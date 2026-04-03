@@ -237,6 +237,7 @@ export interface FieldDef {
   required?: boolean;
   multi?: boolean;
   annotations?: AnnotationDef[];
+  enumValues?: string[];
 }
 
 export interface LinkPropertyDef {

@@ -29,6 +29,7 @@ export interface PropertyMember {
   multi: boolean;
   overloaded: boolean;
   annotations: AnnotationDef[];
+  enumValues?: string[];
   rewrite?: {
     onInsert?: MutationRewriteExpr;
     onUpdate?: MutationRewriteExpr;
@@ -175,6 +176,7 @@ class Parser {
   private readonly tokens: Token[];
   private readonly source: string;
   private readonly scalarAliases = new Map<string, ScalarType>();
+  private readonly enumValues = new Map<string, string[]>();
   private index = 0;
 
   constructor(source: string) {
@@ -778,7 +780,7 @@ class Parser {
       const targetToken = this.expect("word", "Expected property or link target type");
       this.consumeTypeTail();
       if (memberKind === "property" || (memberKind === undefined && this.isScalarLike(targetToken.text))) {
-        const scalar = this.readScalarType(targetToken.text);
+        const { scalar, enumValues } = this.readScalarType(targetToken.text);
 
         let annotations: AnnotationDef[] = [];
         let rewrite: PropertyMember["rewrite"] | undefined;
@@ -799,6 +801,7 @@ class Parser {
           overloaded,
           annotations,
           rewrite,
+          enumValues,
         };
       }
 
@@ -829,7 +832,7 @@ class Parser {
 
           const propName = this.expect("word", "Expected link property name").text;
           if (this.match("arrow")) {
-            const scalar = this.readScalarType(this.expect("word", "Expected link property scalar type").text);
+            const { scalar: linkScalar } = this.readScalarType(this.expect("word", "Expected link property scalar type").text);
             let linkPropertyAnnotations: AnnotationDef[] = [];
             if (this.match("lbrace")) {
               linkPropertyAnnotations = this.parseLinkPropertyBody(moduleName);
@@ -839,7 +842,7 @@ class Parser {
 
             linkProperties.push({
               name: propName,
-              scalar,
+              scalar: linkScalar,
               required: linkPropertyRequired,
               annotations: linkPropertyAnnotations,
             });
@@ -847,12 +850,12 @@ class Parser {
           }
 
           if (this.match("colon")) {
-            const scalar = this.readScalarType(this.expect("word", "Expected link property scalar type").text);
+            const { scalar: linkScalar2 } = this.readScalarType(this.expect("word", "Expected link property scalar type").text);
             this.match("semi");
 
             linkProperties.push({
               name: propName,
-              scalar,
+              scalar: linkScalar2,
               required: linkPropertyRequired,
               annotations: [],
             });
@@ -879,7 +882,7 @@ class Parser {
     this.expect("colon", "Expected ':' in property declaration");
     const scalarToken = this.expect("word", "Expected property scalar type");
     this.consumeTypeTail();
-    const scalar = this.readScalarType(scalarToken.text);
+    const { scalar, enumValues } = this.readScalarType(scalarToken.text);
 
     let annotations: AnnotationDef[] = [];
     let rewrite: PropertyMember["rewrite"] | undefined;
@@ -891,7 +894,6 @@ class Parser {
     }
 
     this.match("semi");
-
     return {
       kind: "property",
       name,
@@ -901,6 +903,7 @@ class Parser {
       overloaded,
       annotations,
       rewrite,
+      enumValues,
     };
   }
 
@@ -1492,7 +1495,7 @@ class Parser {
     return `${first}_${second}`;
   }
 
-  private readScalarType(name: string): ScalarType {
+  private readScalarType(name: string): { scalar: ScalarType; enumValues?: string[] } {
     const normalized = name.includes("::") ? name.split("::").at(-1)! : name;
     const lowered = normalized.toLowerCase();
 
@@ -1523,12 +1526,13 @@ class Parser {
     };
 
     if (mapped[lowered]) {
-      return mapped[lowered];
+      return { scalar: mapped[lowered] };
     }
 
     const alias = this.scalarAliases.get(normalized) ?? this.scalarAliases.get(lowered);
     if (alias) {
-      return alias;
+      const enumVals = this.getEnumValues(normalized);
+      return { scalar: alias, enumValues: enumVals };
     }
 
     if (!BUILTIN_SCALARS.has(lowered)) {
@@ -1536,7 +1540,7 @@ class Parser {
       throw new AppError("E_SYNTAX", `Unknown scalar type '${name}'`, 1, token.index + 1);
     }
 
-    return lowered as ScalarType;
+    return { scalar: lowered as ScalarType };
   }
 
   private parseScalarType(moduleName: string): void {
@@ -1547,7 +1551,9 @@ class Parser {
 
     if (this.matchWord("extending")) {
       if (this.matchWord("enum")) {
-        this.skipAngleTypeArgs();
+        const values = this.parseEnumValues();
+        this.enumValues.set(name, values);
+        this.enumValues.set(name.toLowerCase(), values);
         alias = "str";
       } else {
         alias = this.readScalarType(this.expect("word", "Expected scalar base type").text);
@@ -1565,6 +1571,21 @@ class Parser {
     }
 
     this.match("semi");
+  }
+
+  private parseEnumValues(): string[] {
+    this.expect("lt", "Expected '<' for enum type");
+    const values: string[] = [];
+    while (!this.match("gt")) {
+      const token = this.expect("string", "Expected enum value");
+      values.push(token.text);
+      this.match("comma");
+    }
+    return values;
+  }
+
+  getEnumValues(name: string): string[] | undefined {
+    return this.enumValues.get(name) ?? this.enumValues.get(name.toLowerCase());
   }
 
   private skipAngleTypeArgs(): void {

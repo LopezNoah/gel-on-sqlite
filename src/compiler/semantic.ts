@@ -1351,6 +1351,9 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           if (!isValidScalarValue(field.type, entry as ScalarValue)) {
             fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
           }
+          if (field.enumValues && typeof entry === "string" && !field.enumValues.includes(entry)) {
+            fail(`invalid input value for enum '${statement.typeName}': "${entry}"`);
+          }
         }
       } catch {
         fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
@@ -1360,6 +1363,10 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
 
     if (!isValidScalarValue(field.type, value)) {
       fail(`Type mismatch for '${fieldName}': expected ${field.type}`);
+    }
+
+    if (field.enumValues && typeof value === "string" && !field.enumValues.includes(value)) {
+      fail(`invalid input value for enum '${statement.typeName}': "${value}"`);
     }
   };
 
@@ -1714,7 +1721,7 @@ const isValidScalarValue = (type: ScalarType, value: ScalarValue): boolean => {
           JSON.parse(value);
           return true;
         } catch {
-          return true;
+          return false;
         }
       }
       return false;

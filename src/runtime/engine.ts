@@ -477,6 +477,15 @@ export const executeQuery = (
   return executeQueryWithTrace(db, schema, query, securityContext).result;
 };
 
+export const executeScript = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  script: string,
+  securityContext: SecurityContext = DEFAULT_SECURITY_CONTEXT,
+): QueryResult => {
+  return executeQueryUnitWithTrace(db, schema, script, securityContext).result;
+};
+
 export const executeQueryWithTrace = (
   db: SQLiteDatabase,
   schema: SchemaSnapshot,

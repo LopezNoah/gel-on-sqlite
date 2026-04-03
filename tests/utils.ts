@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { openSQLite, materializeSchema } from "../src/runtime/database.js";
-import { executeQuery } from "../src/runtime/engine.js";
+import { executeQuery, executeScript } from "../src/runtime/engine.js";
 import { parseDeclarativeSchema } from "../src/schema/declarative.js";
 import { schemaSnapshotFromDeclarative } from "../src/schema/uiSchema.js";
 import { expect } from "vitest";
@@ -33,7 +33,8 @@ function stripHashComments(source: string): string {
 function normalizeSetupStatement(source: string): string {
   return source
     .replace(/^(\s*INSERT\s+)([A-Za-z_][\w]*)(\s*\{)/im, "$1default::$2$3")
-    .replace(/<([A-Za-z_][\w:]*)>'([^']*)'/g, "'$2'")
+    .replace(/<json>\s*'([^']*)'/g, "'\"$1\"'")
+    .replace(/<([A-Za-z_][\w:]*)>\s*'([^']*)'/g, "'$2'")
     .replace(/<json>\s*False/g, "false")
     .replace(/<json>\s*True/g, "true")
     .replace(/\bFalse\b/g, "false")
@@ -139,6 +140,13 @@ export class QueryHarness {
 
   query(q: string) {
     return executeQuery(this.db, this.schema, q);
+  }
+
+  /**
+   * Execute a multi-statement script (semicolon-separated)
+   */
+  script(s: string) {
+    return executeScript(this.db, this.schema, s);
   }
 
   /**

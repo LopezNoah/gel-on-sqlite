@@ -217,6 +217,7 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
           required: member.required,
           multi: member.multi,
           annotations: (member.annotations ?? []).length ? [...member.annotations] : undefined,
+          enumValues: member.enumValues,
         });
 
         if (!member.multi && (member.rewrite?.onInsert || member.rewrite?.onUpdate)) {
