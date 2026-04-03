@@ -284,6 +284,22 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     }
   };
 
+  const resolveInsertSetValues = (value: InsertValue): ScalarValue[] => {
+    if (typeof value !== "object" || value === null || !("kind" in value)) {
+      return [value as ScalarValue];
+    }
+
+    if (value.kind === "set") {
+      return value.values.flatMap((entry) => resolveInsertSetValues(entry));
+    }
+
+    if (value.kind === "binding_ref") {
+      return [resolveWithBindingScalar(value.name)];
+    }
+
+    fail(`Expected set-compatible value in insert assignment, got ${value.kind}`);
+  };
+
   const compileFilterExpr = (
     fieldByName: Map<string, { name: string; type: ScalarType; required?: boolean }>,
     knownFields: Set<string>,
@@ -465,7 +481,8 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           continue;
         }
 
-        if (link.multi) {
+        const usesLinkTable = Boolean(link.multi) || (link.properties?.length ?? 0) > 0;
+        if (usesLinkTable) {
           sources.push({
             sourceType: candidateQualifiedName,
             table: tableNameForType(candidateQualifiedName),
@@ -554,6 +571,28 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       ensureField(fieldName);
       const field = requireValue(fieldByName.get(fieldName), `Unknown field '${fieldName}' on '${qualifiedName}'`);
 
+      if (field.multi) {
+        if (typeof value !== "string") {
+          fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
+        }
+
+        try {
+          const parsed = JSON.parse(value) as unknown;
+          if (!Array.isArray(parsed)) {
+            fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
+          }
+
+          for (const entry of parsed) {
+            if (!isValidScalarValue(field.type, entry as ScalarValue)) {
+              fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
+            }
+          }
+        } catch {
+          fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
+        }
+        return;
+      }
+
       if (!isValidScalarValue(field.type, value)) {
         fail(`Type mismatch for '${fieldName}': expected ${field.type}`);
       }
@@ -579,6 +618,8 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         })
         .sort((a, b) => a.name.localeCompare(b.name));
 
+      const usesLinkTable = Boolean(link.multi) || (link.properties?.length ?? 0) > 0;
+
       return {
         sourceType: ownerQualifiedName,
         targetType,
@@ -591,9 +632,9 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
                 table: tableNameForType(targetType),
               },
             ],
-        storage: link.multi ? "table" : "inline",
-        inlineColumn: link.multi ? undefined : `${link.name}_id`,
-        linkTable: link.multi ? `${tableNameForType(ownerQualifiedName)}__${link.name.toLowerCase()}` : undefined,
+        storage: usesLinkTable ? "table" : "inline",
+        inlineColumn: usesLinkTable ? undefined : `${link.name}_id`,
+        linkTable: usesLinkTable ? `${tableNameForType(ownerQualifiedName)}__${link.name.toLowerCase()}` : undefined,
       };
     };
 
@@ -1295,6 +1336,28 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     ensureField(fieldName);
     const field = requireValue(fieldByName.get(fieldName), `Unknown field '${fieldName}' on '${statement.typeName}'`);
 
+    if (field.multi) {
+      if (typeof value !== "string") {
+        fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
+      }
+
+      try {
+        const parsed = JSON.parse(value) as unknown;
+        if (!Array.isArray(parsed)) {
+          fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
+        }
+
+        for (const entry of parsed) {
+          if (!isValidScalarValue(field.type, entry as ScalarValue)) {
+            fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
+          }
+        }
+      } catch {
+        fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
+      }
+      return;
+    }
+
     if (!isValidScalarValue(field.type, value)) {
       fail(`Type mismatch for '${fieldName}': expected ${field.type}`);
     }
@@ -1370,7 +1433,10 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       }
 
       if (knownFields.has(field)) {
-        const scalar = resolveInsertScalarValue(value);
+        const fieldDef = requireValue(fieldByName.get(field), `Unknown field '${field}' on '${statement.typeName}'`);
+        const scalar = fieldDef.multi
+          ? JSON.stringify(resolveInsertSetValues(value))
+          : resolveInsertScalarValue(value);
         validateFieldValue(field, scalar);
         scalarValues[field] = scalar;
         continue;
@@ -1637,16 +1703,21 @@ const isValidScalarValue = (type: ScalarType, value: ScalarValue): boolean => {
     case "bool":
       return typeof value === "boolean";
     case "json":
-      if (typeof value !== "string") {
-        return false;
-      }
-
-      try {
-        JSON.parse(value);
+      if (value === null) {
         return true;
-      } catch {
-        return false;
       }
+      if (typeof value === "boolean" || typeof value === "number") {
+        return true;
+      }
+      if (typeof value === "string") {
+        try {
+          JSON.parse(value);
+          return true;
+        } catch {
+          return true;
+        }
+      }
+      return false;
     case "datetime":
     case "duration":
     case "local_datetime":

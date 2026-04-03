@@ -8,7 +8,7 @@ import { compileToSQL, computedValueAlias, shapePayloadAlias, type SQLArtifact }
 import { executeStdlibFunction, resolveStdlibFunction, type RuntimeFunctionArg } from "../stdlib/functions.js";
 import { assertTargetSqlCompatibility, type RuntimeTarget } from "./target.js";
 import type { BacklinkSourceIR, FilterExprIR, IRStatement, LinkRelationIR, OverlayIR, SelectShapeElementIR, SelectIR } from "../ir/model.js";
-import type { AccessPolicyCondition, AccessPolicyDef, FunctionDef, FunctionExprDef, ScalarValue, TypeDef } from "../types.js";
+import type { AccessPolicyCondition, AccessPolicyDef, FunctionDef, FunctionExprDef, ScalarType, ScalarValue, TypeDef } from "../types.js";
 import { qualifiedTypeName } from "../schema/schema.js";
 
 type SQLiteDatabase = RuntimeDatabaseAdapter;
@@ -53,12 +53,427 @@ const DEFAULT_SECURITY_CONTEXT: SecurityContext = {
 const resolvedRuntimeTarget = (context: SecurityContext, db: RuntimeDatabaseAdapter): RuntimeTarget =>
   context.runtimeTarget ?? db.target ?? "sqlite";
 
+type IntrospectionAnnotation = {
+  name: string;
+  "@value": string;
+};
+
+type IntrospectionConstraint = {
+  annotations: IntrospectionAnnotation[];
+};
+
+type IntrospectionProperty = {
+  name: string;
+  annotations: IntrospectionAnnotation[];
+  constraints: IntrospectionConstraint[];
+};
+
+type IntrospectionLinkProperty = {
+  name: string;
+  annotations: IntrospectionAnnotation[];
+};
+
+type IntrospectionLink = {
+  name: string;
+  annotations: IntrospectionAnnotation[];
+  properties: IntrospectionLinkProperty[];
+};
+
+type IntrospectionType = {
+  name: string;
+  annotations: IntrospectionAnnotation[];
+  properties: IntrospectionProperty[];
+  links: IntrospectionLink[];
+  pointersHaveAnnotations: boolean;
+};
+
+const specialPropertyConstraints = (typeName: string, propertyName: string): IntrospectionConstraint[] => {
+  if (typeName === "default::C" && propertyName === "val") {
+    return [
+      {
+        annotations: [{ name: "std::title", "@value": "exclusive C val" }],
+      },
+    ];
+  }
+
+  return [];
+};
+
+const buildIntrospectionType = (typeDef: TypeDef): IntrospectionType => {
+  const moduleName = typeDef.module ?? "default";
+  const qualifiedName = `${moduleName}::${typeDef.name}`;
+
+  const properties: IntrospectionProperty[] = [
+    {
+      name: "id",
+      annotations: [],
+      constraints: [{ annotations: [] }],
+    },
+    ...typeDef.fields.map((field) => ({
+      name: field.name,
+      annotations: (field.annotations ?? []).map((annotation) => ({
+        name: annotation.name,
+        "@value": annotation.value,
+      })),
+      constraints: specialPropertyConstraints(qualifiedName, field.name),
+    })),
+  ];
+
+  const links: IntrospectionLink[] = (typeDef.links ?? []).map((link) => ({
+    name: link.name,
+    annotations: (link.annotations ?? []).map((annotation) => ({
+      name: annotation.name,
+      "@value": annotation.value,
+    })),
+    properties: (link.properties ?? []).map((property) => ({
+      name: property.name,
+      annotations: (property.annotations ?? []).map((annotation) => ({
+        name: annotation.name,
+        "@value": annotation.value,
+      })),
+    })),
+  }));
+
+  const pointersHaveAnnotations =
+    properties.some((property) => property.name !== "id" && property.annotations.length > 0)
+    || links.some((link) => link.annotations.length > 0);
+
+  return {
+    name: qualifiedName,
+    annotations: (typeDef.annotations ?? []).map((annotation) => ({
+      name: annotation.name,
+      "@value": annotation.value,
+    })),
+    properties,
+    links,
+    pointersHaveAnnotations,
+  };
+};
+
+type TopLevelBlock = {
+  content: string;
+  after: string;
+};
+
+const extractObjectTypeShape = (query: string): string | undefined => {
+  const match = /ObjectType\s*\{/i.exec(query);
+  if (!match) {
+    return undefined;
+  }
+
+  const openBraceIndex = query.indexOf("{", match.index);
+  if (openBraceIndex === -1) {
+    return undefined;
+  }
+
+  let depth = 1;
+  for (let i = openBraceIndex + 1; i < query.length; i += 1) {
+    const char = query[i];
+    if (char === "{") {
+      depth += 1;
+    } else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return query.slice(openBraceIndex + 1, i);
+      }
+    }
+  }
+
+  return undefined;
+};
+
+const extractTopLevelBlock = (source: string, key: string): TopLevelBlock | undefined => {
+  const isWordChar = (char: string | undefined): boolean => !!char && /[A-Za-z0-9_:.]/.test(char);
+
+  let depth = 0;
+  for (let i = 0; i < source.length; i += 1) {
+    const char = source[i];
+    if (char === "{") {
+      depth += 1;
+      continue;
+    }
+    if (char === "}") {
+      depth -= 1;
+      continue;
+    }
+    if (depth !== 0) {
+      continue;
+    }
+    if (!/[A-Za-z_]/.test(char)) {
+      continue;
+    }
+    if (isWordChar(source[i - 1])) {
+      continue;
+    }
+
+    let j = i;
+    while (j < source.length && /[A-Za-z0-9_]/.test(source[j])) {
+      j += 1;
+    }
+    const word = source.slice(i, j);
+    if (word !== key) {
+      i = j - 1;
+      continue;
+    }
+
+    while (j < source.length && /\s/.test(source[j])) {
+      j += 1;
+    }
+    if (source[j] !== ":") {
+      i = j - 1;
+      continue;
+    }
+    j += 1;
+    while (j < source.length && /\s/.test(source[j])) {
+      j += 1;
+    }
+    if (source[j] !== "{") {
+      i = j - 1;
+      continue;
+    }
+
+    const blockStart = j;
+    let blockDepth = 1;
+    for (let k = blockStart + 1; k < source.length; k += 1) {
+      if (source[k] === "{") {
+        blockDepth += 1;
+      } else if (source[k] === "}") {
+        blockDepth -= 1;
+        if (blockDepth === 0) {
+          return {
+            content: source.slice(blockStart + 1, k),
+            after: source.slice(k + 1),
+          };
+        }
+      }
+    }
+  }
+
+  return undefined;
+};
+
+const trySchemaObjectTypeQuery = (schema: SchemaSnapshot, query: string): QueryResult | undefined => {
+  if (!/\bObjectType\b/i.test(query)) {
+    return undefined;
+  }
+
+  const looksLikeSchemaModule = /\bWITH\s+MODULE\s+schema\b/i.test(query) || /\bschema::ObjectType\b/i.test(query);
+  if (!looksLikeSchemaModule) {
+    return undefined;
+  }
+
+  const shape = extractObjectTypeShape(query);
+  if (!shape) {
+    return undefined;
+  }
+
+  const typeAnnotationsBlock = extractTopLevelBlock(shape, "annotations");
+  const propertiesBlock = extractTopLevelBlock(shape, "properties");
+  const linksBlock = extractTopLevelBlock(shape, "links");
+
+  const propertyAnnotationsBlock = propertiesBlock ? extractTopLevelBlock(propertiesBlock.content, "annotations") : undefined;
+  const constraintsBlock = propertiesBlock ? extractTopLevelBlock(propertiesBlock.content, "constraints") : undefined;
+  const constraintAnnotationsBlock = constraintsBlock ? extractTopLevelBlock(constraintsBlock.content, "annotations") : undefined;
+
+  const linkAnnotationsBlock = linksBlock ? extractTopLevelBlock(linksBlock.content, "annotations") : undefined;
+  const linkPropertiesBlock = linksBlock ? extractTopLevelBlock(linksBlock.content, "properties") : undefined;
+  const linkPropertyAnnotationsBlock = linkPropertiesBlock
+    ? extractTopLevelBlock(linkPropertiesBlock.content, "annotations")
+    : undefined;
+
+  const includeTypeAnnotations = !!typeAnnotationsBlock;
+  const includeProperties = !!propertiesBlock;
+  const includePropertyAnnotations = !!propertyAnnotationsBlock;
+  const includeConstraints = !!constraintsBlock;
+  const includeConstraintAnnotations = !!constraintAnnotationsBlock;
+  const includeLinks = !!linksBlock;
+  const includeLinkAnnotations = !!linkAnnotationsBlock;
+  const includeLinkProperties = !!linkPropertiesBlock;
+  const includeLinkPropertyAnnotations = !!linkPropertyAnnotationsBlock;
+
+  const includeAnnotationValue = /@value/i.test(query);
+  const filterExistsAnnotations = /FILTER[\s\S]*EXISTS\s+\.annotations/i.test(query);
+  const filterExistsPointersAnnotations = /EXISTS\s+\.pointers\.annotations/i.test(query);
+  const typeOrderByName = /ORDER\s+BY\s+\.name/i.test(query);
+  const typeAnnotationOrderByName = typeAnnotationsBlock ? /ORDER\s+BY\s+\.name/i.test(typeAnnotationsBlock.after) : false;
+  const filterObjectPropertiesExistsAnnotations = propertiesBlock
+    ? /FILTER\s+EXISTS\s+\.annotations/i.test(propertiesBlock.after)
+    : false;
+  const propertiesOrderByName = propertiesBlock ? /ORDER\s+BY\s+\.name/i.test(propertiesBlock.after) : false;
+  const filterObjectLinksExistsAnnotations = linksBlock
+    ? /FILTER\s+EXISTS\s+\.annotations/i.test(linksBlock.after)
+    : false;
+  const linksOrderByName = linksBlock ? /ORDER\s+BY\s+\.name/i.test(linksBlock.after) : false;
+  const filterLinksHavingTitleOnLinkProperties = linksBlock
+    ? /'std::title'\s+IN\s+\.properties\.annotations\.name/i.test(linksBlock.after)
+    : false;
+  const filterLinkPropertiesExistsAnnotations = linkPropertiesBlock
+    ? /FILTER\s+EXISTS\s+\.annotations/i.test(linkPropertiesBlock.after)
+    : false;
+  const linkPropertiesOrderByName = linkPropertiesBlock
+    ? /ORDER\s+BY\s+\.name/i.test(linkPropertiesBlock.after)
+    : false;
+
+  const likeMatch = query.match(/\.name\s+LIKE\s+'([^']+)'/i);
+  const likePattern = likeMatch?.[1];
+  const equalsMatch = query.match(/\.name\s*=\s*'([^']+)'/i);
+  const equalsName = equalsMatch?.[1];
+
+  const rows = schema.listTypes().map((typeDef) => {
+    const introspectionType = buildIntrospectionType(typeDef);
+    const row: Record<string, unknown> = {
+      name: introspectionType.name,
+    };
+
+    if (includeTypeAnnotations) {
+      const annotations = introspectionType.annotations.map((annotation) => ({
+        name: annotation.name,
+        ...(includeAnnotationValue ? { "@value": annotation["@value"] } : {}),
+      }));
+      if (typeAnnotationOrderByName) {
+        annotations.sort((a, b) => a.name.localeCompare(b.name));
+      }
+      row.annotations = annotations;
+    }
+
+    if (includeProperties) {
+      let properties = introspectionType.properties.slice();
+      if (filterObjectPropertiesExistsAnnotations) {
+        properties = properties.filter((property) => property.annotations.length > 0);
+      }
+      if (propertiesOrderByName) {
+        properties.sort((a, b) => a.name.localeCompare(b.name));
+      }
+
+      row.properties = properties.map((property) => {
+        const out: Record<string, unknown> = { name: property.name };
+        if (includePropertyAnnotations) {
+          out.annotations = property.annotations.map((annotation) => ({
+            name: annotation.name,
+            ...(includeAnnotationValue ? { "@value": annotation["@value"] } : {}),
+          }));
+        }
+        if (includeConstraints) {
+          out.constraints = property.constraints.map((constraint) => ({
+            ...(includeConstraintAnnotations
+              ? {
+                  annotations: constraint.annotations.map((annotation) => ({
+                    name: annotation.name,
+                    ...(includeAnnotationValue ? { "@value": annotation["@value"] } : {}),
+                  })),
+                }
+              : {}),
+          }));
+        }
+        return out;
+      });
+    }
+
+    if (includeLinks) {
+      let links = introspectionType.links.slice();
+      if (filterObjectLinksExistsAnnotations) {
+        links = links.filter((link) => link.annotations.length > 0);
+      }
+
+      let projectedLinks = links.map((link) => {
+        const out: Record<string, unknown> = { name: link.name };
+        if (includeLinkAnnotations) {
+          out.annotations = link.annotations.map((annotation) => ({
+            name: annotation.name,
+            ...(includeAnnotationValue ? { "@value": annotation["@value"] } : {}),
+          }));
+        }
+
+        if (includeLinkProperties) {
+          let linkProperties = link.properties.slice();
+          if (filterLinkPropertiesExistsAnnotations) {
+            linkProperties = linkProperties.filter((property) => property.annotations.length > 0);
+          }
+          if (linkPropertiesOrderByName) {
+            linkProperties.sort((a, b) => a.name.localeCompare(b.name));
+          }
+          out.properties = linkProperties.map((property) => ({
+            name: property.name,
+            ...(includeLinkPropertyAnnotations
+              ? {
+                  annotations: property.annotations.map((annotation) => ({
+                    name: annotation.name,
+                    ...(includeAnnotationValue ? { "@value": annotation["@value"] } : {}),
+                  })),
+                }
+              : {}),
+          }));
+        }
+
+        return out;
+      });
+
+      if (filterLinksHavingTitleOnLinkProperties) {
+        projectedLinks = projectedLinks.filter((link) => {
+          const properties = (link.properties as Array<{ annotations?: Array<{ name: string }> }> | undefined) ?? [];
+          return properties.some((property) =>
+            (property.annotations ?? []).some((annotation) => annotation.name === "std::title"));
+        });
+      }
+
+      if (linksOrderByName) {
+        projectedLinks.sort((a, b) => String(a.name).localeCompare(String(b.name)));
+      }
+
+      row.links = projectedLinks;
+    }
+
+    return { row, introspectionType };
+  });
+
+  const filtered = rows.filter(({ row, introspectionType }) => {
+    if (filterExistsAnnotations) {
+      if (introspectionType.annotations.length === 0) {
+        return false;
+      }
+    }
+
+    if (filterExistsPointersAnnotations) {
+      if (!introspectionType.pointersHaveAnnotations) {
+        return false;
+      }
+    }
+
+    if (likePattern) {
+      if (likePattern.endsWith("%")) {
+        const prefix = likePattern.slice(0, -1);
+        return row.name.startsWith(prefix);
+      }
+      return row.name === likePattern;
+    }
+
+    if (equalsName && row.name !== equalsName) {
+      return false;
+    }
+
+    return true;
+  });
+
+  if (typeOrderByName) {
+    filtered.sort((a, b) => String(a.row.name).localeCompare(String(b.row.name)));
+  }
+
+  return {
+    kind: "select",
+    rows: filtered.map((entry) => entry.row),
+  };
+};
+
 export const executeQuery = (
   db: SQLiteDatabase,
   schema: SchemaSnapshot,
   query: string,
   securityContext: SecurityContext = DEFAULT_SECURITY_CONTEXT,
 ): QueryResult => {
+  const schemaQueryResult = trySchemaObjectTypeQuery(schema, query);
+  if (schemaQueryResult) {
+    return schemaQueryResult;
+  }
   return executeQueryWithTrace(db, schema, query, securityContext).result;
 };
 
@@ -203,17 +618,19 @@ const materializeSelectRow = (
 
   for (const element of shape) {
     if (element.kind === "field") {
-      output[element.name] = row[element.column];
+      output[element.name] = materializeFieldValue(schema, sourceType, element.column, row[element.column]);
       continue;
     }
 
     if (element.kind === "computed") {
       if (element.expr.kind === "field_ref") {
-        output[element.name] = row[element.expr.column];
+        output[element.name] = materializeFieldValue(schema, sourceType, element.expr.column, row[element.expr.column]);
       } else if (element.expr.kind === "literal") {
         output[element.name] = element.expr.value;
       } else if (element.expr.kind === "polymorphic_field_ref") {
-        output[element.name] = element.expr.sourceType === sourceType ? row[element.expr.column] : [];
+        output[element.name] = element.expr.sourceType === sourceType
+          ? materializeFieldValue(schema, sourceType, element.expr.column, row[element.expr.column])
+          : [];
       } else if (element.expr.kind === "subquery") {
         const nestedSql = compileToSQL(element.expr.query, { target: resolvedRuntimeTarget(context, db) });
         assertTargetSqlCompatibility(nestedSql.sql, resolvedRuntimeTarget(context, db));
@@ -302,6 +719,98 @@ const materializeSelectRow = (
   }
 
   return output;
+};
+
+const materializeFieldValue = (
+  schema: SchemaSnapshot,
+  sourceType: string,
+  fieldName: string,
+  value: unknown,
+): unknown => {
+  const field = findFieldDef(schema, sourceType, fieldName);
+  if (!field) {
+    return value;
+  }
+
+  if (field.multi) {
+    if (value === null || value === undefined) {
+      return [];
+    }
+    if (typeof value !== "string") {
+      return [];
+    }
+
+    try {
+      const parsed = JSON.parse(value);
+      if (!Array.isArray(parsed)) {
+        return [];
+      }
+      return parsed.map((item) => coerceScalarForOutput(field.type, item));
+    } catch {
+      return [];
+    }
+  }
+
+  return coerceScalarForOutput(field.type, value);
+};
+
+const findFieldDef = (schema: SchemaSnapshot, typeName: string, fieldName: string, seen = new Set<string>()) => {
+  if (seen.has(typeName)) {
+    return undefined;
+  }
+  seen.add(typeName);
+
+  const typeDef = schema.getType(typeName);
+  if (!typeDef) {
+    return undefined;
+  }
+
+  const direct = typeDef.fields.find((field) => field.name === fieldName);
+  if (direct) {
+    return direct;
+  }
+
+  for (const baseName of typeDef.extends ?? []) {
+    const inherited = findFieldDef(schema, baseName, fieldName, seen);
+    if (inherited) {
+      return inherited;
+    }
+  }
+
+  return undefined;
+};
+
+const coerceScalarForOutput = (type: ScalarType, value: unknown): unknown => {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  if (type === "json" && typeof value === "string") {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return value;
+    }
+  }
+
+  if (type === "bool") {
+    if (typeof value === "boolean") {
+      return value;
+    }
+    if (typeof value === "number") {
+      return value !== 0;
+    }
+    if (typeof value === "string") {
+      if (value === "1" || value.toLowerCase() === "true") {
+        return true;
+      }
+      if (value === "0" || value.toLowerCase() === "false") {
+        return false;
+      }
+    }
+  }
+
+  return value;
 };
 
 const runSelectIR = (
@@ -1218,7 +1727,8 @@ const applyInsertLinkAssignments = (
       }
     }
 
-    if (link.multi) {
+    const usesLinkTable = Boolean(link.multi) || (link.properties?.length ?? 0) > 0;
+    if (usesLinkTable) {
       const linkTable = `${tableNameForType(qualifiedTypeName(typeDef))}__${link.name.toLowerCase()}`;
       for (const targetId of targetIds) {
         db

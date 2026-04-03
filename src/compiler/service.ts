@@ -139,6 +139,7 @@ const fingerprintSchema = (schema: SchemaSnapshot): string => {
           name: field.name,
           type: field.type,
           required: Boolean(field.required),
+          multi: Boolean(field.multi),
         }))
         .sort((a, b) => a.name.localeCompare(b.name)),
       links: (typeDef.links ?? [])
@@ -146,6 +147,11 @@ const fingerprintSchema = (schema: SchemaSnapshot): string => {
           name: link.name,
           targetType: link.targetType,
           multi: Boolean(link.multi),
+          properties: (link.properties ?? []).map((property) => ({
+            name: property.name,
+            type: property.type,
+            required: Boolean(property.required),
+          })),
         }))
         .sort((a, b) => a.name.localeCompare(b.name)),
       mutationRewrites: (typeDef.mutationRewrites ?? [])

@@ -177,7 +177,14 @@ const cloneTypeDef = (typeDef: TypeDef): TypeDef => ({
   extends: typeDef.extends ? [...typeDef.extends] : undefined,
   annotations: typeDef.annotations?.map((annotation) => ({ ...annotation })),
   fields: typeDef.fields.map((f) => ({ ...f, annotations: f.annotations?.map((annotation) => ({ ...annotation })) })),
-  links: typeDef.links?.map((l) => ({ ...l, annotations: l.annotations?.map((annotation) => ({ ...annotation })) })),
+  links: typeDef.links?.map((l) => ({
+    ...l,
+    properties: l.properties?.map((property) => ({
+      ...property,
+      annotations: property.annotations?.map((annotation) => ({ ...annotation })),
+    })),
+    annotations: l.annotations?.map((annotation) => ({ ...annotation })),
+  })),
   computeds: typeDef.computeds?.map((computed) => cloneComputedDef(computed)),
   mutationRewrites: typeDef.mutationRewrites?.map((rewrite) => ({ ...rewrite, onInsert: rewrite.onInsert ? { ...rewrite.onInsert } : undefined, onUpdate: rewrite.onUpdate ? { ...rewrite.onUpdate } : undefined })),
   triggers: typeDef.triggers?.map((trigger) => ({

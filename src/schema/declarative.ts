@@ -135,6 +135,9 @@ type TokenKind =
   | "concat"
   | "lt"
   | "gt"
+  | "minus"
+  | "star"
+  | "pipe"
   | "eof";
 
 interface Token {
@@ -143,7 +146,7 @@ interface Token {
   index: number;
 }
 
-const BUILTIN_SCALARS = new Set<ScalarType>([
+const BUILTIN_SCALARS = new Set<string>([
   "str",
   "int",
   "float",
@@ -157,12 +160,21 @@ const BUILTIN_SCALARS = new Set<ScalarType>([
   "relative_duration",
   "date_duration",
   "uuid",
+  "int16",
+  "int32",
+  "int64",
+  "float32",
+  "float64",
+  "bigint",
+  "decimal",
+  "bytes",
 ]);
 const STANDARD_ANNOTATIONS = new Set(["title", "description", "deprecated"]);
 
 class Parser {
   private readonly tokens: Token[];
   private readonly source: string;
+  private readonly scalarAliases = new Map<string, ScalarType>();
   private index = 0;
 
   constructor(source: string) {
@@ -233,7 +245,17 @@ class Parser {
           continue;
         }
 
-        types.push(this.parseType(moduleName));
+        if (this.peekWordAt(0) === "scalar" && this.peekWordAt(1) === "type") {
+          this.parseScalarType(moduleName);
+          continue;
+        }
+
+        if (this.isTypeDeclarationStart()) {
+          types.push(this.parseType(moduleName));
+          continue;
+        }
+
+        this.skipDeclaration();
       }
     }
 
@@ -564,11 +586,26 @@ class Parser {
       }
     }
 
-    this.expect("lbrace", "Expected '{' after type declaration");
     const annotations: AnnotationDef[] = [];
     const members: TypeMember[] = [];
     const triggers: TriggerDef[] = [];
     const accessPolicies: AccessPolicyDef[] = [];
+
+    if (this.match("semi")) {
+      return {
+        kind: "object",
+        module: moduleName,
+        name: typeName,
+        abstract: isAbstract,
+        extends: extendsTypes,
+        annotations,
+        members,
+        triggers,
+        accessPolicies,
+      };
+    }
+
+    this.expect("lbrace", "Expected '{' after type declaration");
     while (!this.match("rbrace")) {
       if (this.isAnnotationMutationStart()) {
         this.parseAnnotationMutation(moduleName, annotations);
@@ -586,8 +623,15 @@ class Parser {
         continue;
       }
 
+      if (this.peekWordAt(0) === "index") {
+        this.skipDeclaration();
+        continue;
+      }
+
       members.push(this.parseMember(moduleName));
     }
+
+    this.match("semi");
 
     return {
       kind: "object",
@@ -703,7 +747,20 @@ class Parser {
         continue;
       }
 
+      if (this.matchWord("single")) {
+        continue;
+      }
+
       break;
+    }
+
+    let memberKind: "property" | "link" | undefined;
+    if (this.peekWordAt(0) === "property") {
+      this.consume();
+      memberKind = "property";
+    } else if (this.peekWordAt(0) === "link") {
+      this.consume();
+      memberKind = "link";
     }
 
     const name = this.expect("word", "Expected property or link name").text;
@@ -718,7 +775,38 @@ class Parser {
     }
 
     if (this.match("arrow")) {
-      const target = this.normalizeTypeName(moduleName, this.expect("word", "Expected link target type").text);
+      const targetToken = this.expect("word", "Expected property or link target type");
+      this.consumeTypeTail();
+      if (memberKind === "property" || (memberKind === undefined && this.isScalarLike(targetToken.text))) {
+        const scalar = this.readScalarType(targetToken.text);
+
+        let annotations: AnnotationDef[] = [];
+        let rewrite: PropertyMember["rewrite"] | undefined;
+        if (this.match("lbrace")) {
+          const parsed = this.parsePropertyBody(moduleName, name);
+          rewrite = parsed.rewrite;
+          annotations = parsed.annotations;
+          this.expect("rbrace", "Expected '}' after property body");
+        }
+
+        this.match("semi");
+        return {
+          kind: "property",
+          name,
+          scalar,
+          required,
+          multi,
+          overloaded,
+          annotations,
+          rewrite,
+        };
+      }
+
+      const target = this.normalizeTypeName(moduleName, targetToken.text);
+      while (this.match("pipe")) {
+        this.expect("word", "Expected union link target type");
+        this.consumeTypeTail();
+      }
       const annotations: AnnotationDef[] = [];
       const linkProperties: LinkProperty[] = [];
 
@@ -734,21 +822,48 @@ class Parser {
             linkPropertyRequired = true;
           }
 
-          const propName = this.expect("word", "Expected link property name").text;
-          this.expect("colon", "Expected ':' in link property declaration");
-          const scalar = this.readScalarType(this.expect("word", "Expected link property scalar type").text);
-          this.expect("semi", "Expected ';' after link property declaration");
+          this.matchWord("single");
+          this.matchWord("multi");
+          this.matchWord("overloaded");
+          this.matchWord("property");
 
-          linkProperties.push({
-            name: propName,
-            scalar,
-            required: linkPropertyRequired,
-            annotations: [],
-          });
+          const propName = this.expect("word", "Expected link property name").text;
+          if (this.match("arrow")) {
+            const scalar = this.readScalarType(this.expect("word", "Expected link property scalar type").text);
+            let linkPropertyAnnotations: AnnotationDef[] = [];
+            if (this.match("lbrace")) {
+              linkPropertyAnnotations = this.parseLinkPropertyBody(moduleName);
+              this.expect("rbrace", "Expected '}' after link property body");
+            }
+            this.match("semi");
+
+            linkProperties.push({
+              name: propName,
+              scalar,
+              required: linkPropertyRequired,
+              annotations: linkPropertyAnnotations,
+            });
+            continue;
+          }
+
+          if (this.match("colon")) {
+            const scalar = this.readScalarType(this.expect("word", "Expected link property scalar type").text);
+            this.match("semi");
+
+            linkProperties.push({
+              name: propName,
+              scalar,
+              required: linkPropertyRequired,
+              annotations: [],
+            });
+            continue;
+          }
+
+          this.skipStatementInBlock();
         }
       }
 
-      this.expect("semi", "Expected ';' after link declaration");
+      this.match("semi");
       return {
         kind: "link",
         name,
@@ -762,7 +877,9 @@ class Parser {
     }
 
     this.expect("colon", "Expected ':' in property declaration");
-    const scalar = this.readScalarType(this.expect("word", "Expected property scalar type").text);
+    const scalarToken = this.expect("word", "Expected property scalar type");
+    this.consumeTypeTail();
+    const scalar = this.readScalarType(scalarToken.text);
 
     let annotations: AnnotationDef[] = [];
     let rewrite: PropertyMember["rewrite"] | undefined;
@@ -773,7 +890,7 @@ class Parser {
       this.expect("rbrace", "Expected '}' after property body");
     }
 
-    this.expect("semi", "Expected ';' after property declaration");
+    this.match("semi");
 
     return {
       kind: "property",
@@ -999,7 +1116,16 @@ class Parser {
         continue;
       }
 
-      this.expectWord("rewrite", "Expected 'rewrite' in property body");
+      if (this.peekWordAt(0) === "constraint" || this.peekWordAt(0) === "default" || this.peekWordAt(0) === "readonly") {
+        this.skipStatementInBlock();
+        continue;
+      }
+
+      if (!this.matchWord("rewrite")) {
+        this.skipStatementInBlock();
+        continue;
+      }
+
       const events = this.parseRewriteEvents();
       this.expectWord("using", "Expected 'using' in rewrite declaration");
       const expr = this.parseParenthesizedRewriteExpr(moduleName, fieldName);
@@ -1015,6 +1141,21 @@ class Parser {
     }
 
     return { rewrite, annotations };
+  }
+
+  private parseLinkPropertyBody(moduleName: string): AnnotationDef[] {
+    const annotations: AnnotationDef[] = [];
+
+    while (!this.peekIs("rbrace")) {
+      if (this.isAnnotationMutationStart()) {
+        this.parseAnnotationMutation(moduleName, annotations);
+        continue;
+      }
+
+      this.skipStatementInBlock();
+    }
+
+    return annotations;
   }
 
   private parseTrigger(moduleName: string): TriggerDef {
@@ -1353,12 +1494,193 @@ class Parser {
 
   private readScalarType(name: string): ScalarType {
     const normalized = name.includes("::") ? name.split("::").at(-1)! : name;
-    if (!BUILTIN_SCALARS.has(normalized as ScalarType)) {
+    const lowered = normalized.toLowerCase();
+
+    const mapped: Record<string, ScalarType> = {
+      str: "str",
+      bytes: "str",
+      json: "json",
+      bool: "bool",
+      uuid: "uuid",
+      datetime: "datetime",
+      duration: "duration",
+      local_datetime: "local_datetime",
+      local_date: "local_date",
+      local_time: "local_time",
+      relative_duration: "relative_duration",
+      date_duration: "date_duration",
+      int: "int",
+      int16: "int",
+      int32: "int",
+      int64: "int",
+      bigint: "int",
+      float: "float",
+      float32: "float",
+      float64: "float",
+      decimal: "float",
+      array: "str",
+      tuple: "str",
+    };
+
+    if (mapped[lowered]) {
+      return mapped[lowered];
+    }
+
+    const alias = this.scalarAliases.get(normalized) ?? this.scalarAliases.get(lowered);
+    if (alias) {
+      return alias;
+    }
+
+    if (!BUILTIN_SCALARS.has(lowered)) {
       const token = this.peek();
       throw new AppError("E_SYNTAX", `Unknown scalar type '${name}'`, 1, token.index + 1);
     }
 
-    return normalized as ScalarType;
+    return lowered as ScalarType;
+  }
+
+  private parseScalarType(moduleName: string): void {
+    this.expectWord("scalar", "Expected 'scalar' declaration");
+    this.expectWord("type", "Expected 'type' after 'scalar'");
+    const name = this.expect("word", "Expected scalar type name").text;
+    let alias: ScalarType = "str";
+
+    if (this.matchWord("extending")) {
+      if (this.matchWord("enum")) {
+        this.skipAngleTypeArgs();
+        alias = "str";
+      } else {
+        alias = this.readScalarType(this.expect("word", "Expected scalar base type").text);
+      }
+    }
+
+    this.scalarAliases.set(name, alias);
+    this.scalarAliases.set(name.toLowerCase(), alias);
+
+    if (this.match("lbrace")) {
+      this.skipBlockBody();
+      this.expect("rbrace", "Expected '}' after scalar type body");
+      this.match("semi");
+      return;
+    }
+
+    this.match("semi");
+  }
+
+  private skipAngleTypeArgs(): void {
+    this.expect("lt", "Expected '<'");
+    let depth = 1;
+    while (depth > 0) {
+      const token = this.consume();
+      if (token.kind === "lt") {
+        depth += 1;
+      } else if (token.kind === "gt") {
+        depth -= 1;
+      } else if (token.kind === "eof") {
+        throw new AppError("E_SYNTAX", "Unterminated angle bracket expression", 1, token.index + 1);
+      }
+    }
+  }
+
+  private consumeTypeTail(): void {
+    while (this.peekIs("lt")) {
+      this.skipAngleTypeArgs();
+    }
+  }
+
+  private isTypeDeclarationStart(): boolean {
+    if (this.peekWordAt(0) === "type") {
+      return true;
+    }
+    return this.peekWordAt(0) === "abstract" && this.peekWordAt(1) === "type";
+  }
+
+  private isScalarLike(name: string): boolean {
+    const normalized = name.includes("::") ? name.split("::").at(-1)! : name;
+    const lowered = normalized.toLowerCase();
+    return BUILTIN_SCALARS.has(lowered) || this.scalarAliases.has(normalized) || this.scalarAliases.has(lowered);
+  }
+
+  private skipDeclaration(): void {
+    let depth = 0;
+    while (!this.peekIs("eof")) {
+      const token = this.peek();
+      if (token.kind === "lbrace" || token.kind === "lparen" || token.kind === "lbracket") {
+        depth += 1;
+        this.consume();
+        continue;
+      }
+
+      if (token.kind === "rbrace" || token.kind === "rparen" || token.kind === "rbracket") {
+        if (depth === 0) {
+          return;
+        }
+        depth -= 1;
+        this.consume();
+        if (depth === 0 && token.kind === "rbrace") {
+          this.match("semi");
+          return;
+        }
+        continue;
+      }
+
+      if (token.kind === "semi" && depth === 0) {
+        this.consume();
+        return;
+      }
+
+      this.consume();
+    }
+  }
+
+  private skipStatementInBlock(): void {
+    let depth = 0;
+    while (!this.peekIs("eof")) {
+      const token = this.peek();
+
+      if (token.kind === "semi" && depth === 0) {
+        this.consume();
+        return;
+      }
+
+      if (token.kind === "rbrace" || token.kind === "rparen" || token.kind === "rbracket") {
+        if (depth === 0) {
+          if (token.kind === "rbrace") {
+            return;
+          }
+          this.consume();
+          return;
+        }
+        depth -= 1;
+        this.consume();
+        if (depth === 0 && token.kind === "rbrace") {
+          this.match("semi");
+          return;
+        }
+        continue;
+      }
+
+      if (token.kind === "lbrace" || token.kind === "lparen" || token.kind === "lbracket") {
+        depth += 1;
+      }
+
+      this.consume();
+    }
+  }
+
+  private skipBlockBody(): void {
+    let depth = 1;
+    while (depth > 0) {
+      const token = this.consume();
+      if (token.kind === "lbrace") {
+        depth += 1;
+      } else if (token.kind === "rbrace") {
+        depth -= 1;
+      } else if (token.kind === "eof") {
+        throw new AppError("E_SYNTAX", "Unterminated block", 1, token.index + 1);
+      }
+    }
+    this.index -= 1;
   }
 
   private normalizeTypeName(moduleName: string, name: string): string {
@@ -1393,6 +1715,14 @@ class Parser {
 
   private readScalarValue(message: string): ScalarValue {
     const token = this.peek();
+    const word = token.kind === "word" ? token.text.toLowerCase() : "";
+
+    if (token.kind === "minus") {
+      this.consume();
+      const valueToken = this.expect("number", message);
+      return -Number(valueToken.text);
+    }
+
     if (token.kind === "string") {
       this.index += 1;
       return token.text;
@@ -1403,17 +1733,17 @@ class Parser {
       return Number(token.text);
     }
 
-    if (token.kind === "word" && token.text === "true") {
+    if (token.kind === "word" && word === "true") {
       this.index += 1;
       return true;
     }
 
-    if (token.kind === "word" && token.text === "false") {
+    if (token.kind === "word" && word === "false") {
       this.index += 1;
       return false;
     }
 
-    if (token.kind === "word" && token.text === "null") {
+    if (token.kind === "word" && word === "null") {
       this.index += 1;
       return null;
     }
@@ -1442,7 +1772,7 @@ class Parser {
 
   private matchWord(word: string): boolean {
     const token = this.peek();
-    if (token.kind === "word" && token.text === word) {
+    if (token.kind === "word" && token.text.toLowerCase() === word.toLowerCase()) {
       this.index += 1;
       return true;
     }
@@ -1600,6 +1930,24 @@ const tokenize = (source: string): Token[] => {
 
     if (ch === ">") {
       tokens.push({ kind: "gt", text: ">", index: i });
+      i += 1;
+      continue;
+    }
+
+    if (ch === "-") {
+      tokens.push({ kind: "minus", text: "-", index: i });
+      i += 1;
+      continue;
+    }
+
+    if (ch === "|") {
+      tokens.push({ kind: "pipe", text: "|", index: i });
+      i += 1;
+      continue;
+    }
+
+    if (ch === "*") {
+      tokens.push({ kind: "star", text: "*", index: i });
       i += 1;
       continue;
     }

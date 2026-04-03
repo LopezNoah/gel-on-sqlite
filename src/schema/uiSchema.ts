@@ -211,21 +211,20 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
 
     for (const member of resolveMembers(typeDecl)) {
       if (member.kind === "property") {
-        if (!member.multi) {
-          fields.push({
-            name: member.name,
-            type: member.scalar,
-            required: member.required,
-            annotations: (member.annotations ?? []).length ? [...member.annotations] : undefined,
-          });
+        fields.push({
+          name: member.name,
+          type: member.scalar,
+          required: member.required,
+          multi: member.multi,
+          annotations: (member.annotations ?? []).length ? [...member.annotations] : undefined,
+        });
 
-          if (member.rewrite?.onInsert || member.rewrite?.onUpdate) {
-            mutationRewrites.push({
-              field: member.name,
-              onInsert: member.rewrite.onInsert,
-              onUpdate: member.rewrite.onUpdate,
-            });
-          }
+        if (!member.multi && (member.rewrite?.onInsert || member.rewrite?.onUpdate)) {
+          mutationRewrites.push({
+            field: member.name,
+            onInsert: member.rewrite.onInsert,
+            onUpdate: member.rewrite.onUpdate,
+          });
         }
         continue;
       }
@@ -311,10 +310,18 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
         name: member.name,
         targetType: normalizeTypeName(member.target, typeDecl.module),
         multi: member.multi,
+        properties: member.properties.length
+          ? member.properties.map((property) => ({
+              name: property.name,
+              type: property.scalar,
+              required: property.required,
+              annotations: property.annotations.length ? [...property.annotations] : undefined,
+            }))
+          : undefined,
         annotations: (member.annotations ?? []).length ? [...member.annotations] : undefined,
       });
 
-      if (!member.multi) {
+      if (!member.multi && member.properties.length === 0) {
         fields.push({
           name: `${member.name}_id`,
           type: "uuid",
@@ -408,7 +415,12 @@ export const declarativeSchemaFromTypeDefs = (types: TypeDef[], functions: Funct
                 multi: Boolean(link.multi),
                 overloaded: false,
                 annotations: [...(link.annotations ?? [])],
-                properties: [],
+                properties: (link.properties ?? []).map((property) => ({
+                  name: property.name,
+                  scalar: property.type,
+                  required: Boolean(property.required),
+                  annotations: [...(property.annotations ?? [])],
+                })),
               };
 
               members.push(linkMember);
@@ -426,7 +438,7 @@ export const declarativeSchemaFromTypeDefs = (types: TypeDef[], functions: Funct
                 name: field.name,
                 scalar: field.type,
                 required: Boolean(field.required),
-                multi: false,
+                multi: Boolean(field.multi),
                 overloaded: false,
                 annotations: [...(field.annotations ?? [])],
                 rewrite: rewrite

@@ -235,6 +235,14 @@ export interface FieldDef {
   name: string;
   type: ScalarType;
   required?: boolean;
+  multi?: boolean;
+  annotations?: AnnotationDef[];
+}
+
+export interface LinkPropertyDef {
+  name: string;
+  type: ScalarType;
+  required?: boolean;
   annotations?: AnnotationDef[];
 }
 
@@ -242,6 +250,7 @@ export interface LinkDef {
   name: string;
   targetType: string;
   multi?: boolean;
+  properties?: LinkPropertyDef[];
   annotations?: AnnotationDef[];
 }
 

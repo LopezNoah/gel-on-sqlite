@@ -112,7 +112,7 @@ export const materializeSchema = (db: SQLiteDatabase, schema: SchemaSnapshot): v
       `${quoteIdent("id")} TEXT PRIMARY KEY NOT NULL DEFAULT (lower(hex(randomblob(16))))`,
       ...typeDef.fields
         .filter((f) => f.name !== "id")
-        .map((f) => `${quoteIdent(f.name)} ${columnType(f.type)}${f.required ? " NOT NULL" : ""}`),
+        .map((f) => `${quoteIdent(f.name)} ${f.multi ? "TEXT" : columnType(f.type)}${f.required ? " NOT NULL" : ""}`),
     ];
     const ddl = `CREATE TABLE IF NOT EXISTS ${quoteIdent(table)} (${fieldSQL.join(", ")})`;
     db.prepare(ddl).run();
@@ -125,13 +125,15 @@ export const materializeSchema = (db: SQLiteDatabase, schema: SchemaSnapshot): v
     ).run();
 
     for (const link of typeDef.links ?? []) {
-      if (!link.multi) {
+      if (!link.multi && (link.properties?.length ?? 0) === 0) {
         continue;
       }
 
       const linkTable = `${table}__${link.name.toLowerCase()}`;
+      const propertyColumns = (link.properties ?? [])
+        .map((property) => `${quoteIdent(property.name)} ${columnType(property.type)}${property.required ? " NOT NULL" : ""}`);
       db.prepare(
-        `CREATE TABLE IF NOT EXISTS ${quoteIdent(linkTable)} (${quoteIdent("source")} TEXT NOT NULL, ${quoteIdent("target")} TEXT NOT NULL, PRIMARY KEY (${quoteIdent("source")}, ${quoteIdent("target")}))`,
+        `CREATE TABLE IF NOT EXISTS ${quoteIdent(linkTable)} (${quoteIdent("source")} TEXT NOT NULL, ${quoteIdent("target")} TEXT NOT NULL${propertyColumns.length ? `, ${propertyColumns.join(", ")}` : ""}, PRIMARY KEY (${quoteIdent("source")}, ${quoteIdent("target")}))`,
       ).run();
     }
 
