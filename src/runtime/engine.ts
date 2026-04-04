@@ -7,7 +7,7 @@ import type { SchemaSnapshot } from "../schema/schema.js";
 import { compileToSQL, computedValueAlias, shapePayloadAlias, type SQLArtifact } from "../sql/compiler.js";
 import { executeStdlibFunction, resolveStdlibFunction, type RuntimeFunctionArg } from "../stdlib/functions.js";
 import { assertTargetSqlCompatibility, type RuntimeTarget } from "./target.js";
-import type { BacklinkSourceIR, FilterExprIR, IRStatement, LinkRelationIR, OverlayIR, SelectShapeElementIR, SelectIR } from "../ir/model.js";
+import type { BacklinkSourceIR, FilterExprIR, IRStatement, LinkRelationIR, OverlayIR, SelectExprIREntry, SelectExprIR, SelectIR, SelectShapeElementIR } from "../ir/model.js";
 import type { AccessPolicyCondition, AccessPolicyDef, FunctionDef, FunctionExprDef, ScalarType, ScalarValue, TypeDef } from "../types.js";
 import { qualifiedTypeName } from "../schema/schema.js";
 
@@ -427,6 +427,8 @@ const trySchemaObjectTypeQuery = (schema: SchemaSnapshot, query: string): QueryR
   });
 
   const filtered = rows.filter(({ row, introspectionType }) => {
+    const rowName = typeof row.name === "string" ? row.name : String(row.name);
+
     if (filterExistsAnnotations) {
       if (introspectionType.annotations.length === 0) {
         return false;
@@ -442,12 +444,12 @@ const trySchemaObjectTypeQuery = (schema: SchemaSnapshot, query: string): QueryR
     if (likePattern) {
       if (likePattern.endsWith("%")) {
         const prefix = likePattern.slice(0, -1);
-        return row.name.startsWith(prefix);
+        return rowName.startsWith(prefix);
       }
-      return row.name === likePattern;
+      return rowName === likePattern;
     }
 
-    if (equalsName && row.name !== equalsName) {
+    if (equalsName && rowName !== equalsName) {
       return false;
     }
 
@@ -522,6 +524,11 @@ export const executeQueryWithTrace = (
         kind: "select",
         rows: [materializeFreeObjectRow(db, schema, ir.entries, context, sqlTrail)],
       };
+    } else if (ir.kind === "select_expr") {
+      result = {
+        kind: "select",
+        rows: materializeSelectExprRows(db, schema, ir, context, sqlTrail),
+      };
     } else {
       const writeResult = runWriteWithAccessPolicies(db, schema, ast, ir, sqlArtifact, subjectType!, context);
 
@@ -584,6 +591,8 @@ export const executeQueryUnitWithTrace = (
         result = { kind: "select", rows: runSelectIR(db, schema, ir, context, sqlArtifact, sqlTrail) };
       } else if (ir.kind === "select_free") {
         result = { kind: "select", rows: [materializeFreeObjectRow(db, schema, ir.entries, context, sqlTrail)] };
+      } else if (ir.kind === "select_expr") {
+        result = { kind: "select", rows: materializeSelectExprRows(db, schema, ir, context, sqlTrail) };
       } else {
         const writeResult = runWriteWithAccessPolicies(db, schema, ast, ir, sqlArtifact, subjectType!, context);
         result = { kind: ir.kind, changes: writeResult.changes };
@@ -763,7 +772,12 @@ const materializeFieldValue = (
   return coerceScalarForOutput(field.type, value);
 };
 
-const findFieldDef = (schema: SchemaSnapshot, typeName: string, fieldName: string, seen = new Set<string>()) => {
+const findFieldDef = (
+  schema: SchemaSnapshot,
+  typeName: string,
+  fieldName: string,
+  seen = new Set<string>(),
+): TypeDef["fields"][number] | undefined => {
   if (seen.has(typeName)) {
     return undefined;
   }
@@ -907,13 +921,127 @@ const materializeFreeObjectRow = (
       continue;
     }
 
-    const nestedSql = compileToSQL(entry.query, { target: resolvedRuntimeTarget(context, db) });
-    assertTargetSqlCompatibility(nestedSql.sql, resolvedRuntimeTarget(context, db));
-    sqlTrail.push(nestedSql);
-    out[entry.name] = runSelectIR(db, schema, entry.query, context, nestedSql, sqlTrail);
+    if (entry.kind === "select") {
+      const nestedSql = compileToSQL(entry.query, { target: resolvedRuntimeTarget(context, db) });
+      assertTargetSqlCompatibility(nestedSql.sql, resolvedRuntimeTarget(context, db));
+      sqlTrail.push(nestedSql);
+      out[entry.name] = runSelectIR(db, schema, entry.query, context, nestedSql, sqlTrail);
+      continue;
+    }
   }
 
   return out;
+};
+
+const evaluateSelectExprEntry = (
+  schema: SchemaSnapshot,
+  db: SQLiteDatabase,
+  context: SecurityContext,
+  entry: SelectExprIREntry,
+  sqlTrail: SQLArtifact[],
+): unknown => {
+  switch (entry.kind) {
+    case "literal":
+      return entry.value;
+    case "set_literal":
+      return [...entry.values];
+    case "enum_path":
+      return entry.member;
+    case "type_field_path": {
+      const typeDef = schema.getType(entry.typeName);
+      if (!typeDef) {
+        throw new AppError("E_SEMANTIC", `Unknown type '${entry.typeName}'`, 1, 1);
+      }
+      const field = typeDef.fields.find((f) => f.name === entry.field);
+      if (!field) {
+        throw new AppError("E_SEMANTIC", `Unknown field '${entry.field}' on '${entry.typeName}'`, 1, 1);
+      }
+      const rows = db.prepare(`SELECT ${entry.field} FROM ${tableNameForType(entry.typeName)} LIMIT 1`).all() as Record<string, unknown>[];
+      const value = rows.length > 0 ? rows[0]?.[entry.field] ?? null : null;
+      if (field.enumValues && field.enumValues.length > 0) {
+        return value;
+      }
+      return value;
+    }
+    case "cast": {
+      if (entry.value.kind === "set_literal") {
+        const castTypeDef = schema.getType(entry.castType);
+        if (castTypeDef) {
+          const allEnumValues = castTypeDef.fields.flatMap((f) => f.enumValues ?? []);
+          if (allEnumValues.length > 0) {
+            return entry.value.values;
+          }
+        }
+        return entry.value.values;
+      }
+      const innerValue = evaluateSelectExprEntry(schema, db, context, entry.value, sqlTrail);
+      if (entry.castType === "str") {
+        if (innerValue === null) return "";
+        return String(innerValue);
+      }
+      if (entry.castType === "json") {
+        return JSON.stringify(innerValue);
+      }
+      const castTypeDef = schema.getType(entry.castType);
+      if (castTypeDef) {
+        const allEnumValues = castTypeDef.fields.flatMap((f) => f.enumValues ?? []);
+        if (allEnumValues.length > 0) {
+          if (innerValue === null) {
+            return null;
+          }
+          if (typeof innerValue !== "string") {
+            throw new AppError("E_SEMANTIC", `Cannot cast to enum '${entry.castType}': expected string value`, 1, 1);
+          }
+          if (!allEnumValues.includes(innerValue)) {
+            throw new AppError("E_SEMANTIC", `invalid input value for enum '${entry.castType}': "${innerValue}"`, 1, 1);
+          }
+          return innerValue;
+        }
+      }
+      throw new AppError("E_SEMANTIC", `Unsupported cast type '${entry.castType}' in select_expr`, 1, 1);
+    }
+    case "concat": {
+      const parts = entry.parts.map((part) => evaluateSelectExprEntry(schema, db, context, part, sqlTrail));
+      for (let i = 0; i < parts.length; i++) {
+        const part = parts[i];
+        const partEntry = entry.parts[i];
+        if (part instanceof AppError) {
+          throw part;
+        }
+        if (partEntry.kind === "type_field_path") {
+          const typeDef = schema.getType(partEntry.typeName);
+          if (typeDef) {
+            const field = typeDef.fields.find((f) => f.name === partEntry.field);
+            if (field?.enumValues && field.enumValues.length > 0) {
+              const fieldType = field.enumTypeName ?? `std::${field.type}`;
+              throw new AppError("E_SEMANTIC", `operator '++' cannot be applied to operands of type 'std::str' and '${fieldType}'`, 1, 1);
+            }
+          }
+        }
+        if (typeof part !== "string") {
+          throw new AppError("E_SEMANTIC", `operator '++' cannot be applied to operands of type 'std::str' and '${typeof part}'`, 1, 1);
+        }
+      }
+      return parts.join("");
+    }
+  }
+};
+
+const materializeSelectExprRows = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  ir: SelectExprIR,
+  context: SecurityContext,
+  sqlTrail: SQLArtifact[],
+): Record<string, unknown>[] => {
+  if (ir.entries.length === 0) {
+    return [];
+  }
+  const value = evaluateSelectExprEntry(schema, db, context, ir.entries[0], sqlTrail);
+  if (Array.isArray(value)) {
+    return value.map((v) => v as Record<string, unknown>);
+  }
+  return [value as Record<string, unknown>];
 };
 
 const executeFunctionCall = (
@@ -1294,6 +1422,10 @@ const extractOverlays = (ir: IRStatement): OverlayIR[] => {
     return [];
   }
 
+  if (ir.kind === "select_expr") {
+    return [];
+  }
+
   return ir.overlays;
 };
 
@@ -1488,7 +1620,7 @@ const executeSelectExprRows = (
 };
 
 const statementTypeOf = (statement: Statement): "select" | "insert" | "update" | "delete" =>
-  statement.kind === "select_free" ? "select" : statement.kind;
+  statement.kind === "select_free" || statement.kind === "select_expr" ? "select" : statement.kind;
 
 const normalizeSecurityContext = (context: SecurityContext): SecurityContext => {
   return {

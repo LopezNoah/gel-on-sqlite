@@ -239,71 +239,124 @@ export interface DeleteIR {
   overlays: OverlayIR[];
 }
 
+export type SelectFreeIREntry =
+  | {
+      kind: "literal";
+      name: string;
+      value: ScalarValue;
+    }
+  | {
+      kind: "set_literal";
+      name: string;
+      values: ScalarValue[];
+    }
+  | {
+      kind: "select";
+      name: string;
+      query: SelectIR;
+    }
+  | {
+      kind: "function_call";
+      name: string;
+      functionName: string;
+      args: Array<
+        | {
+            kind: "literal";
+            value: ScalarValue;
+          }
+        | {
+            kind: "binding_ref";
+            name: string;
+          }
+        | {
+            kind: "set_literal";
+            values: ScalarValue[];
+          }
+        | {
+            kind: "array_literal";
+            values: ScalarValue[];
+          }
+        | {
+            kind: "function_call";
+            functionName: string;
+            args: Array<
+              | {
+                  kind: "literal";
+                  value: ScalarValue;
+                }
+              | {
+                  kind: "binding_ref";
+                  name: string;
+                }
+              | {
+                  kind: "set_literal";
+                  values: ScalarValue[];
+                }
+              | {
+                  kind: "array_literal";
+                  values: ScalarValue[];
+                }
+            >;
+          }
+      >;
+    }
+  | {
+      kind: "cast";
+      name: string;
+      castType: string;
+      value: SelectFreeIREntry;
+    }
+  | {
+      kind: "enum_path";
+      name: string;
+      enumType: string;
+      member: string;
+    }
+  | {
+      kind: "concat";
+      name: string;
+      parts: SelectFreeIREntry[];
+    };
+
 export interface SelectFreeIR {
   kind: "select_free";
   pathId: string;
-  entries: Array<
-    | {
-        kind: "literal";
-        name: string;
-        value: ScalarValue;
-      }
-    | {
-        kind: "set_literal";
-        name: string;
-        values: ScalarValue[];
-      }
-    | {
-        kind: "select";
-        name: string;
-        query: SelectIR;
-      }
-    | {
-        kind: "function_call";
-        name: string;
-        functionName: string;
-        args: Array<
-          | {
-              kind: "literal";
-              value: ScalarValue;
-            }
-          | {
-              kind: "binding_ref";
-              name: string;
-            }
-          | {
-              kind: "set_literal";
-              values: ScalarValue[];
-            }
-          | {
-              kind: "array_literal";
-              values: ScalarValue[];
-            }
-          | {
-              kind: "function_call";
-              functionName: string;
-              args: Array<
-                | {
-                    kind: "literal";
-                    value: ScalarValue;
-                  }
-                | {
-                    kind: "binding_ref";
-                    name: string;
-                  }
-                | {
-                    kind: "set_literal";
-                    values: ScalarValue[];
-                  }
-                | {
-                    kind: "array_literal";
-                    values: ScalarValue[];
-                  }
-              >;
-            }
-        >;
-      }
-  >;
+  entries: SelectFreeIREntry[];
 }
 
-export type IRStatement = SelectIR | SelectFreeIR | InsertIR | UpdateIR | DeleteIR;
+export type SelectExprIREntry =
+  | {
+      kind: "literal";
+      value: ScalarValue;
+    }
+  | {
+      kind: "set_literal";
+      values: ScalarValue[];
+    }
+  | {
+      kind: "cast";
+      castType: string;
+      value: SelectExprIREntry;
+    }
+  | {
+      kind: "enum_path";
+      enumType: string;
+      member: string;
+    }
+  | {
+      kind: "type_field_path";
+      typeName: string;
+      field: string;
+      fieldType: string;
+    }
+  | {
+      kind: "concat";
+      parts: SelectExprIREntry[];
+    };
+
+export interface SelectExprIR {
+  kind: "select_expr";
+  entries: SelectExprIREntry[];
+}
+
+export type IRStatement = SelectIR | SelectFreeIR | SelectExprIR | InsertIR | UpdateIR | DeleteIR;

@@ -30,6 +30,7 @@ export interface PropertyMember {
   overloaded: boolean;
   annotations: AnnotationDef[];
   enumValues?: string[];
+  enumTypeName?: string;
   rewrite?: {
     onInsert?: MutationRewriteExpr;
     onUpdate?: MutationRewriteExpr;
@@ -106,12 +107,19 @@ export interface FunctionDeclaration {
   };
 }
 
+export interface ScalarTypeDeclaration {
+  name: string;
+  module: string;
+  enumValues: string[];
+}
+
 export interface DeclarativeSchema {
   modules: SchemaModule[];
   types: ObjectTypeDeclaration[];
   functions?: FunctionDeclaration[];
   abstractAnnotations?: AbstractAnnotationDeclaration[];
   permissions?: PermissionDeclaration[];
+  scalarTypes?: ScalarTypeDeclaration[];
 }
 
 type TokenKind =
@@ -190,6 +198,7 @@ class Parser {
     const permissions: PermissionDeclaration[] = [];
     const functions: FunctionDeclaration[] = [];
     const abstractAnnotations: AbstractAnnotationDeclaration[] = [];
+    const scalarTypes: ScalarTypeDeclaration[] = [];
 
     while (!this.match("eof")) {
       this.expectWord("module", "Expected 'module' declaration");
@@ -248,7 +257,7 @@ class Parser {
         }
 
         if (this.peekWordAt(0) === "scalar" && this.peekWordAt(1) === "type") {
-          this.parseScalarType(moduleName);
+          this.parseScalarType(moduleName, scalarTypes);
           continue;
         }
 
@@ -267,6 +276,7 @@ class Parser {
       functions: functions.length ? functions : undefined,
       permissions,
       abstractAnnotations: abstractAnnotations.length ? abstractAnnotations : undefined,
+      scalarTypes: scalarTypes.length ? scalarTypes : undefined,
     };
   }
 
@@ -780,7 +790,7 @@ class Parser {
       const targetToken = this.expect("word", "Expected property or link target type");
       this.consumeTypeTail();
       if (memberKind === "property" || (memberKind === undefined && this.isScalarLike(targetToken.text))) {
-        const { scalar, enumValues } = this.readScalarType(targetToken.text);
+        const { scalar, enumValues, enumTypeName } = this.readScalarType(moduleName, targetToken.text);
 
         let annotations: AnnotationDef[] = [];
         let rewrite: PropertyMember["rewrite"] | undefined;
@@ -802,6 +812,7 @@ class Parser {
           annotations,
           rewrite,
           enumValues,
+          enumTypeName,
         };
       }
 
@@ -832,7 +843,7 @@ class Parser {
 
           const propName = this.expect("word", "Expected link property name").text;
           if (this.match("arrow")) {
-            const { scalar: linkScalar } = this.readScalarType(this.expect("word", "Expected link property scalar type").text);
+            const { scalar: linkScalar } = this.readScalarType(moduleName, this.expect("word", "Expected link property scalar type").text);
             let linkPropertyAnnotations: AnnotationDef[] = [];
             if (this.match("lbrace")) {
               linkPropertyAnnotations = this.parseLinkPropertyBody(moduleName);
@@ -850,7 +861,7 @@ class Parser {
           }
 
           if (this.match("colon")) {
-            const { scalar: linkScalar2 } = this.readScalarType(this.expect("word", "Expected link property scalar type").text);
+            const { scalar: linkScalar2 } = this.readScalarType(moduleName, this.expect("word", "Expected link property scalar type").text);
             this.match("semi");
 
             linkProperties.push({
@@ -882,7 +893,7 @@ class Parser {
     this.expect("colon", "Expected ':' in property declaration");
     const scalarToken = this.expect("word", "Expected property scalar type");
     this.consumeTypeTail();
-    const { scalar, enumValues } = this.readScalarType(scalarToken.text);
+    const { scalar, enumValues, enumTypeName } = this.readScalarType(moduleName, scalarToken.text);
 
     let annotations: AnnotationDef[] = [];
     let rewrite: PropertyMember["rewrite"] | undefined;
@@ -904,6 +915,7 @@ class Parser {
       annotations,
       rewrite,
       enumValues,
+      enumTypeName,
     };
   }
 
@@ -1495,7 +1507,7 @@ class Parser {
     return `${first}_${second}`;
   }
 
-  private readScalarType(name: string): { scalar: ScalarType; enumValues?: string[] } {
+  private readScalarType(moduleName: string, name: string): { scalar: ScalarType; enumValues?: string[]; enumTypeName?: string } {
     const normalized = name.includes("::") ? name.split("::").at(-1)! : name;
     const lowered = normalized.toLowerCase();
 
@@ -1532,7 +1544,8 @@ class Parser {
     const alias = this.scalarAliases.get(normalized) ?? this.scalarAliases.get(lowered);
     if (alias) {
       const enumVals = this.getEnumValues(normalized);
-      return { scalar: alias, enumValues: enumVals };
+      const enumTypeName = name.includes("::") ? name : `${moduleName}::${normalized}`;
+      return { scalar: alias, enumValues: enumVals, enumTypeName };
     }
 
     if (!BUILTIN_SCALARS.has(lowered)) {
@@ -1543,25 +1556,30 @@ class Parser {
     return { scalar: lowered as ScalarType };
   }
 
-  private parseScalarType(moduleName: string): void {
+  private parseScalarType(moduleName: string, scalarTypes: ScalarTypeDeclaration[]): void {
     this.expectWord("scalar", "Expected 'scalar' declaration");
     this.expectWord("type", "Expected 'type' after 'scalar'");
     const name = this.expect("word", "Expected scalar type name").text;
     let alias: ScalarType = "str";
+    let enumVals: string[] | undefined;
 
     if (this.matchWord("extending")) {
       if (this.matchWord("enum")) {
-        const values = this.parseEnumValues();
-        this.enumValues.set(name, values);
-        this.enumValues.set(name.toLowerCase(), values);
+        enumVals = this.parseEnumValues();
+        this.enumValues.set(name, enumVals);
+        this.enumValues.set(name.toLowerCase(), enumVals);
         alias = "str";
       } else {
-        alias = this.readScalarType(this.expect("word", "Expected scalar base type").text);
+        alias = this.readScalarType(moduleName, this.expect("word", "Expected scalar base type").text).scalar;
       }
     }
 
     this.scalarAliases.set(name, alias);
     this.scalarAliases.set(name.toLowerCase(), alias);
+
+    if (enumVals) {
+      scalarTypes.push({ name, module: moduleName, enumValues: enumVals });
+    }
 
     if (this.match("lbrace")) {
       this.skipBlockBody();

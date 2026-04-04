@@ -3,7 +3,17 @@ import type { DeclarativeSchema, FunctionDeclaration, LinkMember, PropertyMember
 import { SchemaSnapshot } from "./schema.js";
 
 export const schemaSnapshotFromDeclarative = (schema: DeclarativeSchema): SchemaSnapshot => {
-  return new SchemaSnapshot(typeDefsFromDeclarative(schema), functionDefsFromDeclarative(schema));
+  const typeDefs = typeDefsFromDeclarative(schema);
+  const scalarTypeDefs = scalarTypeDefsFromDeclarative(schema);
+  return new SchemaSnapshot([...typeDefs, ...scalarTypeDefs], functionDefsFromDeclarative(schema));
+};
+
+export const scalarTypeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] => {
+  return (schema.scalarTypes ?? []).map((st) => ({
+    name: st.name,
+    module: st.module,
+    fields: [{ name: "__enum__", type: "str" as const, enumValues: [...st.enumValues] }],
+  }));
 };
 
 export const functionDefsFromDeclarative = (schema: DeclarativeSchema): FunctionDef[] => {
@@ -218,6 +228,7 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
           multi: member.multi,
           annotations: (member.annotations ?? []).length ? [...member.annotations] : undefined,
           enumValues: member.enumValues,
+          enumTypeName: member.enumTypeName,
         });
 
         if (!member.multi && (member.rewrite?.onInsert || member.rewrite?.onUpdate)) {

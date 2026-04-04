@@ -54,25 +54,25 @@ describe("EdgeQL Enums (SPEC-PARITY)", () => {
     h.script(`INSERT default::Foo { color := 'BLUE' }; SELECT default::Foo { color };`);
   });
 
-  it.skip("test_edgeql_enums_cast_01", () => {
+  it("test_edgeql_enums_cast_01", () => {
     h.assertQueryResult(`SELECT <color_enum_t>{'RED', 'GREEN', 'BLUE'};`,
       ["RED", "GREEN", "BLUE"]
     );
   });
 
-  it.skip("test_edgeql_enums_cast_02_invalid", () => {
+  it("test_edgeql_enums_cast_02_invalid", () => {
     expect(() => h.query(`SELECT <color_enum_t>'YELLOW';`)).toThrow(
       /invalid input value for enum/
     );
   });
 
-  it.skip("test_edgeql_enums_cast_03_case_sensitive", () => {
+  it("test_edgeql_enums_cast_03_case_sensitive", () => {
     expect(() => h.query(`SELECT <color_enum_t>'red';`)).toThrow(
       /invalid input value for enum/
     );
   });
 
-  it.skip("test_edgeql_enums_cast_04", () => {
+  it("test_edgeql_enums_cast_04", () => {
     h.query(`INSERT default::Foo { color := 'BLUE' };`);
     expect(() =>
       h.query(`SELECT 'The test color is: ' ++ default::Foo.color;`)
@@ -81,7 +81,7 @@ describe("EdgeQL Enums (SPEC-PARITY)", () => {
     );
   });
 
-  it.skip("test_edgeql_enums_cast_05", () => {
+  it("test_edgeql_enums_cast_05", () => {
     h.query(`INSERT default::Foo { color := 'BLUE' };`);
     const res = h.query(
       `SELECT 'The test color is: ' ++ <str>default::Foo.color;`
@@ -89,7 +89,7 @@ describe("EdgeQL Enums (SPEC-PARITY)", () => {
     expect(res.rows).toEqual(["The test color is: BLUE"]);
   });
 
-  it.skip("test_edgeql_enums_pathsyntax_01", () => {
+  it("test_edgeql_enums_pathsyntax_01", () => {
     expect(() => h.query(`SELECT color_enum_t`)).toThrow(
       /enum path expression lacks an enum member name/
     );
@@ -123,7 +123,7 @@ describe("EdgeQL Enums (SPEC-PARITY)", () => {
     );
   });
 
-  it.skip("test_edgeql_enums_pathsyntax_02", () => {
+  it("test_edgeql_enums_pathsyntax_02", () => {
     let res = h.query(`SELECT color_enum_t.GREEN;`);
     expect(res.rows).toEqual(["GREEN"]);
 
@@ -134,7 +134,7 @@ describe("EdgeQL Enums (SPEC-PARITY)", () => {
     expect(res.rows).toEqual(["RED"]);
   });
 
-  it.skip("test_edgeql_enums_json_cast_01", () => {
+  it("test_edgeql_enums_json_cast_01", () => {
     const res = h.query(`SELECT <json><color_enum_t>'RED';`);
     expect(res.rows).toEqual(['"RED"']);
 
@@ -145,13 +145,13 @@ describe("EdgeQL Enums (SPEC-PARITY)", () => {
     expect(res3.rows).toEqual(["RED"]);
   });
 
-  it.skip("test_edgeql_enums_json_cast_02", () => {
+  it("test_edgeql_enums_json_cast_02", () => {
     expect(() =>
       h.query(`SELECT <color_enum_t><json>'BANANA';`)
     ).toThrow(/invalid input value for enum.*color_enum_t.*BANANA/);
   });
 
-  it.skip("test_edgeql_enums_json_cast_03", () => {
+  it("test_edgeql_enums_json_cast_03", () => {
     expect(() => h.query(`SELECT <color_enum_t><json>12;`)).toThrow(
       /expected JSON string or null.*got JSON number/
     );

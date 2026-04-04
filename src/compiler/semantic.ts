@@ -1,5 +1,5 @@
 import { AppError } from "../errors.js";
-import type { ComputedExpr, FilterExpr, FreeObjectExpr, InsertValue, SelectStatement, ShapeElement, Statement } from "../edgeql/ast.js";
+import type { ComputedExpr, FilterExpr, FreeObjectExpr, InsertValue, SelectExprStatement, SelectStatement, ShapeElement, Statement } from "../edgeql/ast.js";
 import type {
   BacklinkSourceIR,
   FilterExprIR,
@@ -40,6 +40,23 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     }
 
     return value as Exclude<T, undefined>;
+  };
+
+  const extractLiteralValue = (entry: import("../ir/model.js").SelectExprIREntry): ScalarValue => {
+    switch (entry.kind) {
+      case "literal":
+        return entry.value;
+      case "set_literal":
+        return entry.values as unknown as ScalarValue;
+      case "cast":
+        return extractLiteralValue(entry.value);
+      case "enum_path":
+        return entry.member;
+      case "type_field_path":
+        return null;
+      case "concat":
+        return entry.parts.map(extractLiteralValue).join("");
+    }
   };
 
   type FieldEqPredicate = Extract<FilterExpr, { kind: "predicate" }> & {
@@ -235,8 +252,16 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       switch (binding.kind) {
         case "literal":
           return binding.value;
-        case "binding_ref":
+        case "binding_ref": {
+          const resolvedType = schema.getType(normalizeTypeName(binding.name, activeModule));
+          if (resolvedType) {
+            const isEnumScalarType = resolvedType.fields.some((f) => f.name === "__enum__");
+            if (isEnumScalarType) {
+              fail(`enum path expression lacks an enum member name, as in 'color_enum_t.GREEN'`);
+            }
+          }
           return resolveWithBindingScalar(binding.name);
+        }
         case "parameter": {
           if (binding.castType) {
             validateCastType(binding.castType, name);
@@ -253,6 +278,39 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         }
         case "subquery":
           return fail(`With binding '${name}' is a subquery and cannot be used as a scalar value`);
+        case "enum_path": {
+          const normalizedEnumType = normalizeTypeName(binding.enumType, activeModule);
+          const enumTypeDef = schema.getType(normalizedEnumType);
+          if (!enumTypeDef) {
+            fail(`Unknown enum type '${normalizedEnumType}'`);
+          }
+          const allEnumValues = enumTypeDef!.fields.flatMap((f) => f.enumValues ?? []);
+          if (allEnumValues.length === 0) {
+            fail(`Type '${normalizedEnumType}' is not an enum`);
+          }
+          if (!allEnumValues.includes(binding.member)) {
+            fail(`enum '${normalizedEnumType}' has no member called '${binding.member}'`);
+          }
+          return binding.member;
+        }
+        case "path": {
+          const normalizedHead = normalizeTypeName(binding.head, activeModule);
+          const headTypeDef = schema.getType(normalizedHead);
+          if (headTypeDef) {
+            const isEnumScalarType = headTypeDef.fields.length === 1
+              && headTypeDef.fields[0]?.name === "__enum__"
+              && headTypeDef.fields[0]?.enumValues
+              && headTypeDef.fields[0].enumValues.length > 0;
+            if (isEnumScalarType) {
+              const allEnumValues = headTypeDef.fields[0]!.enumValues!;
+              if (!allEnumValues.includes(binding.tail)) {
+                fail(`enum '${normalizedHead}' has no member called '${binding.tail}'`);
+              }
+              return binding.tail;
+            }
+          }
+          fail(`Unknown type or enum '${normalizedHead}'`);
+        }
         default:
           return fail(`Unsupported with binding kind in '${name}'`);
       }
@@ -297,7 +355,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       return [resolveWithBindingScalar(value.name)];
     }
 
-    fail(`Expected set-compatible value in insert assignment, got ${value.kind}`);
+    return fail(`Expected set-compatible value in insert assignment, got ${value.kind}`);
   };
 
   const compileFilterExpr = (
@@ -577,12 +635,15 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         }
 
         try {
-          const parsed = JSON.parse(value) as unknown;
+          const serialized = typeof value === "string"
+            ? value
+            : fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
+          const parsed: unknown = JSON.parse(serialized);
           if (!Array.isArray(parsed)) {
             fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
           }
 
-          for (const entry of parsed) {
+          for (const entry of parsed as unknown[]) {
             if (!isValidScalarValue(field.type, entry as ScalarValue)) {
               fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
             }
@@ -1187,6 +1248,10 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     const resolvedTypeName = normalizeTypeName(selectStatement.typeName, activeModule);
     const directType = schema.getType(resolvedTypeName);
     if (directType) {
+      const isEnumScalarType = directType.fields.some((f) => f.name === "__enum__");
+      if (isEnumScalarType) {
+        fail(`enum path expression lacks an enum member name, as in 'color_enum_t.GREEN'`);
+      }
       return {
         typeDef: directType,
         clauses: {
@@ -1199,107 +1264,350 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     }
 
     const withBinding = withBindings.get(selectStatement.typeName);
-    if (withBinding?.kind !== "subquery") {
-      fail(`Unknown type '${resolvedTypeName}'`);
+    if (withBinding) {
+      if (withBinding.kind === "subquery") {
+        const withQuery = (withBinding as Extract<NonNullable<SelectStatement["with"]>[number]["value"], { kind: "subquery" }>).query;
+        const sourceType = requireValue(
+          schema.getType(normalizeTypeName(withQuery.typeName, activeModule)),
+          `Unknown type '${normalizeTypeName(withQuery.typeName, activeModule)}' in with binding '${selectStatement.typeName}'`,
+        );
+        return {
+          typeDef: sourceType,
+          clauses: {
+            filter: mergeFilters(withQuery.clauses.filter, selectStatement.filter),
+            orderBy: selectStatement.orderBy ?? withQuery.clauses.orderBy,
+            limit: selectStatement.limit ?? withQuery.clauses.limit,
+            offset: selectStatement.offset ?? withQuery.clauses.offset,
+          },
+        };
+      }
+      if (withBinding.kind === "enum_path" || withBinding.kind === "path") {
+        const resolvedValue = resolveWithBindingScalar(selectStatement.typeName);
+        return {
+          typeDef: { name: "__scalar_result__", module: "std", fields: [{ name: "__value__", type: "str" as const }] },
+          clauses: { filter: undefined, orderBy: undefined, limit: undefined, offset: undefined },
+        } as any;
+      }
     }
-    const withQuery = (withBinding as Extract<NonNullable<SelectStatement["with"]>[number]["value"], { kind: "subquery" }>).query;
-
-    const sourceType = requireValue(
-      schema.getType(normalizeTypeName(withQuery.typeName, activeModule)),
-      `Unknown type '${normalizeTypeName(withQuery.typeName, activeModule)}' in with binding '${selectStatement.typeName}'`,
-    );
-
-    return {
-      typeDef: sourceType,
-      clauses: {
-        filter: mergeFilters(withQuery.clauses.filter, selectStatement.filter),
-        orderBy: selectStatement.orderBy ?? withQuery.clauses.orderBy,
-        limit: selectStatement.limit ?? withQuery.clauses.limit,
-        offset: selectStatement.offset ?? withQuery.clauses.offset,
-      },
-    };
+    return fail(`Unknown type '${resolvedTypeName}'`);
   };
 
   if (statement.kind === "select_free") {
     const pathId = createPathId();
     const names = new Set<string>();
-    const entries = statement.entries.map((entry) => {
+
+    const compileFreeObjectExprToSelectFreeEntry = (expr: FreeObjectExpr, name: string): import("../ir/model.js").SelectFreeIREntry => {
+      if (expr.kind === "literal") {
+        return { kind: "literal", name, value: expr.value };
+      }
+      if (expr.kind === "set_literal") {
+        return { kind: "set_literal", name, values: [...expr.values] };
+      }
+      if (expr.kind === "function_call") {
+        const resolved = resolveFunctionOrFail(expr.call.name, expr.call.args.length);
+        return {
+          kind: "function_call",
+          name,
+          functionName: resolved.qualifiedName,
+          args: expr.call.args.map((arg) => compileFunctionArgInFreeObject(arg)) as never,
+        };
+      }
+      if (expr.kind === "select") {
+        const nestedType = requireValue(
+          schema.getType(normalizeTypeName(expr.typeName, activeModule)),
+          `Unknown type '${normalizeTypeName(expr.typeName, activeModule)}'`,
+        );
+        const nestedPath = createPathId(pathId);
+        const nested = compileSelectForType(
+          nestedType,
+          nestedPath,
+          expr.shape,
+          {
+            filter: expr.clauses.filter,
+            orderBy: expr.clauses.orderBy,
+            limit: expr.clauses.limit,
+            offset: expr.clauses.offset,
+          },
+          { allowBacklinkFilter: true },
+        );
+        return {
+          kind: "select",
+          name,
+          query: {
+            kind: "select",
+            pathId: nested.pathId,
+            sourceType: nested.sourceType,
+            typeRef: nested.typeRef,
+            table: nested.table,
+            sourceTables: nested.sourceTables,
+            columns: nested.columns,
+            shape: nested.shape,
+            scopeTree: nested.scopeTree,
+            appliedOverlays: nested.appliedOverlays,
+            filter: nested.filter,
+            orderBy: nested.orderBy,
+            limit: nested.limit,
+            offset: nested.offset,
+            inference: nested.inference,
+          },
+        };
+      }
+      if (expr.kind === "cast") {
+        const innerEntry = compileFreeObjectExprToSelectFreeEntry(expr.expr, name);
+        return { kind: "cast", name, castType: expr.castType, value: innerEntry };
+      }
+      if (expr.kind === "path") {
+        const normalizedHead = normalizeTypeName(expr.head, activeModule);
+        const headTypeDef = schema.getType(normalizedHead);
+        if (headTypeDef) {
+          const isEnumScalarType = headTypeDef.fields.length === 1
+            && headTypeDef.fields[0]?.name === "__enum__"
+            && headTypeDef.fields[0]?.enumValues
+            && headTypeDef.fields[0].enumValues.length > 0;
+          if (isEnumScalarType) {
+            const allEnumValues = headTypeDef.fields[0]!.enumValues!;
+            if (!allEnumValues.includes(expr.tail)) {
+              fail(`enum '${normalizedHead}' has no member called '${expr.tail}'`);
+            }
+            return { kind: "enum_path", name, enumType: normalizedHead, member: expr.tail };
+          }
+        }
+        fail(`Unsupported path expression '${expr.head}.${expr.tail}' in free object select`);
+      }
+      if (expr.kind === "concat") {
+        return {
+          kind: "concat",
+          name,
+          parts: expr.parts.map((part) => compileFreeObjectExprToSelectFreeEntry(part, "")),
+        };
+      }
+      fail(`Unsupported free object expression kind '${expr.kind}'`);
+      throw new Error("unreachable");
+    };
+
+    const entries = statement.entries.map((entry): import("../ir/model.js").SelectFreeIREntry => {
       if (names.has(entry.name)) {
         fail(`Duplicate free object field '${entry.name}'`);
       }
       names.add(entry.name);
-
-      if (entry.expr.kind === "literal") {
-        return {
-          kind: "literal" as const,
-          name: entry.name,
-          value: entry.expr.value,
-        };
-      }
-
-      if (entry.expr.kind === "set_literal") {
-        return {
-          kind: "set_literal" as const,
-          name: entry.name,
-          values: [...entry.expr.values],
-        };
-      }
-
-      if (entry.expr.kind === "function_call") {
-        const resolved = resolveFunctionOrFail(entry.expr.call.name, entry.expr.call.args.length);
-        return {
-          kind: "function_call" as const,
-          name: entry.name,
-          functionName: resolved.qualifiedName,
-          args: entry.expr.call.args.map((arg) => compileFunctionArgInFreeObject(arg)) as never,
-        };
-      }
-
-      const nestedType = requireValue(
-        schema.getType(normalizeTypeName(entry.expr.typeName, activeModule)),
-        `Unknown type '${normalizeTypeName(entry.expr.typeName, activeModule)}'`,
-      );
-      const nestedPath = createPathId(pathId);
-      const nested = compileSelectForType(
-        nestedType,
-        nestedPath,
-        entry.expr.shape,
-        {
-          filter: entry.expr.clauses.filter,
-          orderBy: entry.expr.clauses.orderBy,
-          limit: entry.expr.clauses.limit,
-          offset: entry.expr.clauses.offset,
-        },
-        { allowBacklinkFilter: true },
-      );
-
-      return {
-        kind: "select" as const,
-        name: entry.name,
-        query: {
-          kind: "select" as const,
-          pathId: nested.pathId,
-          sourceType: nested.sourceType,
-          typeRef: nested.typeRef,
-          table: nested.table,
-          sourceTables: nested.sourceTables,
-          columns: nested.columns,
-          shape: nested.shape,
-          scopeTree: nested.scopeTree,
-          appliedOverlays: nested.appliedOverlays,
-          filter: nested.filter,
-          orderBy: nested.orderBy,
-          limit: nested.limit,
-          offset: nested.offset,
-          inference: nested.inference,
-        },
-      };
+      return compileFreeObjectExprToSelectFreeEntry(entry.expr, entry.name);
     });
 
     return {
       kind: "select_free",
       pathId,
       entries,
+    };
+  }
+
+  if (statement.kind === "select_expr") {
+    const compileExprToIREntry = (expr: FreeObjectExpr): import("../ir/model.js").SelectExprIREntry => {
+      if (expr.kind === "literal") {
+        return { kind: "literal", value: expr.value };
+      }
+      if (expr.kind === "set_literal") {
+        return { kind: "set_literal", values: [...expr.values] };
+      }
+      if (expr.kind === "enum_path") {
+        const normalizedEnumType = normalizeTypeName(expr.enumType, activeModule);
+        const enumTypeDef = schema.getType(normalizedEnumType);
+        if (!enumTypeDef) {
+          fail(`Unknown enum type '${normalizedEnumType}'`);
+        }
+        const allEnumValues = enumTypeDef!.fields.flatMap((f) => f.enumValues ?? []);
+        if (allEnumValues.length === 0) {
+          fail(`Type '${normalizedEnumType}' is not an enum`);
+        }
+        if (!allEnumValues.includes(expr.member)) {
+          fail(`enum '${normalizedEnumType}' has no member called '${expr.member}'`);
+        }
+        return { kind: "enum_path", enumType: normalizedEnumType, member: expr.member };
+      }
+      if (expr.kind === "path") {
+        // Check if head is a WITH binding
+        const bindingValue = withBindings.get(expr.head);
+        if (bindingValue) {
+          // Resolve the binding to see what it refers to
+          if (bindingValue.kind === "binding_ref") {
+            const resolvedType = schema.getType(normalizeTypeName(bindingValue.name, activeModule));
+            if (resolvedType) {
+              const isEnumScalarType = resolvedType.fields.length === 1
+                && resolvedType.fields[0]?.name === "__enum__"
+                && resolvedType.fields[0]?.enumValues
+                && resolvedType.fields[0].enumValues.length > 0;
+              if (isEnumScalarType) {
+                fail(`enum path expression lacks an enum member name, as in '${bindingValue.name}.GREEN'`);
+              }
+            }
+          }
+          if (bindingValue.kind === "enum_path") {
+            fail(`invalid property reference on an expression of primitive type`);
+          }
+          if (bindingValue.kind === "path") {
+            const normalizedHead = normalizeTypeName(bindingValue.head, activeModule);
+            const headTypeDef = schema.getType(normalizedHead);
+            if (headTypeDef) {
+              const isEnumScalarType = headTypeDef.fields.length === 1
+                && headTypeDef.fields[0]?.name === "__enum__"
+                && headTypeDef.fields[0]?.enumValues
+                && headTypeDef.fields[0].enumValues.length > 0;
+              if (isEnumScalarType) {
+                fail(`invalid property reference on an expression of primitive type`);
+              }
+            }
+          }
+          fail(`Unknown type or enum '${expr.head}'`);
+        }
+        const normalizedHead = normalizeTypeName(expr.head, activeModule);
+        const headTypeDef = schema.getType(normalizedHead);
+        if (headTypeDef) {
+          const isEnumScalarType = headTypeDef.fields.length === 1
+            && headTypeDef.fields[0]?.name === "__enum__"
+            && headTypeDef.fields[0]?.enumValues
+            && headTypeDef.fields[0].enumValues.length > 0;
+          if (isEnumScalarType) {
+            const allEnumValues = headTypeDef.fields[0]!.enumValues!;
+            if (!allEnumValues.includes(expr.tail)) {
+              fail(`enum has no member called '${expr.tail}'`);
+            }
+            return { kind: "enum_path", enumType: normalizedHead, member: expr.tail };
+          }
+          const field = headTypeDef.fields.find((f) => f.name === expr.tail);
+          const fieldType = field?.enumTypeName ?? (field?.type ? `std::${field.type}` : "unknown");
+          return { kind: "type_field_path", typeName: normalizedHead, field: expr.tail, fieldType };
+        }
+        fail(`Unknown type or enum '${normalizedHead}'`);
+      }
+      if (expr.kind === "cast") {
+        const innerEntry = compileExprToIREntry(expr.expr);
+        const isBuiltinScalar = ["str", "int", "float", "bool", "json", "datetime", "duration", "local_datetime", "local_date", "local_time", "relative_duration", "date_duration", "uuid"].includes(expr.castType);
+        const resolvedCastType = isBuiltinScalar ? expr.castType : normalizeTypeName(expr.castType, activeModule);
+        const castTypeDef = isBuiltinScalar ? undefined : schema.getType(resolvedCastType);
+        if (castTypeDef) {
+          const allEnumValues = castTypeDef.fields.flatMap((f) => f.enumValues ?? []);
+          if (allEnumValues.length > 0) {
+            // Check if inner is a json cast - validate the JSON value is appropriate for enum
+            if (innerEntry.kind === "cast" && innerEntry.castType === "json") {
+              const jsonInnerValue = extractLiteralValue(innerEntry.value);
+              if (jsonInnerValue === null) {
+                return { kind: "cast", castType: resolvedCastType, value: { kind: "literal", value: null } };
+              }
+              if (typeof jsonInnerValue !== "string") {
+                const jsonType = typeof jsonInnerValue === "number" ? "JSON number" : typeof jsonInnerValue === "boolean" ? "JSON boolean" : "JSON value";
+                fail(`expected JSON string or null for enum cast, got ${jsonType}`);
+              }
+              if (!allEnumValues.includes(jsonInnerValue as string)) {
+                fail(`invalid input value for enum '${resolvedCastType}': "${jsonInnerValue}"`);
+              }
+              return { kind: "cast", castType: resolvedCastType, value: { kind: "literal", value: jsonInnerValue } };
+            }
+            const coerceEnumValue = (entry: import("../ir/model.js").SelectExprIREntry): import("../ir/model.js").SelectExprIREntry => {
+              if (entry.kind === "set_literal") {
+                return {
+                  kind: "set_literal",
+                  values: entry.values.map((v) => {
+                    if (typeof v !== "string") {
+                      fail(`Cannot cast to enum '${resolvedCastType}': expected string value`);
+                    }
+                    if (!allEnumValues.includes(v as string)) {
+                      fail(`invalid input value for enum '${resolvedCastType}': "${v}"`);
+                    }
+                    return v;
+                  }),
+                };
+              }
+              const rawValue = extractLiteralValue(entry);
+              if (typeof rawValue !== "string") {
+                fail(`Cannot cast to enum '${resolvedCastType}': expected string value`);
+              }
+              if (!allEnumValues.includes(rawValue as string)) {
+                fail(`invalid input value for enum '${resolvedCastType}': "${rawValue}"`);
+              }
+              return { kind: "literal", value: rawValue };
+            };
+            return {
+              kind: "cast",
+              castType: resolvedCastType,
+              value: coerceEnumValue(innerEntry),
+            };
+          }
+          fail(`Unsupported cast type '${resolvedCastType}'`);
+        }
+        if (resolvedCastType === "str") {
+          return {
+            kind: "cast",
+            castType: "str",
+            value: innerEntry,
+          };
+        }
+        if (resolvedCastType === "json") {
+          return {
+            kind: "cast",
+            castType: "json",
+            value: innerEntry,
+          };
+        }
+        fail(`Unsupported cast type '${resolvedCastType}'`);
+      }
+      if (expr.kind === "concat") {
+        return {
+          kind: "concat",
+          parts: expr.parts.map(compileExprToIREntry),
+        };
+      }
+      if (expr.kind === "function_call") {
+        fail(`Unsupported expression kind in select_expr: ${expr.kind}`);
+      }
+      if (expr.kind === "select") {
+        // Check if this is actually a binding reference (e.g., WITH x := enum.RED SELECT x)
+        const bindingValue = withBindings.get(expr.typeName);
+        if (bindingValue) {
+          if (bindingValue.kind === "enum_path") {
+            return { kind: "enum_path", enumType: bindingValue.enumType, member: bindingValue.member };
+          }
+          if (bindingValue.kind === "path") {
+            const normalizedHead = normalizeTypeName(bindingValue.head, activeModule);
+            const headTypeDef = schema.getType(normalizedHead);
+            if (headTypeDef) {
+              const isEnumScalarType = headTypeDef.fields.length === 1
+                && headTypeDef.fields[0]?.name === "__enum__"
+                && headTypeDef.fields[0]?.enumValues
+                && headTypeDef.fields[0].enumValues.length > 0;
+              if (isEnumScalarType) {
+                const allEnumValues = headTypeDef.fields[0]!.enumValues!;
+                if (!allEnumValues.includes(bindingValue.tail)) {
+                  fail(`enum '${normalizedHead}' has no member called '${bindingValue.tail}'`);
+                }
+                return { kind: "enum_path", enumType: normalizedHead, member: bindingValue.tail };
+              }
+            }
+            fail(`Unknown type or enum '${normalizedHead}'`);
+          }
+          if (bindingValue.kind === "binding_ref") {
+            const resolvedType = schema.getType(normalizeTypeName(bindingValue.name, activeModule));
+            if (resolvedType) {
+              const isEnumScalarType = resolvedType.fields.length === 1
+                && resolvedType.fields[0]?.name === "__enum__"
+                && resolvedType.fields[0]?.enumValues
+                && resolvedType.fields[0].enumValues.length > 0;
+              if (isEnumScalarType) {
+                fail(`enum path expression lacks an enum member name, as in '${bindingValue.name}.GREEN'`);
+              }
+            }
+            fail(`Unknown binding '${expr.typeName}'`);
+          }
+          fail(`Unsupported binding kind '${bindingValue.kind}'`);
+        }
+        fail(`Unsupported expression kind in select_expr: ${expr.kind}`);
+      }
+      fail(`Unsupported expression kind in select_expr: ${(expr as FreeObjectExpr).kind}`);
+      throw new Error("unreachable");
+    };
+
+    const entry = compileExprToIREntry(statement.expr);
+    return {
+      kind: "select_expr",
+      entries: [entry],
     };
   }
 
@@ -1342,12 +1650,15 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       }
 
       try {
-        const parsed = JSON.parse(value) as unknown;
+        const serialized = typeof value === "string"
+          ? value
+          : fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
+        const parsed: unknown = JSON.parse(serialized);
         if (!Array.isArray(parsed)) {
           fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
         }
 
-        for (const entry of parsed) {
+        for (const entry of parsed as unknown[]) {
           if (!isValidScalarValue(field.type, entry as ScalarValue)) {
             fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
           }

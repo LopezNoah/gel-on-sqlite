@@ -12,6 +12,7 @@ import type {
   InsertConflict,
   InsertValue,
   InsertStatement,
+  SelectExprStatement,
   SelectFreeStatement,
   SelectStatement,
   ShapeElement,
@@ -60,13 +61,110 @@ class Parser {
     withBindings?: WithBinding[],
     withModule?: string,
     withModuleAliases?: WithModuleAlias[],
-  ): SelectStatement | SelectFreeStatement {
+  ): SelectStatement | SelectFreeStatement | SelectExprStatement {
     const start = this.expect("kw_select", "Expected 'select'");
 
+    // Free object select: SELECT { ... }
     if (this.peek().kind === "lbrace") {
       return this.parseFreeObjectSelect(start.line, start.column, withBindings, withModule, withModuleAliases);
     }
 
+    // Expression select: SELECT <type>expr, SELECT expr ++ expr, SELECT enum_type.MEMBER
+    if (this.peek().kind === "lt" || this.peek().kind === "string") {
+      const expr = this.parseFreeObjectConcatExpr();
+      if (this.peek().kind === "semi") {
+        this.consume();
+      }
+      this.expect("eof", "Unexpected tokens after statement");
+      return {
+        kind: "select_expr",
+        with: withBindings,
+        withModule,
+        withModuleAliases,
+        expr,
+        pos: { line: start.line, column: start.column },
+      };
+    }
+
+    // Check for enum path: SELECT enum_type.MEMBER
+    if (this.peek().kind === "identifier" && this.peekNext().kind === "dot" && this.peekNth(2).kind === "identifier") {
+      const first = this.peek().lexeme;
+      const third = this.peekNth(2).lexeme;
+      // If the "member" part looks like a valid identifier (not a keyword), treat as enum path
+      if (!["select", "insert", "update", "delete", "filter", "with", "order", "by", "limit", "offset"].includes(third)) {
+        const expr = this.parseFreeObjectConcatExpr();
+        if (this.peek().kind === "semi") {
+          this.consume();
+        }
+        this.expect("eof", "Unexpected tokens after statement");
+        return {
+          kind: "select_expr",
+          with: withBindings,
+          withModule,
+          withModuleAliases,
+          expr,
+          pos: { line: start.line, column: start.column },
+        };
+      }
+    }
+
+    // Check for enum type with @ (link property reference)
+    if (this.peek().kind === "identifier" && this.peekNext().kind === "at") {
+      const typeName = this.consume().lexeme;
+      this.consume();
+      throw new AppError("E_SYNTAX", "unexpected reference to link property", this.peek().line, this.peek().column);
+    }
+
+    // Check for backlink syntax: SELECT enum_type.<LINK
+    if (this.peek().kind === "identifier" && this.peekNext().kind === "dot" && this.peekNth(2).kind === "lt") {
+      const typeName = this.peek().lexeme;
+      this.consume();
+      this.consume();
+      this.consume();
+      throw new AppError("E_SYNTAX", `enum types do not support backlink`, this.peek().line, this.peek().column);
+    }
+
+    // Check for [IS type].field syntax on enum types
+    if (this.peek().kind === "identifier" && this.peekNext().kind === "lbracket") {
+      const typeName = this.peek().lexeme;
+      this.consume();
+      this.consume();
+      if (this.peek().kind === "kw_is") {
+        this.consume();
+        const filterType = this.expect("identifier", "Expected type name in type filter").lexeme;
+        this.expect("rbracket", "Expected ']' after type filter");
+        if (this.peek().kind === "dot") {
+          this.consume();
+          const member = this.expect("identifier", "Expected member name after '.'").lexeme;
+          throw new AppError("E_SYNTAX", `an enum member name must follow enum type name in the path`, this.peek().line, this.peek().column);
+        }
+      }
+      throw new AppError("E_SYNTAX", "Unexpected tokens after statement", this.peek().line, this.peek().column);
+    }
+
+    // If there are WITH bindings and SELECT is followed by a simple identifier (no shape),
+    // treat it as a select_expr (could be a binding reference to a scalar value)
+    if (withBindings && withBindings.length > 0) {
+      const firstToken = this.peek();
+      const secondToken = this.peekNext();
+      if (firstToken.kind === "identifier" && secondToken.kind !== "lbrace") {
+        const expr = this.parseFreeObjectConcatExpr();
+        if (this.peek().kind === "semi") {
+          this.consume();
+        }
+        this.expect("eof", "Unexpected tokens after statement");
+        return {
+          kind: "select_expr",
+          with: withBindings,
+          withModule,
+          withModuleAliases,
+          expr,
+          pos: { line: start.line, column: start.column },
+        };
+      }
+    }
+
+    // Regular type select: SELECT TypeName { ... }
     const typeName = this.expect("identifier", "Expected type name").lexeme;
 
     const shape: ShapeElement[] = [{ kind: "field", name: "id" }];
@@ -155,6 +253,14 @@ class Parser {
   }
 
   private parseFreeObjectExpr(): FreeObjectExpr {
+    if (this.peek().kind === "lt") {
+      this.consume();
+      const castType = this.expect("identifier", "Expected type name in cast").lexeme;
+      this.expect("gt", "Expected '>' after cast type");
+      const expr = this.parseFreeObjectExpr();
+      return { kind: "cast", castType, expr };
+    }
+
     if (this.peek().kind === "lbrace") {
       this.consume();
       const values: ScalarValue[] = [];
@@ -175,7 +281,26 @@ class Parser {
       };
     }
 
+    if (this.peek().kind === "identifier" && this.peekNext().kind === "dot" && this.peekNth(2).kind === "identifier") {
+      const head = this.consume().lexeme;
+      this.consume();
+      const tail = this.consume().lexeme;
+      // Check for chained path: color_enum_t.RED.GREEN
+      if (this.peek().kind === "dot" && this.peekNext().kind === "identifier") {
+        this.consume();
+        this.consume();
+        throw new AppError("E_SYNTAX", "invalid property reference on an expression of primitive type", this.peek().line, this.peek().column);
+      }
+      return { kind: "path", head, tail };
+    }
+
     if (this.peek().kind === "identifier") {
+      const name = this.peek().lexeme;
+      if (this.peekNext().kind === "at") {
+        this.consume();
+        this.consume();
+        throw new AppError("E_SYNTAX", "unexpected reference to link property", this.peek().line, this.peek().column);
+      }
       return this.parseInlineSelectExpr();
     }
 
@@ -183,6 +308,20 @@ class Parser {
       kind: "literal",
       value: this.readValue(),
     };
+  }
+
+  private parseFreeObjectConcatExpr(): FreeObjectExpr {
+    let left = this.parseFreeObjectExpr();
+    while (this.peek().kind === "concat") {
+      this.consume();
+      const right = this.parseFreeObjectExpr();
+      if (left.kind === "concat") {
+        left = { kind: "concat", parts: [...left.parts, right] };
+      } else {
+        left = { kind: "concat", parts: [left, right] };
+      }
+    }
+    return left;
   }
 
   private parseInlineSelectExpr(): { kind: "select"; typeName: string; shape: ShapeElement[]; clauses: ClauseChain } {
@@ -904,9 +1043,23 @@ class Parser {
     }
 
     if (this.peek().kind === "identifier") {
+      const name = this.peek().lexeme;
+      if (this.peekNext().kind === "dot" && this.peekNth(2).kind === "identifier") {
+        const head = this.consume().lexeme;
+        this.consume();
+        const tail = this.consume().lexeme;
+        // Check for chained path: x.GREEN.MORE
+        if (this.peek().kind === "dot" && this.peekNext().kind === "identifier") {
+          this.consume();
+          this.consume();
+          throw new AppError("E_SYNTAX", "invalid property reference on an expression of primitive type", this.peek().line, this.peek().column);
+        }
+        return { kind: "path", head, tail };
+      }
+      this.consume();
       return {
         kind: "binding_ref",
-        name: this.consume().lexeme,
+        name,
       };
     }
 
@@ -1072,6 +1225,10 @@ class Parser {
 
   private peekNext(): Token {
     return this.tokens[this.index + 1] ?? this.tokens[this.tokens.length - 1];
+  }
+
+  private peekNth(n: number): Token {
+    return this.tokens[this.index + n] ?? this.tokens[this.tokens.length - 1];
   }
 }
 

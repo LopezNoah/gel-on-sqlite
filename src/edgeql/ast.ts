@@ -71,6 +71,16 @@ export type WithBindingValue =
         shape: ShapeElement[];
         clauses: ClauseChain;
       };
+    }
+  | {
+      kind: "enum_path";
+      enumType: string;
+      member: string;
+    }
+  | {
+      kind: "path";
+      head: string;
+      tail: string;
     };
 
 export interface WithModuleAlias {
@@ -216,6 +226,25 @@ export type FreeObjectExpr =
   | {
       kind: "function_call";
       call: FunctionCallExpr;
+    }
+  | {
+      kind: "cast";
+      castType: string;
+      expr: FreeObjectExpr;
+    }
+  | {
+      kind: "enum_path";
+      enumType: string;
+      member: string;
+    }
+  | {
+      kind: "path";
+      head: string;
+      tail: string;
+    }
+  | {
+      kind: "concat";
+      parts: FreeObjectExpr[];
     };
 
 export interface SelectFreeStatement {
@@ -227,6 +256,15 @@ export interface SelectFreeStatement {
     name: string;
     expr: FreeObjectExpr;
   }>;
+  pos: SourcePos;
+}
+
+export interface SelectExprStatement {
+  kind: "select_expr";
+  with?: WithBinding[];
+  withModule?: string;
+  withModuleAliases?: WithModuleAlias[];
+  expr: FreeObjectExpr;
   pos: SourcePos;
 }
 
@@ -301,4 +339,4 @@ export interface DeleteStatement {
   pos: SourcePos;
 }
 
-export type Statement = SelectStatement | SelectFreeStatement | InsertStatement | UpdateStatement | DeleteStatement;
+export type Statement = SelectStatement | SelectFreeStatement | SelectExprStatement | InsertStatement | UpdateStatement | DeleteStatement;

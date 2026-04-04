@@ -27,6 +27,14 @@ export const compileToSQL = (ir: IRStatement, options: SQLCompileOptions = {}): 
     };
   }
 
+  if (ir.kind === "select_expr") {
+    return {
+      sql: "SELECT 1",
+      params: [],
+      loweringMode: "fallback_multi_query",
+    };
+  }
+
   if (ir.kind === "insert") {
     const keys = Object.keys(ir.values);
     if (keys.length === 0) {

@@ -46,7 +46,9 @@ export type TokenKind =
   | "lt"
   | "gt"
   | "minus"
+  | "concat"
   | "dollar"
+  | "at"
   | "lbracket"
   | "rbracket"
   | "eof";
@@ -138,6 +140,7 @@ export const tokenize = (input: string): Token[] => {
       || c === ">"
       || c === "-"
       || c === "$"
+      || c === "@"
       || c === "["
       || c === "]"
       || c === "("
@@ -163,6 +166,8 @@ export const tokenize = (input: string): Token[] => {
         push("minus", c, tokenLine, tokenColumn);
       } else if (c === "$") {
         push("dollar", c, tokenLine, tokenColumn);
+      } else if (c === "@") {
+        push("at", c, tokenLine, tokenColumn);
       } else if (c === "[") {
         push("lbracket", c, tokenLine, tokenColumn);
       } else if (c === "]") {
@@ -182,6 +187,13 @@ export const tokenize = (input: string): Token[] => {
 
     if (c === ":" && input[i + 1] === "=") {
       push("assign", ":=", tokenLine, tokenColumn);
+      i += 2;
+      column += 2;
+      continue;
+    }
+
+    if (c === "+" && input[i + 1] === "+") {
+      push("concat", "++", tokenLine, tokenColumn);
       i += 2;
       column += 2;
       continue;
