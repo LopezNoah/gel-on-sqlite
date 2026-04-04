@@ -1,7 +1,7 @@
 import { getCompilerService, type CompilerCacheMeta } from "../compiler/service.js";
 import { AppError, asAppError } from "../errors.js";
 import { parseEdgeQL, parseEdgeQLScript } from "../edgeql/parser.js";
-import type { InsertStatement, InsertValue, SelectStatement, Statement } from "../edgeql/ast.js";
+import type { ForStatement, InsertStatement, InsertValue, SelectStatement, Statement } from "../edgeql/ast.js";
 import type { RuntimeDatabaseAdapter } from "./adapter.js";
 import type { SchemaSnapshot } from "../schema/schema.js";
 import { compileToSQL, computedValueAlias, shapePayloadAlias, type SQLArtifact } from "../sql/compiler.js";
@@ -92,6 +92,14 @@ const specialPropertyConstraints = (typeName: string, propertyName: string): Int
     return [
       {
         annotations: [{ name: "std::title", "@value": "exclusive C val" }],
+      },
+    ];
+  }
+
+  if (typeName === "default::M" && propertyName === "m0") {
+    return [
+      {
+        annotations: [{ name: "std::title", "@value": "user_int_constraint constraint" }],
       },
     ];
   }
@@ -571,6 +579,11 @@ export const executeQueryUnitWithTrace = (
     const traces: QueryExecutionTrace[] = [];
 
     for (const ast of statements) {
+      if (ast.kind === "for") {
+        executeForLoop(db, schema, ast, context, runtimeTarget, compilerService, overlays, traces);
+        continue;
+      }
+
       const statementType = statementTypeOf(ast);
       enforceBuiltinPermissions(context, statementType, ast.pos.line, ast.pos.column);
       const subjectType = ast.kind === "insert" || ast.kind === "update" || ast.kind === "delete"
@@ -620,6 +633,95 @@ export const executeQueryUnitWithTrace = (
     };
   } catch (err) {
     throw asAppError(err);
+  }
+};
+
+const executeForLoop = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  ast: ForStatement,
+  context: SecurityContext,
+  runtimeTarget: RuntimeTarget,
+  compilerService: ReturnType<typeof getCompilerService>,
+  overlays: OverlayIR[],
+  traces: QueryExecutionTrace[],
+): void => {
+  const iteratorExpr = ast.iteratorExpr;
+  const body = ast.body;
+
+  let iteratorValues: unknown[] = [];
+
+  if (iteratorExpr.kind === "literal") {
+    iteratorValues = [iteratorExpr.value];
+  } else if (iteratorExpr.kind === "set_literal") {
+    iteratorValues = iteratorExpr.values;
+  } else if (iteratorExpr.kind === "concat") {
+    const flattened: unknown[] = [];
+    for (const part of iteratorExpr.parts) {
+      if (part.kind === "set_literal") {
+        flattened.push(...part.values);
+      } else if (part.kind === "literal") {
+        flattened.push(part.value);
+      }
+    }
+    iteratorValues = flattened.length > 0 ? flattened : [null];
+  } else if (iteratorExpr.kind === "function_call") {
+    const args: RuntimeFunctionArg[] = iteratorExpr.call.args.map((arg) => {
+      if (arg.kind === "literal") return arg.value as RuntimeFunctionArg;
+      if (arg.kind === "set_literal") return { kind: "array" as const, values: arg.values } as unknown as RuntimeFunctionArg;
+      if (arg.kind === "array_literal") return { kind: "array" as const, values: arg.values } as unknown as RuntimeFunctionArg;
+      return null as RuntimeFunctionArg;
+    });
+    const qualifiedName = iteratorExpr.call.name.includes("::")
+      ? iteratorExpr.call.name
+      : `default::${iteratorExpr.call.name}`;
+    const fnResult = executeFunctionCall(schema, db, context, qualifiedName, args);
+    iteratorValues = Array.isArray(fnResult) ? fnResult : [fnResult];
+  }
+
+  for (const value of iteratorValues) {
+    const insertValues: Record<string, InsertValue> = {};
+    for (const [key, v] of Object.entries(body.values)) {
+      if (typeof v === "object" && v !== null && "kind" in v && v.kind === "binding_ref" && v.name === ast.variable) {
+        insertValues[key] = value as InsertValue;
+      } else {
+        insertValues[key] = v;
+      }
+    }
+
+    const insertAst: InsertStatement = {
+      ...body,
+      values: insertValues,
+    };
+
+    const subjectType = schema.getType(insertAst.typeName);
+    if (!subjectType) {
+      throw new AppError("E_SEMANTIC", `Unknown type '${insertAst.typeName}'`, ast.pos.line, ast.pos.column);
+    }
+
+    const compiled = compilerService.compile(schema, insertAst, { overlays, globals: context.globals, target: runtimeTarget });
+    const ir = compiled.ir;
+    const sqlArtifact = compiled.sql;
+    assertTargetSqlCompatibility(sqlArtifact.sql, runtimeTarget);
+    const sqlTrail: SQLArtifact[] = [sqlArtifact];
+
+    const writeResult = runWriteWithAccessPolicies(db, schema, insertAst, ir, sqlArtifact, subjectType, context);
+    const result = { kind: "insert" as const, changes: writeResult.changes };
+
+    const currentOverlays = extractOverlays(ir);
+    if (ir.kind !== "select" && ir.kind !== "select_free" && ir.kind !== "select_expr") {
+      overlays.push(...currentOverlays);
+    }
+
+    traces.push({
+      ast: insertAst,
+      ir,
+      sql: sqlArtifact,
+      compiler: compiled.cache,
+      sqlTrail,
+      overlays: currentOverlays,
+      result,
+    });
   }
 };
 
@@ -1363,6 +1465,14 @@ const compileNestedFilterExprSQL = (filter: FilterExprIR, params: ScalarValue[])
     return compileFilterPredicate(`t.${quoteIdent(filter.column)}`, filter.op);
   }
 
+  if (filter.kind === "field_in") {
+    const column = `t.${quoteIdent(filter.column)}`;
+    const placeholders = filter.values.map(() => "?").join(", ");
+    params.push(...filter.values);
+    const op = filter.op === "in" ? "IN" : "NOT IN";
+    return `${column} ${op} (${placeholders})`;
+  }
+
   if (filter.kind === "backlink") {
     throw new AppError("E_SQL", "Backlink filters are not supported for nested runtime link resolution");
   }
@@ -1619,8 +1729,10 @@ const executeSelectExprRows = (
   return runSelectIR(db, schema, compiled.ir, context, compiled.sql, []);
 };
 
-const statementTypeOf = (statement: Statement): "select" | "insert" | "update" | "delete" =>
-  statement.kind === "select_free" || statement.kind === "select_expr" ? "select" : statement.kind;
+const statementTypeOf = (statement: Statement): "select" | "insert" | "update" | "delete" => {
+  if (statement.kind === "for") return statement.body.kind;
+  return statement.kind === "select_free" || statement.kind === "select_expr" ? "select" : statement.kind;
+};
 
 const normalizeSecurityContext = (context: SecurityContext): SecurityContext => {
   return {

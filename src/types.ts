@@ -108,6 +108,11 @@ export type ComputedDef = {
         | {
             kind: "concat";
             parts: ComputedValuePart[];
+          }
+        | {
+            kind: "function_call";
+            name: string;
+            args: ScalarValue[];
           };
     }
   | {

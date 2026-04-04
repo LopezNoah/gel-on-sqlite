@@ -177,12 +177,18 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
     stack.add(typeName);
 
     const inheritedMembers: TypeMember[] = [];
+    const inheritedNames = new Set<string>();
     for (const baseName of typeDecl.extends ?? []) {
       const baseDecl = typeByName.get(baseName);
       if (!baseDecl) {
         throw new Error(`Unknown base type '${baseName}' in ${typeName}`);
       }
-      inheritedMembers.push(...resolveMembers(baseDecl, stack).map((member) => cloneMemberForInheritance(member)));
+      for (const member of resolveMembers(baseDecl, stack).map((member) => cloneMemberForInheritance(member))) {
+        if (!inheritedNames.has(member.name)) {
+          inheritedMembers.push(member);
+          inheritedNames.add(member.name);
+        }
+      }
     }
 
     const merged = [...inheritedMembers];
@@ -878,6 +884,11 @@ const renderComputedExpr = (expr: Extract<TypeMember, { kind: "computed" }>['exp
     return expr.parts
       .map((part) => (part.kind === "field_ref" ? `.${part.field}` : renderScalarLiteral(part.value)))
       .join(" ++ ");
+  }
+
+  if (expr.kind === "function_call") {
+    const args = expr.args.map((arg) => renderScalarLiteral(arg)).join(", ");
+    return `${expr.name}(${args})`;
   }
 
   if (expr.kind === "backlink") {

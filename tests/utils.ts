@@ -32,7 +32,7 @@ function stripHashComments(source: string): string {
 
 function normalizeSetupStatement(source: string): string {
   return source
-    .replace(/^(\s*INSERT\s+)([A-Za-z_][\w]*)(\s*\{)/im, "$1default::$2$3")
+    .replace(/^(\s*INSERT\s+)([A-Za-z_][\w]*)(\s*\{)/gim, "$1default::$2$3")
     .replace(/<json>\s*'([^']*)'/g, "'\"$1\"'")
     .replace(/<([A-Za-z_][\w:]*)>\s*'([^']*)'/g, "'$2'")
     .replace(/<json>\s*False/g, "false")
@@ -117,20 +117,22 @@ export class QueryHarness {
       const p = path.join(__dirname, "schemas", `${options.setup}.edgeql`);
       const setupSource = stripHashComments(fs.readFileSync(p, "utf-8"))
         .replace(/^\s*SET\s+MODULE\s+[^;]+;\s*$/gim, "");
-      let setupQueries = setupSource
-        .split(/;\s*$/m)
-        .filter(s => s.trim().length > 0);
 
       if (options.setup === "dump01_setup") {
-        setupQueries = setupQueries.filter((query) => /^\s*INSERT\s+(default::)?(A|B)\b/i.test(query));
-      }
-      
-      for (const q of setupQueries) {
-        const normalized = normalizeSetupStatement(q) + ";";
-        try {
-          harness.query(normalized);
-        } catch (error) {
-          throw new Error(`Failed setup query:\n${normalized}\n\n${error instanceof Error ? error.message : String(error)}`);
+        const normalized = normalizeSetupStatement(setupSource);
+        harness.script(normalized);
+      } else {
+        let setupQueries = setupSource
+          .split(/;\s*$/m)
+          .filter(s => s.trim().length > 0);
+
+        for (const q of setupQueries) {
+          const normalized = normalizeSetupStatement(q) + ";";
+          try {
+            harness.query(normalized);
+          } catch (error) {
+            throw new Error(`Failed setup query:\n${normalized}\n\n${error instanceof Error ? error.message : String(error)}`);
+          }
         }
       }
     }

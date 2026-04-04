@@ -21,6 +21,10 @@ export type FilterValue =
   | {
       kind: "binding_ref";
       name: string;
+    }
+  | {
+      kind: "set_literal";
+      values: ScalarValue[];
     };
 
 export type FilterExpr =
@@ -29,6 +33,12 @@ export type FilterExpr =
       target: FilterTarget;
       op: "=" | "!=" | "like" | "ilike";
       value: FilterValue;
+    }
+  | {
+      kind: "in_predicate";
+      target: FilterTarget;
+      op: "in" | "not_in";
+      values: ScalarValue[];
     }
   | {
       kind: "and";
@@ -98,6 +108,9 @@ export interface ClauseChain {
   orderBy?: OrderExpr;
   limit?: number;
   offset?: number;
+  _withBindings?: WithBinding[];
+  _withModule?: string;
+  _withModuleAliases?: WithModuleAlias[];
 }
 
 export type ComputedExpr =
@@ -339,4 +352,15 @@ export interface DeleteStatement {
   pos: SourcePos;
 }
 
-export type Statement = SelectStatement | SelectFreeStatement | SelectExprStatement | InsertStatement | UpdateStatement | DeleteStatement;
+export interface ForStatement {
+  kind: "for";
+  with?: WithBinding[];
+  withModule?: string;
+  withModuleAliases?: WithModuleAlias[];
+  variable: string;
+  iteratorExpr: FreeObjectExpr;
+  body: InsertStatement;
+  pos: SourcePos;
+}
+
+export type Statement = SelectStatement | SelectFreeStatement | SelectExprStatement | InsertStatement | UpdateStatement | DeleteStatement | ForStatement;

@@ -5,6 +5,9 @@ export type TokenKind =
   | "kw_insert"
   | "kw_update"
   | "kw_delete"
+  | "kw_for"
+  | "kw_in"
+  | "kw_union"
   | "kw_filter"
   | "kw_set"
   | "kw_with"
@@ -23,6 +26,7 @@ export type TokenKind =
   | "kw_and"
   | "kw_or"
   | "kw_not"
+  | "kw_distinct"
   | "kw_as"
   | "kw_module"
   | "kw_unless"
@@ -65,6 +69,9 @@ const KEYWORDS: Record<string, TokenKind> = {
   insert: "kw_insert",
   update: "kw_update",
   delete: "kw_delete",
+  for: "kw_for",
+  in: "kw_in",
+  union: "kw_union",
   filter: "kw_filter",
   set: "kw_set",
   with: "kw_with",
@@ -83,6 +90,7 @@ const KEYWORDS: Record<string, TokenKind> = {
   and: "kw_and",
   or: "kw_or",
   not: "kw_not",
+  distinct: "kw_distinct",
   as: "kw_as",
   module: "kw_module",
   unless: "kw_unless",
@@ -245,10 +253,19 @@ export const tokenize = (input: string): Token[] => {
       i += 1;
       column += 1;
 
-      while (i < input.length && /[A-Za-z0-9_:]/.test(input[i])) {
-        value += input[i];
-        i += 1;
-        column += 1;
+      while (i < input.length) {
+        const next = input[i];
+        if (/[A-Za-z0-9_]/.test(next)) {
+          value += next;
+          i += 1;
+          column += 1;
+        } else if (next === ":" && input[i + 1] === ":") {
+          value += "::";
+          i += 2;
+          column += 2;
+        } else {
+          break;
+        }
       }
 
       const lowered = value.toLowerCase();

@@ -6,6 +6,7 @@ import type {
   ComputedExpr,
   DeleteStatement,
   FilterExpr,
+  ForStatement,
   FunctionCallArgExpr,
   FunctionCallExpr,
   FreeObjectExpr,
@@ -50,11 +51,45 @@ class Parser {
       return this.parseUpdate(withClause.bindings, withClause.module, withClause.moduleAliases);
     }
 
+    if (token.kind === "kw_for") {
+      return this.parseFor(withClause.bindings, withClause.module, withClause.moduleAliases);
+    }
+
     if (token.kind === "kw_delete") {
       return this.parseDelete(withClause.bindings, withClause.module, withClause.moduleAliases);
     }
 
-    throw new AppError("E_SYNTAX", "Expected 'select', 'insert', 'update', or 'delete'", token.line, token.column);
+    throw new AppError("E_SYNTAX", "Expected 'select', 'insert', 'update', 'delete', or 'for'", token.line, token.column);
+  }
+
+  private parseFor(
+    withBindings?: WithBinding[],
+    withModule?: string,
+    withModuleAliases?: WithModuleAlias[],
+  ): ForStatement {
+    const start = this.expect("kw_for", "Expected 'for'");
+    const variable = this.expect("identifier", "Expected variable name after 'for'").lexeme;
+    this.expect("kw_in", "Expected 'in' after for variable");
+    const iteratorExpr = this.parseFreeObjectConcatExpr();
+    this.expect("kw_union", "Expected 'union' after for iterator");
+    const hasParen = this.peek().kind === "lparen";
+    if (hasParen) {
+      this.consume();
+    }
+    const body = this.parseInsert(withBindings, withModule, withModuleAliases, false);
+    if (hasParen) {
+      this.expect("rparen", "Expected ')' after for body");
+    }
+    return {
+      kind: "for",
+      with: withBindings,
+      withModule,
+      withModuleAliases,
+      variable,
+      iteratorExpr,
+      body,
+      pos: { line: start.line, column: start.column },
+    };
   }
 
   private parseSelect(
@@ -581,6 +616,7 @@ class Parser {
     withBindings?: WithBinding[],
     withModule?: string,
     withModuleAliases?: WithModuleAlias[],
+    expectEof = true,
   ): InsertStatement {
     const start = this.expect("kw_insert", "Expected 'insert'");
     const typeName = this.expect("identifier", "Expected type name").lexeme;
@@ -604,7 +640,9 @@ class Parser {
       this.consume();
     }
 
-    this.expect("eof", "Unexpected tokens after statement");
+    if (expectEof) {
+      this.expect("eof", "Unexpected tokens after statement");
+    }
 
     return {
       kind: "insert",
@@ -629,20 +667,39 @@ class Parser {
       };
     }
 
-    if (this.peek().kind === "lparen" && this.peekNext().kind === "kw_select") {
+    if (this.peek().kind === "lparen") {
       this.consume();
-      this.expect("kw_select", "Expected 'select' in insert expression");
-      const nested = this.parseInlineSelectExpr();
-      this.expect("rparen", "Expected ')' after insert select expression");
-      return nested;
-    }
-
-    if (this.peek().kind === "lparen" && this.peekNext().kind === "kw_insert") {
-      this.consume();
-      this.expect("kw_insert", "Expected 'insert' in nested insert expression");
-      const nested = this.parseNestedInsertExpr();
-      this.expect("rparen", "Expected ')' after nested insert expression");
-      return nested;
+      const next = this.peek();
+      if (next.kind === "kw_with") {
+        const withClause = this.parseWithClause();
+        this.expect("kw_select", "Expected 'select' after with clause in insert expression");
+        const nested = this.parseInlineSelectExpr();
+        this.expect("rparen", "Expected ')' after insert select expression");
+        return {
+          kind: "select",
+          typeName: nested.typeName,
+          shape: nested.shape,
+          clauses: {
+            ...nested.clauses,
+            _withBindings: withClause.bindings,
+            _withModule: withClause.module,
+            _withModuleAliases: withClause.moduleAliases,
+          },
+        };
+      }
+      if (next.kind === "kw_select") {
+        this.consume();
+        const nested = this.parseInlineSelectExpr();
+        this.expect("rparen", "Expected ')' after insert select expression");
+        return nested;
+      }
+      if (next.kind === "kw_insert") {
+        this.consume();
+        const nested = this.parseNestedInsertExpr();
+        this.expect("rparen", "Expected ')' after nested insert expression");
+        return nested;
+      }
+      throw new AppError("E_SYNTAX", "Expected select or insert expression in parentheses", next.line, next.column);
     }
 
     if (this.peek().kind === "lbrace") {
@@ -902,8 +959,27 @@ class Parser {
     } else if (token.kind === "kw_ilike") {
       this.consume();
       op = "ilike";
+    } else if (token.kind === "kw_in") {
+      this.consume();
+      const values = this.parseFilterValueSet();
+      return {
+        kind: "in_predicate",
+        target,
+        op: "in",
+        values,
+      };
+    } else if (token.kind === "kw_not") {
+      this.consume();
+      this.expect("kw_in", "Expected 'IN' after 'NOT' in filter");
+      const values = this.parseFilterValueSet();
+      return {
+        kind: "in_predicate",
+        target,
+        op: "not_in",
+        values,
+      };
     } else {
-      throw new AppError("E_SYNTAX", "Expected filter operator (=, !=, like, ilike)", token.line, token.column);
+      throw new AppError("E_SYNTAX", "Expected filter operator (=, !=, like, ilike, IN, NOT IN)", token.line, token.column);
     }
 
     return {
@@ -912,6 +988,34 @@ class Parser {
       op,
       value: this.readFilterValue(),
     };
+  }
+
+  private parseFilterValueSet(): ScalarValue[] {
+    const token = this.peek();
+    // Handle DISTINCT keyword before set literal
+    if (token.kind === "kw_distinct") {
+      this.consume();
+    }
+    if (this.peek().kind === "lbrace") {
+      this.consume();
+      const values: ScalarValue[] = [];
+      while (this.peek().kind !== "rbrace") {
+        const val = this.readFilterValue();
+        if (typeof val === "string" || typeof val === "number" || typeof val === "boolean" || val === null) {
+          values.push(val);
+        } else {
+          throw new AppError("E_SYNTAX", "IN filter values must be scalar literals", token.line, token.column);
+        }
+        if (this.peek().kind === "comma") {
+          this.consume();
+        } else {
+          break;
+        }
+      }
+      this.expect("rbrace", "Expected '}' to close IN filter value set");
+      return values;
+    }
+    throw new AppError("E_SYNTAX", "Expected '{' for IN filter value set", token.line, token.column);
   }
 
   private parseFilterTarget(): { kind: "field"; field: string } | { kind: "backlink"; link: string; sourceType?: string } {
@@ -1241,6 +1345,7 @@ export const parseEdgeQLScript = (input: string): Statement[] => {
   const statements: Statement[] = [];
   let current = "";
   let quote: "'" | '"' | undefined;
+  let depth = 0;
 
   for (let i = 0; i < input.length; i += 1) {
     const ch = input[i];
@@ -1250,7 +1355,15 @@ export const parseEdgeQLScript = (input: string): Statement[] => {
       continue;
     }
 
-    if (ch === ";" && !quote) {
+    if (!quote) {
+      if (ch === "{" || ch === "(" || ch === "[") {
+        depth += 1;
+      } else if (ch === "}" || ch === ")" || ch === "]") {
+        depth -= 1;
+      }
+    }
+
+    if (ch === ";" && !quote && depth === 0) {
       const piece = current.trim();
       if (piece.length > 0) {
         statements.push(parseEdgeQL(`${piece};`));

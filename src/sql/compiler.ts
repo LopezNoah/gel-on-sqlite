@@ -382,6 +382,15 @@ const compileFilterExprSQL = (filter: FilterExprIR, sourceAlias: string, params:
     return compileFilterPredicate(`${sourceAlias}.${quoteIdent(filter.column)}`, filter.op);
   }
 
+  if (filter.kind === "field_in") {
+    const column = `${sourceAlias}.${quoteIdent(filter.column)}`;
+    const placeholders = filter.values.map(() => "?").join(", ");
+    const encodedValues = filter.values.map((v) => encodeParam(v));
+    params.push(...encodedValues);
+    const op = filter.op === "in" ? "IN" : "NOT IN";
+    return `${column} ${op} (${placeholders})`;
+  }
+
   if (filter.kind === "backlink") {
     return compileBacklinkFilterPredicate(sourceAlias, filter, params);
   }
@@ -401,6 +410,10 @@ const collectFieldFilterColumns = (filter: FilterExprIR | undefined): string[] =
   }
 
   if (filter.kind === "field") {
+    return [filter.column];
+  }
+
+  if (filter.kind === "field_in") {
     return [filter.column];
   }
 

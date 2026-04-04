@@ -151,6 +151,12 @@ export type FilterExprIR =
       value: ScalarValue;
     }
   | {
+      kind: "field_in";
+      column: string;
+      op: "in" | "not_in";
+      values: ScalarValue[];
+    }
+  | {
       kind: "backlink";
       sources: BacklinkSourceIR[];
       op: "=" | "!=";

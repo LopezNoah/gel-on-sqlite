@@ -80,43 +80,43 @@ INSERT B {
     p_bytes := {b'Hello', b'world'},
 };
 
-# FOR x IN {{'D', 'E', 'F'} ++ {'00', '01', '02', '03'}}
-# UNION (
-#     INSERT C {
-#         val := x,
-#     }
-# );
+FOR x IN {'D', 'E', 'F'} ++ {'00', '01', '02', '03'}
+UNION (
+    INSERT C {
+        val := x,
+    }
+);
 
 
-# INSERT D {
-#     num := 0,
-# };
-# INSERT D {
-#     num := 1,
-#     single_link := (SELECT C FILTER .val = 'D00'),
-# };
-# INSERT D {
-#     num := 2,
-#     multi_link := (SELECT C FILTER .val IN DISTINCT {'D01', 'D02'}),
-# };
-# INSERT D {
-#     num := 3,
-#     single_link := (SELECT C FILTER .val = 'D00'),
-#     multi_link := (SELECT C FILTER .val IN DISTINCT {'D01', 'D02', 'D03'}),
-# };
+INSERT D {
+    num := 0,
+};
+INSERT D {
+    num := 1,
+    single_link := (SELECT C FILTER .val = 'D00'),
+};
+INSERT D {
+    num := 2,
+    multi_link := (SELECT C FILTER .val IN DISTINCT {'D01', 'D02'}),
+};
+INSERT D {
+    num := 3,
+    single_link := (SELECT C FILTER .val = 'D00'),
+    multi_link := (SELECT C FILTER .val IN DISTINCT {'D01', 'D02', 'D03'}),
+};
 
 
-# INSERT E {
-#     num := 4,
-# };
-# INSERT E {
-#     num := 5,
-#     single_link := (SELECT C FILTER .val = 'E00'),
-# };
-# INSERT E {
-#     num := 6,
-#     multi_link := (SELECT C FILTER .val IN DISTINCT {'E01', 'E02'}),
-# };
+INSERT E {
+    num := 4,
+};
+INSERT E {
+    num := 5,
+    single_link := (SELECT C FILTER .val = 'E00'),
+};
+INSERT E {
+    num := 6,
+    multi_link := (SELECT C FILTER .val IN DISTINCT {'E01', 'E02'}),
+};
 # INSERT E {
 #     num := 7,
 #     single_link := (
@@ -141,118 +141,119 @@ INSERT B {
 # };
 
 
-# INSERT G;
-# # INSERT H;
-# # INSERT I;
-# # INSERT J;
 
-# # INSERT K {k := 'k0'};
-# # INSERT L {l0 := 'l0_0', l1 := 'l1_0'};
+INSERT G {g0 := 'fixed', g1 := 'func1', g2 := '2'};
+# INSERT H;
+# INSERT I;
+# INSERT J;
 
-# # INSERT M {m0 := 10, m1 := 'm1'};
-# # INSERT N {n0 := 10, n1 := 'n1'};
+INSERT K {k := 'k0'};
+INSERT L {l0 := 'l0_0', l1 := 'l1_0'};
 
-# # INSERT O {o0 := 'ipsum'};
+INSERT M {m0 := 10, m1 := 'm1'};
+INSERT N {n0 := 10, n1 := 'n1'};
 
-# # INSERT P {
-# #     plink0 := (
-# #         SELECT C{@p0 := ['hello', 'world']} FILTER .val = 'E00'
-# #     ),
-# #     plink1 := (
-# #         SELECT C{@p1 := [2.5, -4.25]} FILTER .val = 'E00'
-# #     ),
-# #     p2 := ['hello', 'world'],
-# #     p3 := [2.5, -4.25],
-# # };
+INSERT O {o0 := 'ipsum', o1 := 'Lorem'};
 
-# # INSERT Q {
-# #     q0 := (2, False),
-# #     q1 := ('p3', 3.33n),
-# #     q2 := (x := 2, y := False),
-# #     q3 := ('p11', 3.33n),
-# # };
+# INSERT P {
+#     plink0 := (
+#         SELECT C{@p0 := ['hello', 'world']} FILTER .val = 'E00'
+#     ),
+#     plink1 := (
+#         SELECT C{@p1 := [2.5, -4.25]} FILTER .val = 'E00'
+#     ),
+#     p2 := ['hello', 'world'],
+#     p3 := [2.5, -4.25],
+# };
 
-# # INSERT S {name:= 'name0', s := 's0'};
-# # INSERT T {name:= 'name0', t := 't0'};
-# # INSERT V {name:= 'name1', s := 's1', t := 't1', u := 'u1'};
+# INSERT Q {
+#     q0 := (2, False),
+#     q1 := ('p3', 3.33n),
+#     q2 := (x := 2, y := False),
+#     q3 := ('p11', 3.33n),
+# };
 
-# # INSERT W {name := 'w0'};
-# # INSERT W {name := 'w2'};
-# # INSERT W {name := 'w1', w := (SELECT DETACHED W FILTER .name = 'w2')};
-# # INSERT W {name := 'w3'};
-# # INSERT W {name := 'w4', w := (SELECT DETACHED W FILTER .name = 'w3')};
-# # UPDATE W
-# # FILTER .name = 'w3'
-# # SET {
-# #     w := (SELECT DETACHED W FILTER .name = 'w4')
-# # };
+INSERT S {name:= 'name0', s := 's0'};
+INSERT T {name:= 'name0', t := 't0'};
+INSERT V {name:= 'name1', s := 's1', t := 't1', u := 'u1'};
 
-# # INSERT X {name := 'x0'};
-# # INSERT Y {name := 'y0', x := (SELECT X LIMIT 1)};
-# # UPDATE X SET {y := (SELECT Y LIMIT 1)};
+# INSERT W {name := 'w0'};
+# INSERT W {name := 'w2'};
+# INSERT W {name := 'w1', w := (SELECT DETACHED W FILTER .name = 'w2')};
+# INSERT W {name := 'w3'};
+# INSERT W {name := 'w4', w := (SELECT DETACHED W FILTER .name = 'w3')};
+# UPDATE W
+# FILTER .name = 'w3'
+# SET {
+#     w := (SELECT DETACHED W FILTER .name = 'w4')
+# };
 
-# # INSERT Z {
-# #     ck := (SELECT C FILTER .val = 'F00'),
-# #     stw := (SELECT S FILTER .name = 'name0'),
-# # };
-# # INSERT Z {
-# #     ck := (SELECT K LIMIT 1),
-# #     stw := {
-# #         (SELECT S FILTER .name = 'name0'),
-# #         (SELECT W FILTER .name = 'w1' LIMIT 1),
-# #         (SELECT T FILTER .name = 'name0'),
-# #     }
-# # };
+# INSERT X {name := 'x0'};
+# INSERT Y {name := 'y0', x := (SELECT X LIMIT 1)};
+# UPDATE X SET {y := (SELECT Y LIMIT 1)};
 
-# # # cross-module data
-# # INSERT DefA {a := 'DefA'};
-# # INSERT test::TestB {b := 'TestB', blink := (SELECT DefA LIMIT 1)};
-# # INSERT DefB {other := (SELECT test::TestB LIMIT 1)};
-# # INSERT test::TestC {c := 'TestC'};
-# # INSERT DefC {other := (SELECT test::TestC LIMIT 1)};
-# # UPDATE test::TestC
-# # SET {clink := (SELECT DefC LIMIT 1)};
+# INSERT Z {
+#     ck := (SELECT C FILTER .val = 'F00'),
+#     stw := (SELECT S FILTER .name = 'name0'),
+# };
+# INSERT Z {
+#     ck := (SELECT K LIMIT 1),
+#     stw := {
+#         (SELECT S FILTER .name = 'name0'),
+#         (SELECT W FILTER .name = 'w1' LIMIT 1),
+#         (SELECT T FILTER .name = 'name0'),
+#     }
+# };
 
-# # # on delete
-# # INSERT TargetA {name := 't0'};
-# # INSERT TargetA {name := 't1'};
-# # INSERT TargetA {name := 't2'};
-# # INSERT TargetA {name := 't3'};
-# # INSERT SourceA {name := 's0', link0 := (SELECT TargetA FILTER .name = 't0')};
-# # INSERT SourceA {name := 's1', link1 := (SELECT TargetA FILTER .name = 't1')};
-# # INSERT SourceA {name := 's2', link2 := (SELECT TargetA FILTER .name = 't2')};
-# # INSERT SourceA {name := 's3', link3 := (SELECT TargetA FILTER .name = 't3')};
+# # cross-module data
+# INSERT DefA {a := 'DefA'};
+# INSERT test::TestB {b := 'TestB', blink := (SELECT DefA LIMIT 1)};
+# INSERT DefB {other := (SELECT test::TestB LIMIT 1)};
+# INSERT test::TestC {c := 'TestC'};
+# INSERT DefC {other := (SELECT test::TestC LIMIT 1)};
+# UPDATE test::TestC
+# SET {clink := (SELECT DefC LIMIT 1)};
 
-# # # read-only
-# # INSERT ROPropsA {name := 'ro0'};
-# # INSERT ROPropsA {name := 'ro1', rop0 := 100};
-# # INSERT ROPropsA {name := 'ro2', rop1 := -2};
+# # on delete
+# INSERT TargetA {name := 't0'};
+# INSERT TargetA {name := 't1'};
+# INSERT TargetA {name := 't2'};
+# INSERT TargetA {name := 't3'};
+# INSERT SourceA {name := 's0', link0 := (SELECT TargetA FILTER .name = 't0')};
+# INSERT SourceA {name := 's1', link1 := (SELECT TargetA FILTER .name = 't1')};
+# INSERT SourceA {name := 's2', link2 := (SELECT TargetA FILTER .name = 't2')};
+# INSERT SourceA {name := 's3', link3 := (SELECT TargetA FILTER .name = 't3')};
 
-# # INSERT ROLinksA {name := 'ro0'};
-# # INSERT ROLinksA {name := 'ro1', rol0 := (SELECT C FILTER .val = 'F00')};
-# # INSERT ROLinksA {name := 'ro2', rol1 := (SELECT C FILTER .val = 'F00')};
-# # INSERT ROLinksA {
-# #     name := 'ro3', rol2 := (SELECT C FILTER .val IN {'F01', 'F02'})
-# # };
+# # read-only
+# INSERT ROPropsA {name := 'ro0'};
+# INSERT ROPropsA {name := 'ro1', rop0 := 100};
+# INSERT ROPropsA {name := 'ro2', rop1 := -2};
 
-# # INSERT ROLinksB {
-# #     name := 'ro0',
-# #     rol0 := (SELECT C FILTER .val = 'D00'),
-# #     rol1 := (SELECT C FILTER .val IN {'D01', 'D02'}),
-# # };
-# # INSERT ROLinksB {
-# #     name := 'ro1',
-# #     rol0 := (SELECT C{@rolp00 := 99} FILTER .val = 'D00'),
-# #     rol1 := (
-# #         SELECT C{@rolp10 := 100 - <int64>.val[-1]}
-# #         FILTER .val IN {'D01', 'D02'}
-# #     ),
-# # };
-# # INSERT ROLinksB {
-# #     name := 'ro2',
-# #     rol0 := (SELECT C{@rolp01 := -10} FILTER .val = 'E00'),
-# #     rol1 := (
-# #         SELECT C{@rolp11 := -<int64>.val[-1]}
-# #         FILTER .val IN {'E01', 'E02'}
-# #     ),
-# # };
+# INSERT ROLinksA {name := 'ro0'};
+# INSERT ROLinksA {name := 'ro1', rol0 := (SELECT C FILTER .val = 'F00')};
+# INSERT ROLinksA {name := 'ro2', rol1 := (SELECT C FILTER .val = 'F00')};
+# INSERT ROLinksA {
+#     name := 'ro3', rol2 := (SELECT C FILTER .val IN {'F01', 'F02'})
+# };
+
+# INSERT ROLinksB {
+#     name := 'ro0',
+#     rol0 := (SELECT C FILTER .val = 'D00'),
+#     rol1 := (SELECT C FILTER .val IN {'D01', 'D02'}),
+# };
+# INSERT ROLinksB {
+#     name := 'ro1',
+#     rol0 := (SELECT C{@rolp00 := 99} FILTER .val = 'D00'),
+#     rol1 := (
+#         SELECT C{@rolp10 := 100 - <int64>.val[-1]}
+#         FILTER .val IN {'D01', 'D02'}
+#     ),
+# };
+# INSERT ROLinksB {
+#     name := 'ro2',
+#     rol0 := (SELECT C{@rolp01 := -10} FILTER .val = 'E00'),
+#     rol1 := (
+#         SELECT C{@rolp11 := -<int64>.val[-1]}
+#         FILTER .val IN {'E01', 'E02'}
+#     ),
+# };

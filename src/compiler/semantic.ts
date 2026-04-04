@@ -321,9 +321,14 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     return resolved;
   };
 
-  const resolveFilterValue = (value: ScalarValue | { kind: "binding_ref"; name: string }): ScalarValue => {
-    if (typeof value === "object" && value !== null && "kind" in value && value.kind === "binding_ref") {
-      return resolveWithBindingScalar(value.name);
+  const resolveFilterValue = (value: ScalarValue | { kind: "binding_ref"; name: string } | { kind: "set_literal"; values: ScalarValue[] }): ScalarValue | ScalarValue[] => {
+    if (typeof value === "object" && value !== null && "kind" in value) {
+      if (value.kind === "binding_ref") {
+        return resolveWithBindingScalar(value.name);
+      }
+      if (value.kind === "set_literal") {
+        return value.values;
+      }
     }
 
     return value as ScalarValue;
@@ -380,7 +385,31 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       };
     }
 
-    const value = resolveFilterValue(filter.value);
+    if (filter.kind === "in_predicate") {
+      const fieldName = filter.target.kind === "field" ? filter.target.field : null;
+      if (!fieldName) {
+        fail("IN filter only supports field targets");
+        return {} as FilterExprIR;
+      }
+      if (!knownFields.has(fieldName)) {
+        fail(`Unknown field '${fieldName}' on '${typeLabel}'`);
+      }
+
+      const field = requireValue(fieldByName.get(fieldName), `Unknown field '${fieldName}' on '${typeLabel}'`);
+      for (const v of filter.values) {
+        if (!isValidScalarValue(field.type, v)) {
+          fail(`Type mismatch for '${fieldName}' in IN filter: expected ${field.type}`);
+        }
+      }
+      return {
+        kind: "field_in",
+        column: fieldName,
+        op: filter.op,
+        values: filter.values,
+      };
+    }
+
+    const value = resolveFilterValue(filter.value) as ScalarValue;
     if (filter.target.kind === "backlink") {
       if (!options.allowBacklink) {
         fail("Backlink filters are currently supported only at top-level select scope");
@@ -411,6 +440,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     }
 
     const field = requireValue(fieldByName.get(filter.target.field), `Unknown field '${filter.target.field}' on '${typeLabel}'`);
+
     if (filter.op === "like" || filter.op === "ilike") {
       if (field.type !== "str") {
         fail(`Filter operator '${filter.op}' requires str field, got ${field.type}`);
@@ -824,6 +854,17 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
                 expr: {
                   kind: "literal",
                   value: computed.expr.value,
+                },
+              });
+            } else if (computed.expr.kind === "function_call") {
+              shapeElements.push({
+                kind: "computed",
+                name: shapeElement.name,
+                pathId: elementPathId,
+                expr: {
+                  kind: "function_call",
+                  functionName: computed.expr.name,
+                  args: computed.expr.args.map((arg) => ({ kind: "literal", value: arg })),
                 },
               });
             } else {
@@ -1613,6 +1654,19 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
 
   const resolvedRootType = statement.kind === "select"
     ? resolveSelectSource(statement)
+    : statement.kind === "for"
+    ? {
+        typeDef: requireValue(
+          schema.getType(normalizeTypeName(statement.body.typeName, activeModule)),
+          `Unknown type '${normalizeTypeName(statement.body.typeName, activeModule)}'`,
+        ),
+        clauses: {
+          filter: undefined,
+          orderBy: undefined,
+          limit: undefined,
+          offset: undefined,
+        },
+      }
     : {
         typeDef: requireValue(
           schema.getType(normalizeTypeName(statement.typeName, activeModule)),
@@ -1634,15 +1688,17 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     ...userFields.map((field) => [field.name, field] as const),
   ]);
 
+  const typeName = statement.kind === "for" ? statement.body.typeName : statement.typeName;
+
   const ensureField = (fieldName: string): void => {
     if (!knownFields.has(fieldName)) {
-      fail(`Unknown field '${fieldName}' on '${statement.typeName}'`);
+      fail(`Unknown field '${fieldName}' on '${typeName}'`);
     }
   };
 
   const validateFieldValue = (fieldName: string, value: ScalarValue): void => {
     ensureField(fieldName);
-    const field = requireValue(fieldByName.get(fieldName), `Unknown field '${fieldName}' on '${statement.typeName}'`);
+    const field = requireValue(fieldByName.get(fieldName), `Unknown field '${fieldName}' on '${typeName}'`);
 
     if (field.multi) {
       if (typeof value !== "string") {
@@ -1663,7 +1719,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
             fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
           }
           if (field.enumValues && typeof entry === "string" && !field.enumValues.includes(entry)) {
-            fail(`invalid input value for enum '${statement.typeName}': "${entry}"`);
+            fail(`invalid input value for enum '${typeName}': "${entry}"`);
           }
         }
       } catch {
@@ -1677,7 +1733,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     }
 
     if (field.enumValues && typeof value === "string" && !field.enumValues.includes(value)) {
-      fail(`invalid input value for enum '${statement.typeName}': "${value}"`);
+      fail(`invalid input value for enum '${typeName}': "${value}"`);
     }
   };
 
@@ -1806,7 +1862,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           fail("Update filters do not support backlink targets");
         }
         predicateFilter = filterExpr as FieldEqPredicate;
-        validateFieldValue(predicateFilter.target.field, resolveFilterValue(predicateFilter.value));
+        validateFieldValue(predicateFilter.target.field, resolveFilterValue(predicateFilter.value) as ScalarValue);
       }
     }
 
@@ -1829,7 +1885,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       filter: predicateFilter
         ? {
             column: predicateFilter.target.field,
-            value: resolveFilterValue(predicateFilter.value),
+            value: resolveFilterValue(predicateFilter.value) as ScalarValue,
           }
         : undefined,
       values: statement.values,
@@ -1845,6 +1901,10 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     };
   }
 
+  if (statement.kind === "for") {
+    throw new Error("FOR statements should be handled at the execution layer");
+  }
+
   const deleteFilterExpr = statement.filter;
   let deletePredicateFilter: FieldEqPredicate | undefined;
   if (deleteFilterExpr) {
@@ -1858,7 +1918,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         fail("Delete filters do not support backlink targets");
       }
       deletePredicateFilter = deleteFilterExpr as FieldEqPredicate;
-      validateFieldValue(deletePredicateFilter.target.field, resolveFilterValue(deletePredicateFilter.value));
+      validateFieldValue(deletePredicateFilter.target.field, resolveFilterValue(deletePredicateFilter.value) as ScalarValue);
     }
   }
 
@@ -1870,7 +1930,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     filter: deletePredicateFilter
       ? {
           column: deletePredicateFilter.target.field,
-          value: resolveFilterValue(deletePredicateFilter.value),
+          value: resolveFilterValue(deletePredicateFilter.value) as ScalarValue,
         }
       : undefined,
     overlays: [

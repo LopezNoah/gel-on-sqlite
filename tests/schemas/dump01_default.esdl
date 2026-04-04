@@ -189,116 +189,116 @@ type G {
 # }
 
 
-# # indexes
-# type K {
-#     required property k -> str;
-#     index on (.k);
-# }
+# indexes
+type K {
+    required property k -> str;
+    index on (.k);
+}
 
 
-# type L {
-#     required property l0 -> str;
-#     required property l1 -> str;
-#     index on (.l0 ++ .l1);
-# }
+type L {
+    required property l0 -> str;
+    required property l1 -> str;
+    index on (.l0 ++ .l1);
+}
 
 
-# # constraints
-# abstract constraint user_int_constr(x: int64) {
-#     using (__subject__ > x);
-#     errmessage := '{__subject__} must be greater than {x}';
-#     annotation title := 'user_int_constraint constraint'
-# }
+# constraints
+abstract constraint user_int_constr(x: int64) {
+    using (__subject__ > x);
+    errmessage := '{__subject__} must be greater than {x}';
+    annotation title := 'user_int_constraint constraint'
+}
 
-# scalar type UserInt extending int64 {
-#     annotation title := 'UserInt scalar';
-#     constraint user_int_constr(5);
-# }
-
-
-# scalar type UserStr extending str {
-#     annotation title := 'UserStr scalar';
-#     constraint max_len_value(5);
-# }
+scalar type UserInt extending int64 {
+    annotation title := 'UserInt scalar';
+    constraint user_int_constr(5);
+}
 
 
-# type M {
-#     required property m0 -> int64 {
-#         constraint user_int_constr(3);
-#     }
-#     required property m1 -> str {
-#         constraint max_len_value(3);
-#     }
-# }
+scalar type UserStr extending str {
+    annotation title := 'UserStr scalar';
+    constraint max_len_value(5);
+}
 
 
-# type N {
-#     required property n0 -> UserInt;
-#     required property n1 -> UserStr;
-# }
+type M {
+    required property m0 -> int64 {
+        constraint user_int_constr(3);
+    }
+    required property m1 -> str {
+        constraint max_len_value(3);
+    }
+}
 
 
-# # enum
-# scalar type UserEnum extending enum<'Lorem', 'ipsum', 'dolor', 'sit', 'amet'>;
+type N {
+    required property n0 -> UserInt;
+    required property n1 -> UserStr;
+}
 
 
-# type O {
-#     required property o0 -> UserEnum;
-#     required property o1 -> UserEnum {
-#         default := <UserEnum>'Lorem';
-#     };
-#     property o2 := <UserEnum>'dolor';
-# }
+# enum
+scalar type UserEnum extending enum<'Lorem', 'ipsum', 'dolor', 'sit', 'amet'>;
 
 
-# # collection props
-# type P {
-#     required link plink0 -> C {
-#         property p0 -> array<str>;
-#     };
-#     required link plink1 -> C {
-#         property p1 -> array<float64>;
-#     };
-#     required property p2 -> array<str>;
-#     required property p3 -> array<float64>;
-# }
+type O {
+    required property o0 -> UserEnum;
+    required property o1 -> UserEnum {
+        default := <UserEnum>'Lorem';
+    };
+    property o2 := <UserEnum>'dolor';
+}
 
 
-# type Q {
-#     required property q0 -> tuple<int64, bool>;
-#     required property q1 -> tuple<str, decimal>;
-#     required property q2 -> tuple<x: int64, y: bool>;
-#     required property q3 -> tuple<x: str, y: decimal>;
-# }
+# collection props
+type P {
+    required link plink0 -> C {
+        property p0 -> array<str>;
+    };
+    required link plink1 -> C {
+        property p1 -> array<float64>;
+    };
+    required property p2 -> array<str>;
+    required property p3 -> array<float64>;
+}
 
 
-# # inheritance and delegated constraint
-# abstract type R {
-#     required property name -> str {
-#         delegated constraint exclusive;
-#     }
-# }
+type Q {
+    required property q0 -> tuple<int64, bool>;
+    required property q1 -> tuple<str, decimal>;
+    required property q2 -> tuple<x: int64, y: bool>;
+    required property q3 -> tuple<x: str, y: decimal>;
+}
 
 
-# type S extending R {
-#     required property s -> str;
-# }
+# inheritance and delegated constraint
+abstract type R {
+    required property name -> str {
+        delegated constraint exclusive;
+    }
+}
 
 
-# type T extending R {
-#     required property t -> str;
-# }
+type S extending R {
+    required property s -> str;
+}
 
 
-# abstract type U {
-#     required property u -> str;
-# }
+type T extending R {
+    required property t -> str;
+}
 
 
-# type V extending U, S, T;
+abstract type U {
+    required property u -> str;
+}
 
 
-# # aliases
+type V extending U, S, T;
+
+
+# aliases
 # alias AliasP := P {
 #     name := 'alias P',
 #     p2 := .p2 ++ ['!'],
@@ -308,142 +308,142 @@ type G {
 # };
 
 
-# alias Primes := {2, 3, 5, 7};
+alias Primes := {2, 3, 5, 7};
 
 
-# # self-referential and mutually-referential types
-# type W {
-#     required property name -> str {
-#         constraint exclusive;
-#     }
-#     link w -> W;
-# }
+# self-referential and mutually-referential types
+type W {
+    required property name -> str {
+        constraint exclusive;
+    }
+    link w -> W;
+}
 
 
-# type X {
-#     required property name -> str;
-#     link y -> Y;
-# }
+type X {
+    required property name -> str;
+    link y -> Y;
+}
 
 
-# type Y {
-#     required property name -> str;
-#     link x -> X;
-# }
+type Y {
+    required property name -> str;
+    link x -> X;
+}
 
 
-# # link target as a union type
-# type Z {
-#     # have only 'id' in common
-#     link ck -> C | K;
-#     # have 'name' in common
-#     multi link stw -> S | T | W;
-# }
+# link target as a union type
+type Z {
+    # have only 'id' in common
+    link ck -> C | K;
+    # have 'name' in common
+    multi link stw -> S | T | W;
+}
 
 
-# # cross-module references
-# type DefA extending test::TestA;
+# cross-module references
+type DefA extending test::TestA;
 
 
-# type DefB {
-#     required property name -> str {
-#         default := test::user_func_3(0);
-#     }
-#     link other -> test::TestB;
-# }
+type DefB {
+    required property name -> str {
+        default := test::user_func_3(0);
+    }
+    link other -> test::TestB;
+}
 
 
-# type DefC {
-#     required property name -> str {
-#         default := test::user_func_3(1);
-#     }
-#     link other -> test::TestC;
-# }
+type DefC {
+    required property name -> str {
+        default := test::user_func_3(1);
+    }
+    link other -> test::TestC;
+}
 
 
-# # on-target delete restrictions
-# type TargetA {
-#     required property name -> str {
-#         constraint exclusive;
-#     }
-# }
+# on-target delete restrictions
+type TargetA {
+    required property name -> str {
+        constraint exclusive;
+    }
+}
 
-# type SourceA {
-#     required property name -> str {
-#         constraint exclusive;
-#     }
+type SourceA {
+    required property name -> str {
+        constraint exclusive;
+    }
 
-#     link link0 -> TargetA {
-#         on target delete restrict;
-#     };
-#     link link1 -> TargetA {
-#         on target delete delete source;
-#     };
-#     link link2 -> TargetA {
-#         on target delete allow;
-#     };
-#     link link3 -> TargetA {
-#         on target delete deferred restrict;
-#     };
-# };
-
-
-# # read-only links and props
-# type ROPropsA {
-#     required property name -> str {
-#         constraint exclusive;
-#     }
-
-#     property rop0 -> int64 {
-#         readonly := True;
-#     }
-#     required property rop1 -> int64 {
-#         readonly := True;
-#         default := <int64>round(10 * random());
-#     }
-# }
+    link link0 -> TargetA {
+        on target delete restrict;
+    };
+    link link1 -> TargetA {
+        on target delete delete source;
+    };
+    link link2 -> TargetA {
+        on target delete allow;
+    };
+    link link3 -> TargetA {
+        on target delete deferred restrict;
+    };
+};
 
 
-# type ROLinksA {
-#     required property name -> str {
-#         constraint exclusive;
-#     }
+# read-only links and props
+type ROPropsA {
+    required property name -> str {
+        constraint exclusive;
+    }
 
-#     link rol0 -> C {
-#         readonly := True;
-#     }
-#     required link rol1 -> C {
-#         readonly := True;
-#         default := (SELECT C FILTER .val = 'D00');
-#     }
-#     required multi link rol2 -> C {
-#         readonly := True;
-#         default := (SELECT C FILTER .val IN {'D01', 'D02'});
-#     }
-# }
+    property rop0 -> int64 {
+        readonly := True;
+    }
+    required property rop1 -> int64 {
+        readonly := True;
+        default := <int64>round(10 * random());
+    }
+}
 
 
-# type ROLinksB {
-#     required property name -> str {
-#         constraint exclusive;
-#     }
+type ROLinksA {
+    required property name -> str {
+        constraint exclusive;
+    }
 
-#     link rol0 -> C {
-#         property rolp00 -> int64 {
-#             readonly := True;
-#         }
-#         property rolp01 -> int64 {
-#             readonly := True;
-#             default := <int64>round(10 * random());
-#         }
-#     }
-#     multi link rol1 -> C {
-#         property rolp10 -> int64 {
-#             readonly := True;
-#         }
-#         property rolp11 -> int64 {
-#             readonly := True;
-#             default := <int64>round(10 * random());
-#         }
-#     }
-# }
+    link rol0 -> C {
+        readonly := True;
+    }
+    required link rol1 -> C {
+        readonly := True;
+        default := (SELECT C FILTER .val = 'D00');
+    }
+    required multi link rol2 -> C {
+        readonly := True;
+        default := (SELECT C FILTER .val IN {'D01', 'D02'});
+    }
+}
+
+
+type ROLinksB {
+    required property name -> str {
+        constraint exclusive;
+    }
+
+    link rol0 -> C {
+        property rolp00 -> int64 {
+            readonly := True;
+        }
+        property rolp01 -> int64 {
+            readonly := True;
+            default := <int64>round(10 * random());
+        }
+    }
+    multi link rol1 -> C {
+        property rolp10 -> int64 {
+            readonly := True;
+        }
+        property rolp11 -> int64 {
+            readonly := True;
+            default := <int64>round(10 * random());
+        }
+    }
+}

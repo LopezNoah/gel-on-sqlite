@@ -843,7 +843,9 @@ class Parser {
 
           const propName = this.expect("word", "Expected link property name").text;
           if (this.match("arrow")) {
-            const { scalar: linkScalar } = this.readScalarType(moduleName, this.expect("word", "Expected link property scalar type").text);
+            const typeName = this.expect("word", "Expected link property scalar type").text;
+            this.consumeTypeTail();
+            const { scalar: linkScalar } = this.readScalarType(moduleName, typeName);
             let linkPropertyAnnotations: AnnotationDef[] = [];
             if (this.match("lbrace")) {
               linkPropertyAnnotations = this.parseLinkPropertyBody(moduleName);
@@ -861,7 +863,9 @@ class Parser {
           }
 
           if (this.match("colon")) {
-            const { scalar: linkScalar2 } = this.readScalarType(moduleName, this.expect("word", "Expected link property scalar type").text);
+            const typeName = this.expect("word", "Expected link property scalar type").text;
+            this.consumeTypeTail();
+            const { scalar: linkScalar2 } = this.readScalarType(moduleName, typeName);
             this.match("semi");
 
             linkProperties.push({
@@ -983,6 +987,17 @@ class Parser {
       };
     }
 
+    if (first.kind === "function_call") {
+      return {
+        kind: "property",
+        expr: {
+          kind: "function_call",
+          name: first.name,
+          args: first.args,
+        },
+      };
+    }
+
     const parts: ComputedValuePart[] = [first];
     while (this.match("concat")) {
       const nextPart = this.parseComputedValuePart(moduleName);
@@ -1055,7 +1070,7 @@ class Parser {
 
   private parseComputedValuePartOrLinkExpr(
     moduleName: string,
-  ): ComputedValuePart | Extract<ComputedDef, { kind: "link" }>['expr'] {
+  ): ComputedValuePart | Extract<ComputedDef, { kind: "link" }>['expr'] | { kind: "function_call"; name: string; args: ScalarValue[] } {
     if (this.peek().kind === "dot") {
       this.consume();
 
@@ -1087,6 +1102,36 @@ class Parser {
       return {
         kind: "field_ref",
         field: this.expect("word", "Expected field name after __source__. ").text,
+      };
+    }
+
+    if (this.peek().kind === "word") {
+      const wordToken = this.peek();
+      const word = wordToken.text;
+      if (this.peekAt(1).kind === "lparen") {
+        this.consume();
+        this.consume();
+        const args: ScalarValue[] = [];
+        while (!this.match("rparen")) {
+          args.push(this.readScalarValue("Expected function argument"));
+          this.match("comma");
+        }
+        return {
+          kind: "function_call",
+          name: word,
+          args,
+        };
+      }
+    }
+
+    if (this.peek().kind === "lt") {
+      this.consume();
+      const typeName = this.expect("word", "Expected type name in cast").text;
+      this.expect("gt", "Expected '>' after type name in cast");
+      const value = this.readScalarValue("Expected value after type cast");
+      return {
+        kind: "literal",
+        value,
       };
     }
 
@@ -1838,6 +1883,10 @@ class Parser {
 
   private peek(): Token {
     return this.tokens[this.index];
+  }
+
+  private peekAt(offset: number): Token {
+    return this.tokens[this.index + offset];
   }
 
   private peekWordAt(offset: number): string | undefined {
