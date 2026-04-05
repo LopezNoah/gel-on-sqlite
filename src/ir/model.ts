@@ -182,6 +182,7 @@ export interface LinkRelationIR {
   targetType: string;
   targetTable: string;
   targetTables: SchemaTypeRefIR[];
+  multi: boolean;
   storage: "inline" | "table";
   inlineColumn?: string;
   linkTable?: string;

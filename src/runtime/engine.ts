@@ -828,17 +828,17 @@ const materializeSelectRow = (
 
     if (element.kind === "link") {
       if (element.sourceTypeFilter && element.sourceTypeFilter !== sourceType) {
-        output[element.name] = [];
+        output[element.name] = element.relation.multi ? [] : null;
         continue;
       }
 
       const payload = parsePayloadArray(row[shapePayloadAlias(element.pathId)]);
       if (payload) {
-        output[element.name] = payload;
+        output[element.name] = element.relation.multi ? payload : (payload[0] ?? null);
         continue;
       }
 
-      output[element.name] = resolveLinks(db, schema, context, row, element.relation, element.typeFilter, {
+      const links = resolveLinks(db, schema, context, row, element.relation, element.typeFilter, {
         columns: element.columns,
         shape: element.shape,
         filter: element.filter,
@@ -846,6 +846,7 @@ const materializeSelectRow = (
         limit: element.limit,
         offset: element.offset,
       }, sqlTrail);
+      output[element.name] = element.relation.multi ? links : (links[0] ?? null);
       continue;
     }
 

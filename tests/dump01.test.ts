@@ -802,7 +802,7 @@ describe("TestDump01", () => {
     h.assertQueryResult(
       `
       SELECT C {val}
-      ORDER BY val;
+      ORDER BY .val;
       `,
       [
         { val: "D00" },
@@ -822,60 +822,50 @@ describe("TestDump01", () => {
   });
 
   it("should validate D link data", () => {
-    const rows = h.db
-      .prepare(
-        'SELECT d.num AS num, c.val AS single_val FROM "default__d" d LEFT JOIN "default__c" c ON c.id = d.single_link_id ORDER BY d.num',
-      )
-      .all() as Array<{ num: number; single_val: string | null }>;
-
-    const multiRows = h.db
-      .prepare(
-        'SELECT d.num AS num, c.val AS val FROM "default__d__multi_link" ml JOIN "default__d" d ON d.id = ml.source JOIN "default__c" c ON c.id = ml.target ORDER BY d.num, c.val',
-      )
-      .all() as Array<{ num: number; val: string }>;
-
-    const multiByNum = new Map<number, Array<{ val: string }>>();
-    for (const row of multiRows) {
-      const list = multiByNum.get(row.num) ?? [];
-      list.push({ val: row.val });
-      multiByNum.set(row.num, list);
-    }
-
-    const result = rows.map((row) => ({
-      num: row.num,
-      single_link: row.single_val ? [{ val: row.single_val }] : null,
-      multi_link: multiByNum.get(row.num) ?? [],
-    }));
-
-    expect(result).toEqual([
-      {
-        num: 0,
-        single_link: null,
-        multi_link: [],
-      },
-      {
-        num: 1,
-        single_link: [{ val: "D00" }],
-        multi_link: [],
-      },
-      {
-        num: 2,
-        single_link: null,
-        multi_link: [
-          { val: "D01" },
-          { val: "D02" },
-        ],
-      },
-      {
-        num: 3,
-        single_link: [{ val: "D00" }],
-        multi_link: [
-          { val: "D01" },
-          { val: "D02" },
-          { val: "D03" },
-        ],
-      },
-    ]);
+    h.assertQueryResult(
+      `
+      SELECT D {
+        num,
+        single_link {
+          val,
+        },
+        multi_link {
+          val,
+        } ORDER BY .val,
+      }
+      FILTER .__type__.name = 'default::D'
+      ORDER BY .num;
+      `,
+      [
+        {
+          num: 0,
+          single_link: null,
+          multi_link: [],
+        },
+        {
+          num: 1,
+          single_link: { val: "D00" },
+          multi_link: [],
+        },
+        {
+          num: 2,
+          single_link: null,
+          multi_link: [
+            { val: "D01" },
+            { val: "D02" },
+          ],
+        },
+        {
+          num: 3,
+          single_link: { val: "D00" },
+          multi_link: [
+            { val: "D01" },
+            { val: "D02" },
+            { val: "D03" },
+          ],
+        },
+      ],
+    );
   });
 
   it("should validate E link data", () => {
@@ -888,24 +878,24 @@ describe("TestDump01", () => {
         },
         multi_link {
           val,
-        } ORDER BY val,
+        } ORDER BY .val,
       }
-      ORDER BY num;
+      ORDER BY .num;
       `,
       [
         {
           num: 4,
-          single_link: [],
+          single_link: null,
           multi_link: [],
         },
         {
           num: 5,
-          single_link: [{ val: "E00" }],
+          single_link: { val: "E00" },
           multi_link: [],
         },
         {
           num: 6,
-          single_link: [],
+          single_link: null,
           multi_link: [
             { val: "E01" },
             { val: "E02" },
@@ -913,7 +903,7 @@ describe("TestDump01", () => {
         },
         {
           num: 7,
-          single_link: [{ val: "E00" }],
+          single_link: { val: "E00" },
           multi_link: [
             { val: "E01" },
             { val: "E02" },
@@ -941,7 +931,7 @@ describe("TestDump01", () => {
       [
         {
           num: 8,
-          single_link: [{ val: "F00" }],
+          single_link: { val: "F00" },
           multi_link: [
             { val: "F01" },
             { val: "F02" },

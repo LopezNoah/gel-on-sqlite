@@ -41,6 +41,7 @@ export type TokenKind =
   | "lparen"
   | "rparen"
   | "comma"
+  | "colon"
   | "equals"
   | "not_equals"
   | "assign"
@@ -136,6 +137,20 @@ export const tokenize = (input: string): Token[] => {
       continue;
     }
 
+    if (c === ":") {
+      if (input[i + 1] === "=") {
+        push("assign", ":=", tokenLine, tokenColumn);
+        i += 2;
+        column += 2;
+        continue;
+      }
+
+      push("colon", c, tokenLine, tokenColumn);
+      i += 1;
+      column += 1;
+      continue;
+    }
+
     if (
       c === "{"
       || c === "}"
@@ -190,13 +205,6 @@ export const tokenize = (input: string): Token[] => {
 
       i += 1;
       column += 1;
-      continue;
-    }
-
-    if (c === ":" && input[i + 1] === "=") {
-      push("assign", ":=", tokenLine, tokenColumn);
-      i += 2;
-      column += 2;
       continue;
     }
 

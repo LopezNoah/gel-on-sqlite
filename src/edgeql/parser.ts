@@ -417,6 +417,12 @@ class Parser {
       typeFilter = this.parseTypeFilter("shape type filter");
     }
 
+    let hasLinkShapeColon = false;
+    if (this.peek().kind === "colon") {
+      this.consume();
+      hasLinkShapeColon = true;
+    }
+
     if (this.peek().kind === "lbrace") {
       this.consume();
       const shape: ShapeElement[] = [];
@@ -445,6 +451,11 @@ class Parser {
         token.line,
         token.column,
       );
+    }
+
+    if (hasLinkShapeColon) {
+      const token = this.peek();
+      throw new AppError("E_SYNTAX", "Expected '{' after ':' in link shape", token.line, token.column);
     }
 
     if (this.peek().kind !== "assign") {
@@ -1048,7 +1059,11 @@ class Parser {
     const first = this.expect("identifier", `Expected field name in ${context}`).lexeme;
     if (this.peek().kind === "dot") {
       this.consume();
-      return this.expect("identifier", `Expected field name after qualifier in ${context}`).lexeme;
+      const second = this.expect("identifier", `Expected field name after qualifier in ${context}`).lexeme;
+      if (first === "__type__" && second === "name") {
+        return "__type__.name";
+      }
+      return second;
     }
 
     return first;
@@ -1176,7 +1191,7 @@ class Parser {
   private parseOrderBy(): { field: string; direction: "asc" | "desc" } {
     this.expect("kw_order", "Expected 'order'");
     this.expect("kw_by", "Expected 'by' after 'order'");
-    const field = this.expect("identifier", "Expected field name in order by").lexeme;
+    const field = this.parseFieldReference("order by");
 
     let direction: "asc" | "desc" = "asc";
     if (this.peek().kind === "kw_asc") {

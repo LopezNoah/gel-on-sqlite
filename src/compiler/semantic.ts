@@ -436,6 +436,23 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     }
 
     if (!knownFields.has(filter.target.field)) {
+      if (filter.target.field === "__type__.name") {
+        if (filter.op === "like" || filter.op === "ilike") {
+          if (typeof value !== "string") {
+            fail(`Filter operator '${filter.op}' requires string value`);
+          }
+        } else if (typeof value !== "string") {
+          fail("Type mismatch for '__type__.name': expected str");
+        }
+
+        return {
+          kind: "field",
+          column: "__source_type",
+          op: filter.op,
+          value,
+        };
+      }
+
       fail(`Unknown field '${filter.target.field}' on '${typeLabel}'`);
     }
 
@@ -723,6 +740,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
                 table: tableNameForType(targetType),
               },
             ],
+        multi: Boolean(link.multi),
         storage: usesLinkTable ? "table" : "inline",
         inlineColumn: usesLinkTable ? undefined : `${link.name}_id`,
         linkTable: usesLinkTable ? `${tableNameForType(ownerQualifiedName)}__${link.name.toLowerCase()}` : undefined,
@@ -1213,6 +1231,15 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         })
       : undefined;
 
+    const narrowedSourceTables =
+      resolvedFilter
+      && resolvedFilter.kind === "field"
+      && resolvedFilter.column === "__source_type"
+      && resolvedFilter.op === "="
+      && typeof resolvedFilter.value === "string"
+        ? sourceTables.filter((source) => source.name === resolvedFilter.value)
+        : sourceTables;
+
     if (clauses.orderBy) {
       ensureField(clauses.orderBy.field);
     }
@@ -1233,7 +1260,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         table,
       },
       table,
-      sourceTables,
+      sourceTables: narrowedSourceTables,
       columns: [...selectedColumns],
       shape: shapeElements,
       scopeTree: {

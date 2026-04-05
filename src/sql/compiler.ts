@@ -119,7 +119,8 @@ const compileSelectToSQL = (ir: SelectIR, target: RuntimeTarget): SQLArtifact =>
 
   const sources = ir.sourceTables.length > 0 ? ir.sourceTables : [ir.typeRef];
   const filterColumns = collectFieldFilterColumns(ir.filter);
-  const unionColumns = [...new Set(["id", ...ir.columns, ...filterColumns, ...(ir.orderBy ? [ir.orderBy.column] : [])])];
+  const unionColumns = [...new Set(["id", ...ir.columns, ...filterColumns, ...(ir.orderBy ? [ir.orderBy.column] : [])])]
+    .filter((column) => column !== "__source_type");
   const sourceSelects = sources.map(
     (source) =>
       `SELECT ${quoteLiteral(source.name)} AS ${quoteIdent("__source_type")}, ${unionColumns.map((column) => `${quoteIdent(column)} AS ${quoteIdent(column)}`).join(", ")} FROM ${quoteIdent(source.table)}`,
