@@ -649,35 +649,56 @@ const executeForLoop = (
   const iteratorExpr = ast.iteratorExpr;
   const body = ast.body;
 
-  let iteratorValues: unknown[] = [];
-
-  if (iteratorExpr.kind === "literal") {
-    iteratorValues = [iteratorExpr.value];
-  } else if (iteratorExpr.kind === "set_literal") {
-    iteratorValues = iteratorExpr.values;
-  } else if (iteratorExpr.kind === "concat") {
-    const flattened: unknown[] = [];
-    for (const part of iteratorExpr.parts) {
-      if (part.kind === "set_literal") {
-        flattened.push(...part.values);
-      } else if (part.kind === "literal") {
-        flattened.push(part.value);
-      }
+  const evalIteratorValues = (expr: ForStatement["iteratorExpr"]): unknown[] => {
+    if (expr.kind === "literal") {
+      return [expr.value];
     }
-    iteratorValues = flattened.length > 0 ? flattened : [null];
-  } else if (iteratorExpr.kind === "function_call") {
-    const args: RuntimeFunctionArg[] = iteratorExpr.call.args.map((arg) => {
-      if (arg.kind === "literal") return arg.value as RuntimeFunctionArg;
-      if (arg.kind === "set_literal") return { kind: "array" as const, values: arg.values } as unknown as RuntimeFunctionArg;
-      if (arg.kind === "array_literal") return { kind: "array" as const, values: arg.values } as unknown as RuntimeFunctionArg;
-      return null as RuntimeFunctionArg;
-    });
-    const qualifiedName = iteratorExpr.call.name.includes("::")
-      ? iteratorExpr.call.name
-      : `default::${iteratorExpr.call.name}`;
-    const fnResult = executeFunctionCall(schema, db, context, qualifiedName, args);
-    iteratorValues = Array.isArray(fnResult) ? fnResult : [fnResult];
-  }
+
+    if (expr.kind === "set_literal") {
+      return expr.values;
+    }
+
+    if (expr.kind === "function_call") {
+      const args: RuntimeFunctionArg[] = expr.call.args.map((arg) => {
+        if (arg.kind === "literal") return arg.value as RuntimeFunctionArg;
+        if (arg.kind === "set_literal") return { kind: "array" as const, values: arg.values } as unknown as RuntimeFunctionArg;
+        if (arg.kind === "array_literal") return { kind: "array" as const, values: arg.values } as unknown as RuntimeFunctionArg;
+        return null as RuntimeFunctionArg;
+      });
+      const qualifiedName = expr.call.name.includes("::")
+        ? expr.call.name
+        : `default::${expr.call.name}`;
+      const fnResult = executeFunctionCall(schema, db, context, qualifiedName, args);
+      return Array.isArray(fnResult) ? fnResult : [fnResult];
+    }
+
+    if (expr.kind === "concat") {
+      let results: unknown[] = [""];
+      for (const part of expr.parts) {
+        const partValues = evalIteratorValues(part as ForStatement["iteratorExpr"]);
+        const next: unknown[] = [];
+        for (const left of results) {
+          for (const right of partValues) {
+            if (typeof left === "string" && typeof right === "string") {
+              next.push(left + right);
+            } else if (left === null || left === undefined) {
+              next.push(right);
+            } else if (right === null || right === undefined) {
+              next.push(left);
+            } else {
+              next.push(`${left}${right}`);
+            }
+          }
+        }
+        results = next;
+      }
+      return results.length > 0 ? results : [null];
+    }
+
+    return [null];
+  };
+
+  const iteratorValues = evalIteratorValues(iteratorExpr);
 
   for (const value of iteratorValues) {
     const insertValues: Record<string, InsertValue> = {};
@@ -1540,6 +1561,7 @@ const extractOverlays = (ir: IRStatement): OverlayIR[] => {
 };
 
 const tableNameForType = (qualifiedName: string): string => qualifiedName.replaceAll("::", "__").toLowerCase();
+const PENDING_INLINE_LINK_VALUE = "__gel_pending_inline_link__";
 
 const validateLinkAssignments = (
   db: SQLiteDatabase,
@@ -1568,6 +1590,9 @@ const validateLinkAssignments = (
 
     const assignedId = ir.values[inlineColumn];
     if (assignedId === null) {
+      continue;
+    }
+    if (assignedId === PENDING_INLINE_LINK_VALUE) {
       continue;
     }
     if (typeof assignedId !== "string") {
@@ -1708,11 +1733,12 @@ const executeSelectExprRows = (
   expr: Extract<InsertValue, { kind: "select" }>,
   context: SecurityContext,
 ): Record<string, unknown>[] => {
+  const shape = expr.shape.length > 0 ? expr.shape : [{ kind: "field", name: "id" } as const];
   const ast: SelectStatement = {
     kind: "select",
     typeName: expr.typeName,
-    shape: expr.shape,
-    fields: fieldsFromShape(expr.shape),
+    shape,
+    fields: fieldsFromShape(shape),
     filter: expr.clauses.filter,
     orderBy: expr.clauses.orderBy,
     limit: expr.clauses.limit,

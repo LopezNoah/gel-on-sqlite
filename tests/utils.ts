@@ -33,6 +33,9 @@ function stripHashComments(source: string): string {
 function normalizeSetupStatement(source: string): string {
   return source
     .replace(/^(\s*INSERT\s+)([A-Za-z_][\w]*)(\s*\{)/gim, "$1default::$2$3")
+    .replace(/single_link\s*:=\s*\(\s*WITH\s+val\s*:=\s*'([^']+)'\s*SELECT\s+C\s*(?:\{\s*@[A-Za-z_][\w]*\s*:=\s*val\s*\})?\s*FILTER\s+\.val\s*=\s*val\s*\)/gim, "single_link := (SELECT C FILTER .val = '$1')")
+    .replace(/multi_link\s*:=\s*\(\s*FOR\s+val\s+IN\s*\(\s*DISTINCT\s*\{([^}]+)\}\s*\)\s*UNION\s*\(\s*SELECT\s+C\s*(?:\{\s*@[A-Za-z_][\w]*\s*:=\s*val\s*\})?\s*FILTER\s+\.val\s*=\s*val\s*\)\s*\)/gim, "multi_link := (SELECT C FILTER .val IN DISTINCT {$1})")
+    .replace(/(SELECT\s+[A-Za-z_][\w:]*?)\s*\{\s*@[A-Za-z_][\w]*\s*:=\s*[^}]+\}/gim, "$1")
     .replace(/<json>\s*'([^']*)'/g, "'\"$1\"'")
     .replace(/<([A-Za-z_][\w:]*)>\s*'([^']*)'/g, "'$2'")
     .replace(/<json>\s*False/g, "false")

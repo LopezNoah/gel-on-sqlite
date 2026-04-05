@@ -1767,6 +1767,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
 
   if (statement.kind === "insert") {
     const pathId = createPathId();
+    const pendingInlineLinkValue = "__gel_pending_inline_link__";
     if (typeDef.abstract) {
       fail(`cannot insert into abstract object type '${qualifiedTypeName(typeDef)}'`);
     }
@@ -1817,7 +1818,22 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       }
 
       if (linkByName.has(field)) {
+        const linkDef = requireValue(linkByName.get(field), `Unknown link '${field}' on '${statement.typeName}'`);
         validateInsertLinkExpr(field, value);
+
+        const usesLinkTable = Boolean(linkDef.multi) || (linkDef.properties?.length ?? 0) > 0;
+        if (!usesLinkTable) {
+          const inlineColumn = `${field}_id`;
+          const inlineFieldDef = fieldByName.get(inlineColumn);
+
+          if (typeof value === "string" || value === null) {
+            validateFieldValue(inlineColumn, value);
+            scalarValues[inlineColumn] = value;
+          } else if (inlineFieldDef?.required) {
+            scalarValues[inlineColumn] = pendingInlineLinkValue;
+          }
+        }
+
         continue;
       }
 
