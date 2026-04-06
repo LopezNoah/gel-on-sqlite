@@ -241,6 +241,32 @@ export const tokenize = (input: string): Token[] => {
       continue;
     }
 
+    if (c === "b" && (input[i + 1] === "\"" || input[i + 1] === "'")) {
+      const quote = input[i + 1];
+      i += 2;
+      column += 2;
+
+      let value = "";
+      while (i < input.length && input[i] !== quote) {
+        if (input[i] === "\n") {
+          throw new AppError("E_SYNTAX", "Unterminated byte literal", tokenLine, tokenColumn);
+        }
+
+        value += input[i];
+        i += 1;
+        column += 1;
+      }
+
+      if (input[i] !== quote) {
+        throw new AppError("E_SYNTAX", "Unterminated byte literal", tokenLine, tokenColumn);
+      }
+
+      i += 1;
+      column += 1;
+      push("string", value, tokenLine, tokenColumn);
+      continue;
+    }
+
     if (/[0-9]/.test(c)) {
       let value = c;
       i += 1;
@@ -248,6 +274,12 @@ export const tokenize = (input: string): Token[] => {
 
       while (i < input.length && /[0-9.]/.test(input[i])) {
         value += input[i];
+        i += 1;
+        column += 1;
+      }
+
+      if (i < input.length && input[i] === "n") {
+        value += "n";
         i += 1;
         column += 1;
       }

@@ -76,7 +76,28 @@ class Parser {
     if (hasParen) {
       this.consume();
     }
-    const body = this.parseInsert(withBindings, withModule, withModuleAliases, false);
+    const next = this.peek();
+    let body: InsertStatement | SelectStatement;
+    if (next.kind === "kw_select") {
+      this.consume();
+      const nested = this.parseInlineSelectExpr();
+      body = {
+        kind: "select",
+        with: withBindings,
+        withModule,
+        withModuleAliases,
+        typeName: nested.typeName,
+        shape: nested.shape,
+        fields: [],
+        filter: nested.clauses.filter,
+        orderBy: nested.clauses.orderBy,
+        limit: nested.clauses.limit,
+        offset: nested.clauses.offset,
+        pos: { line: start.line, column: start.column },
+      };
+    } else {
+      body = this.parseInsert(withBindings, withModule, withModuleAliases, false);
+    }
     if (hasParen) {
       this.expect("rparen", "Expected ')' after for body");
     }
@@ -288,6 +309,18 @@ class Parser {
   }
 
   private parseFreeObjectExpr(): FreeObjectExpr {
+    if (this.peek().kind === "lparen") {
+      this.consume();
+      const expr = this.parseFreeObjectConcatExpr();
+      this.expect("rparen", "Expected ')' after parenthesized expression");
+      return expr;
+    }
+
+    if (this.peek().kind === "kw_distinct") {
+      this.consume();
+      return this.parseFreeObjectExpr();
+    }
+
     if (this.peek().kind === "lt") {
       this.consume();
       const castType = this.expect("identifier", "Expected type name in cast").lexeme;
@@ -383,6 +416,31 @@ class Parser {
   }
 
   private parseShapeEntry(): ShapeElement {
+    if (this.peek().kind === "at") {
+      this.consume();
+      const property = this.expect("identifier", "Expected link property name after '@'").lexeme;
+      let expr: ComputedExpr = {
+        kind: "literal",
+        value: null,
+      };
+
+      if (this.peek().kind === "assign") {
+        this.consume();
+        const parsed = this.parseComputedExpr();
+        if (this.isBacklinkExpr(parsed)) {
+          const token = this.peek();
+          throw new AppError("E_SYNTAX", "Link property expressions do not support backlinks", token.line, token.column);
+        }
+        expr = parsed;
+      }
+
+      return {
+        kind: "computed",
+        name: `@${property}`,
+        expr,
+      };
+    }
+
     if (this.peek().kind === "star") {
       return {
         kind: "splat",
@@ -484,6 +542,13 @@ class Parser {
 
   private parseComputedExpr(): ComputedExpr | BacklinkExpr {
     if (this.peek().kind === "lbracket") {
+      if (this.peekNth(1).kind !== "kw_is") {
+        return {
+          kind: "literal",
+          value: this.readValue(),
+        };
+      }
+
       const sourceType = this.parseTypeFilter("polymorphic field reference");
       this.expect("dot", "Expected '.' after polymorphic type filter");
       return {
@@ -541,6 +606,13 @@ class Parser {
       return {
         kind: "function_call",
         call: this.parseFunctionCallExpr(),
+      };
+    }
+
+    if (this.peek().kind === "identifier") {
+      return {
+        kind: "binding_ref",
+        name: this.consume().lexeme,
       };
     }
 
@@ -671,6 +743,32 @@ class Parser {
   }
 
   private parseInsertValue(): InsertValue {
+    if (this.peek().kind === "lt") {
+      this.consume();
+      const castType = this.consume().lexeme;
+      this.expect("gt", "Expected '>' after cast type");
+      const inner = this.parseInsertValue();
+      if (castType === "json" || castType === "std::json") {
+        if (typeof inner === "string") {
+          return JSON.stringify(inner);
+        }
+        if (typeof inner === "boolean" || typeof inner === "number" || inner === null) {
+          return inner;
+        }
+      }
+      return inner;
+    }
+
+    if (this.peek().kind === "identifier" && this.peekNext().kind === "lparen") {
+      const call = this.parseFunctionCallExpr();
+      if (call.name === "to_json") {
+        if (call.args.length === 1 && call.args[0].kind === "literal") {
+          return call.args[0].value;
+        }
+      }
+      return { kind: "function_call", call };
+    }
+
     if (this.peek().kind === "identifier") {
       return {
         kind: "binding_ref",
@@ -710,7 +808,13 @@ class Parser {
         this.expect("rparen", "Expected ')' after nested insert expression");
         return nested;
       }
-      throw new AppError("E_SYNTAX", "Expected select or insert expression in parentheses", next.line, next.column);
+      if (next.kind === "kw_for") {
+        const forStmt = this.parseFor();
+        this.expect("rparen", "Expected ')' after for expression");
+        return forStmt;
+      }
+
+      return this.readTupleLiteralValue();
     }
 
     if (this.peek().kind === "lbrace") {
@@ -730,6 +834,36 @@ class Parser {
     }
 
     return this.readValue();
+  }
+
+  private readTupleLiteralValue(): ScalarValue {
+    const items: ScalarValue[] = [];
+    const named: Record<string, ScalarValue> = {};
+    let hasNamed = false;
+
+    while (this.peek().kind !== "rparen") {
+      if (this.peek().kind === "identifier" && this.peekNext().kind === "assign") {
+        hasNamed = true;
+        const key = this.consume().lexeme;
+        this.consume();
+        named[key] = this.readValue();
+      } else {
+        if (hasNamed) {
+          const token = this.peek();
+          throw new AppError("E_SYNTAX", "Cannot mix unnamed and named tuple elements", token.line, token.column);
+        }
+        items.push(this.readValue());
+      }
+
+      if (this.peek().kind === "comma") {
+        this.consume();
+      } else {
+        break;
+      }
+    }
+
+    this.expect("rparen", "Expected ')' after tuple literal");
+    return JSON.stringify(hasNamed ? named : items);
   }
 
   private parseNestedInsertExpr(): { kind: "insert"; typeName: string; values: Record<string, InsertValue> } {
@@ -1277,7 +1411,8 @@ class Parser {
       }
       this.consume();
       this.consume();
-      return -Number(next.lexeme);
+      const lexeme = next.lexeme.endsWith("n") ? next.lexeme.slice(0, -1) : next.lexeme;
+      return -Number(lexeme);
     }
 
     if (token.kind === "string") {
@@ -1287,7 +1422,11 @@ class Parser {
 
     if (token.kind === "number") {
       this.consume();
-      return Number(token.lexeme);
+      const lexeme = token.lexeme;
+      if (lexeme.endsWith("n")) {
+        return Number(lexeme.slice(0, -1));
+      }
+      return Number(lexeme);
     }
 
     if (token.kind === "kw_true") {
@@ -1303,6 +1442,21 @@ class Parser {
     if (token.kind === "kw_null") {
       this.consume();
       return null;
+    }
+
+    if (token.kind === "lbracket") {
+      this.consume();
+      const values: ScalarValue[] = [];
+      while (this.peek().kind !== "rbracket") {
+        values.push(this.readValue());
+        if (this.peek().kind === "comma") {
+          this.consume();
+        } else {
+          break;
+        }
+      }
+      this.expect("rbracket", "Expected ']' after array literal");
+      return JSON.stringify(values);
     }
 
     throw new AppError("E_SYNTAX", "Expected a literal value", token.line, token.column);

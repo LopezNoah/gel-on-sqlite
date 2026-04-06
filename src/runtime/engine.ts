@@ -10,8 +10,9 @@ import { assertTargetSqlCompatibility, type RuntimeTarget } from "./target.js";
 import type { BacklinkSourceIR, FilterExprIR, IRStatement, LinkRelationIR, OverlayIR, SelectExprIREntry, SelectExprIR, SelectIR, SelectShapeElementIR } from "../ir/model.js";
 import type { AccessPolicyCondition, AccessPolicyDef, FunctionDef, FunctionExprDef, ScalarType, ScalarValue, TypeDef } from "../types.js";
 import { qualifiedTypeName } from "../schema/schema.js";
+import { deserializeSchemaFromGelTables, deserializeSchemaFromInstdata } from "../schema/gel_persistence.js";
+import type { SQLiteDatabase } from "../runtime/database.js";
 
-type SQLiteDatabase = RuntimeDatabaseAdapter;
 
 export interface QueryResult {
   kind: "select" | "insert" | "update" | "delete";
@@ -87,26 +88,6 @@ type IntrospectionType = {
   pointersHaveAnnotations: boolean;
 };
 
-const specialPropertyConstraints = (typeName: string, propertyName: string): IntrospectionConstraint[] => {
-  if (typeName === "default::C" && propertyName === "val") {
-    return [
-      {
-        annotations: [{ name: "std::title", "@value": "exclusive C val" }],
-      },
-    ];
-  }
-
-  if (typeName === "default::M" && propertyName === "m0") {
-    return [
-      {
-        annotations: [{ name: "std::title", "@value": "user_int_constraint constraint" }],
-      },
-    ];
-  }
-
-  return [];
-};
-
 const buildIntrospectionType = (typeDef: TypeDef): IntrospectionType => {
   const moduleName = typeDef.module ?? "default";
   const qualifiedName = `${moduleName}::${typeDef.name}`;
@@ -123,7 +104,12 @@ const buildIntrospectionType = (typeDef: TypeDef): IntrospectionType => {
         name: annotation.name,
         "@value": annotation.value,
       })),
-      constraints: specialPropertyConstraints(qualifiedName, field.name),
+      constraints: (field.constraints ?? []).map((constraint) => ({
+        annotations: constraint.annotations.map((annotation) => ({
+          name: annotation.name,
+          "@value": annotation.value,
+        })),
+      })),
     })),
   ];
 
@@ -260,7 +246,10 @@ const extractTopLevelBlock = (source: string, key: string): TopLevelBlock | unde
   return undefined;
 };
 
-const trySchemaObjectTypeQuery = (schema: SchemaSnapshot, query: string): QueryResult | undefined => {
+const loadPersistedSchema = (db: SQLiteDatabase): SchemaSnapshot | null =>
+  deserializeSchemaFromInstdata(db) ?? deserializeSchemaFromGelTables(db);
+
+const trySchemaObjectTypeQuery = (db: SQLiteDatabase, query: string): QueryResult | undefined => {
   if (!/\bObjectType\b/i.test(query)) {
     return undefined;
   }
@@ -327,7 +316,12 @@ const trySchemaObjectTypeQuery = (schema: SchemaSnapshot, query: string): QueryR
   const equalsMatch = query.match(/\.name\s*=\s*'([^']+)'/i);
   const equalsName = equalsMatch?.[1];
 
-  const rows = schema.listTypes().map((typeDef) => {
+  const persistedSchema = loadPersistedSchema(db);
+  if (!persistedSchema) {
+    return undefined;
+  }
+
+  const rows = persistedSchema.listTypes().map((typeDef) => {
     const introspectionType = buildIntrospectionType(typeDef);
     const row: Record<string, unknown> = {
       name: introspectionType.name,
@@ -480,7 +474,7 @@ export const executeQuery = (
   query: string,
   securityContext: SecurityContext = DEFAULT_SECURITY_CONTEXT,
 ): QueryResult => {
-  const schemaQueryResult = trySchemaObjectTypeQuery(schema, query);
+  const schemaQueryResult = trySchemaObjectTypeQuery(db, query);
   if (schemaQueryResult) {
     return schemaQueryResult;
   }
@@ -636,6 +630,34 @@ export const executeQueryUnitWithTrace = (
   }
 };
 
+const substituteBindingInASTFilter = (
+  filter: import("../edgeql/ast.js").FilterExpr,
+  variable: string,
+  value: ScalarValue,
+): import("../edgeql/ast.js").FilterExpr => {
+  if (filter.kind === "predicate") {
+    const fv = filter.value;
+    if (typeof fv === "object" && fv !== null && "kind" in fv && fv.kind === "binding_ref" && fv.name === variable) {
+      return { ...filter, value };
+    }
+    return filter;
+  }
+  if (filter.kind === "and" || filter.kind === "or") {
+    return {
+      ...filter,
+      left: substituteBindingInASTFilter(filter.left, variable, value),
+      right: substituteBindingInASTFilter(filter.right, variable, value),
+    };
+  }
+  if (filter.kind === "not") {
+    return {
+      ...filter,
+      expr: substituteBindingInASTFilter(filter.expr, variable, value),
+    };
+  }
+  return filter;
+};
+
 const executeForLoop = (
   db: SQLiteDatabase,
   schema: SchemaSnapshot,
@@ -700,49 +722,79 @@ const executeForLoop = (
 
   const iteratorValues = evalIteratorValues(iteratorExpr);
 
-  for (const value of iteratorValues) {
-    const insertValues: Record<string, InsertValue> = {};
-    for (const [key, v] of Object.entries(body.values)) {
-      if (typeof v === "object" && v !== null && "kind" in v && v.kind === "binding_ref" && v.name === ast.variable) {
-        insertValues[key] = value as InsertValue;
-      } else {
-        insertValues[key] = v;
+  if (body.kind === "insert") {
+    for (const value of iteratorValues) {
+      const insertValues: Record<string, InsertValue> = {};
+      for (const [key, v] of Object.entries(body.values)) {
+        if (typeof v === "object" && v !== null && "kind" in v && v.kind === "binding_ref" && v.name === ast.variable) {
+          insertValues[key] = value as InsertValue;
+        } else {
+          insertValues[key] = v;
+        }
       }
+
+      const insertAst: InsertStatement = {
+        ...body,
+        values: insertValues,
+      };
+
+      const subjectType = schema.getType(insertAst.typeName);
+      if (!subjectType) {
+        throw new AppError("E_SEMANTIC", `Unknown type '${insertAst.typeName}'`, ast.pos.line, ast.pos.column);
+      }
+
+      const compiled = compilerService.compile(schema, insertAst, { overlays, globals: context.globals, target: runtimeTarget });
+      const ir = compiled.ir;
+      const sqlArtifact = compiled.sql;
+      assertTargetSqlCompatibility(sqlArtifact.sql, runtimeTarget);
+      const sqlTrail: SQLArtifact[] = [sqlArtifact];
+
+      const writeResult = runWriteWithAccessPolicies(db, schema, insertAst, ir, sqlArtifact, subjectType, context);
+      const result = { kind: "insert" as const, changes: writeResult.changes };
+
+      const currentOverlays = extractOverlays(ir);
+      if (ir.kind !== "select" && ir.kind !== "select_free" && ir.kind !== "select_expr") {
+        overlays.push(...currentOverlays);
+      }
+
+      traces.push({
+        ast: insertAst,
+        ir,
+        sql: sqlArtifact,
+        compiler: compiled.cache,
+        sqlTrail,
+        overlays: currentOverlays,
+        result,
+      });
     }
+  } else {
+    for (const value of iteratorValues) {
+      const selectAst: SelectStatement = {
+        ...body,
+        filter: body.filter ? substituteBindingInASTFilter(body.filter, ast.variable, value as ScalarValue) : undefined,
+      };
 
-    const insertAst: InsertStatement = {
-      ...body,
-      values: insertValues,
-    };
+      const compiled = compilerService.compile(schema, selectAst, { overlays, globals: context.globals, target: runtimeTarget });
+      const ir = compiled.ir as SelectIR;
+      const sqlArtifact = compiled.sql;
+      assertTargetSqlCompatibility(sqlArtifact.sql, runtimeTarget);
+      const sqlTrail: SQLArtifact[] = [sqlArtifact];
 
-    const subjectType = schema.getType(insertAst.typeName);
-    if (!subjectType) {
-      throw new AppError("E_SEMANTIC", `Unknown type '${insertAst.typeName}'`, ast.pos.line, ast.pos.column);
-    }
+      const rows = runSelectIR(db, schema, ir, context, sqlArtifact, sqlTrail);
 
-    const compiled = compilerService.compile(schema, insertAst, { overlays, globals: context.globals, target: runtimeTarget });
-    const ir = compiled.ir;
-    const sqlArtifact = compiled.sql;
-    assertTargetSqlCompatibility(sqlArtifact.sql, runtimeTarget);
-    const sqlTrail: SQLArtifact[] = [sqlArtifact];
-
-    const writeResult = runWriteWithAccessPolicies(db, schema, insertAst, ir, sqlArtifact, subjectType, context);
-    const result = { kind: "insert" as const, changes: writeResult.changes };
-
-    const currentOverlays = extractOverlays(ir);
-    if (ir.kind !== "select" && ir.kind !== "select_free" && ir.kind !== "select_expr") {
+      const currentOverlays = extractOverlays(ir);
       overlays.push(...currentOverlays);
-    }
 
-    traces.push({
-      ast: insertAst,
-      ir,
-      sql: sqlArtifact,
-      compiler: compiled.cache,
-      sqlTrail,
-      overlays: currentOverlays,
-      result,
-    });
+      traces.push({
+        ast: selectAst,
+        ir,
+        sql: sqlArtifact,
+        compiler: compiled.cache,
+        sqlTrail,
+        overlays: currentOverlays,
+        result: { kind: "select" as const, rows },
+      });
+    }
   }
 };
 
@@ -834,7 +886,8 @@ const materializeSelectRow = (
 
       const payload = parsePayloadArray(row[shapePayloadAlias(element.pathId)]);
       if (payload) {
-        output[element.name] = element.relation.multi ? payload : (payload[0] ?? null);
+        const materialized = element.relation.multi ? payload : (payload[0] ?? null);
+        output[element.name] = materialized;
         continue;
       }
 
@@ -846,7 +899,8 @@ const materializeSelectRow = (
         limit: element.limit,
         offset: element.offset,
       }, sqlTrail);
-      output[element.name] = element.relation.multi ? links : (links[0] ?? null);
+      const materialized = element.relation.multi ? links : (links[0] ?? null);
+      output[element.name] = materialized;
       continue;
     }
 
@@ -890,6 +944,27 @@ const materializeFieldValue = (
       return parsed.map((item) => coerceScalarForOutput(field.type, item));
     } catch {
       return [];
+    }
+  }
+
+  if (field.collection && typeof value === "string") {
+    const trimmed = value.trim();
+    if ((trimmed.startsWith("[") && trimmed.endsWith("]")) || (trimmed.startsWith("{") && trimmed.endsWith("}"))) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (field.collection.kind === "array") {
+          return Array.isArray(parsed) ? parsed : [];
+        }
+
+        if (field.collection.kind === "tuple") {
+          if (Array.isArray(parsed) && field.collection.elementNames && field.collection.elementNames.length === parsed.length) {
+            return Object.fromEntries(field.collection.elementNames.map((name, idx) => [name, parsed[idx]]));
+          }
+          return parsed;
+        }
+      } catch {
+        return value;
+      }
     }
   }
 
@@ -1534,7 +1609,35 @@ const parsePayloadArray = (value: unknown): unknown[] | null => {
 
   try {
     const parsed = JSON.parse(value);
-    return Array.isArray(parsed) ? parsed : [];
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    const decodeNested = (input: unknown): unknown => {
+      if (typeof input === "string") {
+        const trimmed = input.trim();
+        if ((trimmed.startsWith("[") && trimmed.endsWith("]")) || (trimmed.startsWith("{") && trimmed.endsWith("}"))) {
+          try {
+            return decodeNested(JSON.parse(trimmed));
+          } catch {
+            return input;
+          }
+        }
+        return input;
+      }
+
+      if (Array.isArray(input)) {
+        return input.map((entry) => decodeNested(entry));
+      }
+
+      if (input && typeof input === "object") {
+        return Object.fromEntries(Object.entries(input).map(([key, entry]) => [key, decodeNested(entry)]));
+      }
+
+      return input;
+    };
+
+    return decodeNested(parsed) as unknown[];
   } catch {
     return null;
   }
@@ -1734,7 +1837,11 @@ const executeSelectExprRows = (
   expr: Extract<InsertValue, { kind: "select" }>,
   context: SecurityContext,
 ): Record<string, unknown>[] => {
-  const shape = expr.shape.length > 0 ? expr.shape : [{ kind: "field", name: "id" } as const];
+  const shape = expr.shape.length > 0 ? [...expr.shape] : [{ kind: "field", name: "id" } as const];
+  const hasId = shape.some((element) => element.kind === "field" && element.name === "id");
+  if (!hasId) {
+    shape.unshift({ kind: "field", name: "id" });
+  }
   const ast: SelectStatement = {
     kind: "select",
     typeName: expr.typeName,
@@ -1927,17 +2034,22 @@ const executeNestedInsert = (
   return [inserted.id];
 };
 
-const resolveInsertTargetIds = (
+type LinkTargetAssignment = {
+  id: string;
+  properties: Record<string, ScalarValue>;
+};
+
+const resolveInsertTargets = (
   db: SQLiteDatabase,
   schema: SchemaSnapshot,
   value: InsertValue,
   context: SecurityContext,
   ast: InsertStatement,
-): string[] => {
+): LinkTargetAssignment[] => {
   const resolveBinding = makeBindingResolver(ast, context, ast.pos.line, ast.pos.column);
 
   if (typeof value !== "object" || value === null || !("kind" in value)) {
-    return typeof value === "string" ? [value] : [];
+    return typeof value === "string" ? [{ id: value, properties: {} }] : [];
   }
 
   if (value.kind === "binding_ref") {
@@ -1945,27 +2057,55 @@ const resolveInsertTargetIds = (
     if (withValue && withValue.kind === "subquery") {
       const rows = executeSelectExprRows(db, schema, withValue.query as Extract<InsertValue, { kind: "select" }>, context);
       return rows
-        .map((row) => row.id)
-        .filter((id): id is string => typeof id === "string");
+        .map((row) => {
+          if (typeof row.id !== "string") {
+            return undefined;
+          }
+
+          const properties: Record<string, ScalarValue> = {};
+          for (const [key, raw] of Object.entries(row)) {
+            if (!key.startsWith("@") || !isScalarValue(raw)) {
+              continue;
+            }
+            properties[key] = raw;
+          }
+
+          return { id: row.id, properties };
+        })
+        .filter((entry): entry is LinkTargetAssignment => !!entry);
     }
 
     const scalar = resolveBinding(value.name);
-    return typeof scalar === "string" ? [scalar] : [];
+    return typeof scalar === "string" ? [{ id: scalar, properties: {} }] : [];
   }
 
   if (value.kind === "select") {
     const rows = executeSelectExprRows(db, schema, value, context);
     return rows
-      .map((row) => row.id)
-      .filter((id): id is string => typeof id === "string");
+      .map((row) => {
+        if (typeof row.id !== "string") {
+          return undefined;
+        }
+
+        const properties: Record<string, ScalarValue> = {};
+        for (const [key, raw] of Object.entries(row)) {
+          if (!key.startsWith("@") || !isScalarValue(raw)) {
+            continue;
+          }
+          properties[key] = raw;
+        }
+
+        return { id: row.id, properties };
+      })
+      .filter((entry): entry is LinkTargetAssignment => !!entry);
   }
 
   if (value.kind === "insert") {
-    return executeNestedInsert(db, schema, value, context);
+    return executeNestedInsert(db, schema, value, context).map((id) => ({ id, properties: {} }));
   }
 
   if (value.kind === "set") {
-    return value.values.flatMap((item) => resolveInsertTargetIds(db, schema, item, context, ast));
+    return value.values.flatMap((item) => resolveInsertTargets(db, schema, item, context, ast));
   }
 
   return [];
@@ -1986,7 +2126,8 @@ const applyInsertLinkAssignments = (
       continue;
     }
 
-    const targetIds = resolveInsertTargetIds(db, schema, value, context, ast);
+    const targetAssignments = resolveInsertTargets(db, schema, value, context, ast);
+    const targetIds = targetAssignments.map((assignment) => assignment.id);
     const targetQualified = link.targetType.includes("::") ? link.targetType : `${typeDef.module ?? "default"}::${link.targetType}`;
     const assignableTargetTables = new Set(
       schema.listConcreteTypesAssignableTo(targetQualified).map((candidate) => tableNameForType(qualifiedTypeName(candidate))),
@@ -2010,10 +2151,20 @@ const applyInsertLinkAssignments = (
     const usesLinkTable = Boolean(link.multi) || (link.properties?.length ?? 0) > 0;
     if (usesLinkTable) {
       const linkTable = `${tableNameForType(qualifiedTypeName(typeDef))}__${link.name.toLowerCase()}`;
-      for (const targetId of targetIds) {
+      const propertyColumns = (link.properties ?? []).map((property) => property.name);
+      const columns = ["source", "target", ...propertyColumns];
+      const placeholders = columns.map(() => "?").join(", ");
+      const insertSql = `INSERT INTO ${quoteIdent(linkTable)} (${columns.map(quoteIdent).join(", ")}) VALUES (${placeholders})`;
+
+      for (const assignment of targetAssignments) {
+        const params = [
+          sourceId,
+          assignment.id,
+          ...propertyColumns.map((column) => assignment.properties[`@${column}`] ?? null),
+        ];
         db
-          .prepare(`INSERT INTO ${quoteIdent(linkTable)} (${quoteIdent("source")}, ${quoteIdent("target")}) VALUES (?, ?)`)
-          .run(sourceId, targetId);
+          .prepare(insertSql)
+          .run(...params);
       }
       continue;
     }

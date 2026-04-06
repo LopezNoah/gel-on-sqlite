@@ -2,6 +2,7 @@ import type { RuntimeDatabaseAdapter } from "../runtime/adapter.js";
 import { createHash } from "node:crypto";
 import type { MutationRewriteExpr, ScalarType, ScalarValue, TriggerDef, TriggerInsertAction, TriggerValueExpr } from "../types.js";
 import type { DeclarativeSchema, LinkMember, ObjectTypeDeclaration, PropertyMember, TypeMember } from "./declarative.js";
+import { scalarToSqlType } from "./scalar.js";
 
 export interface MigrationStep {
   description: string;
@@ -601,22 +602,6 @@ const normalizeTypeName = (moduleName: string, name: string): string => (name.in
 
 const triggerName = (table: string, suffix: string): string => `${table.replaceAll(/[^A-Za-z0-9_]/g, "_")}__${suffix}`;
 
-const sqlType = (scalar: ScalarType): string => {
-  switch (scalar) {
-    case "str":
-    case "json":
-    case "datetime":
-    case "uuid":
-      return "TEXT";
-    case "int":
-      return "INTEGER";
-    case "float":
-      return "REAL";
-    case "bool":
-      return "INTEGER";
-    default:
-      return "TEXT";
-  }
-};
+const sqlType = (scalar: ScalarType): string => scalarToSqlType(scalar);
 
 const quoteIdent = (ident: string): string => `"${ident.replaceAll('"', '""')}"`;

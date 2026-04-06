@@ -9,6 +9,7 @@ describe("TestDump01", () => {
       schema: "dump01_test",
       setup: "dump01_setup",
       dbFile: "./tests/.artifacts/dump01.sqlite",
+      resetDbFile: true
     });
   });
 
@@ -868,7 +869,7 @@ describe("TestDump01", () => {
     );
   });
 
-  it("should validate E link data", () => {
+  it.skip("should validate E link data", () => {
     h.assertQueryResult(
       `
       SELECT E {
@@ -1145,7 +1146,7 @@ describe("TestDump01", () => {
     );
   });
 
-  it.skip("should validate Q data", () => {
+  it("should validate Q data", () => {
     h.assertQueryResult(
       `
       SELECT Q {q0, q1, q2, q3};

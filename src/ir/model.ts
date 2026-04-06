@@ -36,6 +36,10 @@ export type SelectShapeElementIR =
             column: string;
           }
         | {
+          kind: "binding_ref";
+          name: string;
+        }
+        | {
             kind: "literal";
             value: ScalarValue;
           }

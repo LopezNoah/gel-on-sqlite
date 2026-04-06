@@ -15,9 +15,23 @@ export type ScalarType =
 
 export type ScalarValue = string | number | boolean | null;
 
+export type CollectionTypeDef =
+  | {
+      kind: "array";
+    }
+  | {
+      kind: "tuple";
+      elementNames?: string[];
+    };
+
 export interface AnnotationDef {
   name: string;
   value: string;
+}
+
+export interface ConstraintDef {
+  name: string;
+  annotations: AnnotationDef[];
 }
 
 export type FunctionVolatility = "Immutable" | "Stable" | "Volatile" | "Modifying";
@@ -241,6 +255,8 @@ export interface FieldDef {
   type: ScalarType;
   required?: boolean;
   multi?: boolean;
+  collection?: CollectionTypeDef;
+  constraints?: ConstraintDef[];
   annotations?: AnnotationDef[];
   enumValues?: string[];
   enumTypeName?: string;
@@ -250,6 +266,7 @@ export interface LinkPropertyDef {
   name: string;
   type: ScalarType;
   required?: boolean;
+  collection?: CollectionTypeDef;
   annotations?: AnnotationDef[];
 }
 

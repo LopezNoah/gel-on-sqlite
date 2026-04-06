@@ -1125,6 +1125,25 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           continue;
         }
 
+        if (shapeElement.expr.kind === "binding_ref") {
+          shapeElements.push({
+            kind: "computed",
+            name: shapeElement.name,
+            pathId: elementPathId,
+            expr: {
+              kind: "binding_ref",
+              name: shapeElement.expr.name,
+            },
+          });
+          shapeNames.add(shapeElement.name);
+          scopeChildren.push({
+            pathId: elementPathId,
+            typeName: qualifiedName,
+            children: [],
+          });
+          continue;
+        }
+
         shapeElements.push({
           kind: "computed",
           name: shapeElement.name,
@@ -1823,6 +1842,9 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         for (const item of value.values) {
           validateInsertLinkExpr(linkName, item);
         }
+        return;
+      }
+      if (value.kind === "for") {
         return;
       }
 

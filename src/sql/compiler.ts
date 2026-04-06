@@ -160,12 +160,14 @@ const compileLinkArrayExpr = (
   target: RuntimeTarget,
 ): string => {
   const targetAlias = `l_${sanitizePathId(element.pathId)}`;
+  const junctionAlias = element.relation.storage === "table" ? `j_${sanitizePathId(element.pathId)}` : undefined;
   const rowExpr = compileShapeObjectExpr(
     element.shape,
     targetAlias,
     `${targetAlias}.${quoteIdent("__source_type")}`,
     params,
     target,
+    junctionAlias,
   );
 
   const whereClauses: string[] = [];
@@ -177,7 +179,6 @@ const compileLinkArrayExpr = (
       `${targetAlias}.${quoteIdent("id")} = ${sourceAlias}.${quoteIdent(requiredInlineColumn(element.relation.inlineColumn))}`,
     );
   } else {
-    const junctionAlias = `j_${sanitizePathId(element.pathId)}`;
     fromClause = `${compilePolymorphicTargetSource(element.relation, targetAlias)} JOIN ${quoteIdent(requiredLinkTable(element.relation.linkTable))} ${junctionAlias} ON ${junctionAlias}.${quoteIdent("target")} = ${targetAlias}.${quoteIdent("id")}`;
     whereClauses.push(`${junctionAlias}.${quoteIdent("source")} = ${sourceAlias}.${quoteIdent("id")}`);
   }
@@ -238,6 +239,7 @@ const compileShapeObjectExpr = (
   sourceTypeExpr: string,
   params: ScalarValue[],
   target: RuntimeTarget,
+  linkPropertyAlias?: string,
 ): string => {
   const pairs: string[] = [];
 
@@ -253,6 +255,11 @@ const compileShapeObjectExpr = (
       if (element.expr.kind === "field_ref") {
         pairs.push(`${sourceAlias}.${quoteIdent(element.expr.column)}`);
       } else if (element.expr.kind === "literal") {
+        if (linkPropertyAlias && element.name.startsWith("@")) {
+          pairs.push(`${linkPropertyAlias}.${quoteIdent(element.name.slice(1))}`);
+          continue;
+        }
+
         pairs.push("?");
         params.push(encodeParam(element.expr.value));
       } else if (element.expr.kind === "polymorphic_field_ref") {

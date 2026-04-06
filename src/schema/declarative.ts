@@ -4,8 +4,10 @@ import type {
   AccessPolicyCondition,
   AccessPolicyDef,
   AnnotationDef,
+  ConstraintDef,
   AccessPolicyOperation,
   ComputedDef,
+  CollectionTypeDef,
   ComputedValuePart,
   FunctionParamDef,
   FunctionVolatility,
@@ -16,6 +18,9 @@ import type {
   TriggerInsertAction,
   TriggerValueExpr,
 } from "../types.js";
+import { AnnotationRegistry, normalizeAnnotationName } from "./annos.js";
+import { ScalarRegistry } from "./scalar.js";
+import type { ScalarTypeDeclaration } from "./scalar.js";
 
 export interface SchemaModule {
   name: string;
@@ -27,6 +32,7 @@ export interface PropertyMember {
   scalar: ScalarType;
   required: boolean;
   multi: boolean;
+  collection?: CollectionTypeDef;
   overloaded: boolean;
   annotations: AnnotationDef[];
   enumValues?: string[];
@@ -35,12 +41,14 @@ export interface PropertyMember {
     onInsert?: MutationRewriteExpr;
     onUpdate?: MutationRewriteExpr;
   };
+  constraints: ConstraintDef[];
 }
 
 export interface LinkProperty {
   name: string;
   scalar: ScalarType;
   required: boolean;
+  collection?: CollectionTypeDef;
   annotations: AnnotationDef[];
 }
 
@@ -87,6 +95,12 @@ export interface AbstractAnnotationDeclaration extends AbstractAnnotationDef {
   annotations: AnnotationDef[];
 }
 
+export interface ConstraintDeclaration {
+  module: string;
+  name: string;
+  annotations: AnnotationDef[];
+}
+
 export interface PermissionDeclaration {
   module: string;
   name: string;
@@ -107,12 +121,6 @@ export interface FunctionDeclaration {
   };
 }
 
-export interface ScalarTypeDeclaration {
-  name: string;
-  module: string;
-  enumValues: string[];
-}
-
 export interface DeclarativeSchema {
   modules: SchemaModule[];
   types: ObjectTypeDeclaration[];
@@ -120,6 +128,7 @@ export interface DeclarativeSchema {
   abstractAnnotations?: AbstractAnnotationDeclaration[];
   permissions?: PermissionDeclaration[];
   scalarTypes?: ScalarTypeDeclaration[];
+  constraints?: ConstraintDeclaration[];
 }
 
 type TokenKind =
@@ -155,37 +164,12 @@ interface Token {
   index: number;
 }
 
-const BUILTIN_SCALARS = new Set<string>([
-  "str",
-  "int",
-  "float",
-  "bool",
-  "json",
-  "datetime",
-  "duration",
-  "local_datetime",
-  "local_date",
-  "local_time",
-  "relative_duration",
-  "date_duration",
-  "uuid",
-  "int16",
-  "int32",
-  "int64",
-  "float32",
-  "float64",
-  "bigint",
-  "decimal",
-  "bytes",
-]);
-const STANDARD_ANNOTATIONS = new Set(["title", "description", "deprecated"]);
-
 class Parser {
   private readonly tokens: Token[];
   private readonly source: string;
-  private readonly scalarAliases = new Map<string, ScalarType>();
-  private readonly enumValues = new Map<string, string[]>();
+  private readonly scalarRegistry = new ScalarRegistry();
   private index = 0;
+  private readonly annotationRegistry = new AnnotationRegistry();
 
   constructor(source: string) {
     this.source = source;
@@ -199,6 +183,7 @@ class Parser {
     const functions: FunctionDeclaration[] = [];
     const abstractAnnotations: AbstractAnnotationDeclaration[] = [];
     const scalarTypes: ScalarTypeDeclaration[] = [];
+    const constraintDeclarations: ConstraintDeclaration[] = [];
 
     while (!this.match("eof")) {
       this.expectWord("module", "Expected 'module' declaration");
@@ -256,6 +241,11 @@ class Parser {
           continue;
         }
 
+        if (this.peekWordAt(0) === "abstract" && this.peekWordAt(1) === "constraint") {
+          constraintDeclarations.push(this.parseAbstractConstraint(moduleName));
+          continue;
+        }
+
         if (this.peekWordAt(0) === "scalar" && this.peekWordAt(1) === "type") {
           this.parseScalarType(moduleName, scalarTypes);
           continue;
@@ -270,6 +260,8 @@ class Parser {
       }
     }
 
+    this.annotationRegistry.validatePending();
+
     return {
       modules,
       types,
@@ -277,6 +269,7 @@ class Parser {
       permissions,
       abstractAnnotations: abstractAnnotations.length ? abstractAnnotations : undefined,
       scalarTypes: scalarTypes.length ? scalarTypes : undefined,
+      constraints: constraintDeclarations.length ? constraintDeclarations : undefined,
     };
   }
 
@@ -394,7 +387,7 @@ class Parser {
 
       if (this.matchWord("create") || this.matchWord("alter")) {
         this.expectWord("annotation", "Expected 'annotation' clause");
-        const annotationName = this.normalizeAnnotationName(moduleName, this.expect("word", "Expected annotation name").text);
+        const annotationName = normalizeAnnotationName(moduleName, this.expect("word", "Expected annotation name").text);
         this.expect("assign", "Expected ':=' in annotation clause");
         const value = this.readStringLiteral("Expected annotation string value");
         this.expect("semi", "Expected ';' after annotation clause");
@@ -409,7 +402,7 @@ class Parser {
 
       if (this.matchWord("drop")) {
         this.expectWord("annotation", "Expected 'annotation' after 'drop'");
-        const annotationName = this.normalizeAnnotationName(moduleName, this.expect("word", "Expected annotation name").text);
+        const annotationName = normalizeAnnotationName(moduleName, this.expect("word", "Expected annotation name").text);
         this.expect("semi", "Expected ';' after drop annotation clause");
         const existing = next.annotations.findIndex((annotation) => annotation.name === annotationName);
         if (existing >= 0) {
@@ -662,7 +655,7 @@ class Parser {
     this.expectWord("abstract", "Expected 'abstract' in annotation declaration");
     const inheritable = this.matchWord("inheritable");
     this.expectWord("annotation", "Expected 'annotation' in abstract annotation declaration");
-    const name = this.normalizeAnnotationName(moduleName, this.expect("word", "Expected annotation name").text);
+    const name = normalizeAnnotationName(moduleName, this.expect("word", "Expected annotation name").text);
 
     const annotations: AnnotationDef[] = [];
     if (this.match("lbrace")) {
@@ -672,12 +665,43 @@ class Parser {
     }
 
     this.expect("semi", "Expected ';' after abstract annotation declaration");
-    return {
+    const declaration: AbstractAnnotationDeclaration = {
       module: moduleName,
       name,
       inheritable,
       annotations,
     };
+    this.annotationRegistry.register(declaration);
+    return declaration;
+  }
+
+  private parseAbstractConstraint(moduleName: string): ConstraintDeclaration {
+    this.expectWord("abstract", "Expected 'abstract' in constraint declaration");
+    this.expectWord("constraint", "Expected 'constraint' after 'abstract'");
+    const name = this.normalizeConstraintName(moduleName, this.expect("word", "Expected constraint name").text);
+    const annotations: AnnotationDef[] = [];
+
+    if (this.match("lparen")) {
+      this.skipParentheses();
+    }
+
+    if (this.match("lbrace")) {
+      while (!this.match("rbrace")) {
+        if (this.peekWordAt(0) === "annotation") {
+          this.consume();
+          const annotationName = normalizeAnnotationName(moduleName, this.expect("word", "Expected annotation name").text);
+          this.expect("assign", "Expected ':=' in annotation declaration");
+          const value = this.readStringLiteral("Expected annotation string value");
+          this.match("semi");
+          annotations.push({ name: annotationName, value });
+          continue;
+        }
+        this.skipStatementInBlock();
+      }
+    }
+
+    this.match("semi");
+    return { module: moduleName, name, annotations };
   }
 
   private isAbstractAnnotationDeclarationStart(): boolean {
@@ -709,7 +733,7 @@ class Parser {
   private parseAnnotationMutation(moduleName: string, annotations: AnnotationDef[]): void {
     if (this.matchWord("drop")) {
       this.expectWord("annotation", "Expected 'annotation' after 'drop'");
-      const name = this.normalizeAnnotationName(moduleName, this.expect("word", "Expected annotation name").text);
+      const name = normalizeAnnotationName(moduleName, this.expect("word", "Expected annotation name").text);
       this.expect("semi", "Expected ';' after drop annotation");
       const index = annotations.findIndex((item) => item.name === name);
       if (index >= 0) {
@@ -724,7 +748,7 @@ class Parser {
       this.expectWord("annotation", "Expected annotation declaration");
     }
 
-    const name = this.normalizeAnnotationName(moduleName, this.expect("word", "Expected annotation name").text);
+    const name = normalizeAnnotationName(moduleName, this.expect("word", "Expected annotation name").text);
     this.expect("assign", "Expected ':=' in annotation declaration");
     const value = this.readStringLiteral("Expected annotation string value");
     this.expect("semi", "Expected ';' after annotation declaration");
@@ -788,32 +812,36 @@ class Parser {
 
     if (this.match("arrow")) {
       const targetToken = this.expect("word", "Expected property or link target type");
-      this.consumeTypeTail();
+      const collection = this.consumeTypeTail(targetToken.text);
       if (memberKind === "property" || (memberKind === undefined && this.isScalarLike(targetToken.text))) {
         const { scalar, enumValues, enumTypeName } = this.readScalarType(moduleName, targetToken.text);
 
         let annotations: AnnotationDef[] = [];
         let rewrite: PropertyMember["rewrite"] | undefined;
+        let propertyConstraints: ConstraintDef[] = [];
         if (this.match("lbrace")) {
           const parsed = this.parsePropertyBody(moduleName, name);
           rewrite = parsed.rewrite;
           annotations = parsed.annotations;
+          propertyConstraints = parsed.constraints;
           this.expect("rbrace", "Expected '}' after property body");
         }
 
-        this.match("semi");
-        return {
-          kind: "property",
-          name,
-          scalar,
-          required,
-          multi,
-          overloaded,
-          annotations,
-          rewrite,
-          enumValues,
-          enumTypeName,
-        };
+      this.match("semi");
+      return {
+        kind: "property",
+        name,
+        scalar,
+        required,
+        multi,
+        collection,
+        overloaded,
+        annotations,
+        rewrite,
+        constraints: propertyConstraints,
+        enumValues,
+        enumTypeName,
+      };
       }
 
       const target = this.normalizeTypeName(moduleName, targetToken.text);
@@ -844,7 +872,7 @@ class Parser {
           const propName = this.expect("word", "Expected link property name").text;
           if (this.match("arrow")) {
             const typeName = this.expect("word", "Expected link property scalar type").text;
-            this.consumeTypeTail();
+            const linkCollection = this.consumeTypeTail(typeName);
             const { scalar: linkScalar } = this.readScalarType(moduleName, typeName);
             let linkPropertyAnnotations: AnnotationDef[] = [];
             if (this.match("lbrace")) {
@@ -857,6 +885,7 @@ class Parser {
               name: propName,
               scalar: linkScalar,
               required: linkPropertyRequired,
+              collection: linkCollection,
               annotations: linkPropertyAnnotations,
             });
             continue;
@@ -864,7 +893,7 @@ class Parser {
 
           if (this.match("colon")) {
             const typeName = this.expect("word", "Expected link property scalar type").text;
-            this.consumeTypeTail();
+            const linkCollection = this.consumeTypeTail(typeName);
             const { scalar: linkScalar2 } = this.readScalarType(moduleName, typeName);
             this.match("semi");
 
@@ -872,6 +901,7 @@ class Parser {
               name: propName,
               scalar: linkScalar2,
               required: linkPropertyRequired,
+              collection: linkCollection,
               annotations: [],
             });
             continue;
@@ -896,15 +926,17 @@ class Parser {
 
     this.expect("colon", "Expected ':' in property declaration");
     const scalarToken = this.expect("word", "Expected property scalar type");
-    this.consumeTypeTail();
+    const collection = this.consumeTypeTail(scalarToken.text);
     const { scalar, enumValues, enumTypeName } = this.readScalarType(moduleName, scalarToken.text);
 
     let annotations: AnnotationDef[] = [];
     let rewrite: PropertyMember["rewrite"] | undefined;
+    let propertyConstraints: ConstraintDef[] = [];
     if (this.match("lbrace")) {
       const parsed = this.parsePropertyBody(moduleName, name);
       rewrite = parsed.rewrite;
       annotations = parsed.annotations;
+      propertyConstraints = parsed.constraints;
       this.expect("rbrace", "Expected '}' after property body");
     }
 
@@ -915,11 +947,13 @@ class Parser {
       scalar,
       required,
       multi,
+      collection,
       overloaded,
       annotations,
       rewrite,
       enumValues,
       enumTypeName,
+      constraints: propertyConstraints,
     };
   }
 
@@ -1166,9 +1200,10 @@ class Parser {
   private parsePropertyBody(
     moduleName: string,
     fieldName: string,
-  ): { rewrite: PropertyMember["rewrite"]; annotations: AnnotationDef[] } {
+  ): { rewrite: PropertyMember["rewrite"]; annotations: AnnotationDef[]; constraints: ConstraintDef[] } {
     const rewrite: PropertyMember["rewrite"] = {};
     const annotations: AnnotationDef[] = [];
+    const constraints: ConstraintDef[] = [];
 
     while (!this.peekIs("rbrace")) {
       if (this.isAnnotationMutationStart()) {
@@ -1176,7 +1211,12 @@ class Parser {
         continue;
       }
 
-      if (this.peekWordAt(0) === "constraint" || this.peekWordAt(0) === "default" || this.peekWordAt(0) === "readonly") {
+      if (this.peekWordAt(0) === "constraint") {
+        constraints.push(this.parseConstraintClause(moduleName));
+        continue;
+      }
+
+      if (this.peekWordAt(0) === "default" || this.peekWordAt(0) === "readonly") {
         this.skipStatementInBlock();
         continue;
       }
@@ -1200,7 +1240,30 @@ class Parser {
       }
     }
 
-    return { rewrite, annotations };
+    return { rewrite, annotations, constraints };
+  }
+
+  private parseConstraintClause(moduleName: string): ConstraintDef {
+    this.expectWord("constraint", "Expected 'constraint' in property block");
+    const name = this.normalizeConstraintName(moduleName, this.expect("word", "Expected constraint name").text);
+    const annotations: AnnotationDef[] = [];
+
+    if (this.match("lparen")) {
+      this.skipParentheses();
+    }
+
+    if (this.match("lbrace")) {
+      while (!this.match("rbrace")) {
+        if (this.isAnnotationMutationStart()) {
+          this.parseAnnotationMutation(moduleName, annotations);
+          continue;
+        }
+        this.skipStatementInBlock();
+      }
+    }
+
+    this.match("semi");
+    return { name, annotations };
   }
 
   private parseLinkPropertyBody(moduleName: string): AnnotationDef[] {
@@ -1553,52 +1616,13 @@ class Parser {
   }
 
   private readScalarType(moduleName: string, name: string): { scalar: ScalarType; enumValues?: string[]; enumTypeName?: string } {
-    const normalized = name.includes("::") ? name.split("::").at(-1)! : name;
-    const lowered = normalized.toLowerCase();
-
-    const mapped: Record<string, ScalarType> = {
-      str: "str",
-      bytes: "str",
-      json: "json",
-      bool: "bool",
-      uuid: "uuid",
-      datetime: "datetime",
-      duration: "duration",
-      local_datetime: "local_datetime",
-      local_date: "local_date",
-      local_time: "local_time",
-      relative_duration: "relative_duration",
-      date_duration: "date_duration",
-      int: "int",
-      int16: "int",
-      int32: "int",
-      int64: "int",
-      bigint: "int",
-      float: "float",
-      float32: "float",
-      float64: "float",
-      decimal: "float",
-      array: "str",
-      tuple: "str",
-    };
-
-    if (mapped[lowered]) {
-      return { scalar: mapped[lowered] };
+    const resolution = this.scalarRegistry.resolve(name, moduleName);
+    if (resolution) {
+      return resolution;
     }
 
-    const alias = this.scalarAliases.get(normalized) ?? this.scalarAliases.get(lowered);
-    if (alias) {
-      const enumVals = this.getEnumValues(normalized);
-      const enumTypeName = name.includes("::") ? name : `${moduleName}::${normalized}`;
-      return { scalar: alias, enumValues: enumVals, enumTypeName };
-    }
-
-    if (!BUILTIN_SCALARS.has(lowered)) {
-      const token = this.peek();
-      throw new AppError("E_SYNTAX", `Unknown scalar type '${name}'`, 1, token.index + 1);
-    }
-
-    return { scalar: lowered as ScalarType };
+    const token = this.peek();
+    throw new AppError("E_SYNTAX", `Unknown scalar type '${name}'`, 1, token.index + 1);
   }
 
   private parseScalarType(moduleName: string, scalarTypes: ScalarTypeDeclaration[]): void {
@@ -1611,16 +1635,13 @@ class Parser {
     if (this.matchWord("extending")) {
       if (this.matchWord("enum")) {
         enumVals = this.parseEnumValues();
-        this.enumValues.set(name, enumVals);
-        this.enumValues.set(name.toLowerCase(), enumVals);
         alias = "str";
       } else {
         alias = this.readScalarType(moduleName, this.expect("word", "Expected scalar base type").text).scalar;
       }
     }
 
-    this.scalarAliases.set(name, alias);
-    this.scalarAliases.set(name.toLowerCase(), alias);
+    this.scalarRegistry.register(name, { scalar: alias, enumValues: enumVals });
 
     if (enumVals) {
       scalarTypes.push({ name, module: moduleName, enumValues: enumVals });
@@ -1647,10 +1668,6 @@ class Parser {
     return values;
   }
 
-  getEnumValues(name: string): string[] | undefined {
-    return this.enumValues.get(name) ?? this.enumValues.get(name.toLowerCase());
-  }
-
   private skipAngleTypeArgs(): void {
     this.expect("lt", "Expected '<'");
     let depth = 1;
@@ -1666,10 +1683,74 @@ class Parser {
     }
   }
 
-  private consumeTypeTail(): void {
-    while (this.peekIs("lt")) {
-      this.skipAngleTypeArgs();
+  private consumeTypeTail(baseTypeName?: string): CollectionTypeDef | undefined {
+    const lowered = baseTypeName
+      ? (baseTypeName.includes("::") ? baseTypeName.split("::").at(-1)! : baseTypeName).toLowerCase()
+      : undefined;
+
+    if (!this.peekIs("lt")) {
+      if (lowered === "array") {
+        return { kind: "array" };
+      }
+      if (lowered === "tuple") {
+        return { kind: "tuple" };
+      }
+      return undefined;
     }
+
+    if (lowered !== "tuple") {
+      while (this.peekIs("lt")) {
+        this.skipAngleTypeArgs();
+      }
+      return lowered === "array" ? { kind: "array" } : undefined;
+    }
+
+    this.expect("lt", "Expected '<' in tuple type expression");
+    let depth = 1;
+    const parts: Array<Array<{ kind: string; text?: string }>> = [];
+    let current: Array<{ kind: string; text?: string }> = [];
+
+    while (depth > 0) {
+      const token = this.consume();
+      if (token.kind === "lt") {
+        depth += 1;
+        current.push(token);
+        continue;
+      }
+      if (token.kind === "gt") {
+        depth -= 1;
+        if (depth === 0) {
+          if (current.length > 0) {
+            parts.push(current);
+          }
+          break;
+        }
+        current.push(token);
+        continue;
+      }
+      if (depth === 1 && token.kind === "comma") {
+        parts.push(current);
+        current = [];
+        continue;
+      }
+      current.push(token);
+    }
+
+    const elementNames = parts
+      .map((part) => {
+        const colonIndex = part.findIndex((token) => token.kind === "colon");
+        if (colonIndex <= 0) {
+          return undefined;
+        }
+        const candidate = part[colonIndex - 1];
+        return candidate.kind === "word" ? candidate.text : undefined;
+      })
+      .filter((name): name is string => typeof name === "string");
+
+    return {
+      kind: "tuple",
+      elementNames: elementNames.length === parts.length ? elementNames : undefined,
+    };
   }
 
   private isTypeDeclarationStart(): boolean {
@@ -1680,9 +1761,7 @@ class Parser {
   }
 
   private isScalarLike(name: string): boolean {
-    const normalized = name.includes("::") ? name.split("::").at(-1)! : name;
-    const lowered = normalized.toLowerCase();
-    return BUILTIN_SCALARS.has(lowered) || this.scalarAliases.has(normalized) || this.scalarAliases.has(lowered);
+    return this.scalarRegistry.isScalarLike(name);
   }
 
   private skipDeclaration(): void {
@@ -1752,6 +1831,24 @@ class Parser {
     }
   }
 
+  private skipParentheses(): void {
+    let depth = 1;
+    while (depth > 0) {
+      const token = this.consume();
+      if (token.kind === "lparen") {
+        depth += 1;
+        continue;
+      }
+      if (token.kind === "rparen") {
+        depth -= 1;
+        continue;
+      }
+      if (token.kind === "eof") {
+        throw new AppError("E_SYNTAX", "Unterminated parentheses", 1, token.index + 1);
+      }
+    }
+  }
+
   private skipBlockBody(): void {
     let depth = 1;
     while (depth > 0) {
@@ -1775,13 +1872,9 @@ class Parser {
     return `${moduleName}::${name}`;
   }
 
-  private normalizeAnnotationName(moduleName: string, name: string): string {
+  private normalizeConstraintName(moduleName: string, name: string): string {
     if (name.includes("::")) {
       return name;
-    }
-
-    if (STANDARD_ANNOTATIONS.has(name)) {
-      return `std::${name}`;
     }
 
     return `${moduleName}::${name}`;

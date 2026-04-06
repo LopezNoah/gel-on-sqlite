@@ -1,4 +1,5 @@
-import type { FieldDef, FunctionDef, TypeDef } from "../types.js";
+import type { AnnotationDef, FieldDef, FunctionDef, TypeDef } from "../types.js";
+import { AnnotationSet } from "./annos.js";
 
 export interface SchemaDelta {
   createTypes?: TypeDef[];
@@ -134,7 +135,7 @@ const cloneComputedDef = (
     if (computed.expr.kind === "concat") {
       return {
         ...computed,
-        annotations: computed.annotations?.map((annotation) => ({ ...annotation })),
+        annotations: cloneAnnotations(computed.annotations),
         expr: {
           kind: "concat",
           parts: computed.expr.parts.map((part) => ({ ...part })),
@@ -144,7 +145,7 @@ const cloneComputedDef = (
 
     return {
       ...computed,
-      annotations: computed.annotations?.map((annotation) => ({ ...annotation })),
+      annotations: cloneAnnotations(computed.annotations),
       expr: { ...computed.expr },
     };
   }
@@ -152,7 +153,7 @@ const cloneComputedDef = (
   if (computed.expr.kind === "link_ref") {
     return {
       ...computed,
-      annotations: computed.annotations?.map((annotation) => ({ ...annotation })),
+      annotations: cloneAnnotations(computed.annotations),
       expr: {
         kind: "link_ref",
         link: computed.expr.link,
@@ -163,7 +164,7 @@ const cloneComputedDef = (
 
   return {
     ...computed,
-    annotations: computed.annotations?.map((annotation) => ({ ...annotation })),
+    annotations: cloneAnnotations(computed.annotations),
     expr: {
       kind: "backlink",
       link: computed.expr.link,
@@ -172,18 +173,24 @@ const cloneComputedDef = (
   };
 };
 
+const cloneAnnotations = (annotations?: AnnotationDef[]): AnnotationDef[] | undefined =>
+  annotations?.length ? AnnotationSet.from(annotations).toArray() : undefined;
+
 const cloneTypeDef = (typeDef: TypeDef): TypeDef => ({
   ...typeDef,
   extends: typeDef.extends ? [...typeDef.extends] : undefined,
-  annotations: typeDef.annotations?.map((annotation) => ({ ...annotation })),
-  fields: typeDef.fields.map((f) => ({ ...f, annotations: f.annotations?.map((annotation) => ({ ...annotation })) })),
+  annotations: cloneAnnotations(typeDef.annotations),
+  fields: typeDef.fields.map((f) => ({
+    ...f,
+    annotations: cloneAnnotations(f.annotations),
+  })),
   links: typeDef.links?.map((l) => ({
     ...l,
     properties: l.properties?.map((property) => ({
       ...property,
-      annotations: property.annotations?.map((annotation) => ({ ...annotation })),
+      annotations: cloneAnnotations(property.annotations),
     })),
-    annotations: l.annotations?.map((annotation) => ({ ...annotation })),
+    annotations: cloneAnnotations(l.annotations),
   })),
   computeds: typeDef.computeds?.map((computed) => cloneComputedDef(computed)),
   mutationRewrites: typeDef.mutationRewrites?.map((rewrite) => ({ ...rewrite, onInsert: rewrite.onInsert ? { ...rewrite.onInsert } : undefined, onUpdate: rewrite.onUpdate ? { ...rewrite.onUpdate } : undefined })),

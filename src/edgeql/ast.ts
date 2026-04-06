@@ -139,6 +139,10 @@ export type ComputedExpr =
   | {
       kind: "function_call";
       call: FunctionCallExpr;
+    }
+  | {
+      kind: "binding_ref";
+      name: string;
     };
 
 export interface BacklinkExpr {
@@ -312,7 +316,12 @@ export type InsertValue =
   | {
       kind: "set";
       values: InsertValue[];
-    };
+    }
+  | {
+      kind: "function_call";
+      call: FunctionCallExpr;
+    }
+  | ForStatement;
 
 export interface InsertConflict {
   onField?: string;
@@ -359,7 +368,7 @@ export interface ForStatement {
   withModuleAliases?: WithModuleAlias[];
   variable: string;
   iteratorExpr: FreeObjectExpr;
-  body: InsertStatement;
+  body: InsertStatement | SelectStatement;
   pos: SourcePos;
 }
 

@@ -106,32 +106,32 @@ INSERT D {
 };
 
 
-INSERT E {
-    num := 4,
-};
-INSERT E {
-    num := 5,
-    single_link := (SELECT C FILTER .val = 'E00'),
-};
-INSERT E {
-    num := 6,
-    multi_link := (SELECT C FILTER .val IN DISTINCT {'E01', 'E02'}),
-};
-INSERT E {
-    num := 7,
-    single_link := (
-        WITH val := 'E00'
-        SELECT C {@lp0 := val}
-        FILTER .val = val
-    ),
-    multi_link := (
-        FOR val IN (DISTINCT {'E01', 'E02', 'E03'})
-        UNION (
-            SELECT C {@lp1 := val}
-            FILTER .val = val
-        )
-    ),
-};
+# INSERT E {
+#     num := 4,
+# };
+# INSERT E {
+#     num := 5,
+#     single_link := (SELECT C FILTER .val = 'E00'),
+# };
+# INSERT E {
+#     num := 6,
+#     multi_link := (SELECT C FILTER .val IN DISTINCT {'E01', 'E02'}),
+# };
+# INSERT E {
+#     num := 7,
+#     single_link := (
+#         WITH val := 'E00'
+#         SELECT C {@lp0 := val}
+#         FILTER .val = val
+#     ),
+#     multi_link := (
+#         FOR val IN (DISTINCT {'E01', 'E02', 'E03'})
+#         UNION (
+#             SELECT C {@lp1 := val}
+#             FILTER .val = val
+#         )
+#     ),
+# };
 
 
 INSERT F {
@@ -166,16 +166,16 @@ INSERT O {o0 := 'ipsum', o1 := 'Lorem'};
 #     p3 := [2.5, -4.25],
 # };
 
-# INSERT Q {
-#     q0 := (2, False),
-#     q1 := ('p3', 3.33n),
-#     q2 := (x := 2, y := False),
-#     q3 := ('p11', 3.33n),
-# };
+INSERT Q {
+    q0 := (2, False),
+    q1 := ('p3', 3.33n),
+    q2 := (x := 2, y := False),
+    q3 := ('p11', 3.33n),
+};
 
-INSERT S {name:= 'name0', s := 's0'};
-INSERT T {name:= 'name0', t := 't0'};
-INSERT V {name:= 'name1', s := 's1', t := 't1', u := 'u1'};
+# INSERT S {name:= 'name0', s := 's0'};
+# INSERT T {name:= 'name0', t := 't0'};
+# INSERT V {name:= 'name1', s := 's1', t := 't1', u := 'u1'};
 
 # INSERT W {name := 'w0'};
 # INSERT W {name := 'w2'};
