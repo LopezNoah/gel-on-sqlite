@@ -19,8 +19,11 @@ import type {
   TriggerValueExpr,
 } from "../types.js";
 import { AnnotationRegistry, normalizeAnnotationName } from "./annos.js";
+import { OperatorKind, ReturnTypeModifier, type OperatorCode, type OperatorParameter, CreateOperator, lookupOperators, Operator } from "./operators.js";
+import { SchemaCardinality } from "./properties.js";
 import { ScalarRegistry } from "./scalar.js";
 import type { ScalarTypeDeclaration } from "./scalar.js";
+import { TriggerKind as SchemaTriggerKind, TriggerScope as SchemaTriggerScope } from "./triggers.js";
 
 export interface SchemaModule {
   name: string;
@@ -121,10 +124,27 @@ export interface FunctionDeclaration {
   };
 }
 
+export interface OperatorDeclaration {
+  module: string;
+  name: string;
+  kind: OperatorKind;
+  params: FunctionParamDef[];
+  returnType: string;
+  returnTypemod: ReturnTypeModifier;
+  language?: string;
+  fromOperator?: string[];
+  fromFunction?: string[];
+  fromExpr?: boolean;
+  code?: string;
+  recursive?: boolean;
+  derivativeOf?: string;
+}
+
 export interface DeclarativeSchema {
   modules: SchemaModule[];
   types: ObjectTypeDeclaration[];
   functions?: FunctionDeclaration[];
+  operators?: OperatorDeclaration[];
   abstractAnnotations?: AbstractAnnotationDeclaration[];
   permissions?: PermissionDeclaration[];
   scalarTypes?: ScalarTypeDeclaration[];
@@ -181,6 +201,7 @@ class Parser {
     const types: ObjectTypeDeclaration[] = [];
     const permissions: PermissionDeclaration[] = [];
     const functions: FunctionDeclaration[] = [];
+    const operators: OperatorDeclaration[] = [];
     const abstractAnnotations: AbstractAnnotationDeclaration[] = [];
     const scalarTypes: ScalarTypeDeclaration[] = [];
     const constraintDeclarations: ConstraintDeclaration[] = [];
@@ -229,6 +250,32 @@ class Parser {
           continue;
         }
 
+        if (this.peekWordAt(0) === "operator") {
+          operators.push(this.parseOperatorDeclaration(moduleName));
+          continue;
+        }
+
+        if (this.peekWordAt(0) === "create" && this.peekWordAt(1) === "operator") {
+          this.consume();
+          this.consume();
+          operators.push(this.parseOperatorDeclaration(moduleName));
+          continue;
+        }
+
+        if (this.peekWordAt(0) === "alter" && this.peekWordAt(1) === "operator") {
+          this.consume();
+          this.consume();
+          this.parseAlterOperator(moduleName, operators);
+          continue;
+        }
+
+        if (this.peekWordAt(0) === "drop" && this.peekWordAt(1) === "operator") {
+          this.consume();
+          this.consume();
+          this.parseDropOperator(moduleName, operators);
+          continue;
+        }
+
         if (this.peekWordAt(0) === "drop" && this.peekWordAt(1) === "function") {
           this.consume();
           this.consume();
@@ -266,11 +313,282 @@ class Parser {
       modules,
       types,
       functions: functions.length ? functions : undefined,
+      operators: operators.length ? operators : undefined,
       permissions,
       abstractAnnotations: abstractAnnotations.length ? abstractAnnotations : undefined,
       scalarTypes: scalarTypes.length ? scalarTypes : undefined,
       constraints: constraintDeclarations.length ? constraintDeclarations : undefined,
     };
+  }
+
+  private parseOperatorDeclaration(moduleName: string): OperatorDeclaration {
+    this.matchWord("operator");
+    let kind: OperatorKind | undefined;
+    if (this.peekWordAt(0) === "infix") {
+      this.consume();
+      kind = OperatorKind.Infix;
+    } else if (this.peekWordAt(0) === "prefix") {
+      this.consume();
+      kind = OperatorKind.Prefix;
+    } else if (this.peekWordAt(0) === "postfix") {
+      this.consume();
+      kind = OperatorKind.Postfix;
+    } else if (this.peekWordAt(0) === "ternary") {
+      this.consume();
+      kind = OperatorKind.Ternary;
+    }
+
+    const nameToken = this.expect("word", "Expected operator name");
+    const name = nameToken.text;
+    const params = this.parseFunctionParameters();
+    const returns = this.parseFunctionReturnSpec();
+
+    const declaration: OperatorDeclaration = {
+      module: moduleName,
+      name,
+      kind: kind ?? this.inferOperatorKind(params),
+      params,
+      returnType: returns.type,
+      returnTypemod: this.returnSpecToTypemod(returns.optional, returns.setOf),
+    };
+
+    if (this.matchWord("using")) {
+      const code = this.parseOperatorUsingClause();
+      declaration.language = code.language;
+      declaration.fromFunction = code.fromFunction;
+      declaration.fromOperator = code.fromOperator;
+      declaration.fromExpr = code.fromExpr;
+      declaration.code = code.code;
+      this.expect("semi", "Expected ';' after operator declaration");
+    } else if (this.match("lbrace")) {
+      while (!this.match("rbrace")) {
+        if (this.matchWord("using")) {
+          const code = this.parseOperatorUsingClause();
+          declaration.language = code.language;
+          declaration.fromFunction = code.fromFunction;
+          declaration.fromOperator = code.fromOperator;
+          declaration.fromExpr = code.fromExpr;
+          declaration.code = code.code;
+          this.expect("semi", "Expected ';' after operator using clause");
+          continue;
+        }
+
+        if (this.matchWord("set")) {
+          const key = this.expect("word", "Expected operator setting name").text;
+          this.expect("assign", "Expected ':=' after operator setting name");
+          if (key === "recursive") {
+            declaration.recursive = this.readBooleanLiteral("Expected boolean value for operator recursive setting");
+          } else if (key === "derivative_of") {
+            declaration.derivativeOf = this.expect("word", "Expected operator name for derivative_of").text;
+          } else {
+            this.skipStatementInBlock();
+            continue;
+          }
+          this.expect("semi", "Expected ';' after operator setting");
+          continue;
+        }
+
+        this.skipStatementInBlock();
+      }
+      this.expect("semi", "Expected ';' after operator block");
+    } else {
+      const token = this.peek();
+      throw new AppError("E_SYNTAX", "Expected operator body using clause or block", 1, token.index + 1);
+    }
+
+    this.validateOperatorDeclaration(declaration);
+    return declaration;
+  }
+
+  private parseOperatorUsingClause(): OperatorCode {
+    const token = this.peek();
+    const language = this.expect("word", "Expected operator language after using").text;
+    const code: OperatorCode = { language };
+
+    if (this.matchWord("operator")) {
+      const source = this.expect("word", "Expected source operator name").text;
+      code.fromOperator = [source];
+      return code;
+    }
+
+    if (this.matchWord("function")) {
+      const fn = this.expect("word", "Expected source function name").text;
+      code.fromFunction = [fn];
+      return code;
+    }
+
+    if (this.matchWord("expr")) {
+      code.fromExpr = true;
+      return code;
+    }
+
+    if (token.kind === "string" || this.peek().kind === "string") {
+      code.code = this.readStringLiteral("Expected operator code string literal");
+      return code;
+    }
+
+    if (this.peek().kind === "lparen") {
+      code.code = this.readParenthesizedRaw();
+      return code;
+    }
+
+    const fallback = this.peek();
+    throw new AppError("E_SYNTAX", "Unsupported operator using clause", 1, fallback.index + 1);
+  }
+
+  private parseAlterOperator(moduleName: string, operators: OperatorDeclaration[]): void {
+    const name = this.expect("word", "Expected operator name in alter statement").text;
+    const params = this.parseFunctionParameters();
+    const index = this.findOperatorIndex(operators, moduleName, name, params);
+    if (index < 0) {
+      const token = this.peek();
+      throw new AppError("E_SYNTAX", `Unknown operator '${name}' for alter`, 1, token.index + 1);
+    }
+
+    const next = { ...operators[index] };
+    this.expect("lbrace", "Expected '{' in alter operator block");
+    while (!this.match("rbrace")) {
+      if (this.matchWord("set")) {
+        const field = this.expect("word", "Expected operator field after 'set'").text;
+        this.expect("assign", "Expected ':=' after operator field");
+        if (field === "recursive") {
+          next.recursive = this.readBooleanLiteral("Expected recursive boolean value");
+        } else if (field === "derivative_of") {
+          next.derivativeOf = this.expect("word", "Expected derivative operator name").text;
+        } else {
+          this.skipStatementInBlock();
+          continue;
+        }
+        this.expect("semi", "Expected ';' after operator set clause");
+        continue;
+      }
+
+      if (this.matchWord("using")) {
+        const code = this.parseOperatorUsingClause();
+        next.language = code.language;
+        next.fromFunction = code.fromFunction;
+        next.fromOperator = code.fromOperator;
+        next.fromExpr = code.fromExpr;
+        next.code = code.code;
+        this.expect("semi", "Expected ';' after operator using clause");
+        continue;
+      }
+
+      this.skipStatementInBlock();
+    }
+
+    this.expect("semi", "Expected ';' after alter operator block");
+    this.validateOperatorDeclaration(next);
+    operators[index] = next;
+  }
+
+  private parseDropOperator(moduleName: string, operators: OperatorDeclaration[]): void {
+    const name = this.expect("word", "Expected operator name in drop statement").text;
+    const params = this.parseFunctionParameters();
+    this.expect("semi", "Expected ';' after drop operator statement");
+    const index = this.findOperatorIndex(operators, moduleName, name, params);
+    if (index >= 0) {
+      operators.splice(index, 1);
+    }
+  }
+
+  private inferOperatorKind(params: FunctionParamDef[]): OperatorKind {
+    if (params.length === 1) {
+      return OperatorKind.Prefix;
+    }
+    if (params.length === 2) {
+      return OperatorKind.Infix;
+    }
+    return OperatorKind.Ternary;
+  }
+
+  private returnSpecToTypemod(optional: boolean, setOf: boolean): ReturnTypeModifier {
+    if (setOf) {
+      return ReturnTypeModifier.SetOf;
+    }
+    if (optional) {
+      return ReturnTypeModifier.Optional;
+    }
+    return ReturnTypeModifier.Singleton;
+  }
+
+  private findOperatorIndex(
+    operators: OperatorDeclaration[],
+    moduleName: string,
+    name: string,
+    params: FunctionParamDef[],
+  ): number {
+    const signature = this.functionSignature(moduleName, name, params);
+    return operators.findIndex((op) => this.functionSignature(op.module, op.name, op.params) === signature);
+  }
+
+  private validateOperatorDeclaration(op: OperatorDeclaration): void {
+    const mockSchema: {
+      getOperator(fullname: string): Operator | undefined;
+      setOperator(_operator: Operator): void;
+      getOperatorsByShortname(name: string): Operator[];
+    } = {
+      getOperator: () => undefined,
+      setOperator: () => {},
+      getOperatorsByShortname: (name) => {
+        void name;
+        return [];
+      },
+    };
+
+    const params: OperatorParameter[] = op.params.map((param) => ({
+      name: param.name,
+      type: {
+        name: param.type,
+        getDisplayname: () => param.type,
+        isArray: () => param.type.startsWith("array<"),
+        isTuple: () => param.type.startsWith("tuple<"),
+        isRange: () => param.type.startsWith("range<"),
+        isMultirange: () => param.type.startsWith("multirange<"),
+      },
+      asStr: () => `${param.type}`,
+    }));
+
+    const operator = new Operator({
+      fullname: `${op.module}::${op.name}(${params.map((p) => p.asStr(mockSchema as any)).join(",")})`,
+      shortname: op.name,
+      params,
+      returnType: {
+        name: op.returnType,
+        getDisplayname: () => op.returnType,
+      },
+      returnTypemod: op.returnTypemod,
+      operatorKind: op.kind,
+      language: op.language,
+      fromFunction: op.fromFunction,
+      fromOperator: op.fromOperator,
+      fromExpr: op.fromExpr,
+      code: op.code,
+      recursive: op.recursive,
+      derivativeOf: op.derivativeOf,
+    });
+
+    new CreateOperator().createBegin(mockSchema as any, operator);
+    lookupOperators(op.name, mockSchema as any, { default: [] });
+  }
+
+  private readBooleanLiteral(message: string): boolean {
+    const token = this.peek();
+    if (token.kind !== "word") {
+      throw new AppError("E_SYNTAX", message, 1, token.index + 1);
+    }
+
+    const value = token.text.toLowerCase();
+    if (value === "true") {
+      this.consume();
+      return true;
+    }
+    if (value === "false") {
+      this.consume();
+      return false;
+    }
+
+    throw new AppError("E_SYNTAX", message, 1, token.index + 1);
   }
 
   private parseFunctionDeclaration(moduleName: string): FunctionDeclaration {
@@ -828,12 +1146,13 @@ class Parser {
         }
 
       this.match("semi");
+      const cardinality = multi ? SchemaCardinality.Many : SchemaCardinality.One;
       return {
         kind: "property",
         name,
         scalar,
-        required,
-        multi,
+        required: cardinality === SchemaCardinality.Many ? false : required,
+        multi: cardinality === SchemaCardinality.Many,
         collection,
         overloaded,
         annotations,
@@ -941,12 +1260,13 @@ class Parser {
     }
 
     this.match("semi");
+    const cardinality = multi ? SchemaCardinality.Many : SchemaCardinality.One;
     return {
       kind: "property",
       name,
       scalar,
-      required,
-      multi,
+      required: cardinality === SchemaCardinality.Many ? false : required,
+      multi: cardinality === SchemaCardinality.Many,
       collection,
       overloaded,
       annotations,
@@ -1285,7 +1605,8 @@ class Parser {
     const name = this.expect("word", "Expected trigger name").text;
     this.expectWord("after", "Expected 'after' in trigger declaration");
     const eventToken = this.expect("word", "Expected trigger event").text;
-    if (eventToken !== "insert" && eventToken !== "update" && eventToken !== "delete") {
+    const eventKind = this.parseTriggerKind(eventToken);
+    if (!eventKind) {
       const token = this.peek();
       throw new AppError("E_SYNTAX", `Unsupported trigger event '${eventToken}'`, 1, token.index + 1);
     }
@@ -1293,11 +1614,12 @@ class Parser {
     let scope: TriggerDef["scope"] = "each";
     if (this.matchWord("for")) {
       const scopeToken = this.expect("word", "Expected trigger scope ('each' or 'all')").text;
-      if (scopeToken !== "each" && scopeToken !== "all") {
+      const parsedScope = this.parseTriggerScope(scopeToken);
+      if (!parsedScope) {
         const token = this.peek();
         throw new AppError("E_SYNTAX", `Unsupported trigger scope '${scopeToken}'`, 1, token.index + 1);
       }
-      scope = scopeToken;
+      scope = parsedScope === SchemaTriggerScope.Each ? "each" : "all";
     }
 
     let when: TriggerDef["when"];
@@ -1321,11 +1643,46 @@ class Parser {
 
     return {
       name,
-      event: eventToken,
+      event: this.toLegacyTriggerKind(eventKind),
       scope,
       when,
       actions,
     };
+  }
+
+  private parseTriggerKind(value: string): SchemaTriggerKind | undefined {
+    const lowered = value.toLowerCase();
+    if (lowered === "insert") {
+      return SchemaTriggerKind.Insert;
+    }
+    if (lowered === "update") {
+      return SchemaTriggerKind.Update;
+    }
+    if (lowered === "delete") {
+      return SchemaTriggerKind.Delete;
+    }
+    return undefined;
+  }
+
+  private parseTriggerScope(value: string): SchemaTriggerScope | undefined {
+    const lowered = value.toLowerCase();
+    if (lowered === "each") {
+      return SchemaTriggerScope.Each;
+    }
+    if (lowered === "all" || lowered === "statement") {
+      return SchemaTriggerScope.Statement;
+    }
+    return undefined;
+  }
+
+  private toLegacyTriggerKind(kind: SchemaTriggerKind): TriggerDef["event"] {
+    if (kind === SchemaTriggerKind.Insert) {
+      return "insert";
+    }
+    if (kind === SchemaTriggerKind.Update) {
+      return "update";
+    }
+    return "delete";
   }
 
   private parseAccessPolicy(moduleName: string): AccessPolicyDef {

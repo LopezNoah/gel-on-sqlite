@@ -1,4 +1,5 @@
 import type { ScalarType, TypeDef } from "../types.js";
+import * as errors from "./errors.js"; // Assuming errors.ts is in the same directory
 
 const BUILTIN_SCALARS: ScalarType[] = [
   "str",
@@ -58,11 +59,13 @@ export interface ScalarResolution {
 interface ScalarRegistrationOptions {
   scalar: ScalarType;
   enumValues?: string[];
+  bases?: string[]; // Added to track inheritance
 }
 
 interface ScalarAliasInfo {
   scalar: ScalarType;
   enumValues?: string[];
+  bases?: string[];
 }
 
 export class ScalarRegistry {
@@ -71,6 +74,14 @@ export class ScalarRegistry {
   public resolve(name: string, moduleName: string): ScalarResolution | undefined {
     const normalized = ScalarRegistry.normalizeName(name);
     const lower = normalized.toLowerCase();
+
+    // Check for anonymous enum resolution (Matches Python AnonymousEnumTypeShell.resolve)
+    if (lower === "anyenum" && !this.aliasMap.has(normalized)) {
+      throw new errors.InvalidPropertyDefinitionError(
+        'this type cannot be anonymous',
+        // Note: The Python code includes a hint about defining the enum first
+      );
+    }
 
     const alias = this.lookupAlias(normalized, lower);
     if (alias) {
@@ -98,14 +109,67 @@ export class ScalarRegistry {
   public register(name: string, options: ScalarRegistrationOptions): void {
     const normalized = ScalarRegistry.normalizeName(name);
     const lower = normalized.toLowerCase();
+
+    // 1. Validation: Enums cannot contain duplicate values (Python: CreateScalarType)
+    if (options.enumValues) {
+      const uniqueValues = new Set(options.enumValues);
+      if (uniqueValues.size !== options.enumValues.length) {
+        throw new errors.SchemaDefinitionError(
+          `enums cannot contain duplicate values`
+        );
+      }
+
+      // 2. Validation: Enums must be the only supertype (Python: CreateScalarType)
+      if (options.bases && options.bases.length > 1) {
+        throw new errors.SchemaError(
+          `invalid scalar type definition, enumeration must be the only supertype specified`
+        );
+      }
+    }
+
+    // 3. Validation: Collection base types (Python: CreateScalarType)
+    if (options.bases) {
+      for (const base of options.bases) {
+        const baseLower = base.toLowerCase();
+        if (baseLower.startsWith("array<") || baseLower.startsWith("tuple<")) {
+          throw new errors.SchemaError(
+            `scalar type may not have a collection base type`
+          );
+        }
+      }
+    }
+
     const info: ScalarAliasInfo = {
       scalar: options.scalar,
       enumValues: options.enumValues ? [...options.enumValues] : undefined,
+      bases: options.bases,
     };
+    
     this.aliasMap.set(normalized, info);
     if (lower !== normalized) {
       this.aliasMap.set(lower, info);
     }
+  }
+
+  /**
+   * Simulates a Rebase/Alter operation (Python: RebaseScalarType)
+   */
+  public rebase(name: string, newEnumValues: string[]): void {
+    const existing = this.aliasMap.get(name);
+    if (!existing) return;
+
+    // Validation: Cannot drop extending enum (Python: RebaseScalarType)
+    if (existing.enumValues && !newEnumValues) {
+      throw new errors.SchemaError(`cannot DROP EXTENDING enum`);
+    }
+
+    // Validation: Check duplicates during rebase
+    const uniqueValues = new Set(newEnumValues);
+    if (uniqueValues.size !== newEnumValues.length) {
+      throw new errors.SchemaError(`enums cannot contain duplicate values`);
+    }
+
+    existing.enumValues = [...newEnumValues];
   }
 
   public isScalarLike(name: string): boolean {

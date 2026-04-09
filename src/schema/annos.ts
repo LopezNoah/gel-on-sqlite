@@ -1,6 +1,7 @@
 import type { SQLiteDatabase } from "../runtime/database.js";
 import type { AnnotationDef, AbstractAnnotationDef } from "../types.js";
 import type { AnnotationMetadata } from "./gel_metadata_schemas.js";
+import * as errors from "./errors.js";
 
 const STANDARD_ANNOTATIONS = new Map<string, boolean>([
   ["std::title", false],
@@ -34,6 +35,11 @@ export class AnnotationRegistry {
   }
 
   register(annotation: AbstractAnnotationDef): void {
+    // EdgeDB annotations must have a name
+    if (!annotation.name) {
+      throw new errors.InternalServerError("Annotation definition missing name");
+    }
+
     this.definitions.set(annotation.name, Boolean(annotation.inheritable));
     if ((annotation.annotations?.length ?? 0) > 0) {
       this.pendingNested.set(annotation.name, annotation);
@@ -43,9 +49,7 @@ export class AnnotationRegistry {
   validatePending(): void {
     for (const entry of this.pendingNested.values()) {
       for (const nested of entry.annotations ?? []) {
-        if (!this.definitions.has(nested.name)) {
-          throw new Error(`Unknown annotation '${nested.name}' in abstract annotation ${entry.name}`);
-        }
+        this.ensureKnown(nested.name, `abstract annotation ${entry.name}`);
       }
     }
     this.pendingNested.clear();
@@ -53,13 +57,10 @@ export class AnnotationRegistry {
 
   ensureKnown(name: string, context: string): void {
     if (!this.definitions.has(name)) {
-      throw new Error(`Unknown annotation '${name}' in ${context}`);
-    }
-  }
-
-  ensureKnownAnnotations(annotations: AnnotationDef[], context: string): void {
-    for (const annotation of annotations) {
-      this.ensureKnown(annotation.name, `${context}.${annotation.name}`);
+      // Matches logic in Python when an annotation is referenced but not defined
+      throw new errors.SchemaDefinitionError(
+        `Unknown annotation '${name}' in ${context}`
+      );
     }
   }
 
@@ -73,12 +74,71 @@ export class AnnotationSet {
 
   constructor(initial: AnnotationDef[] = []) {
     for (const annotation of initial) {
+      // Python CreateAnnotationValue check: Annotation values must be strings
+      if (typeof annotation.value !== "string") {
+        throw new errors.InvalidValueError(
+          `annotation values must be 'std::str', got ${typeof annotation.value}`
+        );
+      }
       this.annotations.set(annotation.name, { ...annotation });
     }
   }
 
   static from(annotations: AnnotationDef[] = []): AnnotationSet {
     return new AnnotationSet(annotations);
+  }
+
+  // Implementation of Python's AnnotationSubject.must_get_annotation
+  mustGet(name: string, context: string): string {
+    const anno = this.annotations.get(name);
+    if (!anno) {
+      throw new errors.SchemaDefinitionError(
+        `annotation ${name} on ${context} is not set`
+      );
+    }
+    return anno.value;
+  }
+
+  // Implementation of Python's AnnotationSubject.get_json_annotation
+  getJson<T>(
+    name: string, 
+    context: string, 
+    validator: (val: any) => T
+  ): T | undefined {
+    const anno = this.annotations.get(name);
+    if (!anno) return undefined;
+
+    let parsed: any;
+    try {
+      parsed = JSON.parse(anno.value);
+    } catch (e) {
+      throw new errors.SchemaDefinitionError(
+        `annotation ${name} on ${context} is not set to a valid JSON value`
+      );
+    }
+
+    try {
+      return validator(parsed);
+    } catch (e) {
+      throw new errors.SchemaDefinitionError(
+        `annotation ${name} on ${context} is not set to JSON containing a valid value: ${e}`
+      );
+    }
+  }
+
+  // Implementation of Python's AnnotationSubject.must_get_json_annotation
+  mustGetJson<T>(
+    name: string, 
+    context: string, 
+    validator: (val: any) => T
+  ): T {
+    const value = this.getJson(name, context, validator);
+    if (value === undefined) {
+      throw new errors.SchemaDefinitionError(
+        `annotation ${name} is not set on ${context}`
+      );
+    }
+    return value;
   }
 
   clone(): AnnotationSet {
@@ -98,7 +158,9 @@ export class AnnotationSet {
   }
 
   inherit(registry: AnnotationRegistry): AnnotationSet {
-    const filtered = [...this.annotations.values()].filter((annotation) => registry.isInheritable(annotation.name));
+    const filtered = [...this.annotations.values()].filter((annotation) => 
+      registry.isInheritable(annotation.name)
+    );
     return new AnnotationSet(filtered);
   }
 
@@ -137,7 +199,10 @@ export class AnnotationResolver<T extends { extends?: string[]; annotations?: An
     for (const baseName of declaration.extends ?? []) {
       const base = this.lookup(baseName);
       if (!base) {
-        throw new Error(`Unknown base type '${baseName}' in ${qualifiedName}`);
+        // Matches standard EdgeDB "Unknown base" error logic
+        throw new errors.SchemaError(
+          `Unknown base type '${baseName}' in ${qualifiedName}`
+        );
       }
       const baseAnnotations = this.resolve(base, stack).inherit(this.registry);
       inherited = inherited.merge(baseAnnotations);

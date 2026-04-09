@@ -670,57 +670,7 @@ const executeForLoop = (
 ): void => {
   const iteratorExpr = ast.iteratorExpr;
   const body = ast.body;
-
-  const evalIteratorValues = (expr: ForStatement["iteratorExpr"]): unknown[] => {
-    if (expr.kind === "literal") {
-      return [expr.value];
-    }
-
-    if (expr.kind === "set_literal") {
-      return expr.values;
-    }
-
-    if (expr.kind === "function_call") {
-      const args: RuntimeFunctionArg[] = expr.call.args.map((arg) => {
-        if (arg.kind === "literal") return arg.value as RuntimeFunctionArg;
-        if (arg.kind === "set_literal") return { kind: "array" as const, values: arg.values } as unknown as RuntimeFunctionArg;
-        if (arg.kind === "array_literal") return { kind: "array" as const, values: arg.values } as unknown as RuntimeFunctionArg;
-        return null as RuntimeFunctionArg;
-      });
-      const qualifiedName = expr.call.name.includes("::")
-        ? expr.call.name
-        : `default::${expr.call.name}`;
-      const fnResult = executeFunctionCall(schema, db, context, qualifiedName, args);
-      return Array.isArray(fnResult) ? fnResult : [fnResult];
-    }
-
-    if (expr.kind === "concat") {
-      let results: unknown[] = [""];
-      for (const part of expr.parts) {
-        const partValues = evalIteratorValues(part as ForStatement["iteratorExpr"]);
-        const next: unknown[] = [];
-        for (const left of results) {
-          for (const right of partValues) {
-            if (typeof left === "string" && typeof right === "string") {
-              next.push(left + right);
-            } else if (left === null || left === undefined) {
-              next.push(right);
-            } else if (right === null || right === undefined) {
-              next.push(left);
-            } else {
-              next.push(`${left}${right}`);
-            }
-          }
-        }
-        results = next;
-      }
-      return results.length > 0 ? results : [null];
-    }
-
-    return [null];
-  };
-
-  const iteratorValues = evalIteratorValues(iteratorExpr);
+  const iteratorValues = evaluateForIteratorValues(iteratorExpr, schema, db, context);
 
   if (body.kind === "insert") {
     for (const value of iteratorValues) {
@@ -769,10 +719,7 @@ const executeForLoop = (
     }
   } else {
     for (const value of iteratorValues) {
-      const selectAst: SelectStatement = {
-        ...body,
-        filter: body.filter ? substituteBindingInASTFilter(body.filter, ast.variable, value as ScalarValue) : undefined,
-      };
+      const selectAst = bindSelectAstVariable(body, ast.variable, value);
 
       const compiled = compilerService.compile(schema, selectAst, { overlays, globals: context.globals, target: runtimeTarget });
       const ir = compiled.ir as SelectIR;
@@ -796,6 +743,103 @@ const executeForLoop = (
       });
     }
   }
+};
+
+const evaluateForIteratorValues = (
+  expr: ForStatement["iteratorExpr"],
+  schema: SchemaSnapshot,
+  db: SQLiteDatabase,
+  context: SecurityContext,
+): unknown[] => {
+  if (expr.kind === "literal") {
+    return [expr.value];
+  }
+
+  if (expr.kind === "set_literal") {
+    return expr.values;
+  }
+
+  if (expr.kind === "function_call") {
+    const args: RuntimeFunctionArg[] = expr.call.args.map((arg) => {
+      if (arg.kind === "literal") return arg.value as RuntimeFunctionArg;
+      if (arg.kind === "set_literal") return { kind: "array" as const, values: arg.values } as unknown as RuntimeFunctionArg;
+      if (arg.kind === "array_literal") return { kind: "array" as const, values: arg.values } as unknown as RuntimeFunctionArg;
+      return null as RuntimeFunctionArg;
+    });
+    const qualifiedName = expr.call.name.includes("::")
+      ? expr.call.name
+      : `default::${expr.call.name}`;
+    const fnResult = executeFunctionCall(schema, db, context, qualifiedName, args);
+    return Array.isArray(fnResult) ? fnResult : [fnResult];
+  }
+
+  if (expr.kind === "concat") {
+    let results: unknown[] = [""];
+    for (const part of expr.parts) {
+      const partValues = evaluateForIteratorValues(part as ForStatement["iteratorExpr"], schema, db, context);
+      const next: unknown[] = [];
+      for (const left of results) {
+        for (const right of partValues) {
+          if (typeof left === "string" && typeof right === "string") {
+            next.push(left + right);
+          } else if (left === null || left === undefined) {
+            next.push(right);
+          } else if (right === null || right === undefined) {
+            next.push(left);
+          } else {
+            next.push(`${left}${right}`);
+          }
+        }
+      }
+      results = next;
+    }
+    return results.length > 0 ? results : [null];
+  }
+
+  return [null];
+};
+
+const bindSelectAstVariable = (
+  body: SelectStatement,
+  variable: string,
+  value: unknown,
+): SelectStatement => {
+  const scalar = coerceUnknownToScalar(value);
+  if (!scalar) {
+    return {
+      ...body,
+      filter: body.filter,
+    };
+  }
+
+  const existing = (body.with ?? []).filter((binding) => binding.name !== variable);
+  return {
+    ...body,
+    with: [...existing, { name: variable, value: { kind: "literal", value: scalar } }],
+    filter: body.filter ? substituteBindingInASTFilter(body.filter, variable, scalar) : undefined,
+  };
+};
+
+const ensureSelectAstHasId = (ast: SelectStatement): SelectStatement => {
+  const hasId = ast.shape.some((element) => element.kind === "field" && element.name === "id");
+  if (hasId) {
+    return ast;
+  }
+
+  const shape = [{ kind: "field", name: "id" } as const, ...ast.shape];
+  const fields = ast.fields.includes("id") ? ast.fields : ["id", ...ast.fields];
+  return {
+    ...ast,
+    shape,
+    fields,
+  };
+};
+
+const coerceUnknownToScalar = (value: unknown): ScalarValue | undefined => {
+  if (isScalarValue(value)) {
+    return value;
+  }
+  return undefined;
 };
 
 const materializeSelectRow = (
@@ -1844,6 +1888,9 @@ const executeSelectExprRows = (
   }
   const ast: SelectStatement = {
     kind: "select",
+    with: expr.clauses._withBindings,
+    withModule: expr.clauses._withModule,
+    withModuleAliases: expr.clauses._withModuleAliases,
     typeName: expr.typeName,
     shape,
     fields: fieldsFromShape(shape),
@@ -2106,6 +2153,53 @@ const resolveInsertTargets = (
 
   if (value.kind === "set") {
     return value.values.flatMap((item) => resolveInsertTargets(db, schema, item, context, ast));
+  }
+
+  if (value.kind === "for") {
+    const iteratorValues = evaluateForIteratorValues(value.iteratorExpr, schema, db, context);
+    const rows: LinkTargetAssignment[] = [];
+
+    for (const iterValue of iteratorValues) {
+      if (value.body.kind === "select") {
+        const selectAst = ensureSelectAstHasId(bindSelectAstVariable(value.body, value.variable, iterValue));
+        const compiler = getCompilerService();
+        const compiled = compiler.compile(schema, selectAst, { globals: context.globals });
+        assertTargetSqlCompatibility(compiled.sql.sql, resolvedRuntimeTarget(context, db));
+        if (compiled.ir.kind !== "select") {
+          continue;
+        }
+
+        const selectedRows = runSelectIR(db, schema, compiled.ir, context, compiled.sql, []);
+        for (const row of selectedRows) {
+          if (typeof row.id !== "string") {
+            continue;
+          }
+          const properties: Record<string, ScalarValue> = {};
+          for (const [key, raw] of Object.entries(row)) {
+            if (!key.startsWith("@") || !isScalarValue(raw)) {
+              continue;
+            }
+            properties[key] = raw;
+          }
+          rows.push({ id: row.id, properties });
+        }
+      } else {
+        const replacedValues: Record<string, InsertValue> = {};
+        for (const [field, insertValue] of Object.entries(value.body.values)) {
+          if (typeof insertValue === "object" && insertValue !== null && "kind" in insertValue && insertValue.kind === "binding_ref" && insertValue.name === value.variable) {
+            const scalar = coerceUnknownToScalar(iterValue);
+            replacedValues[field] = scalar ?? insertValue;
+          } else {
+            replacedValues[field] = insertValue;
+          }
+        }
+
+        const nestedIds = executeNestedInsert(db, schema, { kind: "insert", typeName: value.body.typeName, values: replacedValues }, context);
+        rows.push(...nestedIds.map((id) => ({ id, properties: {} })));
+      }
+    }
+
+    return rows;
   }
 
   return [];

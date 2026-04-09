@@ -1126,13 +1126,14 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         }
 
         if (shapeElement.expr.kind === "binding_ref") {
+          const boundValue = resolveWithBindingScalar(shapeElement.expr.name);
           shapeElements.push({
             kind: "computed",
             name: shapeElement.name,
             pathId: elementPathId,
             expr: {
-              kind: "binding_ref",
-              name: shapeElement.expr.name,
+              kind: "literal",
+              value: boundValue,
             },
           });
           shapeNames.add(shapeElement.name);

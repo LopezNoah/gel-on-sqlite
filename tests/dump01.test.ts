@@ -869,7 +869,7 @@ describe("TestDump01", () => {
     );
   });
 
-  it.skip("should validate E link data", () => {
+  it("should validate E link data", () => {
     h.assertQueryResult(
       `
       SELECT E {
@@ -943,7 +943,7 @@ describe("TestDump01", () => {
     );
   });
 
-  it.skip("should validate link property values", () => {
+  it("should validate link property values", () => {
     h.assertQueryResult(
       `
       SELECT E {

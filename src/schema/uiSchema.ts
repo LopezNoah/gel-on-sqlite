@@ -752,17 +752,28 @@ const cloneMember = (member: TypeMember): TypeMember => {
   };
 };
 
+const validateAnnotations = (
+  annotations: AnnotationDef[],
+  annotationRegistry: AnnotationRegistry,
+  context: string,
+): void => {
+  for (const annotation of annotations) {
+    annotationRegistry.ensureKnown(annotation.name, context);
+  }
+};
+
 const validateMemberAnnotations = (
   member: TypeMember,
   annotationRegistry: AnnotationRegistry,
   context: string,
 ): void => {
-  annotationRegistry.ensureKnownAnnotations(member.annotations, `${context}.${member.name}`);
+  validateAnnotations(member.annotations, annotationRegistry, `${context}.${member.name}`);
 
   if (member.kind === "property") {
     for (const constraint of member.constraints) {
-      annotationRegistry.ensureKnownAnnotations(
+      validateAnnotations(
         constraint.annotations,
+        annotationRegistry,
         `${context}.${member.name}@constraint`,
       );
     }
@@ -770,8 +781,9 @@ const validateMemberAnnotations = (
 
   if (member.kind === "link") {
     for (const property of member.properties) {
-      annotationRegistry.ensureKnownAnnotations(
+      validateAnnotations(
         property.annotations,
+        annotationRegistry,
         `${context}.${member.name}@${property.name}`,
       );
     }
