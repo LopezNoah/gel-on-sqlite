@@ -45,7 +45,9 @@ const DEFINITIONS: StdlibFunctionDef[] = [
   { name: "std::datetime_of_statement", minArgs: 0, maxArgs: 0 },
   { name: "std::to_datetime", minArgs: 1, maxArgs: 1 },
   { name: "std::to_str", minArgs: 1, maxArgs: 1 },
+  { name: "std::str_lower", minArgs: 1, maxArgs: 1 },
   { name: "std::to_duration", minArgs: 1, maxArgs: 1 },
+  { name: "std::array_join", minArgs: 2, maxArgs: 2 },
   { name: "cal::to_local_datetime", minArgs: 1, maxArgs: 1 },
   { name: "cal::to_local_date", minArgs: 1, maxArgs: 1 },
   { name: "cal::to_local_time", minArgs: 1, maxArgs: 1 },
@@ -157,6 +159,11 @@ export const executeStdlibFunction = (name: string, args: RuntimeFunctionArg[]):
       return parseDateTime(args[0]);
     case "std::to_duration":
       return parseDuration(extractScalar(args[0]));
+    case "std::array_join": {
+      const values = toStringList(args[0]);
+      const separator = String(extractScalar(args[1]) ?? "");
+      return values.join(separator);
+    }
     case "cal::to_local_datetime":
       return parseLocalDateTime(extractScalar(args[0]));
     case "cal::to_local_date":
@@ -169,6 +176,8 @@ export const executeStdlibFunction = (name: string, args: RuntimeFunctionArg[]):
       return parseDuration(extractScalar(args[0]));
     case "std::to_str":
       return String(extractScalar(args[0]) ?? "");
+    case "std::str_lower":
+      return String(extractScalar(args[0]) ?? "").toLowerCase();
     case "std::datetime_get": {
       const date = new Date(parseDateTime(args[0]));
       const part = String(extractScalar(args[1]) ?? "").toLowerCase();
@@ -299,6 +308,13 @@ const toNumberList = (arg: RuntimeFunctionArg): number[] => {
     return arg.values.map((value) => toNumber(value));
   }
   return [toNumber(arg)];
+};
+
+const toStringList = (arg: RuntimeFunctionArg): string[] => {
+  if (typeof arg === "object" && arg !== null && "kind" in arg) {
+    return arg.values.map((value) => String(value ?? ""));
+  }
+  return [String(arg ?? "")];
 };
 
 const unaryNumeric = (arg: RuntimeFunctionArg, fn: (value: number) => number): number | number[] => {

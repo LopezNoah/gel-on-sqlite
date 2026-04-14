@@ -120,14 +120,8 @@ class Parser {
   ): SelectStatement | SelectFreeStatement | SelectExprStatement {
     const start = this.expect("kw_select", "Expected 'select'");
 
-    // Free object select: SELECT { ... }
-    if (this.peek().kind === "lbrace") {
-      return this.parseFreeObjectSelect(start.line, start.column, withBindings, withModule, withModuleAliases);
-    }
-
-    // Expression select: SELECT <type>expr, SELECT expr ++ expr, SELECT enum_type.MEMBER
-    if (this.peek().kind === "lt" || this.peek().kind === "string") {
-      const expr = this.parseFreeObjectConcatExpr();
+    const parseSelectExprTail = (expr: FreeObjectExpr): SelectExprStatement => {
+      const orderBy = this.parseExprOrderBy();
       if (this.peek().kind === "semi") {
         this.consume();
       }
@@ -138,8 +132,30 @@ class Parser {
         withModule,
         withModuleAliases,
         expr,
+        orderBy,
         pos: { line: start.line, column: start.column },
       };
+    };
+
+    // Free object select: SELECT { ... }
+    if (this.peek().kind === "lbrace") {
+      if (this.looksLikeFreeObjectSelect()) {
+        return this.parseFreeObjectSelect(start.line, start.column, withBindings, withModule, withModuleAliases);
+      }
+      const expr = this.parseFreeObjectConcatExpr();
+      return parseSelectExprTail(expr);
+    }
+
+    // Expression select: SELECT <type>expr, SELECT expr ++ expr, SELECT enum_type.MEMBER
+    if (this.peek().kind === "lt" || this.peek().kind === "string") {
+      const expr = this.parseFreeObjectConcatExpr();
+      return parseSelectExprTail(expr);
+    }
+
+    // Function call expression: SELECT fn(...)
+    if (this.peek().kind === "identifier" && this.peekNext().kind === "lparen") {
+      const expr = this.parseFreeObjectConcatExpr();
+      return parseSelectExprTail(expr);
     }
 
     // Check for enum path: SELECT enum_type.MEMBER
@@ -149,18 +165,7 @@ class Parser {
       // If the "member" part looks like a valid identifier (not a keyword), treat as enum path
       if (!["select", "insert", "update", "delete", "filter", "with", "order", "by", "limit", "offset"].includes(third)) {
         const expr = this.parseFreeObjectConcatExpr();
-        if (this.peek().kind === "semi") {
-          this.consume();
-        }
-        this.expect("eof", "Unexpected tokens after statement");
-        return {
-          kind: "select_expr",
-          with: withBindings,
-          withModule,
-          withModuleAliases,
-          expr,
-          pos: { line: start.line, column: start.column },
-        };
+        return parseSelectExprTail(expr);
       }
     }
 
@@ -205,19 +210,14 @@ class Parser {
       const secondToken = this.peekNext();
       if (firstToken.kind === "identifier" && secondToken.kind !== "lbrace") {
         const expr = this.parseFreeObjectConcatExpr();
-        if (this.peek().kind === "semi") {
-          this.consume();
-        }
-        this.expect("eof", "Unexpected tokens after statement");
-        return {
-          kind: "select_expr",
-          with: withBindings,
-          withModule,
-          withModuleAliases,
-          expr,
-          pos: { line: start.line, column: start.column },
-        };
+        return parseSelectExprTail(expr);
       }
+    }
+
+    // Bare identifier expression: SELECT Primes;
+    if (this.peek().kind === "identifier" && (this.peekNext().kind === "semi" || this.peekNext().kind === "eof")) {
+      const expr = this.parseFreeObjectConcatExpr();
+      return parseSelectExprTail(expr);
     }
 
     // Regular type select: SELECT TypeName { ... }
@@ -321,6 +321,10 @@ class Parser {
       return this.parseFreeObjectExpr();
     }
 
+    if (this.peek().kind === "kw_select") {
+      return this.parseSelectExprSubquery();
+    }
+
     if (this.peek().kind === "lt") {
       this.consume();
       const castType = this.expect("identifier", "Expected type name in cast").lexeme;
@@ -331,15 +335,18 @@ class Parser {
 
     if (this.peek().kind === "lbrace") {
       this.consume();
-      const values: ScalarValue[] = [];
+      const values: FreeObjectExpr[] = [];
       while (this.peek().kind !== "rbrace") {
-        values.push(this.readValue());
+        values.push(this.parseFreeObjectConcatExpr());
         if (this.peek().kind !== "rbrace") {
           this.expect("comma", "Expected ',' in set literal");
         }
       }
       this.expect("rbrace", "Expected '}' after set literal");
-      return { kind: "set_literal", values };
+      if (values.every((v) => v.kind === "literal")) {
+        return { kind: "set_literal", values: values.map((v) => (v as { kind: "literal"; value: ScalarValue }).value) };
+      }
+      return { kind: "set_expr", values };
     }
 
     if (this.peek().kind === "identifier" && this.peekNext().kind === "lparen") {
@@ -363,13 +370,23 @@ class Parser {
     }
 
     if (this.peek().kind === "identifier") {
-      const name = this.peek().lexeme;
       if (this.peekNext().kind === "at") {
         this.consume();
         this.consume();
         throw new AppError("E_SYNTAX", "unexpected reference to link property", this.peek().line, this.peek().column);
       }
-      return this.parseInlineSelectExpr();
+      if (
+        this.peekNext().kind === "lbrace"
+        || this.peekNext().kind === "kw_filter"
+        || this.peekNext().kind === "kw_limit"
+        || this.peekNext().kind === "kw_offset"
+      ) {
+        return this.parseInlineSelectExpr();
+      }
+      return {
+        kind: "binding_ref",
+        name: this.consume().lexeme,
+      };
     }
 
     return {
@@ -389,10 +406,88 @@ class Parser {
         left = { kind: "concat", parts: [left, right] };
       }
     }
+    if (this.peek().kind === "kw_is") {
+      this.consume();
+      const typeName = this.expect("identifier", "Expected type name after 'is'").lexeme;
+      return {
+        kind: "is_type",
+        expr: left,
+        typeName,
+      };
+    }
     return left;
   }
 
+  private parseSelectExprSubquery(): FreeObjectExpr {
+    this.expect("kw_select", "Expected 'select'");
+    let alias: string | undefined;
+    let expr: FreeObjectExpr;
+    if (this.peek().kind === "identifier" && this.peekNext().kind === "assign") {
+      alias = this.consume().lexeme;
+      this.consume();
+      expr = this.parseFreeObjectConcatExpr();
+    } else {
+      expr = this.parseFreeObjectConcatExpr();
+    }
+
+    return {
+      kind: "select_expr_subquery",
+      alias,
+      expr,
+      orderBy: this.parseExprOrderBy(),
+    };
+  }
+
+  private parseExprOrderBy(): { expr: FreeObjectExpr; direction: "asc" | "desc" } | undefined {
+    if (this.peek().kind !== "kw_order") {
+      return undefined;
+    }
+    this.consume();
+    this.expect("kw_by", "Expected 'by' after 'order'");
+    const expr = this.parseFreeObjectConcatExpr();
+    let direction: "asc" | "desc" = "asc";
+    if (this.peek().kind === "kw_asc") {
+      this.consume();
+      direction = "asc";
+    } else if (this.peek().kind === "kw_desc") {
+      this.consume();
+      direction = "desc";
+    }
+    return { expr, direction };
+  }
+
+  private looksLikeFreeObjectSelect(): boolean {
+    if (this.peek().kind !== "lbrace") {
+      return false;
+    }
+
+    let depth = 0;
+    for (let i = this.index; i < this.tokens.length; i += 1) {
+      const token = this.tokens[i];
+      if (token.kind === "lbrace") {
+        depth += 1;
+        continue;
+      }
+      if (token.kind === "rbrace") {
+        depth -= 1;
+        if (depth === 0) {
+          break;
+        }
+        continue;
+      }
+
+      if (depth === 1 && token.kind === "assign") {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
   private parseInlineSelectExpr(): { kind: "select"; typeName: string; shape: ShapeElement[]; clauses: ClauseChain } {
+    if (this.peek().kind === "identifier" && this.peek().lexeme.toLowerCase() === "detached") {
+      this.consume();
+    }
     const typeName = this.expect("identifier", "Expected type name in inline select").lexeme;
     const shape: ShapeElement[] = [{ kind: "field", name: "id" }];
     if (this.peek().kind === "lbrace") {
@@ -541,6 +636,11 @@ class Parser {
   }
 
   private parseComputedExpr(): ComputedExpr | BacklinkExpr {
+    const suffixMathExpr = this.parseFieldSuffixMathExpr();
+    if (suffixMathExpr) {
+      return suffixMathExpr;
+    }
+
     if (this.peek().kind === "lbracket") {
       if (this.peekNth(1).kind !== "kw_is") {
         return {
@@ -622,6 +722,93 @@ class Parser {
     };
   }
 
+  private parseFieldSuffixMathExpr(): ComputedExpr | undefined {
+    const parseSuffixRef = (): { field: string; fromEnd: number } | undefined => {
+      const start = this.index;
+      if (this.peek().kind !== "lt") {
+        return undefined;
+      }
+      this.consume();
+      if (this.peek().kind !== "identifier") {
+        this.index = start;
+        return undefined;
+      }
+      this.consume();
+      if (this.peek().kind !== "gt") {
+        this.index = start;
+        return undefined;
+      }
+      this.consume();
+      if (this.peek().kind !== "dot") {
+        this.index = start;
+        return undefined;
+      }
+      this.consume();
+      if (this.peek().kind !== "identifier") {
+        this.index = start;
+        return undefined;
+      }
+      const field = this.consume().lexeme;
+      if (this.peek().kind !== "lbracket") {
+        this.index = start;
+        return undefined;
+      }
+      this.consume();
+      if (this.peek().kind !== "minus") {
+        this.index = start;
+        return undefined;
+      }
+      this.consume();
+      if (this.peek().kind !== "number") {
+        this.index = start;
+        return undefined;
+      }
+      const indexToken = this.consume().lexeme;
+      if (this.peek().kind !== "rbracket") {
+        this.index = start;
+        return undefined;
+      }
+      this.consume();
+      return { field, fromEnd: Number(indexToken.endsWith("n") ? indexToken.slice(0, -1) : indexToken) };
+    };
+
+    if (this.peek().kind === "number" && this.peekNext().kind === "minus") {
+      const start = this.index;
+      const constantToken = this.consume().lexeme;
+      this.consume();
+      const ref = parseSuffixRef();
+      if (!ref) {
+        this.index = start;
+        return undefined;
+      }
+      return {
+        kind: "field_suffix_math",
+        field: ref.field,
+        fromEnd: ref.fromEnd,
+        op: "const_minus",
+        constant: Number(constantToken.endsWith("n") ? constantToken.slice(0, -1) : constantToken),
+      };
+    }
+
+    if (this.peek().kind === "minus" && this.peekNext().kind === "lt") {
+      const start = this.index;
+      this.consume();
+      const ref = parseSuffixRef();
+      if (!ref) {
+        this.index = start;
+        return undefined;
+      }
+      return {
+        kind: "field_suffix_math",
+        field: ref.field,
+        fromEnd: ref.fromEnd,
+        op: "negate",
+      };
+    }
+
+    return undefined;
+  }
+
   private parseFunctionCallExpr(): FunctionCallExpr {
     const name = this.expect("identifier", "Expected function name").lexeme;
     this.expect("lparen", "Expected '(' after function name");
@@ -637,6 +824,55 @@ class Parser {
   }
 
   private parseFunctionCallArgExpr(): FunctionCallArgExpr {
+    if (this.peek().kind === "lt") {
+      this.consume();
+      let depth = 1;
+      while (depth > 0 && this.peek().kind !== "eof") {
+        const token = this.consume();
+        if (token.kind === "lt") {
+          depth += 1;
+        } else if (token.kind === "gt") {
+          depth -= 1;
+        }
+      }
+      if (depth !== 0) {
+        throw new AppError("E_SYNTAX", "Expected '>' after function argument cast type", this.peek().line, this.peek().column);
+      }
+
+      if (this.peek().kind === "lbrace") {
+        this.consume();
+        const values: ScalarValue[] = [];
+        while (this.peek().kind !== "rbrace") {
+          values.push(this.readValue());
+          if (this.peek().kind !== "rbrace") {
+            this.expect("comma", "Expected ',' in cast set literal function argument");
+          }
+        }
+        this.expect("rbrace", "Expected '}' after cast set literal function argument");
+        return { kind: "set_literal", values };
+      }
+
+      if (this.peek().kind === "identifier") {
+        return {
+          kind: "binding_ref",
+          name: this.consume().lexeme,
+        };
+      }
+
+      if (this.peek().kind === "dot") {
+        this.consume();
+        return {
+          kind: "field_ref",
+          field: this.expect("identifier", "Expected field after '.' in cast function argument").lexeme,
+        };
+      }
+
+      return {
+        kind: "literal",
+        value: this.readValue(),
+      };
+    }
+
     if (this.peek().kind === "dot") {
       this.consume();
       return {
@@ -703,19 +939,21 @@ class Parser {
   ): InsertStatement {
     const start = this.expect("kw_insert", "Expected 'insert'");
     const typeName = this.expect("identifier", "Expected type name").lexeme;
-    this.expect("lbrace", "Expected '{' after type name");
 
     const values: Record<string, InsertValue> = {};
-    while (this.peek().kind !== "rbrace") {
-      const fieldName = this.expect("identifier", "Expected field name").lexeme;
-      this.expect("assign", "Expected ':=' after field name");
-      values[fieldName] = this.parseInsertValue();
+    if (this.peek().kind === "lbrace") {
+      this.consume();
+      while (this.peek().kind !== "rbrace") {
+        const fieldName = this.expect("identifier", "Expected field name").lexeme;
+        this.expect("assign", "Expected ':=' after field name");
+        values[fieldName] = this.parseInsertValue();
 
-      if (this.peek().kind !== "rbrace") {
-        this.expect("comma", "Expected ',' between assignments");
+        if (this.peek().kind !== "rbrace") {
+          this.expect("comma", "Expected ',' between assignments");
+        }
       }
+      this.expect("rbrace", "Expected '}' after assignments");
     }
-    this.expect("rbrace", "Expected '}' after assignments");
 
     const conflict = this.parseInsertConflict();
 
@@ -969,11 +1207,11 @@ class Parser {
     this.expect("kw_set", "Expected 'set' in update statement");
     this.expect("lbrace", "Expected '{' after 'set'");
 
-    const values: Record<string, ScalarValue> = {};
+    const values: Record<string, InsertValue> = {};
     while (this.peek().kind !== "rbrace") {
       const fieldName = this.expect("identifier", "Expected field name").lexeme;
       this.expect("assign", "Expected ':=' after field name");
-      values[fieldName] = this.readValue();
+      values[fieldName] = this.parseInsertValue();
 
       if (this.peek().kind !== "rbrace") {
         this.expect("comma", "Expected ',' between assignments");
@@ -1279,6 +1517,38 @@ class Parser {
       return {
         kind: "subquery",
         query: nested,
+      };
+    }
+
+    if (this.peek().kind === "lbrace") {
+      this.consume();
+      const values: ScalarValue[] = [];
+      while (this.peek().kind !== "rbrace") {
+        values.push(this.readValue());
+        if (this.peek().kind !== "rbrace") {
+          this.expect("comma", "Expected ',' in set literal with binding");
+        }
+      }
+      this.expect("rbrace", "Expected '}' after set literal with binding");
+      return {
+        kind: "set_literal",
+        values,
+      };
+    }
+
+    if (this.peek().kind === "lbracket") {
+      this.consume();
+      const values: ScalarValue[] = [];
+      while (this.peek().kind !== "rbracket") {
+        values.push(this.readValue());
+        if (this.peek().kind !== "rbracket") {
+          this.expect("comma", "Expected ',' in array literal with binding");
+        }
+      }
+      this.expect("rbracket", "Expected ']' after array literal with binding");
+      return {
+        kind: "set_literal",
+        values,
       };
     }
 

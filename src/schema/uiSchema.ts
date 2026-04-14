@@ -1,4 +1,5 @@
 import type {
+  AliasDef,
   AnnotationDef,
   ConstraintDef,
   FunctionDef,
@@ -34,7 +35,19 @@ const mergeConstraintSets = (base: ConstraintDef[], override: ConstraintDef[]): 
 export const schemaSnapshotFromDeclarative = (schema: DeclarativeSchema): SchemaSnapshot => {
   const typeDefs = typeDefsFromDeclarative(schema);
   const scalarTypeDefs = scalarTypeDefsFromDeclarative(schema);
-  return new SchemaSnapshot([...typeDefs, ...scalarTypeDefs], functionDefsFromDeclarative(schema));
+  return new SchemaSnapshot(
+    [...typeDefs, ...scalarTypeDefs],
+    functionDefsFromDeclarative(schema),
+    aliasDefsFromDeclarative(schema),
+  );
+};
+
+export const aliasDefsFromDeclarative = (schema: DeclarativeSchema): AliasDef[] => {
+  return (schema.aliases ?? []).map((alias) => ({
+    module: alias.module,
+    name: alias.name,
+    values: [...alias.values],
+  }));
 };
 
 export const scalarTypeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] => {
@@ -213,6 +226,7 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
           name: member.name,
           type: member.scalar,
           required: member.required,
+          hasDefault: member.hasDefault,
           multi: member.multi,
           collection: member.collection,
           annotations: (member.annotations ?? []).length ? [...member.annotations] : undefined,
@@ -317,9 +331,12 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
               name: property.name,
               type: property.scalar,
               required: property.required,
+              hasDefault: property.hasDefault,
               annotations: property.annotations.length ? [...property.annotations] : undefined,
             }))
           : undefined,
+        hasDefault: member.hasDefault,
+        defaultTargetValues: member.defaultTargetValues ? [...member.defaultTargetValues] : undefined,
         annotations: (member.annotations ?? []).length ? [...member.annotations] : undefined,
       });
 
@@ -328,6 +345,7 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
           name: `${member.name}_id`,
           type: "uuid",
           required: member.required,
+          hasDefault: member.hasDefault,
         });
       }
     }
@@ -414,6 +432,7 @@ export const declarativeSchemaFromTypeDefs = (types: TypeDef[], functions: Funct
                 name: link.name,
                 target: normalizeTypeName(link.targetType, moduleName),
                 required: Boolean(idField?.required),
+                hasDefault: Boolean(idField?.hasDefault),
                 multi: Boolean(link.multi),
                 overloaded: false,
                 annotations: [...(link.annotations ?? [])],
@@ -443,6 +462,7 @@ export const declarativeSchemaFromTypeDefs = (types: TypeDef[], functions: Funct
                 name: field.name,
                 scalar: field.type,
                 required: Boolean(field.required),
+                hasDefault: Boolean(field.hasDefault),
                 multi: Boolean(field.multi),
                 overloaded: false,
                 annotations: [...(field.annotations ?? [])],

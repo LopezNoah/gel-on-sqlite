@@ -66,6 +66,10 @@ export type WithBindingValue =
       value: ScalarValue;
     }
   | {
+      kind: "set_literal";
+      values: ScalarValue[];
+    }
+  | {
       kind: "binding_ref";
       name: string;
     }
@@ -143,6 +147,13 @@ export type ComputedExpr =
   | {
       kind: "binding_ref";
       name: string;
+    }
+  | {
+      kind: "field_suffix_math";
+      field: string;
+      fromEnd: number;
+      op: "negate" | "const_minus";
+      constant?: number;
     };
 
 export interface BacklinkExpr {
@@ -235,6 +246,14 @@ export type FreeObjectExpr =
       values: ScalarValue[];
     }
   | {
+      kind: "set_expr";
+      values: FreeObjectExpr[];
+    }
+  | {
+      kind: "binding_ref";
+      name: string;
+    }
+  | {
       kind: "select";
       typeName: string;
       shape: ShapeElement[];
@@ -262,6 +281,20 @@ export type FreeObjectExpr =
   | {
       kind: "concat";
       parts: FreeObjectExpr[];
+    }
+  | {
+      kind: "is_type";
+      expr: FreeObjectExpr;
+      typeName: string;
+    }
+  | {
+      kind: "select_expr_subquery";
+      alias?: string;
+      expr: FreeObjectExpr;
+      orderBy?: {
+        expr: FreeObjectExpr;
+        direction: "asc" | "desc";
+      };
     };
 
 export interface SelectFreeStatement {
@@ -282,6 +315,10 @@ export interface SelectExprStatement {
   withModule?: string;
   withModuleAliases?: WithModuleAlias[];
   expr: FreeObjectExpr;
+  orderBy?: {
+    expr: FreeObjectExpr;
+    direction: "asc" | "desc";
+  };
   pos: SourcePos;
 }
 
@@ -347,7 +384,7 @@ export interface UpdateStatement {
   withModuleAliases?: WithModuleAlias[];
   typeName: string;
   filter?: FilterExpr;
-  values: Record<string, ScalarValue>;
+  values: Record<string, InsertValue>;
   pos: SourcePos;
 }
 

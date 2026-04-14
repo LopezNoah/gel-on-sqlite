@@ -1,4 +1,4 @@
-import type { AnnotationDef, FieldDef, FunctionDef, TypeDef } from "../types.js";
+import type { AliasDef, AnnotationDef, FieldDef, FunctionDef, TypeDef } from "../types.js";
 import { AnnotationSet } from "./annos.js";
 
 export interface SchemaDelta {
@@ -9,10 +9,12 @@ export interface SchemaDelta {
 export class SchemaSnapshot {
   private readonly typesByName: Map<string, TypeDef>;
   private readonly functionsBySignature: Map<string, FunctionDef>;
+  private readonly aliasesByName: Map<string, AliasDef>;
 
-  constructor(types: TypeDef[] = [], functions: FunctionDef[] = []) {
+  constructor(types: TypeDef[] = [], functions: FunctionDef[] = [], aliases: AliasDef[] = []) {
     this.typesByName = new Map(types.map((t) => [qualifiedTypeName(t), cloneTypeDef(t)]));
     this.functionsBySignature = new Map(functions.map((fn) => [functionSignature(fn), cloneFunctionDef(fn)]));
+    this.aliasesByName = new Map(aliases.map((alias) => [qualifiedAliasName(alias), { ...alias, values: [...alias.values] }]));
   }
 
   getType(name: string): TypeDef | undefined {
@@ -47,6 +49,15 @@ export class SchemaSnapshot {
 
   listFunctions(): FunctionDef[] {
     return [...this.functionsBySignature.values()].map(cloneFunctionDef);
+  }
+
+  getAlias(name: string): AliasDef | undefined {
+    const existing = this.aliasesByName.get(name);
+    return existing ? { ...existing, values: [...existing.values] } : undefined;
+  }
+
+  listAliases(): AliasDef[] {
+    return [...this.aliasesByName.values()].map((alias) => ({ ...alias, values: [...alias.values] }));
   }
 
   listConcreteTypesAssignableTo(name: string): TypeDef[] {
@@ -114,7 +125,7 @@ export class SchemaSnapshot {
       typeDef.fields.push({ ...update.field });
     }
 
-    return new SchemaSnapshot([...next.values()], this.listFunctions());
+    return new SchemaSnapshot([...next.values()], this.listFunctions(), this.listAliases());
   }
 }
 
@@ -127,6 +138,8 @@ export const functionSignature = (fn: FunctionDef): string => {
   const params = fn.params.map((param) => `${param.variadic ? "variadic " : ""}${param.namedOnly ? "named only " : ""}${param.optional ? "optional " : ""}${param.setOf ? "set of " : ""}${param.type}`).join(",");
   return `${fn.module}::${fn.name}(${params})`;
 };
+
+const qualifiedAliasName = (alias: AliasDef): string => `${alias.module}::${alias.name}`;
 
 const cloneComputedDef = (
   computed: NonNullable<TypeDef["computeds"]>[number],

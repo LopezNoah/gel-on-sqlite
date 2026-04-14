@@ -92,6 +92,12 @@ export interface FunctionDef {
   body: FunctionBodyDef;
 }
 
+export interface AliasDef {
+  module: string;
+  name: string;
+  values: ScalarValue[];
+}
+
 export type ComputedValuePart =
   | {
       kind: "field_ref";
@@ -254,6 +260,7 @@ export interface FieldDef {
   name: string;
   type: ScalarType;
   required?: boolean;
+  hasDefault?: boolean;
   multi?: boolean;
   collection?: CollectionTypeDef;
   constraints?: ConstraintDef[];
@@ -266,6 +273,7 @@ export interface LinkPropertyDef {
   name: string;
   type: ScalarType;
   required?: boolean;
+  hasDefault?: boolean;
   collection?: CollectionTypeDef;
   annotations?: AnnotationDef[];
 }
@@ -274,6 +282,8 @@ export interface LinkDef {
   name: string;
   targetType: string;
   multi?: boolean;
+  hasDefault?: boolean;
+  defaultTargetValues?: string[];
   properties?: LinkPropertyDef[];
   annotations?: AnnotationDef[];
 }

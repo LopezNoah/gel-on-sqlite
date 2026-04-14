@@ -110,8 +110,15 @@ export type SelectShapeElementIR =
                         values: ScalarValue[];
                       }
                   >;
-                }
+              }
             >;
+          }
+        | {
+            kind: "field_suffix_math";
+            field: string;
+            fromEnd: number;
+            op: "negate" | "const_minus";
+            constant?: number;
           };
     }
   | {
@@ -345,6 +352,10 @@ export type SelectExprIREntry =
       values: ScalarValue[];
     }
   | {
+      kind: "set_expr";
+      values: SelectExprIREntry[];
+    }
+  | {
       kind: "cast";
       castType: string;
       value: SelectExprIREntry;
@@ -363,11 +374,39 @@ export type SelectExprIREntry =
   | {
       kind: "concat";
       parts: SelectExprIREntry[];
+    }
+  | {
+      kind: "is_type";
+      value: SelectExprIREntry;
+      typeName: string;
+    }
+  | {
+      kind: "select_expr_subquery";
+      alias?: string;
+      value: SelectExprIREntry;
+      orderBy?: {
+        value: SelectExprIREntry;
+        direction: "asc" | "desc";
+      };
+    }
+  | {
+      kind: "function_call";
+      functionName: string;
+      args: SelectExprIREntry[];
+    }
+  | {
+      kind: "current_item";
+      bindingName: string;
     };
 
 export interface SelectExprIR {
   kind: "select_expr";
   entries: SelectExprIREntry[];
+  currentBinding?: string;
+  orderBy?: {
+    value: SelectExprIREntry;
+    direction: "asc" | "desc";
+  };
 }
 
 export type IRStatement = SelectIR | SelectFreeIR | SelectExprIR | InsertIR | UpdateIR | DeleteIR;

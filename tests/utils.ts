@@ -1,7 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { openSQLite, materializeSchema } from "../src/runtime/database.js";
-import { serializeSchemaToGelTables, serializeSchemaToInstdata, ensureGelSchemaTables } from "../src/schema/gel_persistence.js";
+import {
+  serializeSchemaToGelTables,
+  serializeSchemaToInstdata,
+  ensureGelSchemaTables,
+  deserializeSchemaFromInstdata,
+  deserializeSchemaFromGelTables,
+} from "../src/schema/gel_persistence.js";
 import { executeQuery, executeScript } from "../src/runtime/engine.js";
 import { parseDeclarativeSchema } from "../src/schema/declarative.js";
 import { schemaSnapshotFromDeclarative } from "../src/schema/uiSchema.js";
@@ -12,6 +18,8 @@ export interface HarnessOptions {
   setup?: string;       // Name of .edgeql file in tests/schemas/
   dbFile?: string;      // Optional SQLite file path for inspection
   resetDbFile?: boolean;
+  reuseExistingDb?: boolean;
+  runSetupOnReuse?: boolean;
 }
 
 function inferredModuleNameFromSchema(schemaName: string): string {
@@ -95,15 +103,8 @@ export class QueryHarness {
    * Factory method to create a fresh test database with schema/data
    */
   static async create(options: HarnessOptions): Promise<QueryHarness> {
-    let schemaSource = "";
-    if (options.schema) {
-      const schemaDir = path.join(__dirname, "schemas");
-      schemaSource = loadSchemaSource(schemaDir, options.schema);
-    }
-
-    const decl = parseDeclarativeSchema(schemaSource);
-    const snapshot = schemaSnapshotFromDeclarative(decl);
     const dbFile = options.dbFile ?? ":memory:";
+    const hadExistingDbFile = Boolean(options.dbFile) && fs.existsSync(dbFile);
     if (options.dbFile) {
       fs.mkdirSync(path.dirname(options.dbFile), { recursive: true });
       if (options.resetDbFile !== false && fs.existsSync(options.dbFile)) {
@@ -112,14 +113,38 @@ export class QueryHarness {
     }
 
     const { db } = openSQLite(dbFile);
-    materializeSchema(db, snapshot);
-    ensureGelSchemaTables(db);
-    serializeSchemaToGelTables(db, snapshot);
-    serializeSchemaToInstdata(db, snapshot);
+    const shouldReuseExistingDb = Boolean(options.dbFile)
+      && options.resetDbFile === false
+      && options.reuseExistingDb === true
+      && hadExistingDbFile;
+
+    let snapshot = null as ReturnType<typeof schemaSnapshotFromDeclarative> | null;
+
+    if (shouldReuseExistingDb) {
+      snapshot = deserializeSchemaFromInstdata(db) ?? deserializeSchemaFromGelTables(db);
+    }
+
+    if (!snapshot) {
+      let schemaSource = "";
+      if (options.schema) {
+        const schemaDir = path.join(__dirname, "schemas");
+        schemaSource = loadSchemaSource(schemaDir, options.schema);
+      }
+
+      const decl = parseDeclarativeSchema(schemaSource);
+      snapshot = schemaSnapshotFromDeclarative(decl);
+      materializeSchema(db, snapshot);
+      ensureGelSchemaTables(db);
+      serializeSchemaToGelTables(db, snapshot);
+      serializeSchemaToInstdata(db, snapshot);
+    }
 
     const harness = new QueryHarness(db, snapshot);
 
-    if (options.setup) {
+    const shouldRunSetup = Boolean(options.setup)
+      && (!shouldReuseExistingDb || options.runSetupOnReuse === true);
+
+    if (shouldRunSetup && options.setup) {
       const p = path.join(__dirname, "schemas", `${options.setup}.edgeql`);
       const rawSource = stripHashComments(fs.readFileSync(p, "utf-8"));
 

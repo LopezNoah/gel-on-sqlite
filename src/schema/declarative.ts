@@ -34,6 +34,7 @@ export interface PropertyMember {
   name: string;
   scalar: ScalarType;
   required: boolean;
+  hasDefault?: boolean;
   multi: boolean;
   collection?: CollectionTypeDef;
   overloaded: boolean;
@@ -51,6 +52,7 @@ export interface LinkProperty {
   name: string;
   scalar: ScalarType;
   required: boolean;
+  hasDefault?: boolean;
   collection?: CollectionTypeDef;
   annotations: AnnotationDef[];
 }
@@ -60,6 +62,8 @@ export interface LinkMember {
   name: string;
   target: string;
   required: boolean;
+  hasDefault?: boolean;
+  defaultTargetValues?: string[];
   multi: boolean;
   overloaded: boolean;
   annotations: AnnotationDef[];
@@ -140,6 +144,12 @@ export interface OperatorDeclaration {
   derivativeOf?: string;
 }
 
+export interface AliasDeclaration {
+  module: string;
+  name: string;
+  values: ScalarValue[];
+}
+
 export interface DeclarativeSchema {
   modules: SchemaModule[];
   types: ObjectTypeDeclaration[];
@@ -149,6 +159,7 @@ export interface DeclarativeSchema {
   permissions?: PermissionDeclaration[];
   scalarTypes?: ScalarTypeDeclaration[];
   constraints?: ConstraintDeclaration[];
+  aliases?: AliasDeclaration[];
 }
 
 type TokenKind =
@@ -205,6 +216,7 @@ class Parser {
     const abstractAnnotations: AbstractAnnotationDeclaration[] = [];
     const scalarTypes: ScalarTypeDeclaration[] = [];
     const constraintDeclarations: ConstraintDeclaration[] = [];
+    const aliases: AliasDeclaration[] = [];
 
     while (!this.match("eof")) {
       this.expectWord("module", "Expected 'module' declaration");
@@ -298,6 +310,14 @@ class Parser {
           continue;
         }
 
+        if (this.peekWordAt(0) === "alias") {
+          const alias = this.parseAlias(moduleName);
+          if (alias) {
+            aliases.push(alias);
+          }
+          continue;
+        }
+
         if (this.isTypeDeclarationStart()) {
           types.push(this.parseType(moduleName));
           continue;
@@ -318,6 +338,31 @@ class Parser {
       abstractAnnotations: abstractAnnotations.length ? abstractAnnotations : undefined,
       scalarTypes: scalarTypes.length ? scalarTypes : undefined,
       constraints: constraintDeclarations.length ? constraintDeclarations : undefined,
+      aliases: aliases.length ? aliases : undefined,
+    };
+  }
+
+  private parseAlias(moduleName: string): AliasDeclaration | undefined {
+    this.expectWord("alias", "Expected 'alias' declaration");
+    const name = this.expect("word", "Expected alias name").text;
+    this.expect("assign", "Expected ':=' in alias declaration");
+    if (!this.peekIs("lbrace")) {
+      this.skipStatementInBlock();
+      return undefined;
+    }
+    this.expect("lbrace", "Expected '{' in alias declaration");
+
+    const values: ScalarValue[] = [];
+    while (!this.match("rbrace")) {
+      values.push(this.readScalarValue("Expected alias literal value"));
+      this.match("comma");
+    }
+
+    this.expect("semi", "Expected ';' after alias declaration");
+    return {
+      module: moduleName,
+      name,
+      values,
     };
   }
 
@@ -1137,24 +1182,27 @@ class Parser {
         let annotations: AnnotationDef[] = [];
         let rewrite: PropertyMember["rewrite"] | undefined;
         let propertyConstraints: ConstraintDef[] = [];
+        let hasDefault = false;
         if (this.match("lbrace")) {
           const parsed = this.parsePropertyBody(moduleName, name);
           rewrite = parsed.rewrite;
           annotations = parsed.annotations;
           propertyConstraints = parsed.constraints;
+          hasDefault = parsed.hasDefault;
           this.expect("rbrace", "Expected '}' after property body");
         }
 
       this.match("semi");
       const cardinality = multi ? SchemaCardinality.Many : SchemaCardinality.One;
-      return {
-        kind: "property",
-        name,
-        scalar,
-        required: cardinality === SchemaCardinality.Many ? false : required,
-        multi: cardinality === SchemaCardinality.Many,
-        collection,
-        overloaded,
+        return {
+          kind: "property",
+          name,
+          scalar,
+          required: cardinality === SchemaCardinality.Many ? false : required,
+          hasDefault,
+          multi: cardinality === SchemaCardinality.Many,
+          collection,
+          overloaded,
         annotations,
         rewrite,
         constraints: propertyConstraints,
@@ -1170,11 +1218,29 @@ class Parser {
       }
       const annotations: AnnotationDef[] = [];
       const linkProperties: LinkProperty[] = [];
+      let hasDefault = false;
+      let defaultTargetValues: string[] | undefined;
 
       if (this.match("lbrace")) {
         while (!this.match("rbrace")) {
           if (this.isAnnotationMutationStart()) {
             this.parseAnnotationMutation(moduleName, annotations);
+            continue;
+          }
+
+          if (this.peekWordAt(0) === "default") {
+            hasDefault = true;
+            this.consume();
+            this.expect("assign", "Expected ':=' after 'default'");
+            const literals = this.readStatementStringLiteralsInBlock();
+            if (literals.length > 0) {
+              defaultTargetValues = literals;
+            }
+            continue;
+          }
+
+          if (this.peekWordAt(0) === "readonly") {
+            this.skipStatementInBlock();
             continue;
           }
 
@@ -1194,8 +1260,11 @@ class Parser {
             const linkCollection = this.consumeTypeTail(typeName);
             const { scalar: linkScalar } = this.readScalarType(moduleName, typeName);
             let linkPropertyAnnotations: AnnotationDef[] = [];
+            let linkPropertyHasDefault = false;
             if (this.match("lbrace")) {
-              linkPropertyAnnotations = this.parseLinkPropertyBody(moduleName);
+              const parsed = this.parseLinkPropertyBody(moduleName);
+              linkPropertyAnnotations = parsed.annotations;
+              linkPropertyHasDefault = parsed.hasDefault;
               this.expect("rbrace", "Expected '}' after link property body");
             }
             this.match("semi");
@@ -1204,6 +1273,7 @@ class Parser {
               name: propName,
               scalar: linkScalar,
               required: linkPropertyRequired,
+              hasDefault: linkPropertyHasDefault,
               collection: linkCollection,
               annotations: linkPropertyAnnotations,
             });
@@ -1236,6 +1306,8 @@ class Parser {
         name,
         target,
         required,
+        hasDefault,
+        defaultTargetValues,
         multi,
         overloaded,
         annotations,
@@ -1251,11 +1323,13 @@ class Parser {
     let annotations: AnnotationDef[] = [];
     let rewrite: PropertyMember["rewrite"] | undefined;
     let propertyConstraints: ConstraintDef[] = [];
+    let hasDefault = false;
     if (this.match("lbrace")) {
       const parsed = this.parsePropertyBody(moduleName, name);
       rewrite = parsed.rewrite;
       annotations = parsed.annotations;
       propertyConstraints = parsed.constraints;
+      hasDefault = parsed.hasDefault;
       this.expect("rbrace", "Expected '}' after property body");
     }
 
@@ -1266,6 +1340,7 @@ class Parser {
       name,
       scalar,
       required: cardinality === SchemaCardinality.Many ? false : required,
+      hasDefault,
       multi: cardinality === SchemaCardinality.Many,
       collection,
       overloaded,
@@ -1520,10 +1595,11 @@ class Parser {
   private parsePropertyBody(
     moduleName: string,
     fieldName: string,
-  ): { rewrite: PropertyMember["rewrite"]; annotations: AnnotationDef[]; constraints: ConstraintDef[] } {
+  ): { rewrite: PropertyMember["rewrite"]; annotations: AnnotationDef[]; constraints: ConstraintDef[]; hasDefault: boolean } {
     const rewrite: PropertyMember["rewrite"] = {};
     const annotations: AnnotationDef[] = [];
     const constraints: ConstraintDef[] = [];
+    let hasDefault = false;
 
     while (!this.peekIs("rbrace")) {
       if (this.isAnnotationMutationStart()) {
@@ -1536,7 +1612,13 @@ class Parser {
         continue;
       }
 
-      if (this.peekWordAt(0) === "default" || this.peekWordAt(0) === "readonly") {
+      if (this.peekWordAt(0) === "default") {
+        hasDefault = true;
+        this.skipStatementInBlock();
+        continue;
+      }
+
+      if (this.peekWordAt(0) === "readonly") {
         this.skipStatementInBlock();
         continue;
       }
@@ -1560,7 +1642,7 @@ class Parser {
       }
     }
 
-    return { rewrite, annotations, constraints };
+    return { rewrite, annotations, constraints, hasDefault };
   }
 
   private parseConstraintClause(moduleName: string): ConstraintDef {
@@ -1586,8 +1668,9 @@ class Parser {
     return { name, annotations };
   }
 
-  private parseLinkPropertyBody(moduleName: string): AnnotationDef[] {
+  private parseLinkPropertyBody(moduleName: string): { annotations: AnnotationDef[]; hasDefault: boolean } {
     const annotations: AnnotationDef[] = [];
+    let hasDefault = false;
 
     while (!this.peekIs("rbrace")) {
       if (this.isAnnotationMutationStart()) {
@@ -1595,10 +1678,50 @@ class Parser {
         continue;
       }
 
+      if (this.peekWordAt(0) === "default") {
+        hasDefault = true;
+        this.skipStatementInBlock();
+        continue;
+      }
+
       this.skipStatementInBlock();
     }
 
-    return annotations;
+    return { annotations, hasDefault };
+  }
+
+  private readStatementStringLiteralsInBlock(): string[] {
+    const literals: string[] = [];
+    let depth = 0;
+
+    while (!this.peekIs("eof")) {
+      const token = this.peek();
+
+      if (token.kind === "semi" && depth === 0) {
+        this.consume();
+        return literals;
+      }
+
+      if (token.kind === "rbrace" && depth === 0) {
+        return literals;
+      }
+
+      if (token.kind === "lbrace" || token.kind === "lparen" || token.kind === "lbracket") {
+        depth += 1;
+      } else if (token.kind === "rbrace" || token.kind === "rparen" || token.kind === "rbracket") {
+        if (depth > 0) {
+          depth -= 1;
+        }
+      }
+
+      if (token.kind === "string") {
+        literals.push(token.text);
+      }
+
+      this.consume();
+    }
+
+    return literals;
   }
 
   private parseTrigger(moduleName: string): TriggerDef {

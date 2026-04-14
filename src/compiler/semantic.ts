@@ -48,6 +48,8 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         return entry.value;
       case "set_literal":
         return entry.values as unknown as ScalarValue;
+      case "set_expr":
+        return entry.values.map(extractLiteralValue) as unknown as ScalarValue;
       case "cast":
         return extractLiteralValue(entry.value);
       case "enum_path":
@@ -56,6 +58,14 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         return null;
       case "concat":
         return entry.parts.map(extractLiteralValue).join("");
+      case "is_type":
+        return null;
+      case "select_expr_subquery":
+        return extractLiteralValue(entry.value);
+      case "function_call":
+        return null;
+      case "current_item":
+        return null;
     }
   };
 
@@ -252,6 +262,8 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       switch (binding.kind) {
         case "literal":
           return binding.value;
+        case "set_literal":
+          return fail(`With binding '${name}' is a set and cannot be used as a scalar value`);
         case "binding_ref": {
           const resolvedType = schema.getType(normalizeTypeName(binding.name, activeModule));
           if (resolvedType) {
@@ -1145,6 +1157,30 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           continue;
         }
 
+        if (shapeElement.expr.kind === "field_suffix_math") {
+          ensureField(shapeElement.expr.field);
+          selectedColumns.add(shapeElement.expr.field);
+          shapeElements.push({
+            kind: "computed",
+            name: shapeElement.name,
+            pathId: elementPathId,
+            expr: {
+              kind: "field_suffix_math",
+              field: shapeElement.expr.field,
+              fromEnd: shapeElement.expr.fromEnd,
+              op: shapeElement.expr.op,
+              constant: shapeElement.expr.constant,
+            },
+          });
+          shapeNames.add(shapeElement.name);
+          scopeChildren.push({
+            pathId: elementPathId,
+            typeName: qualifiedName,
+            children: [],
+          });
+          continue;
+        }
+
         shapeElements.push({
           kind: "computed",
           name: shapeElement.name,
@@ -1489,12 +1525,64 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
   }
 
   if (statement.kind === "select_expr") {
-    const compileExprToIREntry = (expr: FreeObjectExpr): import("../ir/model.js").SelectExprIREntry => {
+    const compileExprToIREntry = (
+      expr: FreeObjectExpr,
+      currentItemBinding?: string,
+    ): import("../ir/model.js").SelectExprIREntry => {
       if (expr.kind === "literal") {
         return { kind: "literal", value: expr.value };
       }
       if (expr.kind === "set_literal") {
         return { kind: "set_literal", values: [...expr.values] };
+      }
+      if (expr.kind === "set_expr") {
+        return {
+          kind: "set_expr",
+          values: expr.values.map((value) => compileExprToIREntry(value, currentItemBinding)),
+        };
+      }
+      if (expr.kind === "binding_ref") {
+        if (currentItemBinding && expr.name === currentItemBinding) {
+          return { kind: "current_item", bindingName: expr.name };
+        }
+        let bindingValue = withBindings.get(expr.name);
+        if (!bindingValue) {
+          const resolvedAliasName = normalizeTypeName(expr.name, activeModule);
+          const alias = schema.getAlias(resolvedAliasName);
+          if (alias) {
+            return { kind: "set_literal", values: [...alias.values] };
+          }
+
+          const resolvedType = schema.getType(resolvedAliasName);
+          if (resolvedType) {
+            const isEnumScalarType = resolvedType.fields.length === 1
+              && resolvedType.fields[0]?.name === "__enum__"
+              && resolvedType.fields[0]?.enumValues
+              && resolvedType.fields[0].enumValues.length > 0;
+            if (isEnumScalarType) {
+              fail("enum path expression lacks an enum member name, as in 'color_enum_t.GREEN'");
+            }
+          }
+
+          fail(`Unknown binding '${expr.name}'`);
+        }
+        bindingValue = requireValue(bindingValue, `Unknown binding '${expr.name}'`);
+        if (bindingValue.kind === "literal") {
+          return { kind: "literal", value: bindingValue.value };
+        }
+        if (bindingValue.kind === "set_literal") {
+          return { kind: "set_literal", values: [...bindingValue.values] };
+        }
+        if (bindingValue.kind === "enum_path") {
+          return { kind: "enum_path", enumType: normalizeTypeName(bindingValue.enumType, activeModule), member: bindingValue.member };
+        }
+        if (bindingValue.kind === "path") {
+          return compileExprToIREntry({ kind: "path", head: bindingValue.head, tail: bindingValue.tail }, currentItemBinding);
+        }
+        if (bindingValue.kind === "binding_ref") {
+          return compileExprToIREntry({ kind: "binding_ref", name: bindingValue.name }, currentItemBinding);
+        }
+        fail(`Unsupported binding kind '${bindingValue.kind}'`);
       }
       if (expr.kind === "enum_path") {
         const normalizedEnumType = normalizeTypeName(expr.enumType, activeModule);
@@ -1567,7 +1655,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         fail(`Unknown type or enum '${normalizedHead}'`);
       }
       if (expr.kind === "cast") {
-        const innerEntry = compileExprToIREntry(expr.expr);
+        const innerEntry = compileExprToIREntry(expr.expr, currentItemBinding);
         const isBuiltinScalar = ["str", "int", "float", "bool", "json", "datetime", "duration", "local_datetime", "local_date", "local_time", "relative_duration", "date_duration", "uuid"].includes(expr.castType);
         const resolvedCastType = isBuiltinScalar ? expr.castType : normalizeTypeName(expr.castType, activeModule);
         const castTypeDef = isBuiltinScalar ? undefined : schema.getType(resolvedCastType);
@@ -1603,6 +1691,24 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
                     return v;
                   }),
                 };
+              }
+              if (entry.kind === "set_expr") {
+                return {
+                  kind: "set_expr",
+                  values: entry.values.map((item) => {
+                    const rawValue = extractLiteralValue(item);
+                    if (typeof rawValue !== "string") {
+                      fail(`Cannot cast to enum '${resolvedCastType}': expected string value`);
+                    }
+                    if (!allEnumValues.includes(rawValue as string)) {
+                      fail(`invalid input value for enum '${resolvedCastType}': "${rawValue}"`);
+                    }
+                    return { kind: "literal", value: rawValue };
+                  }),
+                };
+              }
+              if (entry.kind === "current_item") {
+                return entry;
               }
               const rawValue = extractLiteralValue(entry);
               if (typeof rawValue !== "string") {
@@ -1640,16 +1746,82 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       if (expr.kind === "concat") {
         return {
           kind: "concat",
-          parts: expr.parts.map(compileExprToIREntry),
+          parts: expr.parts.map((part) => compileExprToIREntry(part, currentItemBinding)),
         };
       }
       if (expr.kind === "function_call") {
-        fail(`Unsupported expression kind in select_expr: ${expr.kind}`);
+        const resolved = resolveFunctionOrFail(expr.call.name, expr.call.args.length);
+        return {
+          kind: "function_call",
+          functionName: resolved.qualifiedName,
+          args: expr.call.args.map((arg): import("../ir/model.js").SelectExprIREntry => {
+            if (arg.kind === "literal") {
+              return { kind: "literal", value: arg.value };
+            }
+            if (arg.kind === "binding_ref") {
+              if (currentItemBinding && arg.name === currentItemBinding) {
+                return { kind: "current_item", bindingName: arg.name };
+              }
+              const bindingValue = withBindings.get(arg.name);
+              if (bindingValue?.kind === "set_literal") {
+                return { kind: "set_literal", values: [...bindingValue.values] };
+              }
+              const scalar = resolveWithBindingScalar(arg.name);
+              return { kind: "literal", value: scalar };
+            }
+            if (arg.kind === "set_literal") {
+              return { kind: "set_literal", values: [...arg.values] };
+            }
+            if (arg.kind === "array_literal") {
+              return { kind: "set_literal", values: [...arg.values] };
+            }
+            const nested = compileFunctionArgInFreeObject(arg);
+            if (nested.kind === "literal") {
+              return { kind: "literal", value: nested.value };
+            }
+            if (nested.kind === "set_literal") {
+              return { kind: "set_literal", values: [...nested.values] };
+            }
+            if (nested.kind === "array_literal") {
+              return { kind: "set_literal", values: [...nested.values] };
+            }
+            if (nested.kind === "function_call") {
+              return {
+                kind: "function_call",
+                functionName: nested.functionName,
+                args: nested.args.map((nestedArg) => {
+                  if (nestedArg.kind === "literal") {
+                    return { kind: "literal", value: nestedArg.value };
+                  }
+                  if (nestedArg.kind === "set_literal") {
+                    return { kind: "set_literal", values: [...nestedArg.values] };
+                  }
+                  if (nestedArg.kind === "array_literal") {
+                    return { kind: "set_literal", values: [...nestedArg.values] };
+                  }
+                  fail("Unsupported nested function argument in select_expr");
+                  throw new Error("unreachable");
+                }),
+              };
+            }
+            fail("Unsupported function argument in select_expr");
+            throw new Error("unreachable");
+          }),
+        };
       }
       if (expr.kind === "select") {
         // Check if this is actually a binding reference (e.g., WITH x := enum.RED SELECT x)
         const bindingValue = withBindings.get(expr.typeName);
         if (bindingValue) {
+          if (currentItemBinding && expr.typeName === currentItemBinding) {
+            return { kind: "current_item", bindingName: expr.typeName };
+          }
+          if (bindingValue.kind === "literal") {
+            return { kind: "literal", value: bindingValue.value };
+          }
+          if (bindingValue.kind === "set_literal") {
+            return { kind: "set_literal", values: [...bindingValue.values] };
+          }
           if (bindingValue.kind === "enum_path") {
             return { kind: "enum_path", enumType: bindingValue.enumType, member: bindingValue.member };
           }
@@ -1688,14 +1860,54 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         }
         fail(`Unsupported expression kind in select_expr: ${expr.kind}`);
       }
+      if (expr.kind === "is_type") {
+        return {
+          kind: "is_type",
+          value: compileExprToIREntry(expr.expr, currentItemBinding),
+          typeName: normalizeTypeName(expr.typeName, activeModule),
+        };
+      }
+      if (expr.kind === "select_expr_subquery") {
+        const innerBinding = expr.alias ?? currentItemBinding;
+        return {
+          kind: "select_expr_subquery",
+          alias: expr.alias,
+          value: compileExprToIREntry(expr.expr, innerBinding),
+          orderBy: expr.orderBy
+            ? {
+                value: compileExprToIREntry(expr.orderBy.expr, innerBinding),
+                direction: expr.orderBy.direction,
+              }
+            : undefined,
+        };
+      }
       fail(`Unsupported expression kind in select_expr: ${(expr as FreeObjectExpr).kind}`);
       throw new Error("unreachable");
     };
+
+    const inferredCurrentBinding = (
+      statement.expr.kind === "binding_ref"
+      && withBindings.get(statement.expr.name)?.kind === "set_literal"
+    )
+      ? statement.expr.name
+      : (
+        statement.expr.kind === "select"
+        && withBindings.get(statement.expr.typeName)?.kind === "set_literal"
+      )
+        ? statement.expr.typeName
+        : undefined;
 
     const entry = compileExprToIREntry(statement.expr);
     return {
       kind: "select_expr",
       entries: [entry],
+      currentBinding: inferredCurrentBinding,
+      orderBy: statement.orderBy
+        ? {
+            value: compileExprToIREntry(statement.orderBy.expr, inferredCurrentBinding),
+            direction: statement.orderBy.direction,
+          }
+        : undefined,
     };
   }
 
@@ -1734,6 +1946,9 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     ["id", { name: "id", type: "uuid" as const, required: true }],
     ...userFields.map((field) => [field.name, field] as const),
   ]);
+  const insertRewriteFields = new Set((typeDef.mutationRewrites ?? [])
+    .filter((rewrite) => Boolean(rewrite.onInsert))
+    .map((rewrite) => rewrite.field));
 
   const typeName = statement.kind === "for" ? statement.body.typeName : statement.typeName;
 
@@ -1815,6 +2030,30 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
   if (statement.kind === "insert") {
     const pathId = createPathId();
     const pendingInlineLinkValue = "__gel_pending_inline_link__";
+    const pendingGeneratedValueForField = (fieldName: string): ScalarValue => {
+      const field = fieldByName.get(fieldName);
+      if (!field) {
+        return "__gel_pending_insert_rewrite__";
+      }
+
+      if (field.multi) {
+        return "[]";
+      }
+
+      switch (field.type) {
+        case "int":
+        case "float":
+          return 0;
+        case "bool":
+          return false;
+        case "json":
+          return "null";
+        case "uuid":
+          return pendingInlineLinkValue;
+        default:
+          return "__gel_pending_insert_rewrite__";
+      }
+    };
     if (typeDef.abstract) {
       fail(`cannot insert into abstract object type '${qualifiedTypeName(typeDef)}'`);
     }
@@ -1892,6 +2131,14 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
 
     for (const field of userFields) {
       if (field.required && !(field.name in scalarValues)) {
+        if (insertRewriteFields.has(field.name)) {
+          scalarValues[field.name] = pendingGeneratedValueForField(field.name);
+          continue;
+        }
+        if (field.hasDefault) {
+          scalarValues[field.name] = pendingGeneratedValueForField(field.name);
+          continue;
+        }
         fail(`Missing required field '${field.name}'`);
       }
     }
@@ -1932,6 +2179,30 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       }
     }
 
+    const linkByName = new Map((typeDef.links ?? []).map((link) => [link.name, link] as const));
+
+    const validateUpdateLinkExpr = (linkName: string, value: InsertValue): void => {
+      if (typeof value !== "object" || value === null || !("kind" in value)) {
+        if (typeof value !== "string" && value !== null) {
+          fail(`Link '${linkName}' assignments require object ids or subqueries`);
+        }
+        return;
+      }
+
+      if (value.kind === "binding_ref" || value.kind === "select" || value.kind === "insert" || value.kind === "for") {
+        return;
+      }
+      if (value.kind === "set") {
+        for (const item of value.values) {
+          validateUpdateLinkExpr(linkName, item);
+        }
+        return;
+      }
+
+      fail(`Unsupported update expression for link '${linkName}'`);
+    };
+
+    const scalarValues: Record<string, ScalarValue> = {};
     const updateFields = Object.entries(statement.values);
     if (updateFields.length === 0) {
       fail("Update requires at least one field assignment");
@@ -1941,7 +2212,23 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       if (field === "id") {
         fail("'id' is server-generated and cannot be assigned");
       }
-      validateFieldValue(field, value);
+
+      if (knownFields.has(field)) {
+        const fieldDef = requireValue(fieldByName.get(field), `Unknown field '${field}' on '${statement.typeName}'`);
+        const scalar = fieldDef.multi
+          ? JSON.stringify(resolveInsertSetValues(value))
+          : resolveInsertScalarValue(value);
+        validateFieldValue(field, scalar);
+        scalarValues[field] = scalar;
+        continue;
+      }
+
+      if (linkByName.has(field)) {
+        validateUpdateLinkExpr(field, value);
+        continue;
+      }
+
+      fail(`Unknown field '${field}' on '${statement.typeName}'`);
     }
 
     return {
@@ -1954,7 +2241,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
             value: resolveFilterValue(predicateFilter.value) as ScalarValue,
           }
         : undefined,
-      values: statement.values,
+      values: scalarValues,
       overlays: [
         {
           table,

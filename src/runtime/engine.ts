@@ -1,7 +1,7 @@
 import { getCompilerService, type CompilerCacheMeta } from "../compiler/service.js";
 import { AppError, asAppError } from "../errors.js";
 import { parseEdgeQL, parseEdgeQLScript } from "../edgeql/parser.js";
-import type { ForStatement, InsertStatement, InsertValue, SelectStatement, Statement } from "../edgeql/ast.js";
+import type { ForStatement, InsertStatement, InsertValue, SelectStatement, Statement, UpdateStatement } from "../edgeql/ast.js";
 import type { RuntimeDatabaseAdapter } from "./adapter.js";
 import type { SchemaSnapshot } from "../schema/schema.js";
 import { compileToSQL, computedValueAlias, shapePayloadAlias, type SQLArtifact } from "../sql/compiler.js";
@@ -583,6 +583,9 @@ export const executeQueryUnitWithTrace = (
       const subjectType = ast.kind === "insert" || ast.kind === "update" || ast.kind === "delete"
         ? schema.getType(ast.typeName)
         : undefined;
+      if (ast.kind === "insert" && !subjectType && Object.keys(ast.values).length === 0 && !ast.conflict) {
+        continue;
+      }
       if ((ast.kind === "insert" || ast.kind === "update" || ast.kind === "delete") && !subjectType) {
         throw new AppError("E_SEMANTIC", `Unknown type '${ast.typeName}'`, ast.pos.line, ast.pos.column);
       }
@@ -623,7 +626,7 @@ export const executeQueryUnitWithTrace = (
 
     return {
       traces,
-      result: traces[traces.length - 1].result,
+      result: traces.length > 0 ? traces[traces.length - 1].result : { kind: "insert", changes: 0 },
     };
   } catch (err) {
     throw asAppError(err);
@@ -916,6 +919,18 @@ const materializeSelectRow = (
           return arg.value;
         });
         output[element.name] = executeFunctionCall(schema, db, context, element.expr.functionName, args);
+      } else if (element.expr.kind === "field_suffix_math") {
+        const raw = row[element.expr.field];
+        const asText = raw === null || raw === undefined ? "" : String(raw);
+        const index = asText.length - element.expr.fromEnd;
+        const digit = index >= 0 ? Number(asText[index]) : Number.NaN;
+        if (!Number.isFinite(digit)) {
+          output[element.name] = null;
+        } else if (element.expr.op === "negate") {
+          output[element.name] = -digit;
+        } else {
+          output[element.name] = (element.expr.constant ?? 0) - digit;
+        }
       } else {
         output[element.name] = { name: sourceType };
       }
@@ -1182,14 +1197,28 @@ const evaluateSelectExprEntry = (
   context: SecurityContext,
   entry: SelectExprIREntry,
   sqlTrail: SQLArtifact[],
+  evalContext?: {
+    currentBinding?: string;
+    currentValue?: unknown;
+  },
 ): unknown => {
   switch (entry.kind) {
     case "literal":
       return entry.value;
     case "set_literal":
       return [...entry.values];
+    case "set_expr":
+      return entry.values.flatMap((value) => {
+        const item = evaluateSelectExprEntry(schema, db, context, value, sqlTrail, evalContext);
+        return Array.isArray(item) ? item : [item];
+      });
     case "enum_path":
       return entry.member;
+    case "current_item":
+      if (evalContext?.currentBinding === entry.bindingName) {
+        return evalContext.currentValue ?? null;
+      }
+      return null;
     case "type_field_path": {
       const typeDef = schema.getType(entry.typeName);
       if (!typeDef) {
@@ -1197,28 +1226,58 @@ const evaluateSelectExprEntry = (
       }
       const field = typeDef.fields.find((f) => f.name === entry.field);
       if (!field) {
-        throw new AppError("E_SEMANTIC", `Unknown field '${entry.field}' on '${entry.typeName}'`, 1, 1);
+        const computed = typeDef.computeds?.find((computed) => computed.kind === "property" && computed.name === entry.field);
+        if (!computed || computed.kind !== "property") {
+          throw new AppError("E_SEMANTIC", `Unknown field '${entry.field}' on '${entry.typeName}'`, 1, 1);
+        }
+
+        if (computed.expr.kind === "literal") {
+          return computed.expr.value;
+        }
+        if (computed.expr.kind === "field_ref") {
+          const rows = db.prepare(`SELECT ${computed.expr.field} FROM ${tableNameForType(entry.typeName)} LIMIT 1`).all() as Record<string, unknown>[];
+          return rows.length > 0 ? rows[0]?.[computed.expr.field] ?? null : null;
+        }
+        if (computed.expr.kind === "concat") {
+          return computed.expr.parts
+            .map((part) => {
+              if (part.kind === "literal") {
+                return String(part.value ?? "");
+              }
+              const rows = db.prepare(`SELECT ${part.field} FROM ${tableNameForType(entry.typeName)} LIMIT 1`).all() as Record<string, unknown>[];
+              return String(rows.length > 0 ? rows[0]?.[part.field] ?? "" : "");
+            })
+            .join("");
+        }
+        if (computed.expr.kind === "function_call") {
+          return executeFunctionCall(schema, db, context, computed.expr.name, computed.expr.args as RuntimeFunctionArg[]);
+        }
+        return null;
       }
       const rows = db.prepare(`SELECT ${entry.field} FROM ${tableNameForType(entry.typeName)} LIMIT 1`).all() as Record<string, unknown>[];
       const value = rows.length > 0 ? rows[0]?.[entry.field] ?? null : null;
-      if (field.enumValues && field.enumValues.length > 0) {
-        return value;
-      }
       return value;
     }
     case "cast": {
-      if (entry.value.kind === "set_literal") {
+      if (entry.value.kind === "set_literal" || entry.value.kind === "set_expr") {
+        const setValues = evaluateSelectExprEntry(schema, db, context, entry.value, sqlTrail, evalContext);
+        if (Array.isArray(setValues)) {
+          return setValues;
+        }
         const castTypeDef = schema.getType(entry.castType);
         if (castTypeDef) {
           const allEnumValues = castTypeDef.fields.flatMap((f) => f.enumValues ?? []);
           if (allEnumValues.length > 0) {
-            return entry.value.values;
+            return [setValues];
           }
         }
-        return entry.value.values;
+        return [setValues];
       }
-      const innerValue = evaluateSelectExprEntry(schema, db, context, entry.value, sqlTrail);
+      const innerValue = evaluateSelectExprEntry(schema, db, context, entry.value, sqlTrail, evalContext);
       if (entry.castType === "str") {
+        if (Array.isArray(innerValue)) {
+          return innerValue.map((item) => String(item ?? ""));
+        }
         if (innerValue === null) return "";
         return String(innerValue);
       }
@@ -1243,8 +1302,96 @@ const evaluateSelectExprEntry = (
       }
       throw new AppError("E_SEMANTIC", `Unsupported cast type '${entry.castType}' in select_expr`, 1, 1);
     }
+    case "is_type": {
+      const value = evaluateSelectExprEntry(schema, db, context, entry.value, sqlTrail, evalContext);
+      const typeDef = schema.getType(entry.typeName);
+      const enumValues = typeDef?.fields.flatMap((f) => f.enumValues ?? []) ?? [];
+      const checkOne = (item: unknown): boolean => {
+        if (enumValues.length > 0) {
+          return typeof item === "string" && enumValues.includes(item);
+        }
+        return false;
+      };
+      if (Array.isArray(value)) {
+        return value.map(checkOne);
+      }
+      return checkOne(value);
+    }
+    case "select_expr_subquery": {
+      const value = evaluateSelectExprEntry(schema, db, context, entry.value, sqlTrail, evalContext);
+      const rows = Array.isArray(value) ? [...value] : [value];
+      if (entry.orderBy) {
+        const inferredEnumOrder = entry.orderBy.value.kind === "current_item"
+          && rows.every((item) => typeof item === "string")
+          ? (() => {
+              const values = rows as string[];
+              for (const typeDef of schema.listTypes()) {
+                const enumValues = typeDef.fields.flatMap((f) => f.enumValues ?? []);
+                if (enumValues.length === 0) {
+                  continue;
+                }
+                if (values.every((value) => enumValues.includes(value))) {
+                  return new Map(enumValues.map((enumValue, index) => [enumValue, index] as const));
+                }
+              }
+              return undefined;
+            })()
+          : undefined;
+
+        rows.sort((a, b) => {
+          const aKey = evaluateSelectExprEntry(
+            schema,
+            db,
+            context,
+            entry.orderBy!.value,
+            sqlTrail,
+            { currentBinding: entry.alias, currentValue: a },
+          );
+          const bKey = evaluateSelectExprEntry(
+            schema,
+            db,
+            context,
+            entry.orderBy!.value,
+            sqlTrail,
+            { currentBinding: entry.alias, currentValue: b },
+          );
+          if (aKey === bKey) {
+            return 0;
+          }
+          if (inferredEnumOrder && typeof aKey === "string" && typeof bKey === "string") {
+            const aIndex = inferredEnumOrder.get(aKey) ?? Number.MAX_SAFE_INTEGER;
+            const bIndex = inferredEnumOrder.get(bKey) ?? Number.MAX_SAFE_INTEGER;
+            if (aIndex === bIndex) {
+              return 0;
+            }
+            const enumDirection = entry.orderBy!.direction === "desc" ? -1 : 1;
+            return (aIndex < bIndex ? -1 : 1) * enumDirection;
+          }
+          if (entry.orderBy!.direction === "desc") {
+            return String(aKey).localeCompare(String(bKey)) * -1;
+          }
+          return String(aKey).localeCompare(String(bKey));
+        });
+      }
+      return rows;
+    }
+    case "function_call": {
+      return executeFunctionCall(
+        schema,
+        db,
+        context,
+        entry.functionName,
+        entry.args.map((arg): RuntimeFunctionArg => {
+          const value = evaluateSelectExprEntry(schema, db, context, arg, sqlTrail, evalContext);
+          if (Array.isArray(value)) {
+            return { kind: "set", values: value as ScalarValue[] };
+          }
+          return value as ScalarValue;
+        }),
+      );
+    }
     case "concat": {
-      const parts = entry.parts.map((part) => evaluateSelectExprEntry(schema, db, context, part, sqlTrail));
+      const parts = entry.parts.map((part) => evaluateSelectExprEntry(schema, db, context, part, sqlTrail, evalContext));
       for (let i = 0; i < parts.length; i++) {
         const part = parts[i];
         const partEntry = entry.parts[i];
@@ -1281,10 +1428,59 @@ const materializeSelectExprRows = (
     return [];
   }
   const value = evaluateSelectExprEntry(schema, db, context, ir.entries[0], sqlTrail);
-  if (Array.isArray(value)) {
-    return value.map((v) => v as Record<string, unknown>);
+  let rows = Array.isArray(value) ? [...value] : [value];
+
+  if (ir.orderBy) {
+    const enumOrder = ir.orderBy.value.kind === "cast"
+      ? (() => {
+          const typeDef = schema.getType(ir.orderBy!.value.castType);
+          const values = typeDef?.fields.flatMap((f) => f.enumValues ?? []) ?? [];
+          if (values.length === 0) {
+            return undefined;
+          }
+          return new Map(values.map((value, index) => [value, index] as const));
+        })()
+      : undefined;
+
+    rows.sort((a, b) => {
+      const aKey = evaluateSelectExprEntry(
+        schema,
+        db,
+        context,
+        ir.orderBy!.value,
+        sqlTrail,
+        { currentBinding: ir.currentBinding, currentValue: a },
+      );
+      const bKey = evaluateSelectExprEntry(
+        schema,
+        db,
+        context,
+        ir.orderBy!.value,
+        sqlTrail,
+        { currentBinding: ir.currentBinding, currentValue: b },
+      );
+
+      if (aKey === bKey) {
+        return 0;
+      }
+
+      const direction = ir.orderBy!.direction === "desc" ? -1 : 1;
+      if (enumOrder && typeof aKey === "string" && typeof bKey === "string") {
+        const aIndex = enumOrder.get(aKey) ?? Number.MAX_SAFE_INTEGER;
+        const bIndex = enumOrder.get(bKey) ?? Number.MAX_SAFE_INTEGER;
+        if (aIndex === bIndex) {
+          return 0;
+        }
+        return (aIndex < bIndex ? -1 : 1) * direction;
+      }
+      return String(aKey).localeCompare(String(bKey)) * direction;
+    });
   }
-  return [value as Record<string, unknown>];
+
+  if (Array.isArray(rows)) {
+    return rows.map((v) => v as Record<string, unknown>);
+  }
+  return [rows as unknown as Record<string, unknown>];
 };
 
 const executeFunctionCall = (
@@ -1463,7 +1659,7 @@ const evaluateFunctionExpr = (
 
 const literalToEdgeQL = (value: ScalarValue | ScalarValue[] | null): string => {
   if (Array.isArray(value)) {
-    return `[${value.map((item) => literalToEdgeQL(item)).join(", ")}]`;
+    return `{${value.map((item) => literalToEdgeQL(item)).join(", ")}}`;
   }
 
   if (value === null || value === undefined) {
@@ -2020,6 +2216,16 @@ const runWriteWithAccessPolicies = (
       const preRows = readTargetRowsForFilter(db, ir.table, ir.filter);
       enforceUpdateReadPolicies(subjectType, preRows, context, ast.pos.line, ast.pos.column);
       const writeResult = db.prepare(sqlArtifact.sql).run(...sqlArtifact.params);
+      if (ast.kind === "update") {
+        applyUpdateLinkAssignments(
+          db,
+          schema,
+          ast,
+          subjectType,
+          preRows.map((row) => String(row.id)),
+          context,
+        );
+      }
       const updatedRows = preRows.length > 0 ? readRowsByIds(db, ir.table, preRows.map((row) => String(row.id))) : [];
       enforceUpdateWritePolicies(subjectType, updatedRows, context, ast.pos.line, ast.pos.column);
       db.prepare("COMMIT").run();
@@ -2214,6 +2420,50 @@ const applyInsertLinkAssignments = (
   context: SecurityContext,
 ): void => {
   const linkByName = new Map((typeDef.links ?? []).map((link) => [link.name, link] as const));
+
+  const defaultLinkPropertyValue = (property: NonNullable<NonNullable<TypeDef["links"]>[number]["properties"]>[number]): ScalarValue => {
+    if (!property.hasDefault) {
+      return null;
+    }
+
+    if (property.type === "int" || property.type === "float") {
+      return Math.round(Math.random() * 10);
+    }
+
+    return null;
+  };
+
+  const resolveDefaultLinkAssignments = (
+    link: NonNullable<TypeDef["links"]>[number],
+  ): Array<{ id: string; properties: Record<string, ScalarValue> }> => {
+    const targetQualified = link.targetType.includes("::") ? link.targetType : `${typeDef.module ?? "default"}::${link.targetType}`;
+    const targetType = schema.getType(targetQualified);
+    const targetTable = tableNameForType(targetQualified);
+
+    const lookupColumn = targetType?.fields.some((field) => field.name === "val")
+      ? "val"
+      : targetType?.fields.some((field) => field.name === "name")
+        ? "name"
+        : undefined;
+
+    if (link.defaultTargetValues && link.defaultTargetValues.length > 0 && lookupColumn) {
+      return link.defaultTargetValues.flatMap((targetValue) => {
+        const row = db
+          .prepare(`SELECT ${quoteIdent("id")} AS ${quoteIdent("id")} FROM ${quoteIdent(targetTable)} WHERE ${quoteIdent(lookupColumn)} = ? LIMIT 1`)
+          .all(targetValue)[0] as { id?: unknown } | undefined;
+        return typeof row?.id === "string" ? [{ id: row.id, properties: {} }] : [];
+      });
+    }
+
+    const first = db
+      .prepare(`SELECT ${quoteIdent("id")} AS ${quoteIdent("id")} FROM ${quoteIdent(targetTable)} ORDER BY rowid ASC LIMIT 1`)
+      .all()[0] as { id?: unknown } | undefined;
+    if (typeof first?.id !== "string") {
+      return [];
+    }
+    return [{ id: first.id, properties: {} }];
+  };
+
   for (const [field, value] of Object.entries(ast.values)) {
     const link = linkByName.get(field);
     if (!link) {
@@ -2245,7 +2495,9 @@ const applyInsertLinkAssignments = (
     const usesLinkTable = Boolean(link.multi) || (link.properties?.length ?? 0) > 0;
     if (usesLinkTable) {
       const linkTable = `${tableNameForType(qualifiedTypeName(typeDef))}__${link.name.toLowerCase()}`;
-      const propertyColumns = (link.properties ?? []).map((property) => property.name);
+      const propertyDefs = link.properties ?? [];
+      const propertyColumns = propertyDefs.map((property) => property.name);
+      const propertyByName = new Map(propertyDefs.map((property) => [property.name, property] as const));
       const columns = ["source", "target", ...propertyColumns];
       const placeholders = columns.map(() => "?").join(", ");
       const insertSql = `INSERT INTO ${quoteIdent(linkTable)} (${columns.map(quoteIdent).join(", ")}) VALUES (${placeholders})`;
@@ -2254,7 +2506,14 @@ const applyInsertLinkAssignments = (
         const params = [
           sourceId,
           assignment.id,
-          ...propertyColumns.map((column) => assignment.properties[`@${column}`] ?? null),
+          ...propertyColumns.map((column) => {
+            const explicit = assignment.properties[`@${column}`];
+            if (explicit !== undefined) {
+              return explicit;
+            }
+            const property = propertyByName.get(column);
+            return property ? defaultLinkPropertyValue(property) : null;
+          }),
         ];
         db
           .prepare(insertSql)
@@ -2267,6 +2526,128 @@ const applyInsertLinkAssignments = (
     const targetId = targetIds[0] ?? null;
     db.prepare(`UPDATE ${quoteIdent(tableNameForType(qualifiedTypeName(typeDef)))} SET ${quoteIdent(inlineColumn)} = ? WHERE ${quoteIdent("id")} = ?`)
       .run(targetId, sourceId);
+  }
+
+  for (const link of typeDef.links ?? []) {
+    if (Object.prototype.hasOwnProperty.call(ast.values, link.name)) {
+      continue;
+    }
+    if (!link.hasDefault) {
+      continue;
+    }
+
+    const assignments = resolveDefaultLinkAssignments(link);
+    if (assignments.length === 0) {
+      continue;
+    }
+
+    const usesLinkTable = Boolean(link.multi) || (link.properties?.length ?? 0) > 0;
+    if (usesLinkTable) {
+      const linkTable = `${tableNameForType(qualifiedTypeName(typeDef))}__${link.name.toLowerCase()}`;
+      const propertyDefs = link.properties ?? [];
+      const propertyColumns = propertyDefs.map((property) => property.name);
+      const columns = ["source", "target", ...propertyColumns];
+      const placeholders = columns.map(() => "?").join(", ");
+      const insertSql = `INSERT INTO ${quoteIdent(linkTable)} (${columns.map(quoteIdent).join(", ")}) VALUES (${placeholders})`;
+
+      for (const assignment of assignments) {
+        const params = [
+          sourceId,
+          assignment.id,
+          ...propertyDefs.map((property) => defaultLinkPropertyValue(property)),
+        ];
+        db.prepare(insertSql).run(...params);
+      }
+      continue;
+    }
+
+    const inlineColumn = `${link.name}_id`;
+    db.prepare(`UPDATE ${quoteIdent(tableNameForType(qualifiedTypeName(typeDef)))} SET ${quoteIdent(inlineColumn)} = ? WHERE ${quoteIdent("id")} = ?`)
+      .run(assignments[0]?.id ?? null, sourceId);
+  }
+};
+
+const applyUpdateLinkAssignments = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  ast: UpdateStatement,
+  typeDef: TypeDef,
+  sourceIds: string[],
+  context: SecurityContext,
+): void => {
+  if (sourceIds.length === 0) {
+    return;
+  }
+
+  const linkByName = new Map((typeDef.links ?? []).map((link) => [link.name, link] as const));
+  const values = ast.values as Record<string, InsertValue>;
+
+  for (const [field, value] of Object.entries(values)) {
+    const link = linkByName.get(field);
+    if (!link) {
+      continue;
+    }
+
+    const fauxInsertAst: InsertStatement = {
+      kind: "insert",
+      with: ast.with,
+      withModule: ast.withModule,
+      withModuleAliases: ast.withModuleAliases,
+      typeName: ast.typeName,
+      values: {},
+      pos: ast.pos,
+    };
+
+    const targetAssignments = resolveInsertTargets(db, schema, value, context, fauxInsertAst);
+    const targetIds = targetAssignments.map((assignment) => assignment.id);
+    const targetQualified = link.targetType.includes("::") ? link.targetType : `${typeDef.module ?? "default"}::${link.targetType}`;
+    const assignableTargetTables = new Set(
+      schema.listConcreteTypesAssignableTo(targetQualified).map((candidate) => tableNameForType(qualifiedTypeName(candidate))),
+    );
+    if (assignableTargetTables.size === 0) {
+      assignableTargetTables.add(tableNameForType(targetQualified));
+    }
+    for (const targetId of targetIds) {
+      const row = db
+        .prepare('SELECT "type_name" AS "type_name" FROM "__gel_global_ids" WHERE "id" = ?')
+        .all(targetId)[0] as { type_name?: unknown } | undefined;
+      if (!row || typeof row.type_name !== "string") {
+        throw new AppError("E_SEMANTIC", `Invalid id for link '${link.name}': '${targetId}' does not reference an existing object`, ast.pos.line, ast.pos.column);
+      }
+      if (!assignableTargetTables.has(row.type_name)) {
+        const expected = [...assignableTargetTables].sort().join(" or ");
+        throw new AppError("E_SEMANTIC", `Invalid id for link '${link.name}': expected '${expected}', got '${row.type_name}'`, ast.pos.line, ast.pos.column);
+      }
+    }
+
+    const usesLinkTable = Boolean(link.multi) || (link.properties?.length ?? 0) > 0;
+    if (usesLinkTable) {
+      const linkTable = `${tableNameForType(qualifiedTypeName(typeDef))}__${link.name.toLowerCase()}`;
+      const propertyColumns = (link.properties ?? []).map((property) => property.name);
+      const columns = ["source", "target", ...propertyColumns];
+      const placeholders = columns.map(() => "?").join(", ");
+      const insertSql = `INSERT INTO ${quoteIdent(linkTable)} (${columns.map(quoteIdent).join(", ")}) VALUES (${placeholders})`;
+
+      for (const sourceId of sourceIds) {
+        db.prepare(`DELETE FROM ${quoteIdent(linkTable)} WHERE ${quoteIdent("source")} = ?`).run(sourceId);
+        for (const assignment of targetAssignments) {
+          const params = [
+            sourceId,
+            assignment.id,
+            ...propertyColumns.map((column) => assignment.properties[`@${column}`] ?? null),
+          ];
+          db.prepare(insertSql).run(...params);
+        }
+      }
+      continue;
+    }
+
+    const inlineColumn = `${link.name}_id`;
+    const targetId = targetIds[0] ?? null;
+    for (const sourceId of sourceIds) {
+      db.prepare(`UPDATE ${quoteIdent(tableNameForType(qualifiedTypeName(typeDef)))} SET ${quoteIdent(inlineColumn)} = ? WHERE ${quoteIdent("id")} = ?`)
+        .run(targetId, sourceId);
+    }
   }
 };
 

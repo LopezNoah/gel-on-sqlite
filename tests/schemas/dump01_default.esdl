@@ -161,21 +161,21 @@ type G {
 # }
 
 
-# type I {
-#     required link i0 -> C {
-#         default := (SELECT C FILTER .val = 'D00' LIMIT 1);
-#     };
-#     required link i1 -> C {
-#         default := (
-#             SELECT C FILTER .val = 'D0' ++ user_func_0(1)[-1] LIMIT 1
-#         );
-#     };
-#     required link i2 -> C {
-#         default := (
-#             SELECT C FILTER .val = array_join(['D', '0', '2'], '') LIMIT 1
-#         );
-#     };
-# }
+type I {
+    required link i0 -> C {
+        default := (SELECT C FILTER .val = 'D00' LIMIT 1);
+    };
+    required link i1 -> C {
+        default := (
+            SELECT C FILTER .val = 'D0' ++ user_func_0(1)[-1] LIMIT 1
+        );
+    };
+    required link i2 -> C {
+        default := (
+            SELECT C FILTER .val = array_join(['D', '0', '2'], '') LIMIT 1
+        );
+    };
+}
 
 
 # type J {
@@ -299,13 +299,13 @@ type V extending U, S, T;
 
 
 # aliases
-# alias AliasP := P {
-#     name := 'alias P',
-#     p2 := .p2 ++ ['!'],
-#     f := F {
-#         k := (SELECT K LIMIT 1)
-#     }
-# };
+alias AliasP := P {
+    name := 'alias P',
+    p2 := .p2 ++ ['!'],
+    f := F {
+        k := (SELECT K LIMIT 1)
+    }
+};
 
 
 alias Primes := {2, 3, 5, 7};

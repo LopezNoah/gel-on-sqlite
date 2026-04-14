@@ -38,7 +38,11 @@ export const compileToSQL = (ir: IRStatement, options: SQLCompileOptions = {}): 
   if (ir.kind === "insert") {
     const keys = Object.keys(ir.values);
     if (keys.length === 0) {
-      throw new AppError("E_SQL", "Cannot compile empty insert value map");
+      return {
+        sql: `INSERT INTO ${quoteIdent(ir.table)} DEFAULT VALUES`,
+        params: [],
+        loweringMode: "single_statement",
+      };
     }
 
     const placeholders = keys.map(() => "?").join(", ");
@@ -52,7 +56,11 @@ export const compileToSQL = (ir: IRStatement, options: SQLCompileOptions = {}): 
   if (ir.kind === "update") {
     const keys = Object.keys(ir.values);
     if (keys.length === 0) {
-      throw new AppError("E_SQL", "Cannot compile empty update value map");
+      return {
+        sql: "SELECT 1",
+        params: [],
+        loweringMode: "fallback_multi_query",
+      };
     }
 
     const setClause = keys.map((key) => `${quoteIdent(key)} = ?`).join(", ");
