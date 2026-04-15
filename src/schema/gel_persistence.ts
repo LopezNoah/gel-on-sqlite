@@ -1089,6 +1089,7 @@ const serializeComputedExpr = (expr: ComputedDef["expr"]): string => {
   if (expr.kind === "literal") return String(expr.value);
   if (expr.kind === "concat") return expr.parts.map(serializeComputedExprPart).join(" ++ ");
   if (expr.kind === "function_call") return `${expr.name}(${expr.args.map((a) => JSON.stringify(a)).join(", ")})`;
+  if (expr.kind === "link_aggregate") return `${expr.functionName}(.${expr.link}.${expr.field})`;
   return "";
 };
 
@@ -1124,7 +1125,17 @@ const serializeRewriteExpr = (expr: NonNullable<MutationRewriteDef["onInsert"]>)
   return "";
 };
 
-const parseComputedPropertyExpr = (exprStr: string): { kind: "field_ref"; field: string } | { kind: "literal"; value: ScalarValue } | { kind: "concat"; parts: ComputedValuePart[] } | { kind: "function_call"; name: string; args: ScalarValue[] } => {
+const parseComputedPropertyExpr = (exprStr: string): { kind: "field_ref"; field: string } | { kind: "literal"; value: ScalarValue } | { kind: "concat"; parts: ComputedValuePart[] } | { kind: "function_call"; name: string; args: ScalarValue[] } | { kind: "link_aggregate"; functionName: "sum"; link: string; field: string } => {
+  const aggregateMatch = exprStr.match(/^\s*sum\(\.([A-Za-z_][\w]*)\.([A-Za-z_][\w]*)\)\s*$/i);
+  if (aggregateMatch) {
+    return {
+      kind: "link_aggregate",
+      functionName: "sum",
+      link: aggregateMatch[1],
+      field: aggregateMatch[2],
+    };
+  }
+
   if (exprStr.startsWith(".")) {
     const field = exprStr.slice(1);
     if (field.includes(" ")) {

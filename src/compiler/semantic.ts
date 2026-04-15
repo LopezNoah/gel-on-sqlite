@@ -898,6 +898,27 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
                   args: computed.expr.args.map((arg) => ({ kind: "literal", value: arg })),
                 },
               });
+            } else if (computed.expr.kind === "link_aggregate") {
+              const relation = resolveForwardLink(typeDef, computed.expr.link);
+              const targetType = requireValue(
+                schema.getType(relation.targetType),
+                `Unknown link target type '${relation.targetType}' from '${qualifiedName}.${computed.expr.link}'`,
+              );
+              const targetFields = new Set(["id", ...collectFields(targetType, true).map((field) => field.name)]);
+              if (!targetFields.has(computed.expr.field)) {
+                fail(`Unknown field '${computed.expr.field}' on aggregate target '${relation.targetType}'`);
+              }
+              shapeElements.push({
+                kind: "computed",
+                name: shapeElement.name,
+                pathId: elementPathId,
+                expr: {
+                  kind: "link_aggregate",
+                  functionName: computed.expr.functionName,
+                  relation,
+                  column: computed.expr.field,
+                },
+              });
             } else {
               for (const part of computed.expr.parts) {
                 if (part.kind === "field_ref") {

@@ -924,6 +924,37 @@ const materializeSelectRow = (
           return arg.value;
         });
         output[element.name] = executeFunctionCall(schema, db, context, element.expr.functionName, args);
+      } else if (element.expr.kind === "link_aggregate") {
+        const loweredAlias = computedValueAlias(element.pathId);
+        if (Object.prototype.hasOwnProperty.call(row, loweredAlias)) {
+          output[element.name] = row[loweredAlias];
+          continue;
+        }
+
+        const relation = element.expr.relation;
+        const targetSource = `(SELECT '${relation.targetType.replaceAll("'", "''")}' AS ${quoteIdent("__source_type")}, * FROM ${quoteIdent(relation.targetTable)}) t`;
+        let sql: string;
+        let params: ScalarValue[];
+        if (relation.storage === "inline") {
+          const targetId = row[relation.inlineColumn!];
+          if (!isScalarValue(targetId) || targetId === null) {
+            output[element.name] = 0;
+            continue;
+          }
+          sql = `SELECT COALESCE(SUM(t.${quoteIdent(element.expr.column)}), 0) AS ${quoteIdent("value")} FROM ${targetSource} WHERE t.${quoteIdent("id")} = ?`;
+          params = [targetId];
+        } else {
+          const sourceId = row.id;
+          if (!isScalarValue(sourceId) || sourceId === null) {
+            output[element.name] = 0;
+            continue;
+          }
+          sql = `SELECT COALESCE(SUM(t.${quoteIdent(element.expr.column)}), 0) AS ${quoteIdent("value")} FROM ${targetSource} JOIN ${quoteIdent(relation.linkTable!)} l ON l.${quoteIdent("target")} = t.${quoteIdent("id")} WHERE l.${quoteIdent("source")} = ?`;
+          params = [sourceId];
+        }
+        sqlTrail.push({ sql, params: [...params], loweringMode: "fallback_multi_query" });
+        const aggregateRow = db.prepare(sql).all(...params)[0] as { value?: unknown } | undefined;
+        output[element.name] = Number(aggregateRow?.value ?? 0);
       } else if (element.expr.kind === "field_suffix_math") {
         const raw = row[element.expr.field];
         const asText = raw === null || raw === undefined ? "" : String(raw);
@@ -1318,6 +1349,9 @@ const evaluateSelectExprEntry = (
         }
         if (computed.expr.kind === "function_call") {
           return executeFunctionCall(schema, db, context, computed.expr.name, computed.expr.args as RuntimeFunctionArg[]);
+        }
+        if (computed.expr.kind === "link_aggregate") {
+          return 0;
         }
         return null;
       }

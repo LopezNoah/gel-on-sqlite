@@ -133,6 +133,12 @@ export type ComputedDef = {
             kind: "function_call";
             name: string;
             args: ScalarValue[];
+          }
+        | {
+            kind: "link_aggregate";
+            functionName: "sum";
+            link: string;
+            field: string;
           };
     }
   | {

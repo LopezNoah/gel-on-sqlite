@@ -1557,10 +1557,14 @@ class Parser {
     if (first.kind === "function_call") {
       return {
         kind: "property",
-        expr: {
-          kind: "literal",
-          value: null,
-        },
+        expr: first,
+      };
+    }
+
+    if (first.kind === "link_aggregate") {
+      return {
+        kind: "property",
+        expr: first,
       };
     }
 
@@ -1636,7 +1640,10 @@ class Parser {
 
   private parseComputedValuePartOrLinkExpr(
     moduleName: string,
-  ): ComputedValuePart | Extract<ComputedDef, { kind: "link" }>['expr'] | { kind: "function_call"; name: string; args: ScalarValue[] } {
+  ): ComputedValuePart
+      | Extract<ComputedDef, { kind: "link" }>['expr']
+      | { kind: "function_call"; name: string; args: ScalarValue[] }
+      | { kind: "link_aggregate"; functionName: "sum"; link: string; field: string } {
     if (this.peek().kind === "dot") {
       this.consume();
 
@@ -1677,6 +1684,21 @@ class Parser {
       if (this.peekAt(1).kind === "lparen") {
         this.consume();
         this.consume();
+
+        if (word.toLowerCase() === "sum" && this.peek().kind === "dot") {
+          this.consume();
+          const link = this.expect("word", "Expected link name in aggregate expression").text;
+          this.expect("dot", "Expected '.' between link and field in aggregate expression");
+          const field = this.expect("word", "Expected field name in aggregate expression").text;
+          this.expect("rparen", "Expected ')' after aggregate expression");
+          return {
+            kind: "link_aggregate",
+            functionName: "sum",
+            link,
+            field,
+          };
+        }
+
         const args: ScalarValue[] = [];
         while (!this.match("rparen")) {
           if (this.peek().kind === "string" || this.peek().kind === "number" || this.peek().kind === "word") {

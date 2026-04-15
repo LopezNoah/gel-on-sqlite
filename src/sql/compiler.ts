@@ -98,16 +98,24 @@ const compileSelectToSQL = (ir: SelectIR, target: RuntimeTarget): SQLArtifact =>
   ];
 
   for (const element of ir.shape) {
-    if (element.kind !== "computed" || element.expr.kind !== "function_call") {
+    if (element.kind !== "computed") {
       continue;
     }
 
-    const lowered = compileStdlibFunctionCallSQL(element.expr, rootAlias, params, target);
-    if (!lowered) {
+    if (element.expr.kind === "function_call") {
+      const lowered = compileStdlibFunctionCallSQL(element.expr, rootAlias, params, target);
+      if (!lowered) {
+        continue;
+      }
+
+      projections.push(`${lowered} AS ${quoteIdent(computedValueAlias(element.pathId))}`);
       continue;
     }
 
-    projections.push(`${lowered} AS ${quoteIdent(computedValueAlias(element.pathId))}`);
+    if (element.expr.kind === "link_aggregate") {
+      const lowered = compileLinkAggregateExpr(element.expr, rootAlias);
+      projections.push(`${lowered} AS ${quoteIdent(computedValueAlias(element.pathId))}`);
+    }
   }
 
   if (includePayloads) {
@@ -296,6 +304,8 @@ const compileShapeObjectExpr = (
       } else if (element.expr.kind === "function_call") {
         const lowered = compileStdlibFunctionCallSQL(element.expr, sourceAlias, params, target);
         pairs.push(lowered ?? "json('[]')");
+      } else if (element.expr.kind === "link_aggregate") {
+        pairs.push(compileLinkAggregateExpr(element.expr, sourceAlias));
       } else {
         pairs.push("json('[]')");
       }
@@ -342,6 +352,26 @@ const requiredAlias = (value: string | undefined): string => {
   }
 
   return value;
+};
+
+const compileLinkAggregateExpr = (
+  expr: Extract<Extract<SelectShapeElementIR, { kind: "computed" }>["expr"], { kind: "link_aggregate" }>,
+  sourceAlias: string,
+): string => {
+  const targetAlias = `a_${Math.abs(hashString(`${sourceAlias}:${expr.relation.sourceType}:${expr.relation.targetType}:${expr.column}`)).toString(16)}`;
+  const relation = expr.relation;
+  let fromClause = `(SELECT ${quoteLiteral(relation.targetType)} AS ${quoteIdent("__source_type")}, * FROM ${quoteIdent(relation.targetTable)}) ${targetAlias}`;
+  let whereClause: string;
+
+  if (relation.storage === "inline") {
+    whereClause = `${targetAlias}.${quoteIdent("id")} = ${sourceAlias}.${quoteIdent(requiredInlineColumn(relation.inlineColumn))}`;
+  } else {
+    const junctionAlias = `aj_${Math.abs(hashString(`${sourceAlias}:${relation.sourceType}:${relation.targetType}`)).toString(16)}`;
+    fromClause = `${fromClause} JOIN ${quoteIdent(requiredLinkTable(relation.linkTable))} ${junctionAlias} ON ${junctionAlias}.${quoteIdent("target")} = ${targetAlias}.${quoteIdent("id")}`;
+    whereClause = `${junctionAlias}.${quoteIdent("source")} = ${sourceAlias}.${quoteIdent("id")}`;
+  }
+
+  return `COALESCE((SELECT SUM(${targetAlias}.${quoteIdent(expr.column)}) FROM ${fromClause} WHERE ${whereClause}), 0)`;
 };
 
 const quoteIdent = (ident: string): string => `"${ident.replaceAll('"', '""')}"`;

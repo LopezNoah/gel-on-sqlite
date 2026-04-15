@@ -119,6 +119,12 @@ export type SelectShapeElementIR =
             fromEnd: number;
             op: "negate" | "const_minus";
             constant?: number;
+          }
+        | {
+            kind: "link_aggregate";
+            functionName: "sum";
+            relation: LinkRelationIR;
+            column: string;
           };
     }
   | {

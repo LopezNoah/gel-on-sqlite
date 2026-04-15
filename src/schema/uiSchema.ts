@@ -283,6 +283,33 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
                 parts: member.expr.parts.map((part) => ({ ...part })),
               },
             });
+          } else if (member.expr.kind === "function_call") {
+            computeds.push({
+              kind: "property",
+              name: member.name,
+              required: member.required,
+              multi: member.multi,
+              annotations: member.annotations.length ? [...member.annotations] : undefined,
+              expr: {
+                kind: "function_call",
+                name: member.expr.name,
+                args: [...member.expr.args],
+              },
+            });
+          } else if (member.expr.kind === "link_aggregate") {
+            computeds.push({
+              kind: "property",
+              name: member.name,
+              required: member.required,
+              multi: member.multi,
+              annotations: member.annotations.length ? [...member.annotations] : undefined,
+              expr: {
+                kind: "link_aggregate",
+                functionName: member.expr.functionName,
+                link: member.expr.link,
+                field: member.expr.field,
+              },
+            });
           } else {
             throw new Error(`Computed '${member.name}' has invalid property expression kind '${member.expr.kind}'`);
           }
@@ -917,6 +944,10 @@ const renderComputedExpr = (expr: Extract<TypeMember, { kind: "computed" }>['exp
   if (expr.kind === "function_call") {
     const args = expr.args.map((arg) => renderScalarLiteral(arg)).join(", ");
     return `${expr.name}(${args})`;
+  }
+
+  if (expr.kind === "link_aggregate") {
+    return `${expr.functionName}(.${expr.link}.${expr.field})`;
   }
 
   if (expr.kind === "backlink") {
