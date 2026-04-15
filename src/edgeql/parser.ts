@@ -1614,7 +1614,14 @@ class Parser {
     return first;
   }
 
-  private readFilterValue(): ScalarValue | { kind: "binding_ref"; name: string } {
+  private readFilterValue(): ScalarValue | { kind: "binding_ref"; name: string } | { kind: "field_ref"; field: string } {
+    if (this.peek().kind === "at" || this.peek().kind === "dot") {
+      return {
+        kind: "field_ref",
+        field: this.parseFieldReference("filter value"),
+      };
+    }
+
     if (this.peek().kind === "identifier") {
       return {
         kind: "binding_ref",

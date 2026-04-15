@@ -1819,7 +1819,7 @@ const resolveLinks = (
   }
 
   if (nested.filter) {
-    sql += ` AND ${compileNestedFilterExprSQL(nested.filter, params)}`;
+    sql += ` AND ${compileNestedFilterExprSQL(nested.filter, params, relation.storage === "table" ? "l" : undefined)}`;
   }
 
   if (nested.orderBy) {
@@ -1897,18 +1897,44 @@ const compileFilterPredicate = (lhsSql: string, op: "=" | "!=" | "like" | "ilike
   return `LOWER(${lhsSql}) LIKE LOWER(?)`;
 };
 
-const compileNestedFilterExprSQL = (filter: FilterExprIR, params: ScalarValue[]): string => {
+const compileNestedFilterExprSQL = (filter: FilterExprIR, params: ScalarValue[], linkPropertyAlias?: string): string => {
+  const columnExpr = (column: string): string => {
+    if (column.startsWith("@")) {
+      const alias = linkPropertyAlias ?? "t";
+      return `${alias}.${quoteIdent(column.slice(1))}`;
+    }
+    if (column === "__type__.name") {
+      return `t.${quoteIdent("__source_type")}`;
+    }
+    return `t.${quoteIdent(column)}`;
+  };
+
   if (filter.kind === "field") {
     params.push(filter.value);
-    return compileFilterPredicate(`t.${quoteIdent(filter.column)}`, filter.op);
+    return compileFilterPredicate(columnExpr(filter.column), filter.op);
   }
 
   if (filter.kind === "field_in") {
-    const column = `t.${quoteIdent(filter.column)}`;
+    const column = columnExpr(filter.column);
     const placeholders = filter.values.map(() => "?").join(", ");
     params.push(...filter.values);
     const op = filter.op === "in" ? "IN" : "NOT IN";
     return `${column} ${op} (${placeholders})`;
+  }
+
+  if (filter.kind === "field_compare") {
+    const left = columnExpr(filter.leftColumn);
+    const right = columnExpr(filter.rightColumn);
+    if (filter.op === "=") {
+      return `${left} = ${right}`;
+    }
+    if (filter.op === "!=") {
+      return `${left} != ${right}`;
+    }
+    if (filter.op === "like") {
+      return `${left} LIKE ${right}`;
+    }
+    return `LOWER(${left}) LIKE LOWER(${right})`;
   }
 
   if (filter.kind === "backlink") {
@@ -1916,11 +1942,11 @@ const compileNestedFilterExprSQL = (filter: FilterExprIR, params: ScalarValue[])
   }
 
   if (filter.kind === "not") {
-    return `(NOT ${compileNestedFilterExprSQL(filter.expr, params)})`;
+    return `(NOT ${compileNestedFilterExprSQL(filter.expr, params, linkPropertyAlias)})`;
   }
 
-  const left = compileNestedFilterExprSQL(filter.left, params);
-  const right = compileNestedFilterExprSQL(filter.right, params);
+  const left = compileNestedFilterExprSQL(filter.left, params, linkPropertyAlias);
+  const right = compileNestedFilterExprSQL(filter.right, params, linkPropertyAlias);
   return filter.kind === "and" ? `(${left} AND ${right})` : `(${left} OR ${right})`;
 };
 

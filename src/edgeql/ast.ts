@@ -23,6 +23,10 @@ export type FilterValue =
       name: string;
     }
   | {
+      kind: "field_ref";
+      field: string;
+    }
+  | {
       kind: "set_literal";
       values: ScalarValue[];
     };

@@ -333,13 +333,18 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     return resolved;
   };
 
-  const resolveFilterValue = (value: ScalarValue | { kind: "binding_ref"; name: string } | { kind: "set_literal"; values: ScalarValue[] }): ScalarValue | ScalarValue[] => {
+  const resolveFilterValue = (
+    value: ScalarValue | { kind: "binding_ref"; name: string } | { kind: "set_literal"; values: ScalarValue[] } | { kind: "field_ref"; field: string },
+  ): ScalarValue | ScalarValue[] | { kind: "field_ref"; field: string } => {
     if (typeof value === "object" && value !== null && "kind" in value) {
       if (value.kind === "binding_ref") {
         return resolveWithBindingScalar(value.name);
       }
       if (value.kind === "set_literal") {
         return value.values;
+      }
+      if (value.kind === "field_ref") {
+        return value;
       }
     }
 
@@ -421,7 +426,33 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       };
     }
 
-    const value = resolveFilterValue(filter.value) as ScalarValue;
+    const resolvedFilterValue = resolveFilterValue(filter.value);
+
+    if (typeof resolvedFilterValue === "object" && resolvedFilterValue !== null && "kind" in resolvedFilterValue && resolvedFilterValue.kind === "field_ref") {
+      const filterTarget = filter.target;
+      const left = filterTarget.kind === "field"
+        ? filterTarget.field
+        : fail("Backlink filters do not support field-to-field comparisons");
+      const right = resolvedFilterValue.field;
+
+      const leftKnown = knownFields.has(left) || left.startsWith("@") || left === "__type__.name";
+      const rightKnown = knownFields.has(right) || right.startsWith("@") || right === "__type__.name";
+      if (!leftKnown) {
+        fail(`Unknown field '${left}' on '${typeLabel}'`);
+      }
+      if (!rightKnown) {
+        fail(`Unknown field '${right}' on '${typeLabel}'`);
+      }
+
+      return {
+        kind: "field_compare",
+        leftColumn: left,
+        rightColumn: right,
+        op: filter.op,
+      };
+    }
+
+    const value = resolvedFilterValue as ScalarValue;
     if (filter.target.kind === "backlink") {
       if (!options.allowBacklink) {
         fail("Backlink filters are currently supported only at top-level select scope");

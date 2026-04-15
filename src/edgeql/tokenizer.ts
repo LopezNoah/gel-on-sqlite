@@ -127,6 +127,16 @@ export const tokenize = (input: string): Token[] => {
       continue;
     }
 
+    if (c === "#") {
+      i += 1;
+      column += 1;
+      while (i < input.length && input[i] !== "\n") {
+        i += 1;
+        column += 1;
+      }
+      continue;
+    }
+
     const tokenLine = line;
     const tokenColumn = column;
 

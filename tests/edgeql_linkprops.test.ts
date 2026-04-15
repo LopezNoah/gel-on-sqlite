@@ -181,4 +181,58 @@ describe("LinkProps", () => {
         )
   })
 
+  it ("Should expect users and only cards with same count as cost", () => {
+    h.assertQueryResult(`  
+        #  get users and only cards that have the same count and
+        #  cost in the decks 
+        SELECT User {
+            name,
+            deck: {
+                name,
+                element,
+                cost,
+                @count
+            } FILTER .cost = @count
+                ORDER BY @count DESC THEN .name ASC
+        } ORDER BY .name;`, 
+            [
+            {
+                'name': 'Alice',
+                'deck': [
+                    {
+                        'cost': 3,
+                        'name': 'Giant turtle',
+                        '@count': 3,
+                        'element': 'Water'
+                    },
+                ],
+            },
+            {
+                'name': 'Bob',
+                'deck': [
+                    {
+                        'cost': 3,
+                        'name': 'Giant turtle',
+                        '@count': 3,
+                        'element': 'Water'
+                    },
+                    {
+                        'cost': 3,
+                        'name': 'Golem',
+                        '@count': 3,
+                        'element': 'Earth'
+                    },
+                ],
+            },
+            {
+                'name': 'Carol',
+                'deck': [],
+            },
+            {
+                'name': 'Dave',
+                'deck': [],
+            }
+        ]);
+  })
+
 })

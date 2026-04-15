@@ -174,6 +174,12 @@ export type FilterExprIR =
       values: ScalarValue[];
     }
   | {
+      kind: "field_compare";
+      leftColumn: string;
+      rightColumn: string;
+      op: "=" | "!=" | "like" | "ilike";
+    }
+  | {
       kind: "backlink";
       sources: BacklinkSourceIR[];
       op: "=" | "!=";

@@ -186,6 +186,7 @@ type TokenKind =
   | "lt"
   | "gt"
   | "minus"
+  | "plus"
   | "star"
   | "pipe"
   | "eof";
@@ -346,6 +347,15 @@ class Parser {
   private parseAlias(moduleName: string): AliasDeclaration | undefined {
     this.expectWord("alias", "Expected 'alias' declaration");
     const name = this.expect("word", "Expected alias name").text;
+
+    if (this.match("lbrace")) {
+      while (!this.match("rbrace")) {
+        this.skipStatementInBlock();
+      }
+      this.expect("semi", "Expected ';' after alias declaration");
+      return undefined;
+    }
+
     this.expect("assign", "Expected ':=' in alias declaration");
     if (!this.peekIs("lbrace")) {
       this.skipStatementInBlock();
@@ -2832,6 +2842,12 @@ const tokenize = (source: string): Token[] => {
 
     if (ch === "-") {
       tokens.push({ kind: "minus", text: "-", index: i });
+      i += 1;
+      continue;
+    }
+
+    if (ch === "+") {
+      tokens.push({ kind: "plus", text: "+", index: i });
       i += 1;
       continue;
     }

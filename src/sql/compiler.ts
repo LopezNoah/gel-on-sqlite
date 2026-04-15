@@ -200,7 +200,7 @@ const compileLinkArrayExpr = (
   }
 
   if (element.filter) {
-    whereClauses.push(compileFilterExprSQL(element.filter, targetAlias, params));
+    whereClauses.push(compileFilterExprSQL(element.filter, targetAlias, params, junctionAlias));
   }
 
   let inner = `SELECT ${rowExpr} AS ${quoteIdent("item")} FROM ${fromClause}`;
@@ -437,14 +437,32 @@ const compileBacklinkFilterPredicate = (
   return filter.op === "=" ? `(${clauses.join(" OR ")})` : `NOT (${clauses.join(" OR ")})`;
 };
 
-const compileFilterExprSQL = (filter: FilterExprIR, sourceAlias: string, params: ScalarValue[]): string => {
+const filterColumnSql = (column: string, sourceAlias: string, linkPropertyAlias?: string): string => {
+  if (column.startsWith("@")) {
+    const alias = linkPropertyAlias ?? sourceAlias;
+    return `${alias}.${quoteIdent(column.slice(1))}`;
+  }
+
+  if (column === "__type__.name") {
+    return `${sourceAlias}.${quoteIdent("__source_type")}`;
+  }
+
+  return `${sourceAlias}.${quoteIdent(column)}`;
+};
+
+const compileFilterExprSQL = (
+  filter: FilterExprIR,
+  sourceAlias: string,
+  params: ScalarValue[],
+  linkPropertyAlias?: string,
+): string => {
   if (filter.kind === "field") {
     params.push(encodeParam(filter.value));
-    return compileFilterPredicate(`${sourceAlias}.${quoteIdent(filter.column)}`, filter.op);
+    return compileFilterPredicate(filterColumnSql(filter.column, sourceAlias, linkPropertyAlias), filter.op);
   }
 
   if (filter.kind === "field_in") {
-    const column = `${sourceAlias}.${quoteIdent(filter.column)}`;
+    const column = filterColumnSql(filter.column, sourceAlias, linkPropertyAlias);
     const placeholders = filter.values.map(() => "?").join(", ");
     const encodedValues = filter.values.map((v) => encodeParam(v));
     params.push(...encodedValues);
@@ -452,16 +470,31 @@ const compileFilterExprSQL = (filter: FilterExprIR, sourceAlias: string, params:
     return `${column} ${op} (${placeholders})`;
   }
 
+  if (filter.kind === "field_compare") {
+    const left = filterColumnSql(filter.leftColumn, sourceAlias, linkPropertyAlias);
+    const right = filterColumnSql(filter.rightColumn, sourceAlias, linkPropertyAlias);
+    if (filter.op === "=") {
+      return `${left} = ${right}`;
+    }
+    if (filter.op === "!=") {
+      return `${left} != ${right}`;
+    }
+    if (filter.op === "like") {
+      return `${left} LIKE ${right}`;
+    }
+    return `LOWER(${left}) LIKE LOWER(${right})`;
+  }
+
   if (filter.kind === "backlink") {
     return compileBacklinkFilterPredicate(sourceAlias, filter, params);
   }
 
   if (filter.kind === "not") {
-    return `(NOT ${compileFilterExprSQL(filter.expr, sourceAlias, params)})`;
+    return `(NOT ${compileFilterExprSQL(filter.expr, sourceAlias, params, linkPropertyAlias)})`;
   }
 
-  const left = compileFilterExprSQL(filter.left, sourceAlias, params);
-  const right = compileFilterExprSQL(filter.right, sourceAlias, params);
+  const left = compileFilterExprSQL(filter.left, sourceAlias, params, linkPropertyAlias);
+  const right = compileFilterExprSQL(filter.right, sourceAlias, params, linkPropertyAlias);
   return filter.kind === "and" ? `(${left} AND ${right})` : `(${left} OR ${right})`;
 };
 
@@ -476,6 +509,10 @@ const collectFieldFilterColumns = (filter: FilterExprIR | undefined): string[] =
 
   if (filter.kind === "field_in") {
     return [filter.column];
+  }
+
+  if (filter.kind === "field_compare") {
+    return [filter.leftColumn, filter.rightColumn];
   }
 
   if (filter.kind === "backlink") {
