@@ -8,20 +8,21 @@ describe("LinkProps", () => {
     h = await QueryHarness.create({
       schema: "cards",
       setup: "cards_setup",
-      dbFile: "./tests/.artifacts/expr.sqlite",
+      dbFile: "./tests/.artifacts/expr_alias.sqlite",
       resetDbFile: true
     });
   });
 
-  it ("Should expect AirCards", () => {
+  it ("Aliases basic 01", () => {
     h.assertQueryResult(`
-        SELECT AirCard {
-            name,
-            owners: {
-                name
-            } ORDER BY .name
-        } ORDER BY AirCard.name;`,
-        [
+                SELECT AirCard {
+                    name,
+                    owners: {
+                        name
+                    } ORDER BY .name
+                } ORDER BY AirCard.name;
+            `,
+            [
                 {
                     'name': 'Djinn',
                     'owners': [{'name': 'Carol'}, {'name': 'Dave'}]
@@ -49,34 +50,17 @@ describe("LinkProps", () => {
 
   it("Aircard filtering", () => {
     h.assertQueryResult(`
-                SELECT AirCard {name}
-                FILTER AirCard NOT IN (SELECT Card FILTER Card.name LIKE 'D%')
-                ORDER BY AirCard.name;
-            `,
-            [
-                {'name': 'Giant eagle'},
-                {'name': 'Sprite'},
-            ])
+        SELECT AirCard {name}
+        FILTER AirCard NOT IN (SELECT Card FILTER Card.name LIKE 'D%')
+        ORDER BY AirCard.name;
+    `,
+    [
+        {'name': 'Giant eagle'},
+        {'name': 'Sprite'},
+    ])
   })
 
-  it("Computable link", () => {
-    h.assertQueryResult(`
-                SELECT Card {
-                    owners: {
-                        name
-                    } ORDER BY .name
-                }
-                FILTER .name = 'Djinn';
-            `,
-            [{
-                'owners': [
-                    {'name': 'Carol'},
-                    {'name': 'Dave'}
-                ]
-            }])
-  })  
-
-  it("computable link deck_cost", () => {
+  it("Computable alias link", () => {
     h.assertQueryResult(`
                 SELECT User {
                     name,
@@ -102,5 +86,32 @@ describe("LinkProps", () => {
                     'deck_cost': 20
                 }
             ])
+  })  
+
+  it("computable aliased link AliasedFriends", () => {
+    h.assertQueryResult(`
+            SELECT AliasedFriends {
+                my_name,
+                my_friends: {
+                    @nickname
+                } ORDER BY .name
+            }
+            FILTER .name = 'Alice';
+        `,
+        [{
+            'my_name': 'Alice',
+            'my_friends': [
+                {
+                    '@nickname': 'Swampy'
+                },
+                {
+                    '@nickname': 'Firefighter'
+                },
+                {
+                    '@nickname': 'Grumpy'
+                },
+            ]
+        }]
+    )
   })
 })

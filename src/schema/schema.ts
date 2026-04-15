@@ -144,12 +144,28 @@ const qualifiedAliasName = (alias: AliasDef): string => `${alias.module}::${alia
 const cloneAliasDef = (alias: AliasDef): AliasDef => ({
   ...alias,
   values: alias.values ? [...alias.values] : undefined,
+  projections: alias.projections
+    ? alias.projections.map((projection) => ({
+        name: projection.name,
+        sourceField: projection.sourceField,
+      }))
+    : undefined,
   filter: alias.filter
-    ? {
-        field: alias.filter.field,
-        op: alias.filter.op,
-        value: alias.filter.value,
-      }
+    ? alias.filter.kind === "field_predicate"
+      ? {
+          kind: "field_predicate",
+          field: alias.filter.field,
+          op: alias.filter.op,
+          value: alias.filter.value,
+        }
+      : {
+          kind: "backlink_membership",
+          op: alias.filter.op,
+          value: alias.filter.value,
+          link: alias.filter.link,
+          sourceType: alias.filter.sourceType,
+          field: alias.filter.field,
+        }
     : undefined,
 });
 

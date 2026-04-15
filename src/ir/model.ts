@@ -101,6 +101,7 @@ export type FunctionCallIR<TArg> = {
 export interface BacklinkSourceIR {
   sourceType: string;
   table: string;
+  sourceTables?: SchemaTypeRefIR[];
   storage: "inline" | "table";
   inlineColumn?: string;
   linkTable?: string;
@@ -134,6 +135,19 @@ export type FilterExprIR =
       column: string;
       op: "in" | "not_in";
       values: ScalarValue[];
+    }
+  | {
+      kind: "self_in_select";
+      op: "in" | "not_in";
+      sourceTables: SchemaTypeRefIR[];
+      filter?: FilterExprIR;
+    }
+  | {
+      kind: "backlink_contains";
+      op: "in" | "not_in";
+      value: ScalarValue;
+      column: string;
+      sources: BacklinkSourceIR[];
     }
   | {
       kind: "field_compare";

@@ -409,21 +409,129 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         fail("IN filter only supports field targets");
         return {} as FilterExprIR;
       }
-      if (!knownFields.has(fieldName)) {
-        fail(`Unknown field '${fieldName}' on '${typeLabel}'`);
+
+      if (filter.values.kind === "set_literal") {
+        if (!knownFields.has(fieldName)) {
+          fail(`Unknown field '${fieldName}' on '${typeLabel}'`);
+        }
+
+        const field = requireValue(fieldByName.get(fieldName), `Unknown field '${fieldName}' on '${typeLabel}'`);
+        for (const v of filter.values.values) {
+          if (!isValidScalarValue(field.type, v)) {
+            fail(`Type mismatch for '${fieldName}' in IN filter: expected ${field.type}`);
+          }
+        }
+        return {
+          kind: "field_in",
+          column: fieldName,
+          op: filter.op,
+          values: filter.values.values,
+        };
       }
 
-      const field = requireValue(fieldByName.get(fieldName), `Unknown field '${fieldName}' on '${typeLabel}'`);
-      for (const v of filter.values) {
-        if (!isValidScalarValue(field.type, v)) {
-          fail(`Type mismatch for '${fieldName}' in IN filter: expected ${field.type}`);
+      const resolveInQuery = (): { typeName: string; filter?: FilterExpr; precompiledFilter?: FilterExprIR } => {
+        const valueExpr = filter.values;
+
+        if (valueExpr.kind === "set_literal") {
+          fail("Unsupported IN filter value expression");
         }
+
+        if (valueExpr.kind === "select") {
+          return {
+            typeName: valueExpr.query.typeName,
+            filter: valueExpr.query.clauses.filter,
+          };
+        }
+
+        const nameExpr = valueExpr as Extract<typeof valueExpr, { kind: "name" }>;
+
+        const binding = withBindings.get(nameExpr.name);
+        if (binding?.kind === "subquery") {
+          return {
+            typeName: binding.query.typeName,
+            filter: binding.query.clauses.filter,
+          };
+        }
+
+        const aliasName = normalizeTypeName(nameExpr.name, options.fallbackModule);
+        const alias = schema.getAlias(aliasName);
+        if (alias?.sourceType) {
+          if (alias.filter?.kind === "backlink_membership") {
+            return {
+              typeName: alias.sourceType,
+              precompiledFilter: {
+                kind: "backlink_contains",
+                op: alias.filter.op,
+                value: alias.filter.value,
+                column: alias.filter.field,
+                sources: resolveBacklinkSources(
+                  normalizeTypeName(alias.sourceType, alias.module ?? options.fallbackModule),
+                  alias.module ?? options.fallbackModule,
+                  alias.filter.link,
+                  alias.filter.sourceType,
+                ),
+              },
+            };
+          }
+
+          return {
+            typeName: alias.sourceType,
+            filter: alias.filter
+              && alias.filter.kind === "field_predicate"
+              ? {
+                  kind: "predicate",
+                  target: { kind: "field", field: alias.filter.field },
+                  op: alias.filter.op,
+                  value: alias.filter.value,
+                }
+              : undefined,
+          };
+        }
+
+        return {
+          typeName: nameExpr.name,
+          filter: undefined,
+        };
+      };
+
+      const inQuery = resolveInQuery();
+      const inTypeQualified = normalizeTypeName(inQuery.typeName, options.fallbackModule);
+      const inType = schema.getType(inTypeQualified);
+      if (!inType) {
+        fail(`Unknown type '${inTypeQualified}' in IN filter`);
       }
+      const resolvedInType = requireValue(inType, `Unknown type '${inTypeQualified}' in IN filter`);
+      const inTypeName = qualifiedTypeName(resolvedInType);
+      const sourceTables = schema
+        .listConcreteTypesAssignableTo(inTypeName)
+        .map((candidate) => {
+          const name = qualifiedTypeName(candidate);
+          return {
+            name,
+            table: tableNameForType(name),
+          };
+        });
+
+      const subFilter = inQuery.precompiledFilter ?? (inQuery.filter
+        ? compileFilterExpr(
+            new Map(collectFields(resolvedInType, true).map((entry) => [entry.name, entry])),
+            new Set(["id", ...collectFields(resolvedInType, true).map((entry) => entry.name)]),
+            inTypeName,
+            inQuery.filter,
+            {
+              allowBacklink: false,
+              fallbackModule: resolvedInType.module ?? options.fallbackModule,
+            },
+          )
+        : undefined);
+
       return {
-        kind: "field_in",
-        column: fieldName,
+        kind: "self_in_select",
         op: filter.op,
-        values: filter.values,
+        sourceTables: sourceTables.length > 0
+          ? sourceTables
+          : [{ name: inTypeName, table: tableNameForType(inTypeName) }],
+        filter: subFilter,
       };
     }
 
@@ -624,6 +732,20 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         continue;
       }
 
+      const sourceTables = schema
+        .listConcreteTypesAssignableTo(candidateQualifiedName)
+        .map((assignable) => {
+          const name = qualifiedTypeName(assignable);
+          return {
+            name,
+            table: tableNameForType(name),
+          };
+        });
+
+      const polymorphicSourceTables = sourceTables.length > 0
+        ? sourceTables
+        : [{ name: candidateQualifiedName, table: tableNameForType(candidateQualifiedName) }];
+
       for (const link of collectLinks(candidate, true)) {
         const linkTarget = normalizeTypeName(link.targetType, candidate.module ?? "default");
         if (link.name !== linkName || linkTarget !== targetTypeQualifiedName) {
@@ -635,6 +757,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           sources.push({
             sourceType: candidateQualifiedName,
             table: tableNameForType(candidateQualifiedName),
+            sourceTables: polymorphicSourceTables,
             storage: "table",
             linkTable: `${tableNameForType(candidateQualifiedName)}__${link.name.toLowerCase()}`,
           });
@@ -644,6 +767,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         sources.push({
           sourceType: candidateQualifiedName,
           table: tableNameForType(candidateQualifiedName),
+          sourceTables: polymorphicSourceTables,
           storage: "inline",
           inlineColumn: `${link.name}_id`,
         });
@@ -670,6 +794,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     },
     options: {
       allowBacklinkFilter: boolean;
+      aliasProjections?: Map<string, string>;
     },
     ): {
       pathId: string;
@@ -893,8 +1018,9 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       }
 
       if (shapeElement.kind === "field") {
-        const computed = computedByName.get(shapeElement.name);
-        if (!knownFields.has(shapeElement.name) && computed) {
+        const resolvedFieldName = options.aliasProjections?.get(shapeElement.name) ?? shapeElement.name;
+        const computed = computedByName.get(resolvedFieldName);
+        if (!knownFields.has(resolvedFieldName) && computed) {
           if (computed.kind === "property") {
             const elementPathId = createPathId(pathId);
             if (computed.expr.kind === "field_ref") {
@@ -1040,13 +1166,13 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         }
 
         const elementPathId = createPathId(pathId);
-        ensureField(shapeElement.name);
-        selectedColumns.add(shapeElement.name);
+        ensureField(resolvedFieldName);
+        selectedColumns.add(resolvedFieldName);
         shapeElements.push({
           kind: "field",
           name: shapeElement.name,
           pathId: elementPathId,
-          column: shapeElement.name,
+          column: resolvedFieldName,
         });
         shapeNames.add(shapeElement.name);
         scopeChildren.push({
@@ -1273,7 +1399,8 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       }
 
       const linkPathId = createPathId(pathId);
-      const computedLink = computedByName.get(shapeElement.name);
+      const resolvedLinkName = options.aliasProjections?.get(shapeElement.name) ?? shapeElement.name;
+      const computedLink = computedByName.get(resolvedLinkName);
       if (computedLink?.kind === "link" && computedLink.expr.kind === "backlink") {
         hasBacklink = true;
         const sources = resolveBacklinkSources(qualifiedName, scopeModule, computedLink.expr.link, computedLink.expr.sourceType);
@@ -1303,14 +1430,14 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         continue;
       }
 
-      const relation = resolveForwardLink(typeDef, shapeElement.name);
+      const relation = resolveForwardLink(typeDef, resolvedLinkName);
       const normalizedTypeFilter = shapeElement.typeFilter ? normalizeTypeName(shapeElement.typeFilter, scopeModule) : undefined;
       const filteredTargetTables = normalizedTypeFilter
         ? relation.targetTables.filter((candidate) => isAssignableTo(candidate.name, normalizedTypeFilter))
         : relation.targetTables;
 
-      if (normalizedTypeFilter && filteredTargetTables.length === 0) {
-        fail(`Type filter '${normalizedTypeFilter}' is not compatible with link '${qualifiedName}.${shapeElement.name}'`);
+        if (normalizedTypeFilter && filteredTargetTables.length === 0) {
+        fail(`Type filter '${normalizedTypeFilter}' is not compatible with link '${qualifiedName}.${resolvedLinkName}'`);
       }
 
       const effectiveTargetType = normalizedTypeFilter ?? relation.targetType;
@@ -1323,7 +1450,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       });
 
       if (relation.storage === "inline") {
-        selectedColumns.add(requireValue(relation.inlineColumn, `Missing inline storage metadata for '${shapeElement.name}'`));
+        selectedColumns.add(requireValue(relation.inlineColumn, `Missing inline storage metadata for '${resolvedLinkName}'`));
       }
 
       shapeElements.push({
@@ -1450,6 +1577,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
 
   const resolveSelectSource = (selectStatement: SelectStatement): {
     typeDef: TypeDef;
+    aliasProjections?: Map<string, string>;
     clauses: {
       filter?: SelectStatement["filter"];
       orderBy?: SelectStatement["orderBy"];
@@ -1466,6 +1594,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       }
       return {
         typeDef: directType,
+        aliasProjections: undefined,
         clauses: {
           filter: selectStatement.filter,
           orderBy: selectStatement.orderBy,
@@ -1485,6 +1614,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         );
         return {
           typeDef: sourceType,
+          aliasProjections: undefined,
           clauses: {
             filter: mergeFilters(withQuery.clauses.filter, selectStatement.filter),
             orderBy: selectStatement.orderBy ?? withQuery.clauses.orderBy,
@@ -1497,6 +1627,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         const resolvedValue = resolveWithBindingScalar(selectStatement.typeName);
         return {
           typeDef: { name: "__scalar_result__", module: "std", fields: [{ name: "__value__", type: "str" as const }] },
+          aliasProjections: undefined,
           clauses: { filter: undefined, orderBy: undefined, limit: undefined, offset: undefined },
         } as any;
       }
@@ -1508,7 +1639,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         schema.getType(normalizeTypeName(schemaAlias.sourceType, schemaAlias.module ?? activeModule)),
         `Unknown type '${normalizeTypeName(schemaAlias.sourceType, schemaAlias.module ?? activeModule)}' in alias '${resolvedTypeName}'`,
       );
-      const aliasFilter = schemaAlias.filter
+      const aliasFilter = schemaAlias.filter?.kind === "field_predicate"
         ? {
             kind: "predicate" as const,
             target: { kind: "field" as const, field: schemaAlias.filter.field },
@@ -1518,6 +1649,9 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         : undefined;
       return {
         typeDef: sourceType,
+        aliasProjections: schemaAlias.projections
+          ? new Map(schemaAlias.projections.map((projection) => [projection.name, projection.sourceField] as const))
+          : undefined,
         clauses: {
           filter: mergeFilters(aliasFilter, selectStatement.filter),
           orderBy: selectStatement.orderBy,
@@ -2127,7 +2261,10 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       orderBy: resolvedRootType.clauses.orderBy,
       limit: resolvedRootType.clauses.limit,
       offset: resolvedRootType.clauses.offset,
-    }, { allowBacklinkFilter: true });
+    }, {
+      allowBacklinkFilter: true,
+      aliasProjections: resolvedRootType.aliasProjections,
+    });
 
     return {
       kind: "select",

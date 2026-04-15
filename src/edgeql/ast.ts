@@ -42,7 +42,23 @@ export type FilterExpr =
       kind: "in_predicate";
       target: FilterTarget;
       op: "in" | "not_in";
-      values: ScalarValue[];
+      values:
+        | {
+            kind: "set_literal";
+            values: ScalarValue[];
+          }
+        | {
+            kind: "select";
+            query: {
+              typeName: string;
+              shape: ShapeElement[];
+              clauses: ClauseChain;
+            };
+          }
+        | {
+            kind: "name";
+            name: string;
+          };
     }
   | {
       kind: "and";

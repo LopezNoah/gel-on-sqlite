@@ -2040,6 +2040,14 @@ const compileNestedFilterExprSQL = (filter: FilterExprIR, params: ScalarValue[],
     throw new AppError("E_SQL", "Backlink filters are not supported for nested runtime link resolution");
   }
 
+  if (filter.kind === "self_in_select") {
+    throw new AppError("E_SQL", "IN subquery filters are not supported for nested runtime link resolution");
+  }
+
+  if (filter.kind === "backlink_contains") {
+    throw new AppError("E_SQL", "Backlink membership filters are not supported for nested runtime link resolution");
+  }
+
   if (filter.kind === "not") {
     return `(NOT ${compileNestedFilterExprSQL(filter.expr, params, linkPropertyAlias)})`;
   }

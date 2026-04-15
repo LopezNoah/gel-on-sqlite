@@ -149,11 +149,25 @@ export interface AliasDeclaration {
   name: string;
   values?: ScalarValue[];
   sourceType?: string;
-  filter?: {
-    field: string;
-    op: "=" | "!=" | "like" | "ilike";
-    value: ScalarValue;
-  };
+  projections?: Array<{
+    name: string;
+    sourceField: string;
+  }>;
+  filter?:
+    | {
+        kind: "field_predicate";
+        field: string;
+        op: "=" | "!=" | "like" | "ilike";
+        value: ScalarValue;
+      }
+    | {
+        kind: "backlink_membership";
+        op: "in" | "not_in";
+        value: ScalarValue;
+        link: string;
+        sourceType?: string;
+        field: string;
+      };
 }
 
 export interface DeclarativeSchema {
@@ -395,9 +409,56 @@ class Parser {
       const sourceType = this.expect("word", "Expected source type name in alias declaration").text;
       let filter: AliasDeclaration["filter"];
       let unsupportedTail = false;
+      let projections: AliasDeclaration["projections"];
 
       if (this.peekIs("lbrace")) {
-        unsupportedTail = true;
+        this.consume();
+        const parsedProjections: Array<{ name: string; sourceField: string }> = [];
+        while (!this.peekIs("rbrace") && !this.peekIs("eof")) {
+          if (!(this.peekIs("word") && this.peekAt(1).kind === "assign")) {
+            unsupportedTail = true;
+            while (!this.peekIs("rbrace") && !this.peekIs("eof")) {
+              this.consume();
+            }
+            break;
+          }
+
+          const aliasField = this.expect("word", "Expected alias field name in alias projection").text;
+          this.expect("assign", "Expected ':=' in alias projection");
+
+          if (this.peekIs("word") && this.peekAt(1).kind === "dot") {
+            this.consume();
+            this.consume();
+          } else if (this.peekIs("dot")) {
+            this.consume();
+          }
+
+          if (!this.peekIs("word")) {
+            unsupportedTail = true;
+            while (!this.peekIs("rbrace") && !this.peekIs("eof")) {
+              this.consume();
+            }
+            break;
+          }
+
+          const sourceField = this.consume().text;
+          parsedProjections.push({ name: aliasField, sourceField });
+
+          if (this.peekIs("comma")) {
+            this.consume();
+          } else if (!this.peekIs("rbrace")) {
+            unsupportedTail = true;
+            while (!this.peekIs("rbrace") && !this.peekIs("eof")) {
+              this.consume();
+            }
+            break;
+          }
+        }
+
+        this.expect("rbrace", "Expected '}' to close alias projection");
+        if (parsedProjections.length > 0) {
+          projections = parsedProjections;
+        }
       }
 
       if (!unsupportedTail && this.matchWord("filter")) {
@@ -421,7 +482,41 @@ class Parser {
           }
 
           const value = this.readScalarValue("Expected scalar literal value in alias filter");
-          filter = { field, op, value };
+          filter = { kind: "field_predicate", field, op, value };
+        } else if (this.peekIsScalarValue()) {
+          const value = this.readScalarValue("Expected scalar literal value in alias filter");
+          let op: "in" | "not_in";
+          if (this.matchWord("not")) {
+            this.expectWord("in", "Expected 'IN' after 'NOT' in alias filter");
+            op = "not_in";
+          } else {
+            this.expectWord("in", "Expected 'IN' in alias filter");
+            op = "in";
+          }
+
+          if (this.peekIs("word") && this.peekAt(1).kind === "dot") {
+            this.consume();
+            this.consume();
+          }
+
+          this.expect("lt", "Expected '.<' backlink expression in alias filter");
+          const link = this.expect("word", "Expected backlink link name in alias filter").text;
+          let sourceType: string | undefined;
+          if (this.match("lbracket")) {
+            this.expectWord("is", "Expected 'IS' in backlink type filter");
+            sourceType = this.expect("word", "Expected source type in backlink filter").text;
+            this.expect("rbracket", "Expected ']' to close backlink type filter");
+          }
+          this.expect("dot", "Expected '.' after backlink in alias filter");
+          const sourceField = this.expect("word", "Expected source field in backlink filter").text;
+          filter = {
+            kind: "backlink_membership",
+            op,
+            value,
+            link,
+            sourceType,
+            field: sourceField,
+          };
         } else if (this.peekIs("word")) {
           this.expect("word", "Expected type name in alias filter");
           this.expect("dot", "Expected '.' in alias filter");
@@ -444,7 +539,7 @@ class Parser {
           }
 
           const value = this.readScalarValue("Expected scalar literal value in alias filter");
-          filter = { field, op, value };
+          filter = { kind: "field_predicate", field, op, value };
         } else {
           unsupportedTail = true;
         }
@@ -479,6 +574,7 @@ class Parser {
         module: moduleName,
         name,
         sourceType,
+        projections,
         filter,
       };
     }

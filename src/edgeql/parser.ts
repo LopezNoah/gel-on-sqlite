@@ -34,6 +34,21 @@ class Parser {
     this.tokens = tokenize(input);
   }
 
+  private parseDelimited<T>(
+    endKind: Token["kind"],
+    parseItem: () => T,
+    commaMessage: string,
+  ): T[] {
+    const items: T[] = [];
+    while (this.peek().kind !== endKind) {
+      items.push(parseItem());
+      if (this.peek().kind !== endKind) {
+        this.expect("comma", commaMessage);
+      }
+    }
+    return items;
+  }
+
   parseStatement(): Statement {
     const withClause = this.peek().kind === "kw_with"
       ? this.parseWithClause()
@@ -1512,7 +1527,7 @@ class Parser {
       op = "ilike";
     } else if (token.kind === "kw_in") {
       this.consume();
-      const values = this.parseFilterValueSet();
+      const values = this.parseInPredicateValues();
       return {
         kind: "in_predicate",
         target,
@@ -1522,7 +1537,7 @@ class Parser {
     } else if (token.kind === "kw_not") {
       this.consume();
       this.expect("kw_in", "Expected 'IN' after 'NOT' in filter");
-      const values = this.parseFilterValueSet();
+      const values = this.parseInPredicateValues();
       return {
         kind: "in_predicate",
         target,
@@ -1541,7 +1556,10 @@ class Parser {
     };
   }
 
-  private parseFilterValueSet(): ScalarValue[] {
+  private parseInPredicateValues():
+    | { kind: "set_literal"; values: ScalarValue[] }
+    | { kind: "select"; query: { typeName: string; shape: ShapeElement[]; clauses: ClauseChain } }
+    | { kind: "name"; name: string } {
     const token = this.peek();
     // Handle DISTINCT keyword before set literal
     if (token.kind === "kw_distinct") {
@@ -1564,9 +1582,31 @@ class Parser {
         }
       }
       this.expect("rbrace", "Expected '}' to close IN filter value set");
-      return values;
+      return {
+        kind: "set_literal",
+        values,
+      };
     }
-    throw new AppError("E_SYNTAX", "Expected '{' for IN filter value set", token.line, token.column);
+
+    if (this.peek().kind === "lparen" && this.peekNext().kind === "kw_select") {
+      this.consume();
+      this.expect("kw_select", "Expected 'SELECT' in IN predicate subquery");
+      const query = this.parseInlineSelectExpr();
+      this.expect("rparen", "Expected ')' after IN predicate subquery");
+      return {
+        kind: "select",
+        query,
+      };
+    }
+
+    if (this.peek().kind === "identifier") {
+      return {
+        kind: "name",
+        name: this.consume().lexeme,
+      };
+    }
+
+    throw new AppError("E_SYNTAX", "Expected set literal, identifier, or SELECT subquery in IN filter", token.line, token.column);
   }
 
   private parseFilterTarget(): { kind: "field"; field: string } | { kind: "backlink"; link: string; sourceType?: string } {

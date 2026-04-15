@@ -421,13 +421,20 @@ const compileBacklinkFilterPredicate = (
   }
 
   const clauses = filter.sources.map((source) => {
+    const sourceTables = source.sourceTables && source.sourceTables.length > 0
+      ? source.sourceTables
+      : [{ name: source.sourceType, table: source.table }];
+    const sourceFrom = sourceTables.length === 1
+      ? `${quoteIdent(sourceTables[0].table)} s`
+      : `(${sourceTables.map((entry) => `SELECT ${quoteLiteral(entry.name)} AS ${quoteIdent("__source_type")}, * FROM ${quoteIdent(entry.table)}`).join(" UNION ALL ")}) s`;
+
     if (source.storage === "inline") {
       params.push(encodeParam(filter.value));
-      return `EXISTS (SELECT 1 FROM ${quoteIdent(source.table)} s WHERE s.${quoteIdent(requiredInlineColumn(source.inlineColumn))} = ${rootAlias}.${quoteIdent("id")} AND s.${quoteIdent("id")} = ?)`;
+      return `EXISTS (SELECT 1 FROM ${sourceFrom} WHERE s.${quoteIdent(requiredInlineColumn(source.inlineColumn))} = ${rootAlias}.${quoteIdent("id")} AND s.${quoteIdent("id")} = ?)`;
     }
 
     params.push(encodeParam(filter.value));
-    return `EXISTS (SELECT 1 FROM ${quoteIdent(source.table)} s JOIN ${quoteIdent(requiredLinkTable(source.linkTable))} l ON l.${quoteIdent("source")} = s.${quoteIdent("id")} WHERE l.${quoteIdent("target")} = ${rootAlias}.${quoteIdent("id")} AND s.${quoteIdent("id")} = ?)`;
+    return `EXISTS (SELECT 1 FROM ${sourceFrom} JOIN ${quoteIdent(requiredLinkTable(source.linkTable))} l ON l.${quoteIdent("source")} = s.${quoteIdent("id")} WHERE l.${quoteIdent("target")} = ${rootAlias}.${quoteIdent("id")} AND s.${quoteIdent("id")} = ?)`;
   });
 
   if (clauses.length === 0) {
@@ -468,6 +475,45 @@ const compileFilterExprSQL = (
     params.push(...encodedValues);
     const op = filter.op === "in" ? "IN" : "NOT IN";
     return `${column} ${op} (${placeholders})`;
+  }
+
+  if (filter.kind === "self_in_select") {
+    const sourceAliasInner = "s_in";
+    const filterColumns = collectFieldFilterColumns(filter.filter).filter((column) => column !== "id");
+    const projectedColumns = [quoteIdent("id"), ...filterColumns.map((column) => quoteIdent(column))];
+    const sourceSelects = filter.sourceTables.map(
+      (source) => `SELECT ${quoteLiteral(source.name)} AS ${quoteIdent("__source_type")}, ${projectedColumns.join(", ")} FROM ${quoteIdent(source.table)}`,
+    );
+    const subqueryFrom = `(${sourceSelects.join(" UNION ALL ")}) ${sourceAliasInner}`;
+    const where = filter.filter
+      ? ` WHERE ${compileFilterExprSQL(filter.filter, sourceAliasInner, params)}`
+      : "";
+    const op = filter.op === "in" ? "IN" : "NOT IN";
+    return `${sourceAlias}.${quoteIdent("id")} ${op} (SELECT ${sourceAliasInner}.${quoteIdent("id")} FROM ${subqueryFrom}${where})`;
+  }
+
+  if (filter.kind === "backlink_contains") {
+    const clauses = filter.sources.map((source) => {
+      const sourceTables = source.sourceTables && source.sourceTables.length > 0
+        ? source.sourceTables
+        : [{ name: source.sourceType, table: source.table }];
+      const sourceFrom = sourceTables.length === 1
+        ? `${quoteIdent(sourceTables[0].table)} s`
+        : `(${sourceTables.map((entry) => `SELECT ${quoteLiteral(entry.name)} AS ${quoteIdent("__source_type")}, * FROM ${quoteIdent(entry.table)}`).join(" UNION ALL ")}) s`;
+
+      params.push(encodeParam(filter.value));
+      if (source.storage === "inline") {
+        return `EXISTS (SELECT 1 FROM ${sourceFrom} WHERE s.${quoteIdent(requiredInlineColumn(source.inlineColumn))} = ${sourceAlias}.${quoteIdent("id")} AND s.${quoteIdent(filter.column)} = ?)`;
+      }
+
+      return `EXISTS (SELECT 1 FROM ${sourceFrom} JOIN ${quoteIdent(requiredLinkTable(source.linkTable))} l ON l.${quoteIdent("source")} = s.${quoteIdent("id")} WHERE l.${quoteIdent("target")} = ${sourceAlias}.${quoteIdent("id")} AND s.${quoteIdent(filter.column)} = ?)`;
+    });
+
+    if (clauses.length === 0) {
+      return filter.op === "in" ? "0" : "1";
+    }
+
+    return filter.op === "in" ? `(${clauses.join(" OR ")})` : `NOT (${clauses.join(" OR ")})`;
   }
 
   if (filter.kind === "field_compare") {
@@ -516,6 +562,14 @@ const collectFieldFilterColumns = (filter: FilterExprIR | undefined): string[] =
   }
 
   if (filter.kind === "backlink") {
+    return [];
+  }
+
+  if (filter.kind === "self_in_select") {
+    return [];
+  }
+
+  if (filter.kind === "backlink_contains") {
     return [];
   }
 

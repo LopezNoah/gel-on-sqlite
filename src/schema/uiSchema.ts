@@ -48,12 +48,28 @@ export const aliasDefsFromDeclarative = (schema: DeclarativeSchema): AliasDef[] 
     name: alias.name,
     values: alias.values ? [...alias.values] : undefined,
     sourceType: alias.sourceType,
+    projections: alias.projections
+      ? alias.projections.map((projection) => ({
+          name: projection.name,
+          sourceField: projection.sourceField,
+        }))
+      : undefined,
     filter: alias.filter
-      ? {
-          field: alias.filter.field,
-          op: alias.filter.op,
-          value: alias.filter.value,
-        }
+      ? alias.filter.kind === "field_predicate"
+        ? {
+            kind: "field_predicate",
+            field: alias.filter.field,
+            op: alias.filter.op,
+            value: alias.filter.value,
+          }
+        : {
+            kind: "backlink_membership",
+            op: alias.filter.op,
+            value: alias.filter.value,
+            link: alias.filter.link,
+            sourceType: alias.filter.sourceType,
+            field: alias.filter.field,
+          }
       : undefined,
   }));
 };

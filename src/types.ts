@@ -97,11 +97,25 @@ export interface AliasDef {
   name: string;
   values?: ScalarValue[];
   sourceType?: string;
-  filter?: {
-    field: string;
-    op: "=" | "!=" | "like" | "ilike";
-    value: ScalarValue;
-  };
+  projections?: Array<{
+    name: string;
+    sourceField: string;
+  }>;
+  filter?:
+    | {
+        kind: "field_predicate";
+        field: string;
+        op: "=" | "!=" | "like" | "ilike";
+        value: ScalarValue;
+      }
+    | {
+        kind: "backlink_membership";
+        op: "in" | "not_in";
+        value: ScalarValue;
+        link: string;
+        sourceType?: string;
+        field: string;
+      };
 }
 
 export type ComputedValuePart =
