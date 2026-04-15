@@ -201,7 +201,14 @@ const compileLinkArrayExpr = (
   }
 
   if (element.orderBy) {
-    inner += ` ORDER BY ${targetAlias}.${quoteIdent(element.orderBy.column)} ${element.orderBy.direction.toUpperCase()}`;
+    const linkPropertyColumns = new Set(element.relation.propertyColumns ?? []);
+    const orderAlias = element.relation.storage === "table" && linkPropertyColumns.has(element.orderBy.column)
+      ? requiredAlias(junctionAlias)
+      : targetAlias;
+    inner += ` ORDER BY ${orderAlias}.${quoteIdent(element.orderBy.column)} ${element.orderBy.direction.toUpperCase()}`;
+    if (element.orderBy.column !== "name" && element.columns.includes("name")) {
+      inner += `, ${targetAlias}.${quoteIdent("name")} ASC`;
+    }
   }
 
   if (element.limit !== undefined) {
@@ -324,6 +331,14 @@ const requiredInlineColumn = (value: string | undefined): string => {
 const requiredLinkTable = (value: string | undefined): string => {
   if (!value) {
     throw new AppError("E_SQL", "Missing link table metadata");
+  }
+
+  return value;
+};
+
+const requiredAlias = (value: string | undefined): string => {
+  if (!value) {
+    throw new AppError("E_SQL", "Missing SQL alias metadata");
   }
 
   return value;
@@ -550,6 +565,12 @@ const compileStdlibFunctionCallSQL = (
       return `strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`;
     case "std::to_str":
       return `CAST(${argSql[0]} AS TEXT)`;
+    case "std::len":
+      return `length(COALESCE(CAST(${argSql[0]} AS TEXT), ''))`;
+    case "std::str_lower":
+      return `lower(COALESCE(CAST(${argSql[0]} AS TEXT), ''))`;
+    case "std::str_upper":
+      return `upper(COALESCE(CAST(${argSql[0]} AS TEXT), ''))`;
     case "std::datetime_get": {
       const firstExpr = `LOWER(CAST(${argSql[0]} AS TEXT))`;
       const secondExpr = `LOWER(CAST(${argSql[1]} AS TEXT))`;

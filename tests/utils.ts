@@ -149,7 +149,8 @@ export class QueryHarness {
       const rawSource = stripHashComments(fs.readFileSync(p, "utf-8"));
 
       const setModuleMatch = rawSource.match(/^\s*SET\s+MODULE\s+([A-Za-z_][\w:]*);/im);
-      const currentModule = setModuleMatch ? setModuleMatch[1] : null;
+      const fallbackModule = options.schema ? inferredModuleNameFromSchema(options.schema) : "default";
+      const currentModule = setModuleMatch ? setModuleMatch[1] : fallbackModule;
 
       const setupSource = rawSource.replace(/^\s*SET\s+MODULE\s+[^;]+;\s*$/gim, "");
 
@@ -158,7 +159,9 @@ export class QueryHarness {
         .filter(s => s.trim().length > 0);
 
       for (const q of setupQueries) {
-        const qualified = currentModule ? qualifyUnqualifiedTypes(q, currentModule) : q;
+        const qualified = /^\s*WITH\b/i.test(q)
+          ? q
+          : qualifyUnqualifiedTypes(q, currentModule);
         harness.script(qualified + ";");
       }
     }

@@ -281,6 +281,7 @@ export interface LinkPropertyDef {
 export interface LinkDef {
   name: string;
   targetType: string;
+  overloaded?: boolean;
   multi?: boolean;
   hasDefault?: boolean;
   defaultTargetValues?: string[];

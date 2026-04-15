@@ -752,6 +752,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
                 table: tableNameForType(targetType),
               },
             ],
+        propertyColumns: (link.properties ?? []).map((property) => property.name),
         multi: Boolean(link.multi),
         storage: usesLinkTable ? "table" : "inline",
         inlineColumn: usesLinkTable ? undefined : `${link.name}_id`,
@@ -1296,8 +1297,17 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         ? sourceTables.filter((source) => source.name === resolvedFilter.value)
         : sourceTables;
 
-    if (clauses.orderBy) {
-      ensureField(clauses.orderBy.field);
+    const resolvedOrderBy = clauses.orderBy
+      ? {
+          column: clauses.orderBy.field.startsWith("@")
+            ? clauses.orderBy.field.slice(1)
+            : clauses.orderBy.field,
+          direction: clauses.orderBy.direction,
+        }
+      : undefined;
+
+    if (resolvedOrderBy && !clauses.orderBy!.field.startsWith("@")) {
+      ensureField(resolvedOrderBy.column);
     }
 
     if (clauses.limit !== undefined && clauses.limit < 0) {
@@ -1326,12 +1336,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       },
       appliedOverlays: (context.overlays ?? []).filter((overlay) => overlay.table === table),
       filter: resolvedFilter,
-      orderBy: clauses.orderBy
-        ? {
-            column: clauses.orderBy.field,
-            direction: clauses.orderBy.direction,
-          }
-        : undefined,
+      orderBy: resolvedOrderBy,
       limit: clauses.limit,
       offset: clauses.offset,
       inference: inferSelect(

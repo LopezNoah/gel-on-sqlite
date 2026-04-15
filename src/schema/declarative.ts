@@ -179,6 +179,7 @@ type TokenKind =
   | "equals"
   | "bang_eq"
   | "qeq"
+  | "coalesce"
   | "assign"
   | "arrow"
   | "concat"
@@ -996,6 +997,11 @@ class Parser {
         continue;
       }
 
+      if (this.peekWordAt(0) === "constraint") {
+        this.skipStatementInBlock();
+        continue;
+      }
+
       members.push(this.parseMember(moduleName));
     }
 
@@ -1150,6 +1156,11 @@ class Parser {
         continue;
       }
 
+      if (this.matchWord("optional")) {
+        required = false;
+        continue;
+      }
+
       break;
     }
 
@@ -1284,14 +1295,23 @@ class Parser {
             const typeName = this.expect("word", "Expected link property scalar type").text;
             const linkCollection = this.consumeTypeTail(typeName);
             const { scalar: linkScalar2 } = this.readScalarType(moduleName, typeName);
+            let linkPropertyAnnotations: AnnotationDef[] = [];
+            let linkPropertyHasDefault = false;
+            if (this.match("lbrace")) {
+              const parsed = this.parseLinkPropertyBody(moduleName);
+              linkPropertyAnnotations = parsed.annotations;
+              linkPropertyHasDefault = parsed.hasDefault;
+              this.expect("rbrace", "Expected '}' after link property body");
+            }
             this.match("semi");
 
             linkProperties.push({
               name: propName,
               scalar: linkScalar2,
               required: linkPropertyRequired,
+              hasDefault: linkPropertyHasDefault,
               collection: linkCollection,
-              annotations: [],
+              annotations: linkPropertyAnnotations,
             });
             continue;
           }
@@ -1316,9 +1336,124 @@ class Parser {
     }
 
     this.expect("colon", "Expected ':' in property declaration");
-    const scalarToken = this.expect("word", "Expected property scalar type");
-    const collection = this.consumeTypeTail(scalarToken.text);
-    const { scalar, enumValues, enumTypeName } = this.readScalarType(moduleName, scalarToken.text);
+    const targetToken = this.expect("word", "Expected property scalar type");
+    const collection = this.consumeTypeTail(targetToken.text);
+
+    if (memberKind === "link" || (memberKind === undefined && !this.isScalarLike(targetToken.text))) {
+      const target = this.normalizeTypeName(moduleName, targetToken.text);
+      while (this.match("pipe")) {
+        this.expect("word", "Expected union link target type");
+        this.consumeTypeTail();
+      }
+      const annotations: AnnotationDef[] = [];
+      const linkProperties: LinkProperty[] = [];
+      let hasDefault = false;
+      let defaultTargetValues: string[] | undefined;
+
+      if (this.match("lbrace")) {
+        while (!this.match("rbrace")) {
+          if (this.isAnnotationMutationStart()) {
+            this.parseAnnotationMutation(moduleName, annotations);
+            continue;
+          }
+
+          if (this.peekWordAt(0) === "default") {
+            hasDefault = true;
+            this.consume();
+            this.expect("assign", "Expected ':=' after 'default'");
+            const literals = this.readStatementStringLiteralsInBlock();
+            if (literals.length > 0) {
+              defaultTargetValues = literals;
+            }
+            continue;
+          }
+
+          if (this.peekWordAt(0) === "readonly") {
+            this.skipStatementInBlock();
+            continue;
+          }
+
+          let linkPropertyRequired = false;
+          if (this.matchWord("required")) {
+            linkPropertyRequired = true;
+          }
+
+          this.matchWord("single");
+          this.matchWord("multi");
+          this.matchWord("overloaded");
+          this.matchWord("property");
+
+          const propName = this.expect("word", "Expected link property name").text;
+          if (this.match("arrow")) {
+            const typeName = this.expect("word", "Expected link property scalar type").text;
+            const linkCollection = this.consumeTypeTail(typeName);
+            const { scalar: linkScalar } = this.readScalarType(moduleName, typeName);
+            let linkPropertyAnnotations: AnnotationDef[] = [];
+            let linkPropertyHasDefault = false;
+            if (this.match("lbrace")) {
+              const parsed = this.parseLinkPropertyBody(moduleName);
+              linkPropertyAnnotations = parsed.annotations;
+              linkPropertyHasDefault = parsed.hasDefault;
+              this.expect("rbrace", "Expected '}' after link property body");
+            }
+            this.match("semi");
+
+            linkProperties.push({
+              name: propName,
+              scalar: linkScalar,
+              required: linkPropertyRequired,
+              hasDefault: linkPropertyHasDefault,
+              collection: linkCollection,
+              annotations: linkPropertyAnnotations,
+            });
+            continue;
+          }
+
+          if (this.match("colon")) {
+            const typeName = this.expect("word", "Expected link property scalar type").text;
+            const linkCollection = this.consumeTypeTail(typeName);
+            const { scalar: linkScalar2 } = this.readScalarType(moduleName, typeName);
+            let linkPropertyAnnotations: AnnotationDef[] = [];
+            let linkPropertyHasDefault = false;
+            if (this.match("lbrace")) {
+              const parsed = this.parseLinkPropertyBody(moduleName);
+              linkPropertyAnnotations = parsed.annotations;
+              linkPropertyHasDefault = parsed.hasDefault;
+              this.expect("rbrace", "Expected '}' after link property body");
+            }
+            this.match("semi");
+
+            linkProperties.push({
+              name: propName,
+              scalar: linkScalar2,
+              required: linkPropertyRequired,
+              hasDefault: linkPropertyHasDefault,
+              collection: linkCollection,
+              annotations: linkPropertyAnnotations,
+            });
+            continue;
+          }
+
+          this.skipStatementInBlock();
+        }
+      }
+
+      this.match("semi");
+      return {
+        kind: "link",
+        name,
+        target,
+        required,
+        hasDefault,
+        defaultTargetValues,
+        multi,
+        overloaded,
+        annotations,
+        properties: linkProperties,
+      };
+    }
+
+    const { scalar, enumValues, enumTypeName } = this.readScalarType(moduleName, targetToken.text);
 
     let annotations: AnnotationDef[] = [];
     let rewrite: PropertyMember["rewrite"] | undefined;
@@ -1394,6 +1529,9 @@ class Parser {
     if (this.match("lparen")) {
       this.expectWord("select", "Expected 'select' in computed declaration");
       const selectExpr = this.parseComputedSelectExpr(moduleName);
+      if (!this.peekIs("rparen")) {
+        this.skipComputedSelectTail();
+      }
       this.expect("rparen", "Expected ')' after computed select expression");
       return {
         kind: "link",
@@ -1420,9 +1558,8 @@ class Parser {
       return {
         kind: "property",
         expr: {
-          kind: "function_call",
-          name: first.name,
-          args: first.args,
+          kind: "literal",
+          value: null,
         },
       };
     }
@@ -1542,7 +1679,12 @@ class Parser {
         this.consume();
         const args: ScalarValue[] = [];
         while (!this.match("rparen")) {
-          args.push(this.readScalarValue("Expected function argument"));
+          if (this.peek().kind === "string" || this.peek().kind === "number" || this.peek().kind === "word") {
+            args.push(this.readScalarValue("Expected function argument"));
+          } else {
+            this.skipFunctionArgumentExpression();
+            args.push(null);
+          }
           this.match("comma");
         }
         return {
@@ -1557,6 +1699,12 @@ class Parser {
       this.consume();
       const typeName = this.expect("word", "Expected type name in cast").text;
       this.expect("gt", "Expected '>' after type name in cast");
+      if (this.match("dot")) {
+        return {
+          kind: "field_ref",
+          field: this.expect("word", "Expected field name after cast").text,
+        };
+      }
       const value = this.readScalarValue("Expected value after type cast");
       return {
         kind: "literal",
@@ -2311,6 +2459,65 @@ class Parser {
     }
   }
 
+  private skipFunctionArgumentExpression(): void {
+    let parenDepth = 0;
+    let bracketDepth = 0;
+    let braceDepth = 0;
+
+    while (!this.peekIs("eof")) {
+      const token = this.peek();
+      if (
+        parenDepth === 0
+        && bracketDepth === 0
+        && braceDepth === 0
+        && (token.kind === "comma" || token.kind === "rparen")
+      ) {
+        return;
+      }
+
+      this.consume();
+      if (token.kind === "lparen") {
+        parenDepth += 1;
+      } else if (token.kind === "rparen") {
+        if (parenDepth === 0) {
+          return;
+        }
+        parenDepth -= 1;
+      } else if (token.kind === "lbracket") {
+        bracketDepth += 1;
+      } else if (token.kind === "rbracket") {
+        if (bracketDepth > 0) {
+          bracketDepth -= 1;
+        }
+      } else if (token.kind === "lbrace") {
+        braceDepth += 1;
+      } else if (token.kind === "rbrace") {
+        if (braceDepth > 0) {
+          braceDepth -= 1;
+        }
+      }
+    }
+  }
+
+  private skipComputedSelectTail(): void {
+    let parenDepth = 0;
+    while (!this.peekIs("eof")) {
+      const token = this.peek();
+      if (token.kind === "rparen" && parenDepth === 0) {
+        return;
+      }
+
+      this.consume();
+      if (token.kind === "lparen") {
+        parenDepth += 1;
+      } else if (token.kind === "rparen") {
+        if (parenDepth > 0) {
+          parenDepth -= 1;
+        }
+      }
+    }
+  }
+
   private skipParentheses(): void {
     let depth = 1;
     while (depth > 0) {
@@ -2535,6 +2742,12 @@ const tokenize = (source: string): Token[] => {
       continue;
     }
 
+    if (ch === "?" && source[i + 1] === "?") {
+      tokens.push({ kind: "coalesce", text: "??", index: i });
+      i += 2;
+      continue;
+    }
+
     if (ch === "?" && source[i + 1] === "=") {
       tokens.push({ kind: "qeq", text: "?=", index: i });
       i += 2;
@@ -2645,6 +2858,31 @@ const tokenize = (source: string): Token[] => {
       }
 
       tokens.push({ kind: "number", text: source.slice(start, i), index: start });
+      continue;
+    }
+
+    if (ch === "@" && /[A-Za-z_]/.test(source[i + 1] ?? "")) {
+      const start = i;
+      i += 2;
+      while (i < source.length) {
+        if (/[A-Za-z0-9_]/.test(source[i])) {
+          i += 1;
+          continue;
+        }
+
+        if (source[i] === ":" && source[i + 1] === ":") {
+          i += 2;
+          continue;
+        }
+
+        break;
+      }
+
+      tokens.push({
+        kind: "word",
+        text: source.slice(start, i),
+        index: start,
+      });
       continue;
     }
 

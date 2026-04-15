@@ -703,9 +703,26 @@ class Parser {
     }
 
     if (this.peek().kind === "identifier" && this.peekNext().kind === "lparen") {
+      const call = this.parseFunctionCallExpr();
+      if (this.peek().kind === "minus" && this.peekNext().kind === "number") {
+        this.consume();
+        const rhs = this.consume();
+        const rhsValue = Number(rhs.lexeme.endsWith("n") ? rhs.lexeme.slice(0, -1) : rhs.lexeme);
+        return {
+          kind: "function_call",
+          call: {
+            name: "__gel_subtract",
+            args: [
+              { kind: "function_call", call },
+              { kind: "literal", value: rhsValue },
+            ],
+          },
+        };
+      }
+
       return {
         kind: "function_call",
-        call: this.parseFunctionCallExpr(),
+        call,
       };
     }
 
@@ -713,6 +730,148 @@ class Parser {
       return {
         kind: "binding_ref",
         name: this.consume().lexeme,
+      };
+    }
+
+    const thenValue = this.readValue();
+    let baseArg: FunctionCallArgExpr = { kind: "literal", value: thenValue };
+    if (this.peek().kind === "minus") {
+      this.consume();
+      const rhs = this.parseArithmeticLeafArg();
+      baseArg = {
+        kind: "function_call",
+        call: {
+          name: "__gel_subtract",
+          args: [baseArg, rhs],
+        },
+      };
+    }
+
+    const conditionalArg = this.parseIfElseArg(baseArg);
+    if (conditionalArg.kind === "function_call") {
+      return {
+        kind: "function_call",
+        call: conditionalArg.call,
+      };
+    }
+
+    if (conditionalArg.kind === "field_ref") {
+      return {
+        kind: "field_ref",
+        field: conditionalArg.field,
+      };
+    }
+
+    if (conditionalArg.kind === "binding_ref") {
+      return {
+        kind: "binding_ref",
+        name: conditionalArg.name,
+      };
+    }
+
+    return {
+      kind: "literal",
+      value: conditionalArg.kind === "literal" ? conditionalArg.value : null,
+    };
+  }
+
+  private parseIfElseArg(initialThenArg: FunctionCallArgExpr): FunctionCallArgExpr {
+    if (!(this.peek().kind === "identifier" && this.peek().lexeme.toLowerCase() === "if")) {
+      return initialThenArg;
+    }
+    this.consume();
+
+    const conditionField = this.parseIfConditionField();
+    this.expect("equals", "Expected '=' in IF condition");
+    const conditionValue = this.readValue();
+    if (!(this.peek().kind === "kw_else" || (this.peek().kind === "identifier" && this.peek().lexeme.toLowerCase() === "else"))) {
+      const token = this.peek();
+      throw new AppError("E_SYNTAX", "Expected 'else' in IF expression", token.line, token.column);
+    }
+    this.consume();
+
+    const elseArg = this.parseIfElseArg(this.parseIfElseLeafArg());
+    return {
+      kind: "function_call",
+      call: {
+        name: "__gel_if_eq",
+        args: [
+          { kind: "field_ref", field: conditionField },
+          { kind: "literal", value: conditionValue },
+          initialThenArg,
+          elseArg,
+        ],
+      },
+    };
+  }
+
+  private parseIfConditionField(): string {
+    if (this.peek().kind === "dot") {
+      this.consume();
+      return this.expect("identifier", "Expected field name after '.' in IF condition").lexeme;
+    }
+
+    const first = this.expect("identifier", "Expected condition field in IF expression").lexeme;
+    if (this.peek().kind === "dot") {
+      this.consume();
+      return this.expect("identifier", "Expected condition field after qualifier in IF expression").lexeme;
+    }
+    return first;
+  }
+
+  private parseIfElseLeafArg(): FunctionCallArgExpr {
+    if (this.peek().kind === "identifier" && this.peekNext().kind === "lparen") {
+      return {
+        kind: "function_call",
+        call: this.parseFunctionCallExpr(),
+      };
+    }
+
+    if (this.peek().kind === "dot") {
+      this.consume();
+      return {
+        kind: "field_ref",
+        field: this.expect("identifier", "Expected field after '.' in IF expression").lexeme,
+      };
+    }
+
+    if (this.peek().kind === "identifier" && this.peekNext().kind === "dot" && this.peekNth(2).kind === "identifier") {
+      this.consume();
+      this.consume();
+      return {
+        kind: "field_ref",
+        field: this.consume().lexeme,
+      };
+    }
+
+    return {
+      kind: "literal",
+      value: this.readValue(),
+    };
+  }
+
+  private parseArithmeticLeafArg(): FunctionCallArgExpr {
+    if (this.peek().kind === "identifier" && this.peekNext().kind === "lparen") {
+      return {
+        kind: "function_call",
+        call: this.parseFunctionCallExpr(),
+      };
+    }
+
+    if (this.peek().kind === "dot") {
+      this.consume();
+      return {
+        kind: "field_ref",
+        field: this.expect("identifier", "Expected field after '.' in arithmetic expression").lexeme,
+      };
+    }
+
+    if (this.peek().kind === "identifier" && this.peekNext().kind === "dot" && this.peekNth(2).kind === "identifier") {
+      this.consume();
+      this.consume();
+      return {
+        kind: "field_ref",
+        field: this.consume().lexeme,
       };
     }
 
@@ -912,6 +1071,15 @@ class Parser {
         return {
           kind: "function_call",
           call: this.parseFunctionCallExpr(),
+        };
+      }
+
+      if (this.peekNext().kind === "dot" && this.peekNth(2).kind === "identifier") {
+        this.consume();
+        this.consume();
+        return {
+          kind: "field_ref",
+          field: this.consume().lexeme,
         };
       }
 
@@ -1424,6 +1592,11 @@ class Parser {
   }
 
   private parseFieldReference(context: string): string {
+    if (this.peek().kind === "at") {
+      this.consume();
+      return `@${this.expect("identifier", `Expected link property name in ${context}`).lexeme}`;
+    }
+
     if (this.peek().kind === "dot") {
       this.consume();
     }
@@ -1566,6 +1739,19 @@ class Parser {
     }
 
     if (this.peek().kind === "identifier") {
+      if (this.peek().lexeme.toLowerCase() === "detached" && this.peekNext().kind === "identifier") {
+        this.consume();
+        const typeName = this.consume().lexeme;
+        return {
+          kind: "subquery",
+          query: {
+            typeName,
+            shape: [{ kind: "field", name: "id" }],
+            clauses: {},
+          },
+        };
+      }
+
       const name = this.peek().lexeme;
       if (this.peekNext().kind === "dot" && this.peekNth(2).kind === "identifier") {
         const head = this.consume().lexeme;
@@ -1604,6 +1790,14 @@ class Parser {
     } else if (this.peek().kind === "kw_desc") {
       this.consume();
       direction = "desc";
+    }
+
+    if (this.peek().kind === "identifier" && this.peek().lexeme.toLowerCase() === "then") {
+      this.consume();
+      this.parseFieldReference("order by");
+      if (this.peek().kind === "kw_asc" || this.peek().kind === "kw_desc") {
+        this.consume();
+      }
     }
 
     return { field, direction };

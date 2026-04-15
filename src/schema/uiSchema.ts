@@ -325,6 +325,7 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
       links.push({
         name: member.name,
         targetType: normalizeTypeName(member.target, typeDecl.module),
+        overloaded: member.overloaded,
         multi: member.multi,
         properties: member.properties.length
           ? member.properties.map((property) => ({
@@ -434,7 +435,7 @@ export const declarativeSchemaFromTypeDefs = (types: TypeDef[], functions: Funct
                 required: Boolean(idField?.required),
                 hasDefault: Boolean(idField?.hasDefault),
                 multi: Boolean(link.multi),
-                overloaded: false,
+                overloaded: Boolean(link.overloaded),
                 annotations: [...(link.annotations ?? [])],
                 properties: (link.properties ?? []).map((property) => ({
                   name: property.name,

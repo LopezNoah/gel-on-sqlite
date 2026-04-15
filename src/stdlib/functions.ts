@@ -45,7 +45,9 @@ const DEFINITIONS: StdlibFunctionDef[] = [
   { name: "std::datetime_of_statement", minArgs: 0, maxArgs: 0 },
   { name: "std::to_datetime", minArgs: 1, maxArgs: 1 },
   { name: "std::to_str", minArgs: 1, maxArgs: 1 },
+  { name: "std::len", minArgs: 1, maxArgs: 1 },
   { name: "std::str_lower", minArgs: 1, maxArgs: 1 },
+  { name: "std::str_upper", minArgs: 1, maxArgs: 1 },
   { name: "std::to_duration", minArgs: 1, maxArgs: 1 },
   { name: "std::array_join", minArgs: 2, maxArgs: 2 },
   { name: "cal::to_local_datetime", minArgs: 1, maxArgs: 1 },
@@ -61,6 +63,8 @@ const DEFINITIONS: StdlibFunctionDef[] = [
   { name: "std::duration_truncate", minArgs: 2, maxArgs: 2 },
   { name: "cal::duration_normalize_hours", minArgs: 1, maxArgs: 1 },
   { name: "cal::duration_normalize_days", minArgs: 1, maxArgs: 1 },
+  { name: "std::__gel_subtract", minArgs: 2, maxArgs: 2 },
+  { name: "std::__gel_if_eq", minArgs: 4, maxArgs: 4 },
 ];
 
 const BY_NAME = new Map(DEFINITIONS.map((def) => [def.name, def]));
@@ -176,8 +180,17 @@ export const executeStdlibFunction = (name: string, args: RuntimeFunctionArg[]):
       return parseDuration(extractScalar(args[0]));
     case "std::to_str":
       return String(extractScalar(args[0]) ?? "");
+    case "std::len": {
+      const value = extractScalar(args[0]);
+      if (value === null || value === undefined) {
+        return 0;
+      }
+      return String(value).length;
+    }
     case "std::str_lower":
       return String(extractScalar(args[0]) ?? "").toLowerCase();
+    case "std::str_upper":
+      return String(extractScalar(args[0]) ?? "").toUpperCase();
     case "std::datetime_get": {
       const date = new Date(parseDateTime(args[0]));
       const part = String(extractScalar(args[1]) ?? "").toLowerCase();
@@ -284,6 +297,14 @@ export const executeStdlibFunction = (name: string, args: RuntimeFunctionArg[]):
       const days = Math.floor(duration.hours / 24);
       const hours = duration.hours % 24;
       return `P${days}DT${hours}H${duration.minutes}M${duration.seconds}S`;
+    }
+    case "std::__gel_subtract": {
+      return toNumber(args[0]) - toNumber(args[1]);
+    }
+    case "std::__gel_if_eq": {
+      const lhs = extractScalar(args[0]);
+      const rhs = extractScalar(args[1]);
+      return lhs === rhs ? extractScalar(args[2]) : extractScalar(args[3]);
     }
     default:
       return undefined;

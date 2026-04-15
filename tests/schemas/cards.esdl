@@ -70,121 +70,121 @@ type Award extending Named {
     link winner := .<awards[is User];
 };
 
-alias AirCard := (
-    SELECT Card
-    FILTER Card.element = 'Air'
-);
+# alias AirCard := (
+#     SELECT Card
+#     FILTER Card.element = 'Air'
+# );
 
-alias WaterCard := (
-    SELECT Card
-    FILTER Card.element = 'Water'
-);
+# alias WaterCard := (
+#     SELECT Card
+#     FILTER Card.element = 'Water'
+# );
 
-alias EarthCard := (
-    SELECT Card
-    FILTER Card.element = 'Earth'
-);
+# alias EarthCard := (
+#     SELECT Card
+#     FILTER Card.element = 'Earth'
+# );
 
-alias FireCard := (
-    SELECT Card
-    FILTER Card.element = 'Fire'
-);
+# alias FireCard := (
+#     SELECT Card
+#     FILTER Card.element = 'Fire'
+# );
 
-alias WaterOrEarthCard := (
-    SELECT Card {
-        owned_by_alice := EXISTS (SELECT Card.<deck[IS User].name = 'Alice')
-    }
-    FILTER .element = 'Water' OR .element = 'Earth'
-);
+# alias WaterOrEarthCard := (
+#     SELECT Card {
+#         owned_by_alice := EXISTS (SELECT Card.<deck[IS User].name = 'Alice')
+#     }
+#     FILTER .element = 'Water' OR .element = 'Earth'
+# );
 
-alias EarthOrFireCard {
-    using (SELECT Card FILTER .element = 'Fire' OR .element = 'Earth')
-};
+# alias EarthOrFireCard {
+#     using (SELECT Card FILTER .element = 'Fire' OR .element = 'Earth')
+# };
 
-alias AliceCard := (
-    SELECT Card
-    FILTER 'Alice' IN Card.<deck[IS User].name
-);
+# alias AliceCard := (
+#     SELECT Card
+#     FILTER 'Alice' IN Card.<deck[IS User].name
+# );
 
-alias BobCard := (
-    SELECT Card
-    FILTER 'Bob' IN Card.<deck[IS User].name
-);
+# alias BobCard := (
+#     SELECT Card
+#     FILTER 'Bob' IN Card.<deck[IS User].name
+# );
 
-alias CarolCard := (
-    SELECT Card
-    FILTER 'Carol' IN Card.<deck[IS User].name
-);
+# alias CarolCard := (
+#     SELECT Card
+#     FILTER 'Carol' IN Card.<deck[IS User].name
+# );
 
-alias DaveCard := (
-    SELECT Card
-    FILTER 'Dave' IN Card.<deck[IS User].name
-);
+# alias DaveCard := (
+#     SELECT Card
+#     FILTER 'Dave' IN Card.<deck[IS User].name
+# );
 
-alias AliasedFriends := (
-    SELECT User { my_friends := User.friends, my_name := User.name }
-);
+# alias AliasedFriends := (
+#     SELECT User { my_friends := User.friends, my_name := User.name }
+# );
 
-alias AwardAlias := (
-    Award {
-        # this should be a single link, because awards are exclusive
-        winner := Award.<awards[IS User] {
-            name_upper := str_upper(.name)
-        }
-    }
-);
+# alias AwardAlias := (
+#     Award {
+#         # this should be a single link, because awards are exclusive
+#         winner := Award.<awards[IS User] {
+#             name_upper := str_upper(.name)
+#         }
+#     }
+# );
 
-# This expression is unnecessarily deep, but that shouldn't have
-# any impact as compared to AwardAlias.
-alias AwardAlias2 := (
-    SELECT Award {
-        winner := Award.<awards[IS User] {
-            deck: {
-                id
-            }
-        }
-    }
-);
+# # This expression is unnecessarily deep, but that shouldn't have
+# # any impact as compared to AwardAlias.
+# alias AwardAlias2 := (
+#     SELECT Award {
+#         winner := Award.<awards[IS User] {
+#             deck: {
+#                 id
+#             }
+#         }
+#     }
+# );
 
-# This alias includes ordering
-alias UserAlias := (
-    SELECT User {
-        deck: {
-            id
-        } ORDER BY User.deck.cost DESC
-          LIMIT 1,
-    }
-);
+# # This alias includes ordering
+# alias UserAlias := (
+#     SELECT User {
+#         deck: {
+#             id
+#         } ORDER BY User.deck.cost DESC
+#           LIMIT 1,
+#     }
+# );
 
-alias SpecialCardAlias := SpecialCard {
-    el_cost := (.element, .cost)
-};
+# alias SpecialCardAlias := SpecialCard {
+#     el_cost := (.element, .cost)
+# };
 
-alias AliasOne := 1;
-global GlobalOne := 1;
+# alias AliasOne := 1;
+# global GlobalOne := 1;
 
-global HighestCost := (
-    SELECT max(Card.cost)
-);
+# global HighestCost := (
+#     SELECT max(Card.cost)
+# );
 
-global CardsWithText := (
-    SELECT Card FILTER exists(.text)
-);
+# global CardsWithText := (
+#     SELECT Card FILTER exists(.text)
+# );
 
-alias AliasArrayOfArrayOfScalar := [[1, 2, 3], [4, 5, 6]];
-global GlobalArrayOfArrayOfScalar := [[1, 2, 3], [4, 5, 6]];
+# alias AliasArrayOfArrayOfScalar := [[1, 2, 3], [4, 5, 6]];
+# global GlobalArrayOfArrayOfScalar := [[1, 2, 3], [4, 5, 6]];
 
-alias AliasCardsByCost := array_agg((
-    for cost in range_unpack(range(0, max(Card.cost) + 1))
-        select array_agg(
-            (select Card filter .cost = cost)
-        )
-));
-global GlobalCardsByCost := array_agg((
-    for cost in range_unpack(range(0, max(Card.cost) + 1))
-        select array_agg(
-            (select Card filter .cost = cost)
-        )
-));
+# alias AliasCardsByCost := array_agg((
+#     for cost in range_unpack(range(0, max(Card.cost) + 1))
+#         select array_agg(
+#             (select Card filter .cost = cost)
+#         )
+# ));
+# global GlobalCardsByCost := array_agg((
+#     for cost in range_unpack(range(0, max(Card.cost) + 1))
+#         select array_agg(
+#             (select Card filter .cost = cost)
+#         )
+# ));
 
-permission GameAdmin;
+# permission GameAdmin;

@@ -580,14 +580,11 @@ export const executeQueryUnitWithTrace = (
 
       const statementType = statementTypeOf(ast);
       enforceBuiltinPermissions(context, statementType, ast.pos.line, ast.pos.column);
-      const subjectType = ast.kind === "insert" || ast.kind === "update" || ast.kind === "delete"
+      const astSubjectType = ast.kind === "insert" || ast.kind === "update" || ast.kind === "delete"
         ? schema.getType(ast.typeName)
         : undefined;
-      if (ast.kind === "insert" && !subjectType && Object.keys(ast.values).length === 0 && !ast.conflict) {
+      if (ast.kind === "insert" && !astSubjectType && Object.keys(ast.values).length === 0 && !ast.conflict) {
         continue;
-      }
-      if ((ast.kind === "insert" || ast.kind === "update" || ast.kind === "delete") && !subjectType) {
-        throw new AppError("E_SEMANTIC", `Unknown type '${ast.typeName}'`, ast.pos.line, ast.pos.column);
       }
 
       const compiled = compilerService.compile(schema, ast, { overlays, globals: context.globals, target: runtimeTarget });
@@ -595,6 +592,14 @@ export const executeQueryUnitWithTrace = (
       const sqlArtifact = compiled.sql;
       assertTargetSqlCompatibility(sqlArtifact.sql, runtimeTarget);
       const sqlTrail: SQLArtifact[] = [sqlArtifact];
+
+      const subjectType = ir.kind === "insert" || ir.kind === "update" || ir.kind === "delete"
+        ? typeDefForTable(schema, ir.table)
+        : undefined;
+      if ((ir.kind === "insert" || ir.kind === "update" || ir.kind === "delete") && !subjectType) {
+        const astTypeName = "typeName" in ast ? ast.typeName : "<unknown>";
+        throw new AppError("E_SEMANTIC", `Unknown type '${astTypeName}'`, ast.pos.line, ast.pos.column);
+      }
 
       let result: QueryResult;
       if (ir.kind === "select") {
@@ -1059,6 +1064,68 @@ const findFieldDef = (
   }
 
   return undefined;
+};
+
+const linkDefsEquivalent = (a: NonNullable<TypeDef["links"]>[number], b: NonNullable<TypeDef["links"]>[number]): boolean => {
+  if (a.name !== b.name) {
+    return false;
+  }
+  if ((a.targetType ?? "") !== (b.targetType ?? "")) {
+    return false;
+  }
+  if (Boolean(a.multi) !== Boolean(b.multi)) {
+    return false;
+  }
+
+  const aProps = a.properties ?? [];
+  const bProps = b.properties ?? [];
+  if (aProps.length !== bProps.length) {
+    return false;
+  }
+  for (let i = 0; i < aProps.length; i += 1) {
+    const ap = aProps[i];
+    const bp = bProps[i];
+    if (!bp || ap.name !== bp.name || ap.type !== bp.type) {
+      return false;
+    }
+  }
+
+  return true;
+};
+
+const resolveLinkStorageOwner = (
+  schema: SchemaSnapshot,
+  typeDef: TypeDef,
+  link: NonNullable<TypeDef["links"]>[number],
+): TypeDef => {
+  if (link.overloaded) {
+    return typeDef;
+  }
+
+  let owner = typeDef;
+  let current = typeDef;
+
+  while ((current.extends ?? []).length > 0) {
+    const nextBaseName = current.extends?.[0];
+    if (!nextBaseName) {
+      break;
+    }
+
+    const baseType = schema.getType(nextBaseName);
+    if (!baseType) {
+      break;
+    }
+
+    const baseLink = (baseType.links ?? []).find((candidate) => candidate.name === link.name);
+    if (!baseLink || baseLink.overloaded || !linkDefsEquivalent(link, baseLink)) {
+      break;
+    }
+
+    owner = baseType;
+    current = baseType;
+  }
+
+  return owner;
 };
 
 const coerceScalarForOutput = (type: ScalarType, value: unknown): unknown => {
@@ -1978,8 +2045,11 @@ const fieldsFromShape = (shape: SelectStatement["shape"]): string[] => {
   return [...fields];
 };
 
-const typeDefForInsertIR = (schema: SchemaSnapshot, table: string): TypeDef | undefined =>
+const typeDefForTable = (schema: SchemaSnapshot, table: string): TypeDef | undefined =>
   schema.listTypes().find((candidate) => tableNameForType(qualifiedTypeName(candidate)) === table);
+
+const typeDefForInsertIR = (schema: SchemaSnapshot, table: string): TypeDef | undefined =>
+  typeDefForTable(schema, table);
 
 const resolveConflictField = (ast: InsertStatement, typeDef: TypeDef): string | undefined => {
   if (ast.conflict?.onField) {
@@ -2333,7 +2403,16 @@ const resolveInsertTargets = (
   }
 
   if (value.kind === "select") {
-    const rows = executeSelectExprRows(db, schema, value, context);
+    const scopedSelect = {
+      ...value,
+      clauses: {
+        ...value.clauses,
+        _withBindings: value.clauses._withBindings ?? ast.with,
+        _withModule: value.clauses._withModule ?? ast.withModule,
+        _withModuleAliases: value.clauses._withModuleAliases ?? ast.withModuleAliases,
+      },
+    };
+    const rows = executeSelectExprRows(db, schema, scopedSelect, context);
     return rows
       .map((row) => {
         if (typeof row.id !== "string") {
@@ -2472,7 +2551,9 @@ const applyInsertLinkAssignments = (
 
     const targetAssignments = resolveInsertTargets(db, schema, value, context, ast);
     const targetIds = targetAssignments.map((assignment) => assignment.id);
-    const targetQualified = link.targetType.includes("::") ? link.targetType : `${typeDef.module ?? "default"}::${link.targetType}`;
+    const linkOwner = resolveLinkStorageOwner(schema, typeDef, link);
+    const ownerModule = linkOwner.module ?? "default";
+    const targetQualified = link.targetType.includes("::") ? link.targetType : `${ownerModule}::${link.targetType}`;
     const assignableTargetTables = new Set(
       schema.listConcreteTypesAssignableTo(targetQualified).map((candidate) => tableNameForType(qualifiedTypeName(candidate))),
     );
@@ -2494,7 +2575,7 @@ const applyInsertLinkAssignments = (
 
     const usesLinkTable = Boolean(link.multi) || (link.properties?.length ?? 0) > 0;
     if (usesLinkTable) {
-      const linkTable = `${tableNameForType(qualifiedTypeName(typeDef))}__${link.name.toLowerCase()}`;
+      const linkTable = `${tableNameForType(qualifiedTypeName(linkOwner))}__${link.name.toLowerCase()}`;
       const propertyDefs = link.properties ?? [];
       const propertyColumns = propertyDefs.map((property) => property.name);
       const propertyByName = new Map(propertyDefs.map((property) => [property.name, property] as const));
@@ -2600,7 +2681,9 @@ const applyUpdateLinkAssignments = (
 
     const targetAssignments = resolveInsertTargets(db, schema, value, context, fauxInsertAst);
     const targetIds = targetAssignments.map((assignment) => assignment.id);
-    const targetQualified = link.targetType.includes("::") ? link.targetType : `${typeDef.module ?? "default"}::${link.targetType}`;
+    const linkOwner = resolveLinkStorageOwner(schema, typeDef, link);
+    const ownerModule = linkOwner.module ?? "default";
+    const targetQualified = link.targetType.includes("::") ? link.targetType : `${ownerModule}::${link.targetType}`;
     const assignableTargetTables = new Set(
       schema.listConcreteTypesAssignableTo(targetQualified).map((candidate) => tableNameForType(qualifiedTypeName(candidate))),
     );
@@ -2622,7 +2705,7 @@ const applyUpdateLinkAssignments = (
 
     const usesLinkTable = Boolean(link.multi) || (link.properties?.length ?? 0) > 0;
     if (usesLinkTable) {
-      const linkTable = `${tableNameForType(qualifiedTypeName(typeDef))}__${link.name.toLowerCase()}`;
+      const linkTable = `${tableNameForType(qualifiedTypeName(linkOwner))}__${link.name.toLowerCase()}`;
       const propertyColumns = (link.properties ?? []).map((property) => property.name);
       const columns = ["source", "target", ...propertyColumns];
       const placeholders = columns.map(() => "?").join(", ");
