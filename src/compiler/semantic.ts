@@ -620,11 +620,11 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
 
     for (const candidate of schema.listTypes()) {
       const candidateQualifiedName = qualifiedTypeName(candidate);
-      if (requestedSourceType && candidateQualifiedName !== requestedSourceType) {
+      if (requestedSourceType && !isAssignableTo(candidateQualifiedName, requestedSourceType)) {
         continue;
       }
 
-      for (const link of candidate.links ?? []) {
+      for (const link of collectLinks(candidate, true)) {
         const linkTarget = normalizeTypeName(link.targetType, candidate.module ?? "default");
         if (link.name !== linkName || linkTarget !== targetTypeQualifiedName) {
           continue;
@@ -1273,6 +1273,36 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       }
 
       const linkPathId = createPathId(pathId);
+      const computedLink = computedByName.get(shapeElement.name);
+      if (computedLink?.kind === "link" && computedLink.expr.kind === "backlink") {
+        hasBacklink = true;
+        const sources = resolveBacklinkSources(qualifiedName, scopeModule, computedLink.expr.link, computedLink.expr.sourceType);
+        const nestedSourceType = normalizeTypeName(computedLink.expr.sourceType ?? qualifiedName, scopeModule);
+        const nestedType = requireValue(
+          schema.getType(nestedSourceType),
+          `Unknown backlink source type '${nestedSourceType}' on '${qualifiedName}.${shapeElement.name}'`,
+        );
+        const nested = compileSelectForType(nestedType, linkPathId, shapeElement.shape, shapeElement.clauses, {
+          allowBacklinkFilter: false,
+        });
+        shapeElements.push({
+          kind: "backlink",
+          name: shapeElement.name,
+          pathId: linkPathId,
+          sources,
+          columns: nested.columns,
+          shape: nested.shape,
+          filter: nested.filter,
+          orderBy: nested.orderBy,
+          limit: nested.limit,
+          offset: nested.offset,
+          inference: nested.inference,
+        });
+        shapeNames.add(shapeElement.name);
+        scopeChildren.push(nested.scopeTree);
+        continue;
+      }
+
       const relation = resolveForwardLink(typeDef, shapeElement.name);
       const normalizedTypeFilter = shapeElement.typeFilter ? normalizeTypeName(shapeElement.typeFilter, scopeModule) : undefined;
       const filteredTargetTables = normalizedTypeFilter
@@ -1471,6 +1501,32 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         } as any;
       }
     }
+
+    const schemaAlias = schema.getAlias(resolvedTypeName);
+    if (schemaAlias?.sourceType) {
+      const sourceType = requireValue(
+        schema.getType(normalizeTypeName(schemaAlias.sourceType, schemaAlias.module ?? activeModule)),
+        `Unknown type '${normalizeTypeName(schemaAlias.sourceType, schemaAlias.module ?? activeModule)}' in alias '${resolvedTypeName}'`,
+      );
+      const aliasFilter = schemaAlias.filter
+        ? {
+            kind: "predicate" as const,
+            target: { kind: "field" as const, field: schemaAlias.filter.field },
+            op: schemaAlias.filter.op,
+            value: schemaAlias.filter.value,
+          }
+        : undefined;
+      return {
+        typeDef: sourceType,
+        clauses: {
+          filter: mergeFilters(aliasFilter, selectStatement.filter),
+          orderBy: selectStatement.orderBy,
+          limit: selectStatement.limit,
+          offset: selectStatement.offset,
+        },
+      };
+    }
+
     return fail(`Unknown type '${resolvedTypeName}'`);
   };
 
@@ -1614,7 +1670,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         if (!bindingValue) {
           const resolvedAliasName = normalizeTypeName(expr.name, activeModule);
           const alias = schema.getAlias(resolvedAliasName);
-          if (alias) {
+          if (alias?.values) {
             return { kind: "set_literal", values: [...alias.values] };
           }
 

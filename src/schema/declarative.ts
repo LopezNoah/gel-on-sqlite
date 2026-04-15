@@ -147,7 +147,13 @@ export interface OperatorDeclaration {
 export interface AliasDeclaration {
   module: string;
   name: string;
-  values: ScalarValue[];
+  values?: ScalarValue[];
+  sourceType?: string;
+  filter?: {
+    field: string;
+    op: "=" | "!=" | "like" | "ilike";
+    value: ScalarValue;
+  };
 }
 
 export interface DeclarativeSchema {
@@ -357,24 +363,142 @@ class Parser {
     }
 
     this.expect("assign", "Expected ':=' in alias declaration");
-    if (!this.peekIs("lbrace")) {
-      this.skipStatementInBlock();
+    if (this.peekIs("lbrace")) {
+      this.expect("lbrace", "Expected '{' in alias declaration");
+
+      const values: ScalarValue[] = [];
+      while (!this.match("rbrace")) {
+        values.push(this.readScalarValue("Expected alias literal value"));
+        this.match("comma");
+      }
+
+      this.expect("semi", "Expected ';' after alias declaration");
+      return {
+        module: moduleName,
+        name,
+        values,
+      };
+    }
+
+    if (this.peekIsScalarValue()) {
+      const value = this.readScalarValue("Expected alias literal value");
+      this.expect("semi", "Expected ';' after alias declaration");
+      return {
+        module: moduleName,
+        name,
+        values: [value],
+      };
+    }
+
+    const hasParens = this.match("lparen");
+    if (this.matchWord("select")) {
+      const sourceType = this.expect("word", "Expected source type name in alias declaration").text;
+      let filter: AliasDeclaration["filter"];
+      let unsupportedTail = false;
+
+      if (this.peekIs("lbrace")) {
+        unsupportedTail = true;
+      }
+
+      if (!unsupportedTail && this.matchWord("filter")) {
+        if (this.match("dot")) {
+          const field = this.expect("word", "Expected field name after '.' in alias filter").text;
+          const opToken = this.expectOneOf(["equals", "bang_eq", "word"], "Expected alias filter operator");
+          const op =
+            opToken.kind === "equals"
+              ? "="
+              : opToken.kind === "bang_eq"
+              ? "!="
+              : opToken.text.toLowerCase() === "like"
+              ? "like"
+              : opToken.text.toLowerCase() === "ilike"
+              ? "ilike"
+              : undefined;
+
+          if (!op) {
+            this.skipStatementInBlock();
+            return undefined;
+          }
+
+          const value = this.readScalarValue("Expected scalar literal value in alias filter");
+          filter = { field, op, value };
+        } else if (this.peekIs("word")) {
+          this.expect("word", "Expected type name in alias filter");
+          this.expect("dot", "Expected '.' in alias filter");
+          const field = this.expect("word", "Expected field name in alias filter").text;
+          const opToken = this.expectOneOf(["equals", "bang_eq", "word"], "Expected alias filter operator");
+          const op =
+            opToken.kind === "equals"
+              ? "="
+              : opToken.kind === "bang_eq"
+              ? "!="
+              : opToken.text.toLowerCase() === "like"
+              ? "like"
+              : opToken.text.toLowerCase() === "ilike"
+              ? "ilike"
+              : undefined;
+
+          if (!op) {
+            this.skipStatementInBlock();
+            return undefined;
+          }
+
+          const value = this.readScalarValue("Expected scalar literal value in alias filter");
+          filter = { field, op, value };
+        } else {
+          unsupportedTail = true;
+        }
+      }
+
+      if (hasParens) {
+        if (this.peekIs("rparen")) {
+          this.consume();
+        } else {
+          unsupportedTail = true;
+          let depth = 1;
+          while (depth > 0 && !this.peekIs("eof")) {
+            const token = this.consume();
+            if (token.kind === "lparen") {
+              depth += 1;
+            } else if (token.kind === "rparen") {
+              depth -= 1;
+            }
+          }
+        }
+      } else {
+        while (!this.peekIs("semi") && !this.peekIs("eof")) {
+          unsupportedTail = true;
+          this.consume();
+        }
+      }
+      this.expect("semi", "Expected ';' after alias declaration");
+      if (unsupportedTail) {
+        return undefined;
+      }
+      return {
+        module: moduleName,
+        name,
+        sourceType,
+        filter,
+      };
+    }
+
+    if (hasParens) {
+      let depth = 1;
+      while (depth > 0 && !this.peekIs("eof")) {
+        const token = this.consume();
+        if (token.kind === "lparen") {
+          depth += 1;
+        } else if (token.kind === "rparen") {
+          depth -= 1;
+        }
+      }
+      this.match("semi");
       return undefined;
     }
-    this.expect("lbrace", "Expected '{' in alias declaration");
 
-    const values: ScalarValue[] = [];
-    while (!this.match("rbrace")) {
-      values.push(this.readScalarValue("Expected alias literal value"));
-      this.match("comma");
-    }
-
-    this.expect("semi", "Expected ';' after alias declaration");
-    return {
-      module: moduleName,
-      name,
-      values,
-    };
+    this.skipStatementInBlock();
+    return undefined;
   }
 
   private parseOperatorDeclaration(moduleName: string): OperatorDeclaration {
@@ -2607,6 +2731,27 @@ class Parser {
 
     this.index += 1;
     return token.text;
+  }
+
+  private peekIsScalarValue(): boolean {
+    const token = this.peek();
+    if (token.kind === "string" || token.kind === "number" || token.kind === "minus") {
+      return true;
+    }
+    if (token.kind !== "word") {
+      return false;
+    }
+    const normalized = token.text.toLowerCase();
+    return normalized === "true" || normalized === "false" || normalized === "null";
+  }
+
+  private expectOneOf(kinds: TokenKind[], message: string): Token {
+    const token = this.peek();
+    if (!kinds.includes(token.kind)) {
+      throw new AppError("E_SYNTAX", message, 1, token.index + 1);
+    }
+    this.index += 1;
+    return token;
   }
 
   private readScalarValue(message: string): ScalarValue {

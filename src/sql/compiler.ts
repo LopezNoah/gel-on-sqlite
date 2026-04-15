@@ -360,7 +360,7 @@ const compileLinkAggregateExpr = (
 ): string => {
   const targetAlias = `a_${Math.abs(hashString(`${sourceAlias}:${expr.relation.sourceType}:${expr.relation.targetType}:${expr.column}`)).toString(16)}`;
   const relation = expr.relation;
-  let fromClause = `(SELECT ${quoteLiteral(relation.targetType)} AS ${quoteIdent("__source_type")}, * FROM ${quoteIdent(relation.targetTable)}) ${targetAlias}`;
+  let fromClause = compilePolymorphicTargetSource(relation, targetAlias);
   let whereClause: string;
 
   if (relation.storage === "inline") {

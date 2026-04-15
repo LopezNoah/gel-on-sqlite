@@ -95,7 +95,13 @@ export interface FunctionDef {
 export interface AliasDef {
   module: string;
   name: string;
-  values: ScalarValue[];
+  values?: ScalarValue[];
+  sourceType?: string;
+  filter?: {
+    field: string;
+    op: "=" | "!=" | "like" | "ilike";
+    value: ScalarValue;
+  };
 }
 
 export type ComputedValuePart =

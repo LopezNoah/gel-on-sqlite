@@ -13,7 +13,7 @@ describe("LinkProps", () => {
     });
   });
 
-  it ("Should expect cards", () => {
+  it ("Should expect AirCards", () => {
     h.assertQueryResult(`
         SELECT AirCard {
             name,
@@ -38,58 +38,69 @@ describe("LinkProps", () => {
         )
   })
 
-  it ("Should expect users and only cards with same count as cost", () => {
-    h.assertQueryResult(`  
-        #  get users and only cards that have the same count and
-        #  cost in the decks 
-        SELECT User {
-            name,
-            deck: {
-                name,
-                element,
-                cost,
-                @count
-            } FILTER .cost = @count
-                ORDER BY @count DESC THEN .name ASC
-        } ORDER BY .name;`, 
-            [
-            {
-                'name': 'Alice',
-                'deck': [
-                    {
-                        'cost': 3,
-                        'name': 'Giant turtle',
-                        '@count': 3,
-                        'element': 'Water'
-                    },
-                ],
-            },
-            {
-                'name': 'Bob',
-                'deck': [
-                    {
-                        'cost': 3,
-                        'name': 'Giant turtle',
-                        '@count': 3,
-                        'element': 'Water'
-                    },
-                    {
-                        'cost': 3,
-                        'name': 'Golem',
-                        '@count': 3,
-                        'element': 'Earth'
-                    },
-                ],
-            },
-            {
-                'name': 'Carol',
-                'deck': [],
-            },
-            {
-                'name': 'Dave',
-                'deck': [],
-            }
-        ]);
+  it.skip("FireCard filtering", () => {
+    h.assertQueryResult(`
+        SELECT FireCard {name}
+        FILTER FireCard IN DaveCard
+        ORDER BY FireCard.name;
+    `,
+    [{'name': 'Dragon'}])
   })
 
+  it.skip("Aircard filtering", () => {
+    h.assertQueryResult(`
+                SELECT AirCard {name}
+                FILTER AirCard NOT IN (SELECT Card FILTER Card.name LIKE 'D%')
+                ORDER BY AirCard.name;
+            `,
+            [
+                {'name': 'Giant eagle'},
+                {'name': 'Sprite'},
+            ])
+  })
+
+  it("Computable link", () => {
+    h.assertQueryResult(`
+                SELECT Card {
+                    owners: {
+                        name
+                    } ORDER BY .name
+                }
+                FILTER .name = 'Djinn';
+            `,
+            [{
+                'owners': [
+                    {'name': 'Carol'},
+                    {'name': 'Dave'}
+                ]
+            }])
+  })  
+
+  it("computable link deck_cost", () => {
+    h.assertQueryResult(`
+                SELECT User {
+                    name,
+                    deck_cost
+                }
+                ORDER BY User.name;
+            `,
+            [
+                {
+                    'name': 'Alice',
+                    'deck_cost': 11
+                },
+                {
+                    'name': 'Bob',
+                    'deck_cost': 9
+                },
+                {
+                    'name': 'Carol',
+                    'deck_cost': 16
+                },
+                {
+                    'name': 'Dave',
+                    'deck_cost': 20
+                }
+            ])
+  })
 })

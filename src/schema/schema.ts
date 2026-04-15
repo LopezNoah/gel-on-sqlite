@@ -14,7 +14,7 @@ export class SchemaSnapshot {
   constructor(types: TypeDef[] = [], functions: FunctionDef[] = [], aliases: AliasDef[] = []) {
     this.typesByName = new Map(types.map((t) => [qualifiedTypeName(t), cloneTypeDef(t)]));
     this.functionsBySignature = new Map(functions.map((fn) => [functionSignature(fn), cloneFunctionDef(fn)]));
-    this.aliasesByName = new Map(aliases.map((alias) => [qualifiedAliasName(alias), { ...alias, values: [...alias.values] }]));
+    this.aliasesByName = new Map(aliases.map((alias) => [qualifiedAliasName(alias), cloneAliasDef(alias)]));
   }
 
   getType(name: string): TypeDef | undefined {
@@ -53,11 +53,11 @@ export class SchemaSnapshot {
 
   getAlias(name: string): AliasDef | undefined {
     const existing = this.aliasesByName.get(name);
-    return existing ? { ...existing, values: [...existing.values] } : undefined;
+    return existing ? cloneAliasDef(existing) : undefined;
   }
 
   listAliases(): AliasDef[] {
-    return [...this.aliasesByName.values()].map((alias) => ({ ...alias, values: [...alias.values] }));
+    return [...this.aliasesByName.values()].map((alias) => cloneAliasDef(alias));
   }
 
   listConcreteTypesAssignableTo(name: string): TypeDef[] {
@@ -140,6 +140,18 @@ export const functionSignature = (fn: FunctionDef): string => {
 };
 
 const qualifiedAliasName = (alias: AliasDef): string => `${alias.module}::${alias.name}`;
+
+const cloneAliasDef = (alias: AliasDef): AliasDef => ({
+  ...alias,
+  values: alias.values ? [...alias.values] : undefined,
+  filter: alias.filter
+    ? {
+        field: alias.filter.field,
+        op: alias.filter.op,
+        value: alias.filter.value,
+      }
+    : undefined,
+});
 
 const cloneComputedDef = (
   computed: NonNullable<TypeDef["computeds"]>[number],

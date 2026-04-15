@@ -227,6 +227,13 @@ export type SelectShapeElementIR =
   | (ShapeBaseIR & {
       kind: "backlink";
       sources: BacklinkSourceIR[];
+      columns?: string[];
+      shape?: SelectShapeElementIR[];
+      filter?: FilterExprIR;
+      orderBy?: OrderByIR<string>;
+      limit?: number;
+      offset?: number;
+      inference?: InferenceResult;
     })
   | (ShapeBaseIR & {
       kind: "link";

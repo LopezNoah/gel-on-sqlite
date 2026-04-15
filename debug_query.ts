@@ -56,15 +56,10 @@ const qualifyUnqualifiedTypes = (source: string, moduleName: string): string =>
 
   const query1 = 'SELECT User { name, deck_cost } ORDER BY .name;';
   const query = `SELECT User {
-            name,
-            deck: {
-                name,
-                element,
-                cost,
-                @count
-            } FILTER .cost = @count
-                ORDER BY @count DESC THEN .name ASC
-        } ORDER BY .name;`;
+                    name,
+                    deck_cost
+                }
+                ORDER BY User.name;`;
   const trace = executeQueryWithTrace(db, snapshot, query);
   const last = trace;
   const sqlText = last?.sql?.sql ?? '';

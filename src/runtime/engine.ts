@@ -925,7 +925,7 @@ const materializeSelectRow = (
         }
 
         const relation = element.expr.relation;
-        const targetSource = `(SELECT '${relation.targetType.replaceAll("'", "''")}' AS ${quoteIdent("__source_type")}, * FROM ${quoteIdent(relation.targetTable)}) t`;
+        const targetSource = compilePolymorphicTargetSource(relation, "t");
         let sql: string;
         let params: ScalarValue[];
         if (relation.storage === "inline") {
@@ -993,13 +993,30 @@ const materializeSelectRow = (
     }
 
     const payload = parsePayloadArray(row[shapePayloadAlias(element.pathId)]);
-    if (payload) {
+    if (payload && !(element.columns && element.shape)) {
       output[element.name] = payload;
       continue;
     }
 
     const targetId = row.id;
-    output[element.name] = isScalarValue(targetId) ? resolveBacklinks(db, element.sources, targetId, sqlTrail) : [];
+    if (!isScalarValue(targetId)) {
+      output[element.name] = [];
+      continue;
+    }
+
+    if (element.columns && element.shape) {
+      output[element.name] = resolveBacklinkObjects(db, schema, context, element.sources, targetId, {
+        columns: element.columns,
+        shape: element.shape,
+        filter: element.filter,
+        orderBy: element.orderBy,
+        limit: element.limit,
+        offset: element.offset,
+      }, sqlTrail);
+      continue;
+    }
+
+    output[element.name] = resolveBacklinks(db, element.sources, targetId, sqlTrail);
   }
 
   return output;
@@ -1859,6 +1876,106 @@ const resolveBacklinks = (
   }
 
   return out;
+};
+
+const resolveBacklinkObjects = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  context: SecurityContext,
+  sources: BacklinkSourceIR[],
+  targetId: ScalarValue,
+  nested: {
+    columns: string[];
+    shape: SelectShapeElementIR[];
+    filter?: FilterExprIR;
+    orderBy?: OrderByIR<string>;
+    limit?: number;
+    offset?: number;
+  },
+  sqlTrail: SQLArtifact[],
+): Record<string, unknown>[] => {
+  const rows: Array<Record<string, unknown> & { __source_type: string }> = [];
+  const seen = new Set<string>();
+
+  for (const source of sources) {
+    const params: ScalarValue[] = [targetId];
+    const queryColumns = nested.columns.includes("id") ? nested.columns : ["id", ...nested.columns];
+    const projected = queryColumns
+      .map((column) => `t.${quoteIdent(column)} AS ${quoteIdent(column)}`)
+      .join(", ");
+    const sourceTypeSelectDefault = `'${source.sourceType.replaceAll("'", "''")}' AS ${quoteIdent("__source_type")}`;
+
+    const sourceTables = schema
+      .listConcreteTypesAssignableTo(source.sourceType)
+      .map((candidate) => {
+        const typeName = qualifiedTypeName(candidate);
+        return {
+          typeName,
+          table: tableNameForType(typeName),
+        };
+      });
+
+    const polymorphicSource = sourceTables.length > 0
+      ? `(${sourceTables.map((entry) => `SELECT '${entry.typeName.replaceAll("'", "''")}' AS ${quoteIdent("__source_type")}, * FROM ${quoteIdent(entry.table)}`).join(" UNION ALL ")}) t`
+      : `${quoteIdent(source.table)} t`;
+    const sourceTypeSelect = sourceTables.length > 0
+      ? `t.${quoteIdent("__source_type")} AS ${quoteIdent("__source_type")}`
+      : sourceTypeSelectDefault;
+    const selected = projected.length > 0 ? `${sourceTypeSelect}, ${projected}` : sourceTypeSelect;
+
+    let sql = source.storage === "inline"
+      ? `SELECT ${selected} FROM ${polymorphicSource} WHERE t.${quoteIdent(source.inlineColumn!)} = ?`
+      : `SELECT ${selected} FROM ${polymorphicSource} JOIN ${quoteIdent(source.linkTable!)} l ON l.${quoteIdent("source")} = t.${quoteIdent("id")} WHERE l.${quoteIdent("target")} = ?`;
+
+    if (nested.filter) {
+      sql += ` AND ${compileNestedFilterExprSQL(nested.filter, params, source.storage === "table" ? "l" : undefined)}`;
+    }
+
+    sqlTrail.push({ sql, params: [...params], loweringMode: "fallback_multi_query" });
+    const sourceRows = db.prepare(sql).all(...params) as Array<Record<string, unknown> & { __source_type?: unknown }>;
+
+    for (const row of sourceRows) {
+      const rowType = String(row.__source_type ?? source.sourceType);
+      const key = `${rowType}:${String(row.id)}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      rows.push({ ...row, __source_type: rowType });
+    }
+  }
+
+  if (nested.orderBy) {
+    const direction = nested.orderBy.direction === "desc" ? -1 : 1;
+    const orderColumn = nested.orderBy.value;
+    rows.sort((a, b) => {
+      const left = a[orderColumn] as ScalarValue | undefined;
+      const right = b[orderColumn] as ScalarValue | undefined;
+      if (left === right) {
+        return 0;
+      }
+      if (left === undefined || left === null) {
+        return -1 * direction;
+      }
+      if (right === undefined || right === null) {
+        return 1 * direction;
+      }
+      if (left < right) {
+        return -1 * direction;
+      }
+      if (left > right) {
+        return 1 * direction;
+      }
+      return 0;
+    });
+  }
+
+  const offset = nested.offset ?? 0;
+  const sliced = nested.limit === undefined
+    ? rows.slice(offset)
+    : rows.slice(offset, offset + nested.limit);
+
+  return sliced.map((item) => materializeSelectRow(db, schema, context, nested.shape, item, rowSourceType(item, item.__source_type), sqlTrail));
 };
 
 const quoteIdent = (ident: string): string => `"${ident.replaceAll('"', '""')}"`;

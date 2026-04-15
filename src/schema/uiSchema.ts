@@ -46,7 +46,15 @@ export const aliasDefsFromDeclarative = (schema: DeclarativeSchema): AliasDef[] 
   return (schema.aliases ?? []).map((alias) => ({
     module: alias.module,
     name: alias.name,
-    values: [...alias.values],
+    values: alias.values ? [...alias.values] : undefined,
+    sourceType: alias.sourceType,
+    filter: alias.filter
+      ? {
+          field: alias.filter.field,
+          op: alias.filter.op,
+          value: alias.filter.value,
+        }
+      : undefined,
   }));
 };
 
