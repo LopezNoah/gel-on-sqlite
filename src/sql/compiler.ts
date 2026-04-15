@@ -135,7 +135,7 @@ const compileSelectToSQL = (ir: SelectIR, target: RuntimeTarget): SQLArtifact =>
 
   const sources = ir.sourceTables.length > 0 ? ir.sourceTables : [ir.typeRef];
   const filterColumns = collectFieldFilterColumns(ir.filter);
-  const unionColumns = [...new Set(["id", ...ir.columns, ...filterColumns, ...(ir.orderBy ? [ir.orderBy.column] : [])])]
+  const unionColumns = [...new Set(["id", ...ir.columns, ...filterColumns, ...(ir.orderBy ? [ir.orderBy.value] : [])])]
     .filter((column) => column !== "__source_type");
   const sourceSelects = sources.map(
     (source) =>
@@ -149,7 +149,7 @@ const compileSelectToSQL = (ir: SelectIR, target: RuntimeTarget): SQLArtifact =>
   }
 
   if (ir.orderBy) {
-    sql += ` ORDER BY ${rootAlias}.${quoteIdent(ir.orderBy.column)} ${ir.orderBy.direction.toUpperCase()}`;
+    sql += ` ORDER BY ${rootAlias}.${quoteIdent(ir.orderBy.value)} ${ir.orderBy.direction.toUpperCase()}`;
   }
 
   if (ir.limit !== undefined) {
@@ -210,11 +210,11 @@ const compileLinkArrayExpr = (
 
   if (element.orderBy) {
     const linkPropertyColumns = new Set(element.relation.propertyColumns ?? []);
-    const orderAlias = element.relation.storage === "table" && linkPropertyColumns.has(element.orderBy.column)
+    const orderAlias = element.relation.storage === "table" && linkPropertyColumns.has(element.orderBy.value)
       ? requiredAlias(junctionAlias)
       : targetAlias;
-    inner += ` ORDER BY ${orderAlias}.${quoteIdent(element.orderBy.column)} ${element.orderBy.direction.toUpperCase()}`;
-    if (element.orderBy.column !== "name" && element.columns.includes("name")) {
+    inner += ` ORDER BY ${orderAlias}.${quoteIdent(element.orderBy.value)} ${element.orderBy.direction.toUpperCase()}`;
+    if (element.orderBy.value !== "name" && element.columns.includes("name")) {
       inner += `, ${targetAlias}.${quoteIdent("name")} ASC`;
     }
   }

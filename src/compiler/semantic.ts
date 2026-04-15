@@ -6,6 +6,7 @@ import type {
   InferenceResult,
   IRStatement,
   LinkRelationIR,
+  OrderByIR,
   OverlayIR,
   ScopeTreeIR,
   SelectShapeElementIR,
@@ -681,7 +682,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     scopeTree: ScopeTreeIR;
     appliedOverlays: OverlayIR[];
     filter?: FilterExprIR;
-    orderBy?: { column: string; direction: "asc" | "desc" };
+    orderBy?: OrderByIR<string>;
     limit?: number;
     offset?: number;
     inference: InferenceResult;
@@ -1351,7 +1352,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
 
     const resolvedOrderBy = clauses.orderBy
       ? {
-          column: clauses.orderBy.field.startsWith("@")
+          value: clauses.orderBy.field.startsWith("@")
             ? clauses.orderBy.field.slice(1)
             : clauses.orderBy.field,
           direction: clauses.orderBy.direction,
@@ -1359,7 +1360,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       : undefined;
 
     if (resolvedOrderBy && !clauses.orderBy!.field.startsWith("@")) {
-      ensureField(resolvedOrderBy.column);
+      ensureField(resolvedOrderBy.value);
     }
 
     if (clauses.limit !== undefined && clauses.limit < 0) {
@@ -1476,6 +1477,9 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
   if (statement.kind === "select_free") {
     const pathId = createPathId();
     const names = new Set<string>();
+    const asNestedFreeEntry = (
+      entry: import("../ir/model.js").SelectFreeIREntry,
+    ): import("../ir/model.js").SelectFreeIREntry<3> => entry as import("../ir/model.js").SelectFreeIREntry<3>;
 
     const compileFreeObjectExprToSelectFreeEntry = (expr: FreeObjectExpr, name: string): import("../ir/model.js").SelectFreeIREntry => {
       if (expr.kind === "literal") {
@@ -1535,7 +1539,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       }
       if (expr.kind === "cast") {
         const innerEntry = compileFreeObjectExprToSelectFreeEntry(expr.expr, name);
-        return { kind: "cast", name, castType: expr.castType, value: innerEntry };
+        return { kind: "cast", name, castType: expr.castType, value: asNestedFreeEntry(innerEntry) };
       }
       if (expr.kind === "path") {
         const normalizedHead = normalizeTypeName(expr.head, activeModule);
@@ -1559,7 +1563,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         return {
           kind: "concat",
           name,
-          parts: expr.parts.map((part) => compileFreeObjectExprToSelectFreeEntry(part, "")),
+          parts: expr.parts.map((part) => asNestedFreeEntry(compileFreeObjectExprToSelectFreeEntry(part, ""))),
         };
       }
       fail(`Unsupported free object expression kind '${expr.kind}'`);
@@ -1582,6 +1586,10 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
   }
 
   if (statement.kind === "select_expr") {
+    const asNestedExprEntry = (
+      entry: import("../ir/model.js").SelectExprIREntry,
+    ): import("../ir/model.js").SelectExprIREntry<3> => entry as import("../ir/model.js").SelectExprIREntry<3>;
+
     const compileExprToIREntry = (
       expr: FreeObjectExpr,
       currentItemBinding?: string,
@@ -1595,7 +1603,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       if (expr.kind === "set_expr") {
         return {
           kind: "set_expr",
-          values: expr.values.map((value) => compileExprToIREntry(value, currentItemBinding)),
+          values: expr.values.map((value) => asNestedExprEntry(compileExprToIREntry(value, currentItemBinding))),
         };
       }
       if (expr.kind === "binding_ref") {
@@ -1779,7 +1787,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
             return {
               kind: "cast",
               castType: resolvedCastType,
-              value: coerceEnumValue(innerEntry),
+              value: asNestedExprEntry(coerceEnumValue(innerEntry)),
             };
           }
           fail(`Unsupported cast type '${resolvedCastType}'`);
@@ -1788,14 +1796,14 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           return {
             kind: "cast",
             castType: "str",
-            value: innerEntry,
+            value: asNestedExprEntry(innerEntry),
           };
         }
         if (resolvedCastType === "json") {
           return {
             kind: "cast",
             castType: "json",
-            value: innerEntry,
+            value: asNestedExprEntry(innerEntry),
           };
         }
         fail(`Unsupported cast type '${resolvedCastType}'`);
@@ -1803,7 +1811,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       if (expr.kind === "concat") {
         return {
           kind: "concat",
-          parts: expr.parts.map((part) => compileExprToIREntry(part, currentItemBinding)),
+          parts: expr.parts.map((part) => asNestedExprEntry(compileExprToIREntry(part, currentItemBinding))),
         };
       }
       if (expr.kind === "function_call") {
@@ -1811,7 +1819,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         return {
           kind: "function_call",
           functionName: resolved.qualifiedName,
-          args: expr.call.args.map((arg): import("../ir/model.js").SelectExprIREntry => {
+          args: expr.call.args.map((arg): import("../ir/model.js").SelectExprIREntry<3> => {
             if (arg.kind === "literal") {
               return { kind: "literal", value: arg.value };
             }
@@ -1846,7 +1854,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
               return {
                 kind: "function_call",
                 functionName: nested.functionName,
-                args: nested.args.map((nestedArg) => {
+                args: nested.args.map((nestedArg): import("../ir/model.js").SelectExprIREntry<2> => {
                   if (nestedArg.kind === "literal") {
                     return { kind: "literal", value: nestedArg.value };
                   }
@@ -1920,7 +1928,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       if (expr.kind === "is_type") {
         return {
           kind: "is_type",
-          value: compileExprToIREntry(expr.expr, currentItemBinding),
+          value: asNestedExprEntry(compileExprToIREntry(expr.expr, currentItemBinding)),
           typeName: normalizeTypeName(expr.typeName, activeModule),
         };
       }
@@ -1929,10 +1937,10 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         return {
           kind: "select_expr_subquery",
           alias: expr.alias,
-          value: compileExprToIREntry(expr.expr, innerBinding),
+          value: asNestedExprEntry(compileExprToIREntry(expr.expr, innerBinding)),
           orderBy: expr.orderBy
             ? {
-                value: compileExprToIREntry(expr.orderBy.expr, innerBinding),
+                value: asNestedExprEntry(compileExprToIREntry(expr.orderBy.expr, innerBinding)),
                 direction: expr.orderBy.direction,
               }
             : undefined,

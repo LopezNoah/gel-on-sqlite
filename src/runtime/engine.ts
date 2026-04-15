@@ -7,7 +7,7 @@ import type { SchemaSnapshot } from "../schema/schema.js";
 import { compileToSQL, computedValueAlias, shapePayloadAlias, type SQLArtifact } from "../sql/compiler.js";
 import { executeStdlibFunction, resolveStdlibFunction, type RuntimeFunctionArg } from "../stdlib/functions.js";
 import { assertTargetSqlCompatibility, type RuntimeTarget } from "./target.js";
-import type { BacklinkSourceIR, FilterExprIR, IRStatement, LinkRelationIR, OverlayIR, SelectExprIREntry, SelectExprIR, SelectIR, SelectShapeElementIR } from "../ir/model.js";
+import type { BacklinkSourceIR, FilterExprIR, IRStatement, LinkRelationIR, OrderByIR, OverlayIR, SelectExprIREntry, SelectExprIR, SelectIR, SelectShapeElementIR } from "../ir/model.js";
 import type { AccessPolicyCondition, AccessPolicyDef, FunctionDef, FunctionExprDef, ScalarType, ScalarValue, TypeDef } from "../types.js";
 import { qualifiedTypeName } from "../schema/schema.js";
 import { deserializeSchemaFromGelTables, deserializeSchemaFromInstdata } from "../schema/gel_persistence.js";
@@ -893,36 +893,29 @@ const materializeSelectRow = (
           continue;
         }
 
-        const args: RuntimeFunctionArg[] = element.expr.args.map((arg) => {
+        const resolveShapeFunctionArg = (arg: typeof element.expr.args[number]): RuntimeFunctionArg => {
           if (arg.kind === "field_ref") {
             return row[arg.column] as ScalarValue;
           }
-
-          if (arg.kind === "function_call") {
-            return executeFunctionCall(schema, db, context, arg.functionName, arg.args.map((nested) => {
-              if (nested.kind === "field_ref") {
-                return row[nested.column] as ScalarValue;
-              }
-              if (nested.kind === "set_literal") {
-                return { kind: "set" as const, values: [...nested.values] };
-              }
-              if (nested.kind === "array_literal") {
-                return { kind: "array" as const, values: [...nested.values] };
-              }
-              return nested.value;
-            })) as RuntimeFunctionArg;
-          }
-
           if (arg.kind === "set_literal") {
             return { kind: "set" as const, values: [...arg.values] };
           }
-
           if (arg.kind === "array_literal") {
             return { kind: "array" as const, values: [...arg.values] };
           }
-
+          if (arg.kind === "function_call") {
+            return executeFunctionCall(
+              schema,
+              db,
+              context,
+              arg.functionName,
+              arg.args.map((nested) => resolveShapeFunctionArg(nested)),
+            ) as RuntimeFunctionArg;
+          }
           return arg.value;
-        });
+        };
+
+        const args: RuntimeFunctionArg[] = element.expr.args.map((arg) => resolveShapeFunctionArg(arg));
         output[element.name] = executeFunctionCall(schema, db, context, element.expr.functionName, args);
       } else if (element.expr.kind === "link_aggregate") {
         const loweredAlias = computedValueAlias(element.pathId);
@@ -1238,40 +1231,29 @@ const materializeFreeObjectRow = (
         context,
         entry.functionName,
         entry.args.map((arg): RuntimeFunctionArg => {
-          if (arg.kind === "function_call") {
-            return executeFunctionCall(
-              schema,
-              db,
-              context,
-              arg.functionName,
-              arg.args.map((nested) => {
-                if (nested.kind === "binding_ref") {
-                  return context.globals?.[nested.name] ?? null;
-                }
-                if (nested.kind === "set_literal") {
-                  return { kind: "set" as const, values: [...nested.values] };
-                }
-                if (nested.kind === "array_literal") {
-                  return { kind: "array" as const, values: [...nested.values] };
-                }
-                return nested.value;
-              }),
-            ) as RuntimeFunctionArg;
-          }
+          const resolveFreeFunctionArg = (value: typeof arg): RuntimeFunctionArg => {
+            if (value.kind === "set_literal") {
+              return { kind: "set" as const, values: [...value.values] };
+            }
+            if (value.kind === "array_literal") {
+              return { kind: "array" as const, values: [...value.values] };
+            }
+            if (value.kind === "binding_ref") {
+              return context.globals?.[value.name] ?? null;
+            }
+            if (value.kind === "function_call") {
+              return executeFunctionCall(
+                schema,
+                db,
+                context,
+                value.functionName,
+                value.args.map((nested) => resolveFreeFunctionArg(nested)),
+              ) as RuntimeFunctionArg;
+            }
+            return value.value;
+          };
 
-          if (arg.kind === "set_literal") {
-            return { kind: "set" as const, values: [...arg.values] };
-          }
-
-          if (arg.kind === "array_literal") {
-            return { kind: "array" as const, values: [...arg.values] };
-          }
-
-          if (arg.kind === "binding_ref") {
-            return context.globals?.[arg.name] ?? null;
-          }
-
-          return arg.value;
+          return resolveFreeFunctionArg(arg);
         }),
       );
       continue;
@@ -1789,7 +1771,7 @@ const resolveLinks = (
     columns: string[];
     shape: SelectShapeElementIR[];
     filter?: FilterExprIR;
-    orderBy?: { column: string; direction: "asc" | "desc" };
+    orderBy?: OrderByIR<string>;
     limit?: number;
     offset?: number;
   },
@@ -1823,7 +1805,7 @@ const resolveLinks = (
   }
 
   if (nested.orderBy) {
-    sql += ` ORDER BY ${quoteIdent(nested.orderBy.column)} ${nested.orderBy.direction.toUpperCase()}`;
+    sql += ` ORDER BY ${quoteIdent(nested.orderBy.value)} ${nested.orderBy.direction.toUpperCase()}`;
   }
 
   if (nested.limit !== undefined) {
