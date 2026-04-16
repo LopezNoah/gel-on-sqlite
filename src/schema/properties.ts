@@ -77,6 +77,7 @@ export interface PropertyData {
   name: string;
   source?: unknown;
   target?: PropertyTypeLike;
+  expr?: Expression;
   required?: boolean;
   cardinality?: SchemaCardinality;
   owned?: boolean;
@@ -328,7 +329,7 @@ export class CreateProperty extends PropertyCommand {
     const link = context.get(PropertySourceContext);
     if (op.property === "target" && link) {
       if (node.kind === "CreateConcreteProperty") {
-        const expr = this.getAttributeValue("expr" as keyof PropertyData) as unknown as Expression | undefined;
+        const expr = this.getAttributeValue("expr");
         if (expr) {
           node.target = expr.parse();
         } else {

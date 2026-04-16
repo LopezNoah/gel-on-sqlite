@@ -769,10 +769,10 @@ const evaluateForIteratorValues = (
 
   if (expr.kind === "function_call") {
     const args: RuntimeFunctionArg[] = expr.call.args.map((arg) => {
-      if (arg.kind === "literal") return arg.value as RuntimeFunctionArg;
-      if (arg.kind === "set_literal") return { kind: "array" as const, values: arg.values } as unknown as RuntimeFunctionArg;
-      if (arg.kind === "array_literal") return { kind: "array" as const, values: arg.values } as unknown as RuntimeFunctionArg;
-      return null as RuntimeFunctionArg;
+      if (arg.kind === "literal") return arg.value;
+      if (arg.kind === "set_literal") return { kind: "array", values: arg.values };
+      if (arg.kind === "array_literal") return { kind: "array", values: arg.values };
+      return null;
     });
     const qualifiedName = expr.call.name.includes("::")
       ? expr.call.name
@@ -1586,10 +1586,7 @@ const materializeSelectExprRows = (
     });
   }
 
-  if (Array.isArray(rows)) {
-    return rows.map((v) => v as Record<string, unknown>);
-  }
-  return [rows as unknown as Record<string, unknown>];
+  return rows.map((v) => v as Record<string, unknown>);
 };
 
 const executeFunctionCall = (
@@ -2096,7 +2093,9 @@ const parsePayloadArray = (value: unknown): unknown[] | null => {
       return [];
     }
 
-    const decodeNested = (input: unknown): unknown => {
+    function decodeNested(input: unknown[]): unknown[];
+    function decodeNested(input: unknown): unknown;
+    function decodeNested(input: unknown): unknown {
       if (typeof input === "string") {
         const trimmed = input.trim();
         if ((trimmed.startsWith("[") && trimmed.endsWith("]")) || (trimmed.startsWith("{") && trimmed.endsWith("}"))) {
@@ -2118,9 +2117,9 @@ const parsePayloadArray = (value: unknown): unknown[] | null => {
       }
 
       return input;
-    };
+    }
 
-    return decodeNested(parsed) as unknown[];
+    return decodeNested(parsed);
   } catch {
     return null;
   }

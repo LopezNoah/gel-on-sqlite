@@ -187,7 +187,21 @@ export const deserializeSchemaFromGelTables = (db: SQLiteDatabase): SchemaSnapsh
     idx: number;
   }>;
 
-  const typeAnnotations = db.prepare(`SELECT * FROM gel_annotations`).all() as unknown as AnnotationRow[];
+  const typeAnnotations = db.prepare(`SELECT * FROM gel_annotations`).all().map((row): AnnotationRow => {
+    const subjectId = row.subject_id;
+    const annotationId = row.annotation_id;
+    const value = row.value;
+
+    if (typeof subjectId !== "string" || typeof annotationId !== "string" || (typeof value !== "string" && value !== null)) {
+      throw new Error("Invalid annotation row in gel_annotations");
+    }
+
+    return {
+      subject_id: subjectId,
+      annotation_id: annotationId,
+      value,
+    };
+  });
 
   const typeTriggers = db.prepare(`SELECT * FROM gel_type_triggers`).all() as Array<{
     type_id: string;

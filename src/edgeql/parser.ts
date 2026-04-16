@@ -32,6 +32,8 @@ interface ParseContext {
   withModuleAliases?: WithModuleAlias[];
 }
 
+type ParsedLiteralValue = ScalarValue | ParsedLiteralValue[];
+
 class Parser {
   private readonly tokens: Token[];
   private index = 0;
@@ -420,7 +422,7 @@ class Parser {
 
     return {
       kind: "literal",
-      value: this.readValue(),
+      value: this.readScalarLikeValue(),
     };
   }
 
@@ -713,7 +715,7 @@ class Parser {
     if (this.peekNth(1).kind !== "kw_is") {
       return {
         kind: "literal",
-        value: this.readValue(),
+        value: this.readScalarLikeValue(),
       };
     }
 
@@ -810,7 +812,7 @@ class Parser {
       };
     }
 
-    const thenValue = this.readValue();
+    const thenValue = this.readScalarLikeValue();
     let baseArg: FunctionCallArgExpr = { kind: "literal", value: thenValue };
     if (this.peek().kind === "minus") {
       this.consume();
@@ -857,7 +859,7 @@ class Parser {
 
     const conditionField = this.parseIfConditionField();
     this.expect("equals", "Expected '=' in IF condition");
-    const conditionValue = this.readValue();
+    const conditionValue = this.readScalarValue();
     if (this.peek().kind !== "kw_else") {
       const token = this.peek();
       throw new AppError("E_SYNTAX", "Expected 'else' in IF expression", token.line, token.column);
@@ -936,7 +938,7 @@ class Parser {
 
     return {
       kind: "literal",
-      value: this.readValue(),
+      value: this.readScalarLikeValue(),
     };
   }
 
@@ -1050,7 +1052,7 @@ class Parser {
 
     if (this.peek().kind === "lbrace") {
       this.consume();
-      const values = this.parseDelimited("rbrace", () => this.readValue(), "Expected ',' in set literal function argument");
+      const values = this.parseDelimited("rbrace", () => this.readScalarValue(), "Expected ',' in set literal function argument");
       this.expect("rbrace", "Expected '}' after set literal function argument");
       return {
         kind: "set_literal",
@@ -1060,7 +1062,7 @@ class Parser {
 
     if (this.peek().kind === "lbracket") {
       this.consume();
-      const values = this.parseDelimited("rbracket", () => this.readValue(), "Expected ',' in array literal function argument");
+      const values = this.parseDelimited("rbracket", () => this.readScalarValue(), "Expected ',' in array literal function argument");
       this.expect("rbracket", "Expected ']' after array literal function argument");
       return {
         kind: "array_literal",
@@ -1074,7 +1076,7 @@ class Parser {
 
     return {
       kind: "literal",
-      value: this.readValue(),
+      value: this.readScalarValue(),
     };
   }
 
@@ -1095,7 +1097,7 @@ class Parser {
 
     if (this.peek().kind === "lbrace") {
       this.consume();
-      const values = this.parseDelimited("rbrace", () => this.readValue(), "Expected ',' in cast set literal function argument");
+      const values = this.parseDelimited("rbrace", () => this.readScalarValue(), "Expected ',' in cast set literal function argument");
       this.expect("rbrace", "Expected '}' after cast set literal function argument");
       return {
         kind: "set_literal",
@@ -1120,7 +1122,7 @@ class Parser {
 
     return {
       kind: "literal",
-      value: this.readValue(),
+      value: this.readScalarValue(),
     };
   }
 
@@ -1217,7 +1219,7 @@ class Parser {
 
     if (this.peek().kind === "lbracket") {
       this.consume();
-      const values = this.parseDelimited("rbracket", () => this.readValue(), "Expected ',' in array literal");
+      const values = this.parseDelimited("rbracket", () => this.readScalarValue(), "Expected ',' in array literal");
       this.expect("rbracket", "Expected ']' after array literal");
       return {
         kind: "array_literal",
@@ -1229,7 +1231,7 @@ class Parser {
       return this.parseInsertSetLiteralValue();
     }
 
-    return this.readValue();
+    return this.readScalarValue();
   }
 
   private parseCastInsertValue(): InsertValue {
@@ -1319,13 +1321,13 @@ class Parser {
         hasNamed = true;
         const key = this.consume().lexeme;
         this.consume();
-        named[key] = this.readValue();
+        named[key] = this.readScalarLikeValue();
       } else {
         if (hasNamed) {
           const token = this.peek();
           throw new AppError("E_SYNTAX", "Cannot mix unnamed and named tuple elements", token.line, token.column);
         }
-        items.push(this.readValue());
+        items.push(this.readScalarLikeValue());
       }
 
       if (this.peek().kind === "comma") {
@@ -1432,7 +1434,7 @@ class Parser {
     this.expect("assign", "Expected ':=' after field name");
     return {
       field,
-      value: this.readValue(),
+      value: this.readScalarLikeValue(),
     };
   }
 
@@ -1611,14 +1613,7 @@ class Parser {
     }
     if (this.peek().kind === "lbrace") {
       this.consume();
-      const values: ScalarValue[] = [];
-      for (const val of this.parseDelimited("rbrace", () => this.readFilterValue(), "Expected ',' in IN filter values")) {
-        if (typeof val === "string" || typeof val === "number" || typeof val === "boolean" || val === null) {
-          values.push(val);
-        } else {
-          throw new AppError("E_SYNTAX", "IN filter values must be scalar literals", token.line, token.column);
-        }
-      }
+      const values = this.parseDelimited("rbrace", () => this.readScalarValue(), "Expected ',' in IN filter values");
       this.expect("rbrace", "Expected '}' to close IN filter value set");
       return {
         kind: "set_literal",
@@ -1707,7 +1702,7 @@ class Parser {
       };
     }
 
-    return this.readValue();
+    return this.readScalarValue();
   }
 
   private parseWithClause(): ParseContext {
@@ -1776,7 +1771,7 @@ class Parser {
 
     if (this.peek().kind === "lbrace") {
       this.consume();
-      const values = this.parseDelimited("rbrace", () => this.readValue(), "Expected ',' in set literal with binding");
+      const values = this.parseDelimited("rbrace", () => this.readScalarValue(), "Expected ',' in set literal with binding");
       this.expect("rbrace", "Expected '}' after set literal with binding");
       return {
         kind: "set_literal",
@@ -1786,7 +1781,7 @@ class Parser {
 
     if (this.peek().kind === "lbracket") {
       this.consume();
-      const values = this.parseDelimited("rbracket", () => this.readValue(), "Expected ',' in array literal with binding");
+      const values = this.parseDelimited("rbracket", () => this.readScalarValue(), "Expected ',' in array literal with binding");
       this.expect("rbracket", "Expected ']' after array literal with binding");
       return {
         kind: "array_literal",
@@ -1844,7 +1839,7 @@ class Parser {
 
     return {
       kind: "literal",
-      value: this.readValue(),
+      value: this.readScalarValue(),
     };
   }
 
@@ -1936,7 +1931,7 @@ class Parser {
     return 1;
   }
 
-  private readValue(): ScalarValue {
+  private readValue(): ParsedLiteralValue {
     const token = this.peek();
     if (token.kind === "minus") {
       const next = this.peekNext();
@@ -1980,7 +1975,7 @@ class Parser {
 
     if (token.kind === "lbracket") {
       this.consume();
-      const values: ScalarValue[] = [];
+      const values: ParsedLiteralValue[] = [];
       while (this.peek().kind !== "rbracket") {
         values.push(this.readValue());
         if (this.peek().kind === "comma") {
@@ -1990,10 +1985,34 @@ class Parser {
         }
       }
       this.expect("rbracket", "Expected ']' after array literal");
-      return values as unknown as ScalarValue;
+      return values;
     }
 
     throw new AppError("E_SYNTAX", "Expected a literal value", token.line, token.column);
+  }
+
+  private readScalarValue(message = "Expected a literal value"): ScalarValue {
+    if (this.peek().kind === "lbracket") {
+      const token = this.peek();
+      throw new AppError("E_SYNTAX", message, token.line, token.column);
+    }
+
+    const value = this.readValue();
+    if (Array.isArray(value)) {
+      const token = this.peek();
+      throw new AppError("E_SYNTAX", message, token.line, token.column);
+    }
+
+    return value;
+  }
+
+  private readScalarLikeValue(): ScalarValue {
+    const value = this.readValue();
+    if (Array.isArray(value)) {
+      return JSON.stringify(value);
+    }
+
+    return value;
   }
 
   private readInteger(message: string): number {

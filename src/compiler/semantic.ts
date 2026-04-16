@@ -43,14 +43,16 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     return value as Exclude<T, undefined>;
   };
 
-  const extractLiteralValue = (entry: import("../ir/model.js").SelectExprIREntry): ScalarValue => {
+  type ExtractedLiteralValue = ScalarValue | ExtractedLiteralValue[];
+
+  const extractLiteralValue = (entry: import("../ir/model.js").SelectExprIREntry): ExtractedLiteralValue => {
     switch (entry.kind) {
       case "literal":
         return entry.value;
       case "set_literal":
-        return entry.values as unknown as ScalarValue;
+        return entry.values;
       case "set_expr":
-        return entry.values.map(extractLiteralValue) as unknown as ScalarValue;
+        return entry.values.map(extractLiteralValue);
       case "cast":
         return extractLiteralValue(entry.value);
       case "enum_path":
@@ -68,6 +70,10 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       case "current_item":
         return null;
     }
+  };
+
+  const expectStringLiteral = (value: ExtractedLiteralValue, message: string): string => {
+    return typeof value === "string" ? value : fail(message);
   };
 
   type FieldEqPredicate = Extract<FilterExpr, { kind: "predicate" }> & {
@@ -869,12 +875,12 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
             ? value
             : fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
           const parsed: unknown = JSON.parse(serialized);
-          if (!Array.isArray(parsed)) {
-            fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
-          }
+          const parsedArray = Array.isArray(parsed)
+            ? parsed
+            : fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
 
-          for (const entry of parsed as unknown[]) {
-            if (!isValidScalarValue(field.type, entry as ScalarValue)) {
+          for (const entry of parsedArray) {
+            if (!isValidScalarValue(field.type, entry)) {
               fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
             }
           }
@@ -1940,14 +1946,14 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
               if (jsonInnerValue === null) {
                 return { kind: "cast", castType: resolvedCastType, value: { kind: "literal", value: null } };
               }
-              if (typeof jsonInnerValue !== "string") {
-                const jsonType = typeof jsonInnerValue === "number" ? "JSON number" : typeof jsonInnerValue === "boolean" ? "JSON boolean" : "JSON value";
-                fail(`expected JSON string or null for enum cast, got ${jsonType}`);
+              const jsonInnerString = typeof jsonInnerValue === "string"
+                ? jsonInnerValue
+                : fail(`expected JSON string or null for enum cast, got ${typeof jsonInnerValue === "number" ? "JSON number" : typeof jsonInnerValue === "boolean" ? "JSON boolean" : "JSON value"}`);
+
+              if (!allEnumValues.includes(jsonInnerString)) {
+                fail(`invalid input value for enum '${resolvedCastType}': "${jsonInnerString}"`);
               }
-              if (!allEnumValues.includes(jsonInnerValue as string)) {
-                fail(`invalid input value for enum '${resolvedCastType}': "${jsonInnerValue}"`);
-              }
-              return { kind: "cast", castType: resolvedCastType, value: { kind: "literal", value: jsonInnerValue } };
+              return { kind: "cast", castType: resolvedCastType, value: { kind: "literal", value: jsonInnerString } };
             }
             const coerceEnumValue = (entry: import("../ir/model.js").SelectExprIREntry): import("../ir/model.js").SelectExprIREntry => {
               if (entry.kind === "set_literal") {
@@ -1969,13 +1975,11 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
                   kind: "set_expr",
                   values: entry.values.map((item) => {
                     const rawValue = extractLiteralValue(item);
-                    if (typeof rawValue !== "string") {
-                      fail(`Cannot cast to enum '${resolvedCastType}': expected string value`);
+                    const enumValue = expectStringLiteral(rawValue, `Cannot cast to enum '${resolvedCastType}': expected string value`);
+                    if (!allEnumValues.includes(enumValue)) {
+                      fail(`invalid input value for enum '${resolvedCastType}': "${enumValue}"`);
                     }
-                    if (!allEnumValues.includes(rawValue as string)) {
-                      fail(`invalid input value for enum '${resolvedCastType}': "${rawValue}"`);
-                    }
-                    return { kind: "literal", value: rawValue };
+                    return { kind: "literal", value: enumValue };
                   }),
                 };
               }
@@ -1983,13 +1987,11 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
                 return entry;
               }
               const rawValue = extractLiteralValue(entry);
-              if (typeof rawValue !== "string") {
-                fail(`Cannot cast to enum '${resolvedCastType}': expected string value`);
+              const enumValue = expectStringLiteral(rawValue, `Cannot cast to enum '${resolvedCastType}': expected string value`);
+              if (!allEnumValues.includes(enumValue)) {
+                fail(`invalid input value for enum '${resolvedCastType}': "${enumValue}"`);
               }
-              if (!allEnumValues.includes(rawValue as string)) {
-                fail(`invalid input value for enum '${resolvedCastType}': "${rawValue}"`);
-              }
-              return { kind: "literal", value: rawValue };
+              return { kind: "literal", value: enumValue };
             };
             return {
               kind: "cast",
@@ -2240,31 +2242,31 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     ensureField(fieldName);
     const field = requireValue(fieldByName.get(fieldName), `Unknown field '${fieldName}' on '${typeName}'`);
 
-    if (field.multi) {
-      if (typeof value !== "string") {
-        fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
-      }
-
-      try {
-        const serialized = typeof value === "string"
-          ? value
-          : fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
-        const parsed: unknown = JSON.parse(serialized);
-        if (!Array.isArray(parsed)) {
+      if (field.multi) {
+        if (typeof value !== "string") {
           fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
         }
 
-        for (const entry of parsed as unknown[]) {
-          if (!isValidScalarValue(field.type, entry as ScalarValue)) {
-            fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
+        try {
+          const serialized = typeof value === "string"
+            ? value
+            : fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
+          const parsed: unknown = JSON.parse(serialized);
+          const parsedArray = Array.isArray(parsed)
+            ? parsed
+            : fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
+
+          for (const entry of parsedArray) {
+            if (!isValidScalarValue(field.type, entry)) {
+              fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
+            }
+            if (field.enumValues && typeof entry === "string" && !field.enumValues.includes(entry)) {
+              fail(`invalid input value for enum '${typeName}': "${entry}"`);
+            }
           }
-          if (field.enumValues && typeof entry === "string" && !field.enumValues.includes(entry)) {
-            fail(`invalid input value for enum '${typeName}': "${entry}"`);
-          }
+        } catch {
+          fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
         }
-      } catch {
-        fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
-      }
       return;
     }
 
@@ -2700,7 +2702,7 @@ const coerceCastScalarValue = (castType: string, value: unknown, context: string
   }
 };
 
-const isValidScalarValue = (type: ScalarType, value: ScalarValue): boolean => {
+const isValidScalarValue = (type: ScalarType, value: unknown): value is ScalarValue => {
   if (value === null) {
     return true;
   }
@@ -2729,10 +2731,10 @@ const isValidScalarValue = (type: ScalarType, value: ScalarValue): boolean => {
           return false;
         }
       }
-      if (Array.isArray(value as unknown)) {
+      if (Array.isArray(value)) {
         return true;
       }
-      if (typeof (value as unknown) === "object") {
+      if (value !== null && typeof value === "object") {
         return true;
       }
       return false;

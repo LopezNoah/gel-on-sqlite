@@ -26,10 +26,7 @@ export type FilterValue =
       kind: "field_ref";
       field: string;
     }
-  | {
-      kind: "set_literal";
-      values: ScalarValue[];
-    };
+  | SetLiteralValue;
 
 export type FilterExpr =
   | {
@@ -43,10 +40,7 @@ export type FilterExpr =
       target: FilterTarget;
       op: "in" | "not_in";
       values:
-        | {
-            kind: "set_literal";
-            values: ScalarValue[];
-          }
+        | SetLiteralValue
         | {
             kind: "select";
             query: {
@@ -268,10 +262,7 @@ export type FreeObjectExpr =
       kind: "literal";
       value: ScalarValue;
     }
-  | {
-      kind: "set_literal";
-      values: ScalarValue[];
-    }
+  | SetLiteralValue
   | {
       kind: "set_expr";
       values: FreeObjectExpr[];

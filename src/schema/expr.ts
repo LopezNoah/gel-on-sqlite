@@ -283,8 +283,8 @@ export class Expression {
     this.origin = `${id} ${field}`;
   }
 
-  isCompiled(): boolean {
-    return this.refs !== null;
+  isCompiled(): this is CompiledExpression {
+    return this.refs !== null && this._irast !== null;
   }
 
   protected refsKeys(schema: SchemaLike): Set<string> {
@@ -402,8 +402,8 @@ export class Expression {
     asFragment?: boolean;
     context?: CommandContextLike;
   }): CompiledExpression {
-    if (this._irast) {
-      return this as unknown as CompiledExpression;
+    if (this.isCompiled()) {
+      return this;
     }
 
     return this.compiled({
@@ -415,8 +415,8 @@ export class Expression {
   }
 
   assertCompiled(): CompiledExpression {
-    if (this._irast) {
-      return this as unknown as CompiledExpression;
+    if (this.isCompiled()) {
+      return this;
     }
     throw new Error(`uncompiled expression '${this.text}' (origin: ${this.origin})`);
   }
