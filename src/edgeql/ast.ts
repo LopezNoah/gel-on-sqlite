@@ -356,6 +356,14 @@ export interface InsertStatement {
 export type InsertValue =
   | ScalarValue
   | {
+      kind: "array";
+      values: ScalarValue[];
+    }
+  | {
+      kind: "tuple";
+      values: ScalarValue[] | Record<string, ScalarValue>;
+    }
+  | {
       kind: "binding_ref";
       name: string;
     }

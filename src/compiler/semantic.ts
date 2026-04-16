@@ -360,6 +360,10 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     switch (value.kind) {
       case "binding_ref":
         return resolveWithBindingScalar(value.name);
+      case "array":
+        return JSON.stringify(value.values);
+      case "tuple":
+        return JSON.stringify(value.values);
       default:
         return fail(`Expected scalar value in insert assignment, got ${value.kind}`);
     }
@@ -376,6 +380,14 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
 
     if (value.kind === "binding_ref") {
       return [resolveWithBindingScalar(value.name)];
+    }
+
+    if (value.kind === "array") {
+      return [JSON.stringify(value.values)];
+    }
+
+    if (value.kind === "tuple") {
+      return [JSON.stringify(value.values)];
     }
 
     return fail(`Expected set-compatible value in insert assignment, got ${value.kind}`);
