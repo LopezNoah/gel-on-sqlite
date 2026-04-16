@@ -1,6 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { openSQLite, materializeSchema } from "../src/runtime/database.js";
+import {
+  serializeSchemaToGelTables,
+  serializeSchemaToInstdata,
+  ensureGelSchemaTables,
+  deserializeSchemaFromInstdata,
+  deserializeSchemaFromGelTables,
+} from "../src/schema/gel_persistence.js";
 import { executeQuery, executeScript } from "../src/runtime/engine.js";
 import { parseDeclarativeSchema } from "../src/schema/declarative.js";
 import { schemaSnapshotFromDeclarative } from "../src/schema/uiSchema.js";
@@ -11,6 +18,8 @@ export interface HarnessOptions {
   setup?: string;       // Name of .edgeql file in tests/schemas/
   dbFile?: string;      // Optional SQLite file path for inspection
   resetDbFile?: boolean;
+  reuseExistingDb?: boolean;
+  runSetupOnReuse?: boolean;
 }
 
 function inferredModuleNameFromSchema(schemaName: string): string {
@@ -21,30 +30,13 @@ function inferredModuleNameFromSchema(schemaName: string): string {
   return schemaName.slice(idx + 1).toLowerCase().replace(/_/g, "::");
 }
 
-function hasExplicitModuleDeclaration(source: string): boolean {
-  const withoutComments = source.replace(/^\s*#.*$/gm, "");
-  return withoutComments.trimStart().startsWith("module ");
-}
-
 function stripHashComments(source: string): string {
   return source.replace(/^\s*#.*$/gm, "");
 }
 
-function normalizeSetupStatement(source: string): string {
-  return source
-    .replace(/^(\s*INSERT\s+)([A-Za-z_][\w]*)(\s*\{)/gim, "$1default::$2$3")
-    .replace(/single_link\s*:=\s*\(\s*WITH\s+val\s*:=\s*'([^']+)'\s*SELECT\s+C\s*(?:\{\s*@[A-Za-z_][\w]*\s*:=\s*val\s*\})?\s*FILTER\s+\.val\s*=\s*val\s*\)/gim, "single_link := (SELECT C FILTER .val = '$1')")
-    .replace(/multi_link\s*:=\s*\(\s*FOR\s+val\s+IN\s*\(\s*DISTINCT\s*\{([^}]+)\}\s*\)\s*UNION\s*\(\s*SELECT\s+C\s*(?:\{\s*@[A-Za-z_][\w]*\s*:=\s*val\s*\})?\s*FILTER\s+\.val\s*=\s*val\s*\)\s*\)/gim, "multi_link := (SELECT C FILTER .val IN DISTINCT {$1})")
-    .replace(/(SELECT\s+[A-Za-z_][\w:]*?)\s*\{\s*@[A-Za-z_][\w]*\s*:=\s*[^}]+\}/gim, "$1")
-    .replace(/<json>\s*'([^']*)'/g, "'\"$1\"'")
-    .replace(/<([A-Za-z_][\w:]*)>\s*'([^']*)'/g, "'$2'")
-    .replace(/<json>\s*False/g, "false")
-    .replace(/<json>\s*True/g, "true")
-    .replace(/\bFalse\b/g, "false")
-    .replace(/\bTrue\b/g, "true")
-    .replace(/to_json\('([^']*)'\)/g, "'$1'")
-    .replace(/\bb'([^']*)'/g, "'$1'")
-    .replace(/(-?\d+(?:\.\d+)?)n\b/g, "$1");
+function hasExplicitModuleDeclaration(source: string): boolean {
+  const withoutComments = source.replace(/^\s*#.*$/gm, "");
+  return withoutComments.trimStart().startsWith("module ");
 }
 
 function wrapModule(moduleName: string, source: string): string {
@@ -53,6 +45,22 @@ function wrapModule(moduleName: string, source: string): string {
     return cleanSource;
   }
   return `module ${moduleName} {\n${cleanSource}\n}`;
+}
+
+function qualifyUnqualifiedTypes(source: string, moduleName: string): string {
+  return source
+    .replace(/\b(INSERT|UPDATE|DELETE)\s+([A-Za-z_]\w*(?:::[A-Za-z_]\w*)?)\b/gi, (_match, keyword: string, typeName: string) => {
+      if (typeName.includes("::")) return _match;
+      return `${keyword} ${moduleName}::${typeName}`;
+    })
+    .replace(/\bSELECT\s+([A-Za-z_]\w*(?:::[A-Za-z_]\w*)?)\s*(?=[\{<\s]|$)/gi, (_match, typeName: string) => {
+      if (typeName.includes("::") || ["MODULE", "DETACHED", "DISTINCT", "count", "array_agg", "array_join", "str_lower"].includes(typeName)) return _match;
+      return `SELECT ${moduleName}::${typeName}`;
+    })
+    .replace(/\bFILTER\s+\.__type__\.name\s*=\s*'([A-Za-z_]\w*)'/gi, (_match, typeName: string) => {
+      if (typeName.includes("::")) return _match;
+      return `FILTER .__type__.name = '${moduleName}::${typeName}'`;
+    });
 }
 
 function loadSchemaSource(schemaDir: string, schemaName: string): string {
@@ -95,15 +103,8 @@ export class QueryHarness {
    * Factory method to create a fresh test database with schema/data
    */
   static async create(options: HarnessOptions): Promise<QueryHarness> {
-    let schemaSource = "";
-    if (options.schema) {
-      const schemaDir = path.join(__dirname, "schemas");
-      schemaSource = loadSchemaSource(schemaDir, options.schema);
-    }
-
-    const decl = parseDeclarativeSchema(schemaSource);
-    const snapshot = schemaSnapshotFromDeclarative(decl);
     const dbFile = options.dbFile ?? ":memory:";
+    const hadExistingDbFile = Boolean(options.dbFile) && fs.existsSync(dbFile);
     if (options.dbFile) {
       fs.mkdirSync(path.dirname(options.dbFile), { recursive: true });
       if (options.resetDbFile !== false && fs.existsSync(options.dbFile)) {
@@ -112,31 +113,56 @@ export class QueryHarness {
     }
 
     const { db } = openSQLite(dbFile);
-    materializeSchema(db, snapshot);
+    const shouldReuseExistingDb = Boolean(options.dbFile)
+      && options.resetDbFile === false
+      && options.reuseExistingDb === true
+      && hadExistingDbFile;
+
+    let snapshot = null as ReturnType<typeof schemaSnapshotFromDeclarative> | null;
+
+    if (shouldReuseExistingDb) {
+      snapshot = deserializeSchemaFromInstdata(db) ?? deserializeSchemaFromGelTables(db);
+    }
+
+    if (!snapshot) {
+      let schemaSource = "";
+      if (options.schema) {
+        const schemaDir = path.join(__dirname, "schemas");
+        schemaSource = loadSchemaSource(schemaDir, options.schema);
+      }
+
+      const decl = parseDeclarativeSchema(schemaSource);
+      snapshot = schemaSnapshotFromDeclarative(decl);
+      materializeSchema(db, snapshot);
+      ensureGelSchemaTables(db);
+      serializeSchemaToGelTables(db, snapshot);
+      serializeSchemaToInstdata(db, snapshot);
+    }
 
     const harness = new QueryHarness(db, snapshot);
 
-    if (options.setup) {
+    const shouldRunSetup = Boolean(options.setup)
+      && (!shouldReuseExistingDb || options.runSetupOnReuse === true);
+
+    if (shouldRunSetup && options.setup) {
       const p = path.join(__dirname, "schemas", `${options.setup}.edgeql`);
-      const setupSource = stripHashComments(fs.readFileSync(p, "utf-8"))
-        .replace(/^\s*SET\s+MODULE\s+[^;]+;\s*$/gim, "");
+      const rawSource = stripHashComments(fs.readFileSync(p, "utf-8"));
 
-      if (options.setup === "dump01_setup") {
-        const normalized = normalizeSetupStatement(setupSource);
-        harness.script(normalized);
-      } else {
-        let setupQueries = setupSource
-          .split(/;\s*$/m)
-          .filter(s => s.trim().length > 0);
+      const setModuleMatch = rawSource.match(/^\s*SET\s+MODULE\s+([A-Za-z_][\w:]*);/im);
+      const fallbackModule = options.schema ? inferredModuleNameFromSchema(options.schema) : "default";
+      const currentModule = setModuleMatch ? setModuleMatch[1] : fallbackModule;
 
-        for (const q of setupQueries) {
-          const normalized = normalizeSetupStatement(q) + ";";
-          try {
-            harness.query(normalized);
-          } catch (error) {
-            throw new Error(`Failed setup query:\n${normalized}\n\n${error instanceof Error ? error.message : String(error)}`);
-          }
-        }
+      const setupSource = rawSource.replace(/^\s*SET\s+MODULE\s+[^;]+;\s*$/gim, "");
+
+      let setupQueries = setupSource
+        .split(/;\s*$/m)
+        .filter(s => s.trim().length > 0);
+
+      for (const q of setupQueries) {
+        const qualified = /^\s*WITH\b/i.test(q)
+          ? q
+          : qualifyUnqualifiedTypes(q, currentModule);
+        harness.script(qualified + ";");
       }
     }
 

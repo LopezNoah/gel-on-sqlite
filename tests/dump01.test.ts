@@ -9,6 +9,7 @@ describe("TestDump01", () => {
       schema: "dump01_test",
       setup: "dump01_setup",
       dbFile: "./tests/.artifacts/dump01.sqlite",
+      resetDbFile: true
     });
   });
 
@@ -942,7 +943,7 @@ describe("TestDump01", () => {
     );
   });
 
-  it.skip("should validate link property values", () => {
+  it("should validate link property values", () => {
     h.assertQueryResult(
       `
       SELECT E {
@@ -1041,7 +1042,7 @@ describe("TestDump01", () => {
     );
   });
 
-  it.skip("should validate user functions", () => {
+  it("should validate user functions", () => {
     h.assertQueryResult(
       `
       SELECT user_func_0(99);
@@ -1078,7 +1079,7 @@ describe("TestDump01", () => {
     );
   });
 
-  it.skip("should validate user enum", () => {
+  it("should validate user enum", () => {
     h.assertQueryResult(
       `
       WITH w := {'Lorem', 'ipsum', 'dolor', 'sit', 'amet'}
@@ -1098,7 +1099,7 @@ describe("TestDump01", () => {
     );
   });
 
-  it.skip("should validate O data", () => {
+  it("should validate O data", () => {
     h.assertQueryResult(
       `
       SELECT <str>{O.o0, O.o1, O.o2};
@@ -1124,7 +1125,7 @@ describe("TestDump01", () => {
     );
   });
 
-  it.skip("should validate collection properties P", () => {
+  it("should validate collection properties P", () => {
     h.assertQueryResult(
       `
       SELECT P {
@@ -1145,7 +1146,7 @@ describe("TestDump01", () => {
     );
   });
 
-  it.skip("should validate Q data", () => {
+  it("should validate Q data", () => {
     h.assertQueryResult(
       `
       SELECT Q {q0, q1, q2, q3};
@@ -1161,7 +1162,7 @@ describe("TestDump01", () => {
     );
   });
 
-  it.skip("should validate multiple inheritance S, T, V", () => {
+  it("should validate multiple inheritance S, T, V", () => {
     h.assertQueryResult(
       `
       SELECT S {name, s}
@@ -1199,7 +1200,7 @@ describe("TestDump01", () => {
     );
   });
 
-  it.skip("should validate aliases Primes", () => {
+  it("should validate aliases Primes", () => {
     h.assertQueryResult(
       `
       SELECT Primes;
@@ -1208,7 +1209,7 @@ describe("TestDump01", () => {
     );
   });
 
-  it.skip("should validate self/mutually-referencing types W", () => {
+  it("should validate self/mutually-referencing types W", () => {
     h.assertQueryResult(
       `
       SELECT W {
@@ -1453,7 +1454,7 @@ describe("TestDump01", () => {
     }).toThrow();
   });
 
-  it.skip("should validate read-only ROPropsA", () => {
+  it("should validate read-only ROPropsA", () => {
     h.assertQueryResult(
       `
       SELECT ROPropsA {
@@ -1501,7 +1502,7 @@ describe("TestDump01", () => {
     }).toThrow();
   });
 
-  it.skip("should validate read-only ROLinksA", () => {
+  it("should validate read-only ROLinksA", () => {
     h.assertQueryResult(
       `
       SELECT ROLinksA {
@@ -1568,7 +1569,7 @@ describe("TestDump01", () => {
     }).toThrow();
   });
 
-  it.skip("should validate read-only ROLinksB", () => {
+  it("should validate read-only ROLinksB", () => {
     h.assertQueryResult(
       `
       SELECT ROLinksB {

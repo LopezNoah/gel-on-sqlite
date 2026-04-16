@@ -1,4 +1,5 @@
-import type { FieldDef, FunctionDef, TypeDef } from "../types.js";
+import type { AliasDef, AnnotationDef, FieldDef, FunctionDef, TypeDef } from "../types.js";
+import { AnnotationSet } from "./annos.js";
 
 export interface SchemaDelta {
   createTypes?: TypeDef[];
@@ -8,10 +9,12 @@ export interface SchemaDelta {
 export class SchemaSnapshot {
   private readonly typesByName: Map<string, TypeDef>;
   private readonly functionsBySignature: Map<string, FunctionDef>;
+  private readonly aliasesByName: Map<string, AliasDef>;
 
-  constructor(types: TypeDef[] = [], functions: FunctionDef[] = []) {
+  constructor(types: TypeDef[] = [], functions: FunctionDef[] = [], aliases: AliasDef[] = []) {
     this.typesByName = new Map(types.map((t) => [qualifiedTypeName(t), cloneTypeDef(t)]));
     this.functionsBySignature = new Map(functions.map((fn) => [functionSignature(fn), cloneFunctionDef(fn)]));
+    this.aliasesByName = new Map(aliases.map((alias) => [qualifiedAliasName(alias), cloneAliasDef(alias)]));
   }
 
   getType(name: string): TypeDef | undefined {
@@ -46,6 +49,15 @@ export class SchemaSnapshot {
 
   listFunctions(): FunctionDef[] {
     return [...this.functionsBySignature.values()].map(cloneFunctionDef);
+  }
+
+  getAlias(name: string): AliasDef | undefined {
+    const existing = this.aliasesByName.get(name);
+    return existing ? cloneAliasDef(existing) : undefined;
+  }
+
+  listAliases(): AliasDef[] {
+    return [...this.aliasesByName.values()].map((alias) => cloneAliasDef(alias));
   }
 
   listConcreteTypesAssignableTo(name: string): TypeDef[] {
@@ -113,7 +125,7 @@ export class SchemaSnapshot {
       typeDef.fields.push({ ...update.field });
     }
 
-    return new SchemaSnapshot([...next.values()], this.listFunctions());
+    return new SchemaSnapshot([...next.values()], this.listFunctions(), this.listAliases());
   }
 }
 
@@ -127,6 +139,36 @@ export const functionSignature = (fn: FunctionDef): string => {
   return `${fn.module}::${fn.name}(${params})`;
 };
 
+const qualifiedAliasName = (alias: AliasDef): string => `${alias.module}::${alias.name}`;
+
+const cloneAliasDef = (alias: AliasDef): AliasDef => ({
+  ...alias,
+  values: alias.values ? [...alias.values] : undefined,
+  projections: alias.projections
+    ? alias.projections.map((projection) => ({
+        name: projection.name,
+        sourceField: projection.sourceField,
+      }))
+    : undefined,
+  filter: alias.filter
+    ? alias.filter.kind === "field_predicate"
+      ? {
+          kind: "field_predicate",
+          field: alias.filter.field,
+          op: alias.filter.op,
+          value: alias.filter.value,
+        }
+      : {
+          kind: "backlink_membership",
+          op: alias.filter.op,
+          value: alias.filter.value,
+          link: alias.filter.link,
+          sourceType: alias.filter.sourceType,
+          field: alias.filter.field,
+        }
+    : undefined,
+});
+
 const cloneComputedDef = (
   computed: NonNullable<TypeDef["computeds"]>[number],
 ): NonNullable<TypeDef["computeds"]>[number] => {
@@ -134,7 +176,7 @@ const cloneComputedDef = (
     if (computed.expr.kind === "concat") {
       return {
         ...computed,
-        annotations: computed.annotations?.map((annotation) => ({ ...annotation })),
+        annotations: cloneAnnotations(computed.annotations),
         expr: {
           kind: "concat",
           parts: computed.expr.parts.map((part) => ({ ...part })),
@@ -144,7 +186,7 @@ const cloneComputedDef = (
 
     return {
       ...computed,
-      annotations: computed.annotations?.map((annotation) => ({ ...annotation })),
+      annotations: cloneAnnotations(computed.annotations),
       expr: { ...computed.expr },
     };
   }
@@ -152,7 +194,7 @@ const cloneComputedDef = (
   if (computed.expr.kind === "link_ref") {
     return {
       ...computed,
-      annotations: computed.annotations?.map((annotation) => ({ ...annotation })),
+      annotations: cloneAnnotations(computed.annotations),
       expr: {
         kind: "link_ref",
         link: computed.expr.link,
@@ -163,7 +205,7 @@ const cloneComputedDef = (
 
   return {
     ...computed,
-    annotations: computed.annotations?.map((annotation) => ({ ...annotation })),
+    annotations: cloneAnnotations(computed.annotations),
     expr: {
       kind: "backlink",
       link: computed.expr.link,
@@ -172,18 +214,24 @@ const cloneComputedDef = (
   };
 };
 
+const cloneAnnotations = (annotations?: AnnotationDef[]): AnnotationDef[] | undefined =>
+  annotations?.length ? AnnotationSet.from(annotations).toArray() : undefined;
+
 const cloneTypeDef = (typeDef: TypeDef): TypeDef => ({
   ...typeDef,
   extends: typeDef.extends ? [...typeDef.extends] : undefined,
-  annotations: typeDef.annotations?.map((annotation) => ({ ...annotation })),
-  fields: typeDef.fields.map((f) => ({ ...f, annotations: f.annotations?.map((annotation) => ({ ...annotation })) })),
+  annotations: cloneAnnotations(typeDef.annotations),
+  fields: typeDef.fields.map((f) => ({
+    ...f,
+    annotations: cloneAnnotations(f.annotations),
+  })),
   links: typeDef.links?.map((l) => ({
     ...l,
     properties: l.properties?.map((property) => ({
       ...property,
-      annotations: property.annotations?.map((annotation) => ({ ...annotation })),
+      annotations: cloneAnnotations(property.annotations),
     })),
-    annotations: l.annotations?.map((annotation) => ({ ...annotation })),
+    annotations: cloneAnnotations(l.annotations),
   })),
   computeds: typeDef.computeds?.map((computed) => cloneComputedDef(computed)),
   mutationRewrites: typeDef.mutationRewrites?.map((rewrite) => ({ ...rewrite, onInsert: rewrite.onInsert ? { ...rewrite.onInsert } : undefined, onUpdate: rewrite.onUpdate ? { ...rewrite.onUpdate } : undefined })),

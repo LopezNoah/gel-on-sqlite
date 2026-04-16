@@ -29,6 +29,9 @@ const BASE_SQL_NATIVE_STDLIB_LOWERING = new Set<string>([
   "std::datetime_of_transaction",
   "std::datetime_of_statement",
   "std::to_str",
+  "std::len",
+  "std::str_lower",
+  "std::str_upper",
 ]);
 
 const RUNTIME_TARGET_CAPABILITIES: Record<RuntimeTarget, RuntimeTargetCapabilities> = {

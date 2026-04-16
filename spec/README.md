@@ -17,6 +17,8 @@ This folder is the sqlite-ts-local spec workspace.
 - `SPEC-052-ui-schema-management-and-studio-parity.md` - Astro UI parity roadmap for schema editing/apply, type/link exploration, query suggestions, and data-browser traversal.
 - `SPEC-054-studio-lib-transplant-tailwind-and-sqlite-adapter.md` - plan for importing Gel Studio code into `ui/src/lib`, adding required dependencies, converting to Tailwind, and bridging to sqlite-ts APIs.
 - `SPEC-015-schema-pointer-metadata.md` - sqlite-ts metadata contract for computed fields/backlinks and upstream Gel alignment.
+- `SPEC-080-edgeql-keyword-tokenizer-parity.md` - parity contract and file plan for keyword classes, tokenization, normalization, and diagnostics.
+- `SPEC-081-edgeql-parse-entrypoint-compatibility.md` - parse API/start-mode compatibility contract and project structure plan.
 - `SPEC-014-schema-storage-and-polymorphism.md` - detailed PostgreSQL storage/polymorphism reference with line-level evidence.
 - `reference-parity/` - one-to-one parity specs generated from `docs/reference/datamodel/**/*.rst` and `docs/reference/edgeql/**/*.rst` for sqlite-ts feature tracking.
 - `UPSTREAM-README.md` - preserved upstream spec workspace README from `edb/spec`.
