@@ -27,6 +27,23 @@ export interface SQLiteDatabase extends RuntimeDatabaseAdapter {
 
 export interface SQLiteRuntime extends RuntimeInstance<SQLiteDatabase> {}
 
+const isRowRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
+
+const toRowRecords = (value: unknown): Record<string, unknown>[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const out: Record<string, unknown>[] = [];
+  for (const entry of value) {
+    if (isRowRecord(entry)) {
+      out.push(entry);
+    }
+  }
+  return out;
+};
+
 export const openSQLite = (file = ":memory:"): SQLiteRuntime => {
   try {
     const db = new BetterSQLite3(file);
@@ -37,7 +54,7 @@ export const openSQLite = (file = ":memory:"): SQLiteRuntime => {
         prepare: (sql) => {
           const stmt = db.prepare(sql);
           return {
-            all: (...params) => stmt.all(...params) as Record<string, unknown>[],
+            all: (...params) => toRowRecords(stmt.all(...params)),
             run: (...params) => {
               const result = stmt.run(...params);
               return { changes: result.changes };
@@ -71,7 +88,7 @@ export const openSQLite = (file = ":memory:"): SQLiteRuntime => {
         };
 
         return {
-          all: (...params) => stmt.all(...params) as Record<string, unknown>[],
+          all: (...params) => toRowRecords(stmt.all(...params)),
           run: (...params) => {
             const result = stmt.run(...params) as { changes?: number };
             return { changes: Number(result.changes ?? 0) };
