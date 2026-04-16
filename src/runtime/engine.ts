@@ -16,7 +16,7 @@ import type { SQLiteDatabase } from "../runtime/database.js";
 
 export interface QueryResult {
   kind: "select" | "insert" | "update" | "delete";
-  rows?: Record<string, unknown>[];
+  rows?: unknown[];
   changes?: number;
 }
 
@@ -1341,7 +1341,7 @@ const evaluateSelectExprEntry = (
           return computed.expr.value;
         }
         if (computed.expr.kind === "field_ref") {
-          const rows = db.prepare(`SELECT ${computed.expr.field} FROM ${tableNameForType(entry.typeName)} LIMIT 1`).all() as Record<string, unknown>[];
+          const rows = db.prepare(`SELECT ${computed.expr.field} FROM ${tableNameForType(entry.typeName)} LIMIT 1`).all();
           return rows.length > 0 ? rows[0]?.[computed.expr.field] ?? null : null;
         }
         if (computed.expr.kind === "concat") {
@@ -1350,7 +1350,7 @@ const evaluateSelectExprEntry = (
               if (part.kind === "literal") {
                 return String(part.value ?? "");
               }
-              const rows = db.prepare(`SELECT ${part.field} FROM ${tableNameForType(entry.typeName)} LIMIT 1`).all() as Record<string, unknown>[];
+              const rows = db.prepare(`SELECT ${part.field} FROM ${tableNameForType(entry.typeName)} LIMIT 1`).all();
               return String(rows.length > 0 ? rows[0]?.[part.field] ?? "" : "");
             })
             .join("");
@@ -1363,7 +1363,7 @@ const evaluateSelectExprEntry = (
         }
         return null;
       }
-      const rows = db.prepare(`SELECT ${entry.field} FROM ${tableNameForType(entry.typeName)} LIMIT 1`).all() as Record<string, unknown>[];
+      const rows = db.prepare(`SELECT ${entry.field} FROM ${tableNameForType(entry.typeName)} LIMIT 1`).all();
       const value = rows.length > 0 ? rows[0]?.[entry.field] ?? null : null;
       return value;
     }
@@ -1532,7 +1532,7 @@ const materializeSelectExprRows = (
   ir: SelectExprIR,
   context: SecurityContext,
   sqlTrail: SQLArtifact[],
-): Record<string, unknown>[] => {
+): unknown[] => {
   if (ir.entries.length === 0) {
     return [];
   }
@@ -1586,7 +1586,7 @@ const materializeSelectExprRows = (
     });
   }
 
-  return rows.map((v) => v as Record<string, unknown>);
+  return rows;
 };
 
 const executeFunctionCall = (
@@ -1656,8 +1656,9 @@ const executeFunctionCall = (
   const query = withPrefix.length > 0 ? `with ${withPrefix} ${fn.body.query}` : fn.body.query;
   const result = executeQuery(db, schema, query, context);
   if (result.rows) {
-    if (result.rows.length === 1 && Object.keys(result.rows[0] ?? {}).length === 1) {
-      return Object.values(result.rows[0])[0];
+    const firstRow = result.rows[0];
+    if (result.rows.length === 1 && isRecordRow(firstRow) && Object.keys(firstRow).length === 1) {
+      return Object.values(firstRow)[0];
     }
     return result.rows;
   }
@@ -1841,7 +1842,7 @@ const resolveLinks = (
     params.push(nested.offset);
   }
 
-  const rows = db.prepare(sql).all(...params) as Record<string, unknown>[];
+  const rows = db.prepare(sql).all(...params);
   sqlTrail.push({ sql, params: [...params], loweringMode: "fallback_multi_query" });
   return rows.map((item) => materializeSelectRow(db, schema, context, nested.shape, item, rowSourceType(item, relation.targetType), sqlTrail));
 };
@@ -2081,6 +2082,9 @@ const compilePolymorphicTargetSource = (relation: LinkRelationIR, alias: string)
 
 const isScalarValue = (value: unknown): value is ScalarValue =>
   value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean";
+
+const isRecordRow = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
 
 const parsePayloadArray = (value: unknown): unknown[] | null => {
   if (typeof value !== "string") {
@@ -2851,9 +2855,8 @@ const applyUpdateLinkAssignments = (
   }
 
   const linkByName = new Map((typeDef.links ?? []).map((link) => [link.name, link] as const));
-  const values = ast.values as Record<string, InsertValue>;
 
-  for (const [field, value] of Object.entries(values)) {
+  for (const [field, value] of Object.entries(ast.values)) {
     const link = linkByName.get(field);
     if (!link) {
       continue;
@@ -3136,6 +3139,6 @@ const readRowsByIds = (db: SQLiteDatabase, table: string, ids: string[]): Record
 const readRowById = (db: SQLiteDatabase, table: string, id: string): Record<string, unknown> | null => {
   const row = db
     .prepare(`SELECT * FROM ${quoteIdent(table)} WHERE ${quoteIdent("id")} = ?`)
-    .all(id)[0] as Record<string, unknown> | undefined;
+    .all(id)[0];
   return row ?? null;
 };
