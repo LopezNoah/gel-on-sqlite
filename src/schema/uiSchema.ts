@@ -1,19 +1,81 @@
-import type { FunctionDef, FunctionExprDef, ScalarValue, TypeDef } from "../types.js";
+import type {
+  AliasDef,
+  AnnotationDef,
+  ConstraintDef,
+  FunctionDef,
+  FunctionExprDef,
+  ScalarValue,
+  TypeDef,
+} from "../types.js";
 import type { DeclarativeSchema, FunctionDeclaration, LinkMember, PropertyMember, TypeMember } from "./declarative.js";
+import { AnnotationRegistry, AnnotationResolver, AnnotationSet } from "./annos.js";
 import { SchemaSnapshot } from "./schema.js";
+import { scalarTypeDeclarationToTypeDef } from "./scalar.js";
+
+const cloneConstraint = (constraint: ConstraintDef): ConstraintDef => ({
+  name: constraint.name,
+  annotations: constraint.annotations.map((annotation) => ({ ...annotation })),
+});
+
+const cloneConstraints = (constraints: ConstraintDef[]): ConstraintDef[] => constraints.map(cloneConstraint);
+
+const inheritConstraints = (constraints: ConstraintDef[]): ConstraintDef[] => cloneConstraints(constraints);
+
+const mergeConstraintSets = (base: ConstraintDef[], override: ConstraintDef[]): ConstraintDef[] => {
+  const map = new Map<string, ConstraintDef>();
+  for (const constraint of base) {
+    map.set(constraint.name, cloneConstraint(constraint));
+  }
+  for (const constraint of override) {
+    map.set(constraint.name, cloneConstraint(constraint));
+  }
+  return [...map.values()];
+};
 
 export const schemaSnapshotFromDeclarative = (schema: DeclarativeSchema): SchemaSnapshot => {
   const typeDefs = typeDefsFromDeclarative(schema);
   const scalarTypeDefs = scalarTypeDefsFromDeclarative(schema);
-  return new SchemaSnapshot([...typeDefs, ...scalarTypeDefs], functionDefsFromDeclarative(schema));
+  return new SchemaSnapshot(
+    [...typeDefs, ...scalarTypeDefs],
+    functionDefsFromDeclarative(schema),
+    aliasDefsFromDeclarative(schema),
+  );
+};
+
+export const aliasDefsFromDeclarative = (schema: DeclarativeSchema): AliasDef[] => {
+  return (schema.aliases ?? []).map((alias) => ({
+    module: alias.module,
+    name: alias.name,
+    values: alias.values ? [...alias.values] : undefined,
+    sourceType: alias.sourceType,
+    projections: alias.projections
+      ? alias.projections.map((projection) => ({
+          name: projection.name,
+          sourceField: projection.sourceField,
+        }))
+      : undefined,
+    filter: alias.filter
+      ? alias.filter.kind === "field_predicate"
+        ? {
+            kind: "field_predicate",
+            field: alias.filter.field,
+            op: alias.filter.op,
+            value: alias.filter.value,
+          }
+        : {
+            kind: "backlink_membership",
+            op: alias.filter.op,
+            value: alias.filter.value,
+            link: alias.filter.link,
+            sourceType: alias.filter.sourceType,
+            field: alias.filter.field,
+          }
+      : undefined,
+  }));
 };
 
 export const scalarTypeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] => {
-  return (schema.scalarTypes ?? []).map((st) => ({
-    name: st.name,
-    module: st.module,
-    fields: [{ name: "__enum__", type: "str" as const, enumValues: [...st.enumValues] }],
-  }));
+  return (schema.scalarTypes ?? []).map(scalarTypeDeclarationToTypeDef);
 };
 
 export const functionDefsFromDeclarative = (schema: DeclarativeSchema): FunctionDef[] => {
@@ -31,86 +93,31 @@ export const functionDefsFromDeclarative = (schema: DeclarativeSchema): Function
 };
 
 export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] => {
-  const standardAnnotations = new Map<string, boolean>([
-    ["std::title", false],
-    ["std::description", false],
-    ["std::deprecated", false],
-  ]);
-
-  const annotationDefs = new Map<string, boolean>(standardAnnotations);
-  for (const annotation of schema.abstractAnnotations ?? []) {
-    annotationDefs.set(annotation.name, Boolean(annotation.inheritable));
-  }
-
-  for (const annotation of schema.abstractAnnotations ?? []) {
-    for (const nested of annotation.annotations ?? []) {
-      if (!annotationDefs.has(nested.name)) {
-        throw new Error(`Unknown annotation '${nested.name}' in abstract annotation ${annotation.name}`);
-      }
-    }
-  }
-
+  const annotationRegistry = new AnnotationRegistry(schema.abstractAnnotations ?? []);
   const typeByName = new Map(schema.types.map((typeDecl) => [qualifiedTypeName(typeDecl), typeDecl]));
+
+  const annotationResolver = new AnnotationResolver<DeclarativeSchema["types"][number]>(
+    annotationRegistry,
+    (typeDecl) => qualifiedTypeName(typeDecl),
+    (name) => typeByName.get(name),
+  );
   const resolvedMemberCache = new Map<string, TypeMember[]>();
-  const resolvedTypeAnnotationsCache = new Map<string, NonNullable<TypeDef["annotations"]>>();
 
-  const validateAnnotation = (annotationName: string, context: string): void => {
-    if (!annotationDefs.has(annotationName)) {
-      throw new Error(`Unknown annotation '${annotationName}' in ${context}`);
-    }
+  const constraintAnnotations = new Map<string, AnnotationSet>();
+  for (const constraint of schema.constraints ?? []) {
+    constraintAnnotations.set(constraint.name, AnnotationSet.from(constraint.annotations));
+  }
+
+  const mergeConstraintAnnotations = (name: string, own: AnnotationDef[]): AnnotationDef[] => {
+    const base = constraintAnnotations.get(name) ?? new AnnotationSet();
+    return base.merge(AnnotationSet.from(own)).toArray();
   };
 
-  const mergeAnnotations = (
-    inherited: NonNullable<TypeDef["annotations"]>,
-    own: NonNullable<TypeDef["annotations"]>,
-  ): NonNullable<TypeDef["annotations"]> => {
-    const merged = [...inherited, ...own];
-    const deduped = new Map<string, (typeof merged)[number]>();
-    for (const annotation of merged) {
-      deduped.set(annotation.name, annotation);
-    }
-    return [...deduped.values()];
-  };
+  const resolveTypeAnnotations = (typeDecl: DeclarativeSchema["types"][number]): AnnotationDef[] =>
+    annotationResolver.resolve(typeDecl).toArray();
 
-  const inheritAnnotations = (
-    annotations: NonNullable<TypeDef["annotations"]>,
-  ): NonNullable<TypeDef["annotations"]> => {
-    return annotations.filter((annotation) => annotationDefs.get(annotation.name) === true);
-  };
-
-  const resolveTypeAnnotations = (
-    typeDecl: DeclarativeSchema["types"][number],
-    stack = new Set<string>(),
-  ): NonNullable<TypeDef["annotations"]> => {
-    const typeName = qualifiedTypeName(typeDecl);
-    const cached = resolvedTypeAnnotationsCache.get(typeName);
-    if (cached) {
-      return cached.map((annotation) => ({ ...annotation }));
-    }
-
-    if (stack.has(typeName)) {
-      return [];
-    }
-    stack.add(typeName);
-
-    const inherited: NonNullable<TypeDef["annotations"]> = [];
-    for (const baseName of typeDecl.extends ?? []) {
-      const baseDecl = typeByName.get(baseName);
-      if (!baseDecl) {
-        throw new Error(`Unknown base type '${baseName}' in ${typeName}`);
-      }
-      inherited.push(...inheritAnnotations(resolveTypeAnnotations(baseDecl, stack)));
-    }
-
-    const own = (typeDecl.annotations ?? []).map((annotation) => {
-      validateAnnotation(annotation.name, `${typeName}`);
-      return { ...annotation };
-    });
-    const resolved = mergeAnnotations(inherited, own);
-    resolvedTypeAnnotationsCache.set(typeName, resolved);
-    stack.delete(typeName);
-    return resolved.map((annotation) => ({ ...annotation }));
-  };
+  const inheritMemberAnnotations = (annotations: AnnotationDef[]): AnnotationDef[] =>
+    AnnotationSet.from(annotations).inherit(annotationRegistry).toArray();
 
   const isSubtypeOf = (candidate: string, target: string, seen = new Set<string>()): boolean => {
     if (candidate === target) {
@@ -130,23 +137,24 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
   };
 
   const cloneMemberForInheritance = (member: TypeMember): TypeMember => {
-    if (member.kind === "property") {
-      return {
-        ...member,
-        annotations: inheritAnnotations(member.annotations),
-        rewrite: member.rewrite
-          ? {
-              onInsert: member.rewrite.onInsert,
-              onUpdate: member.rewrite.onUpdate,
-            }
-          : undefined,
-      };
-    }
+  if (member.kind === "property") {
+    return {
+      ...member,
+      annotations: inheritMemberAnnotations(member.annotations),
+      rewrite: member.rewrite
+        ? {
+            onInsert: member.rewrite.onInsert,
+            onUpdate: member.rewrite.onUpdate,
+          }
+        : undefined,
+      constraints: cloneConstraints(member.constraints),
+    };
+  }
 
     if (member.kind === "computed") {
       return {
         ...member,
-        annotations: inheritAnnotations(member.annotations),
+        annotations: inheritMemberAnnotations(member.annotations),
         expr:
           member.expr.kind === "concat"
             ? { ...member.expr, parts: member.expr.parts.map((part) => ({ ...part })) }
@@ -154,14 +162,14 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
       };
     }
 
-    return {
-      ...member,
-      annotations: inheritAnnotations(member.annotations),
-      properties: member.properties.map((property) => ({
-        ...property,
-        annotations: inheritAnnotations(property.annotations),
-      })),
-    };
+      return {
+        ...member,
+        annotations: inheritMemberAnnotations(member.annotations),
+        properties: member.properties.map((property) => ({
+          ...property,
+          annotations: inheritMemberAnnotations(property.annotations),
+        })),
+      };
   };
 
   const resolveMembers = (typeDecl: DeclarativeSchema["types"][number], stack = new Set<string>()): TypeMember[] => {
@@ -194,7 +202,7 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
     const merged = [...inheritedMembers];
     for (const ownMember of typeDecl.members) {
       const own = cloneMember(ownMember);
-      validateMemberAnnotations(own, annotationDefs, typeName);
+      validateMemberAnnotations(own, annotationRegistry, typeName);
       const existingIndex = merged.findIndex((candidate) => candidate.name === own.name);
 
       if (existingIndex < 0) {
@@ -211,7 +219,7 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
 
       const baseMember = merged[existingIndex];
       assertOverloadCompatibility(baseMember, own, typeName, isSubtypeOf);
-      merged[existingIndex] = mergeOverloadedMember(baseMember, own, inheritAnnotations, mergeAnnotations);
+      merged[existingIndex] = mergeOverloadedMember(baseMember, own, annotationRegistry);
     }
 
     resolvedMemberCache.set(typeName, merged.map((member) => cloneMember(member)));
@@ -220,6 +228,7 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
   };
 
   return schema.types.map((typeDecl) => {
+    const resolvedTypeAnnotations = resolveTypeAnnotations(typeDecl);
     const links: NonNullable<TypeDef["links"]> = [];
     const fields: TypeDef["fields"] = [];
     const computeds: NonNullable<TypeDef["computeds"]> = [];
@@ -227,12 +236,25 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
 
     for (const member of resolveMembers(typeDecl)) {
       if (member.kind === "property") {
+        const resolvedConstraints =
+          member.constraints.length > 0
+            ? member.constraints
+                .map((constraint) => ({
+                  name: constraint.name,
+                  annotations: mergeConstraintAnnotations(constraint.name, constraint.annotations),
+                }))
+                .filter((constraint) => constraint.annotations.length > 0)
+            : [];
+
         fields.push({
           name: member.name,
           type: member.scalar,
           required: member.required,
+          hasDefault: member.hasDefault,
           multi: member.multi,
+          collection: member.collection,
           annotations: (member.annotations ?? []).length ? [...member.annotations] : undefined,
+          constraints: resolvedConstraints,
           enumValues: member.enumValues,
           enumTypeName: member.enumTypeName,
         });
@@ -285,6 +307,33 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
                 parts: member.expr.parts.map((part) => ({ ...part })),
               },
             });
+          } else if (member.expr.kind === "function_call") {
+            computeds.push({
+              kind: "property",
+              name: member.name,
+              required: member.required,
+              multi: member.multi,
+              annotations: member.annotations.length ? [...member.annotations] : undefined,
+              expr: {
+                kind: "function_call",
+                name: member.expr.name,
+                args: [...member.expr.args],
+              },
+            });
+          } else if (member.expr.kind === "link_aggregate") {
+            computeds.push({
+              kind: "property",
+              name: member.name,
+              required: member.required,
+              multi: member.multi,
+              annotations: member.annotations.length ? [...member.annotations] : undefined,
+              expr: {
+                kind: "link_aggregate",
+                functionName: member.expr.functionName,
+                link: member.expr.link,
+                field: member.expr.field,
+              },
+            });
           } else {
             throw new Error(`Computed '${member.name}' has invalid property expression kind '${member.expr.kind}'`);
           }
@@ -327,15 +376,19 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
       links.push({
         name: member.name,
         targetType: normalizeTypeName(member.target, typeDecl.module),
+        overloaded: member.overloaded,
         multi: member.multi,
         properties: member.properties.length
           ? member.properties.map((property) => ({
               name: property.name,
               type: property.scalar,
               required: property.required,
+              hasDefault: property.hasDefault,
               annotations: property.annotations.length ? [...property.annotations] : undefined,
             }))
           : undefined,
+        hasDefault: member.hasDefault,
+        defaultTargetValues: member.defaultTargetValues ? [...member.defaultTargetValues] : undefined,
         annotations: (member.annotations ?? []).length ? [...member.annotations] : undefined,
       });
 
@@ -344,6 +397,7 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
           name: `${member.name}_id`,
           type: "uuid",
           required: member.required,
+          hasDefault: member.hasDefault,
         });
       }
     }
@@ -353,7 +407,7 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
       name: typeDecl.name,
       abstract: typeDecl.abstract,
       extends: (typeDecl.extends ?? []).length ? [...typeDecl.extends] : undefined,
-      annotations: resolveTypeAnnotations(typeDecl).length ? resolveTypeAnnotations(typeDecl) : undefined,
+      annotations: resolvedTypeAnnotations.length ? resolvedTypeAnnotations : undefined,
       fields,
       links: links.length ? links : undefined,
       computeds: computeds.length ? computeds : undefined,
@@ -430,13 +484,15 @@ export const declarativeSchemaFromTypeDefs = (types: TypeDef[], functions: Funct
                 name: link.name,
                 target: normalizeTypeName(link.targetType, moduleName),
                 required: Boolean(idField?.required),
+                hasDefault: Boolean(idField?.hasDefault),
                 multi: Boolean(link.multi),
-                overloaded: false,
+                overloaded: Boolean(link.overloaded),
                 annotations: [...(link.annotations ?? [])],
                 properties: (link.properties ?? []).map((property) => ({
                   name: property.name,
                   scalar: property.type,
                   required: Boolean(property.required),
+                  collection: property.collection,
                   annotations: [...(property.annotations ?? [])],
                 })),
               };
@@ -451,14 +507,18 @@ export const declarativeSchemaFromTypeDefs = (types: TypeDef[], functions: Funct
 
               const rewrite = typeDef.mutationRewrites?.find((candidate) => candidate.field === field.name);
 
+              const fieldConstraints = field.constraints ? cloneConstraints(field.constraints) : [];
+
               const member: PropertyMember = {
                 kind: "property",
                 name: field.name,
                 scalar: field.type,
                 required: Boolean(field.required),
+                hasDefault: Boolean(field.hasDefault),
                 multi: Boolean(field.multi),
                 overloaded: false,
                 annotations: [...(field.annotations ?? [])],
+                constraints: fieldConstraints,
                 rewrite: rewrite
                   ? {
                       onInsert: rewrite.onInsert,
@@ -739,6 +799,7 @@ const cloneMember = (member: TypeMember): TypeMember => {
             onUpdate: member.rewrite.onUpdate,
           }
         : undefined,
+      constraints: cloneConstraints(member.constraints),
     };
   }
 
@@ -763,24 +824,40 @@ const cloneMember = (member: TypeMember): TypeMember => {
   };
 };
 
-const validateMemberAnnotations = (
-  member: TypeMember,
-  annotationDefs: Map<string, boolean>,
+const validateAnnotations = (
+  annotations: AnnotationDef[],
+  annotationRegistry: AnnotationRegistry,
   context: string,
 ): void => {
-  for (const annotation of member.annotations) {
-    if (!annotationDefs.has(annotation.name)) {
-      throw new Error(`Unknown annotation '${annotation.name}' in ${context}.${member.name}`);
+  for (const annotation of annotations) {
+    annotationRegistry.ensureKnown(annotation.name, context);
+  }
+};
+
+const validateMemberAnnotations = (
+  member: TypeMember,
+  annotationRegistry: AnnotationRegistry,
+  context: string,
+): void => {
+  validateAnnotations(member.annotations, annotationRegistry, `${context}.${member.name}`);
+
+  if (member.kind === "property") {
+    for (const constraint of member.constraints) {
+      validateAnnotations(
+        constraint.annotations,
+        annotationRegistry,
+        `${context}.${member.name}@constraint`,
+      );
     }
   }
 
   if (member.kind === "link") {
     for (const property of member.properties) {
-      for (const annotation of property.annotations) {
-        if (!annotationDefs.has(annotation.name)) {
-          throw new Error(`Unknown annotation '${annotation.name}' in ${context}.${member.name}@${property.name}`);
-        }
-      }
+      validateAnnotations(
+        property.annotations,
+        annotationRegistry,
+        `${context}.${member.name}@${property.name}`,
+      );
     }
   }
 };
@@ -828,23 +905,25 @@ const assertOverloadCompatibility = (
 const mergeOverloadedMember = (
   baseMember: TypeMember,
   overloadedMember: TypeMember,
-  inheritAnnotations: (annotations: NonNullable<TypeDef["annotations"]>) => NonNullable<TypeDef["annotations"]>,
-  mergeAnnotations: (
-    inherited: NonNullable<TypeDef["annotations"]>,
-    own: NonNullable<TypeDef["annotations"]>,
-  ) => NonNullable<TypeDef["annotations"]>,
+  annotationRegistry: AnnotationRegistry,
 ): TypeMember => {
+  const baseAnnotations = AnnotationSet.from(baseMember.annotations)
+    .inherit(annotationRegistry)
+    .merge(AnnotationSet.from(overloadedMember.annotations))
+    .toArray();
+
   if (overloadedMember.kind === "property" && baseMember.kind === "property") {
     return {
       ...overloadedMember,
-      annotations: mergeAnnotations(inheritAnnotations(baseMember.annotations), overloadedMember.annotations),
+      annotations: baseAnnotations,
+      constraints: mergeConstraintSets(baseMember.constraints, overloadedMember.constraints),
     };
   }
 
   if (overloadedMember.kind === "link" && baseMember.kind === "link") {
     return {
       ...overloadedMember,
-      annotations: mergeAnnotations(inheritAnnotations(baseMember.annotations), overloadedMember.annotations),
+      annotations: baseAnnotations,
       properties: overloadedMember.properties.map((property) => ({
         ...property,
         annotations: [...property.annotations],
@@ -855,7 +934,7 @@ const mergeOverloadedMember = (
   if (overloadedMember.kind === "computed" && baseMember.kind === "computed") {
     return {
       ...overloadedMember,
-      annotations: mergeAnnotations(inheritAnnotations(baseMember.annotations), overloadedMember.annotations),
+      annotations: baseAnnotations,
       expr:
         overloadedMember.expr.kind === "concat"
           ? {
@@ -889,6 +968,10 @@ const renderComputedExpr = (expr: Extract<TypeMember, { kind: "computed" }>['exp
   if (expr.kind === "function_call") {
     const args = expr.args.map((arg) => renderScalarLiteral(arg)).join(", ");
     return `${expr.name}(${args})`;
+  }
+
+  if (expr.kind === "link_aggregate") {
+    return `${expr.functionName}(.${expr.link}.${expr.field})`;
   }
 
   if (expr.kind === "backlink") {

@@ -23,9 +23,10 @@ export type FilterValue =
       name: string;
     }
   | {
-      kind: "set_literal";
-      values: ScalarValue[];
-    };
+      kind: "field_ref";
+      field: string;
+    }
+  | SetLiteralValue;
 
 export type FilterExpr =
   | {
@@ -38,7 +39,20 @@ export type FilterExpr =
       kind: "in_predicate";
       target: FilterTarget;
       op: "in" | "not_in";
-      values: ScalarValue[];
+      values:
+        | SetLiteralValue
+        | {
+            kind: "select";
+            query: {
+              typeName: string;
+              shape: ShapeElement[];
+              clauses: ClauseChain;
+            };
+          }
+        | {
+            kind: "name";
+            name: string;
+          };
     }
   | {
       kind: "and";
@@ -60,11 +74,28 @@ export interface WithBinding {
   value: WithBindingValue;
 }
 
+export interface SetLiteralValue {
+  kind: "set_literal";
+  values: ScalarValue[];
+}
+
+export interface ArrayLiteralValue {
+  kind: "array_literal";
+  values: ScalarValue[];
+}
+
+export interface TupleLiteralValue {
+  kind: "tuple_literal";
+  values: ScalarValue[] | Record<string, ScalarValue>;
+}
+
 export type WithBindingValue =
   | {
       kind: "literal";
       value: ScalarValue;
     }
+  | SetLiteralValue
+  | ArrayLiteralValue
   | {
       kind: "binding_ref";
       name: string;
@@ -139,6 +170,17 @@ export type ComputedExpr =
   | {
       kind: "function_call";
       call: FunctionCallExpr;
+    }
+  | {
+      kind: "binding_ref";
+      name: string;
+    }
+  | {
+      kind: "field_suffix_math";
+      field: string;
+      fromEnd: number;
+      op: "negate" | "const_minus";
+      constant?: number;
     };
 
 export interface BacklinkExpr {
@@ -159,14 +201,8 @@ export type FunctionCallArgExpr =
       kind: "binding_ref";
       name: string;
     }
-  | {
-      kind: "set_literal";
-      values: ScalarValue[];
-    }
-  | {
-      kind: "array_literal";
-      values: ScalarValue[];
-    }
+  | SetLiteralValue
+  | ArrayLiteralValue
   | {
       kind: "function_call";
       call: FunctionCallExpr;
@@ -226,9 +262,14 @@ export type FreeObjectExpr =
       kind: "literal";
       value: ScalarValue;
     }
+  | SetLiteralValue
   | {
-      kind: "set_literal";
-      values: ScalarValue[];
+      kind: "set_expr";
+      values: FreeObjectExpr[];
+    }
+  | {
+      kind: "binding_ref";
+      name: string;
     }
   | {
       kind: "select";
@@ -258,6 +299,20 @@ export type FreeObjectExpr =
   | {
       kind: "concat";
       parts: FreeObjectExpr[];
+    }
+  | {
+      kind: "is_type";
+      expr: FreeObjectExpr;
+      typeName: string;
+    }
+  | {
+      kind: "select_expr_subquery";
+      alias?: string;
+      expr: FreeObjectExpr;
+      orderBy?: {
+        expr: FreeObjectExpr;
+        direction: "asc" | "desc";
+      };
     };
 
 export interface SelectFreeStatement {
@@ -278,6 +333,10 @@ export interface SelectExprStatement {
   withModule?: string;
   withModuleAliases?: WithModuleAlias[];
   expr: FreeObjectExpr;
+  orderBy?: {
+    expr: FreeObjectExpr;
+    direction: "asc" | "desc";
+  };
   pos: SourcePos;
 }
 
@@ -294,6 +353,8 @@ export interface InsertStatement {
 
 export type InsertValue =
   | ScalarValue
+  | ArrayLiteralValue
+  | TupleLiteralValue
   | {
       kind: "binding_ref";
       name: string;
@@ -312,7 +373,12 @@ export type InsertValue =
   | {
       kind: "set";
       values: InsertValue[];
-    };
+    }
+  | {
+      kind: "function_call";
+      call: FunctionCallExpr;
+    }
+  | ForStatement;
 
 export interface InsertConflict {
   onField?: string;
@@ -338,7 +404,7 @@ export interface UpdateStatement {
   withModuleAliases?: WithModuleAlias[];
   typeName: string;
   filter?: FilterExpr;
-  values: Record<string, ScalarValue>;
+  values: Record<string, InsertValue>;
   pos: SourcePos;
 }
 
@@ -359,7 +425,7 @@ export interface ForStatement {
   withModuleAliases?: WithModuleAlias[];
   variable: string;
   iteratorExpr: FreeObjectExpr;
-  body: InsertStatement;
+  body: InsertStatement | SelectStatement;
   pos: SourcePos;
 }
 

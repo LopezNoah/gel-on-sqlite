@@ -4,7 +4,8 @@ import { executeQuery, executeQueryWithTrace } from "./runtime/engine.js";
 import { parseDeclarativeSchema } from "./schema/declarative.js";
 import { applyMigrationPlan, planSchemaMigration, renderMigrationSQL } from "./schema/migrations.js";
 import { SchemaSnapshot } from "./schema/schema.js";
-import { schemaSnapshotFromDeclarative } from "./schema/uiSchema.js";
+import { declarativeSchemaFromTypeDefs, renderDeclarativeSchema, schemaSnapshotFromDeclarative } from "./schema/uiSchema.js";
+import { bootstrapGelSchema, deserializeSchemaFromGelTables, deserializeSchemaFromInstdata, ensureGelSchemaTables, serializeSchemaToGelTables, serializeSchemaToInstdata } from "./schema/gel_persistence.js";
 import type { TypeDef } from "./types.js";
 
 const baseTypes: TypeDef[] = [
@@ -39,16 +40,27 @@ const initialSchemaSource = `module default {
   }
 }`;
 
+const runtime = openSQLite(process.env.SQLITE_FILE ?? ":memory:");
+ensureGelSchemaTables(runtime.db);
+const persistedSchema = deserializeSchemaFromInstdata(runtime.db) ?? deserializeSchemaFromGelTables(runtime.db);
+
 let schemaSource = initialSchemaSource;
 let declarativeSchema = parseDeclarativeSchema(schemaSource);
 let schema = schemaSnapshotFromDeclarative(declarativeSchema);
 
-if (schema.listTypes().length === 0) {
-  schema = new SchemaSnapshot(baseTypes);
+if (persistedSchema) {
+  schema = persistedSchema;
+  declarativeSchema = declarativeSchemaFromTypeDefs(schema.listTypes(), schema.listFunctions());
+  schemaSource = renderDeclarativeSchema(declarativeSchema);
 }
 
-const runtime = openSQLite(process.env.SQLITE_FILE ?? ":memory:");
+if (schema.listTypes().length === 0) {
+  schema = new SchemaSnapshot(baseTypes);
+  declarativeSchema = declarativeSchemaFromTypeDefs(schema.listTypes(), schema.listFunctions());
+  schemaSource = renderDeclarativeSchema(declarativeSchema);
+}
 materializeSchema(runtime.db, schema);
+bootstrapGelSchema(runtime.db, schema);
 
 const app = createHttpServer({
   schema,
@@ -64,6 +76,8 @@ const app = createHttpServer({
     declarativeSchema = nextDeclarative;
     schema = schemaSnapshotFromDeclarative(nextDeclarative);
     schemaSource = source;
+    serializeSchemaToGelTables(runtime.db, schema);
+    serializeSchemaToInstdata(runtime.db, schema);
 
     return {
       schema,

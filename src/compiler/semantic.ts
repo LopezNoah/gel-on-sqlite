@@ -6,6 +6,7 @@ import type {
   InferenceResult,
   IRStatement,
   LinkRelationIR,
+  OrderByIR,
   OverlayIR,
   ScopeTreeIR,
   SelectShapeElementIR,
@@ -42,12 +43,16 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     return value as Exclude<T, undefined>;
   };
 
-  const extractLiteralValue = (entry: import("../ir/model.js").SelectExprIREntry): ScalarValue => {
+  type ExtractedLiteralValue = ScalarValue | ExtractedLiteralValue[];
+
+  const extractLiteralValue = (entry: import("../ir/model.js").SelectExprIREntry): ExtractedLiteralValue => {
     switch (entry.kind) {
       case "literal":
         return entry.value;
       case "set_literal":
-        return entry.values as unknown as ScalarValue;
+        return entry.values;
+      case "set_expr":
+        return entry.values.map(extractLiteralValue);
       case "cast":
         return extractLiteralValue(entry.value);
       case "enum_path":
@@ -56,7 +61,19 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         return null;
       case "concat":
         return entry.parts.map(extractLiteralValue).join("");
+      case "is_type":
+        return null;
+      case "select_expr_subquery":
+        return extractLiteralValue(entry.value);
+      case "function_call":
+        return null;
+      case "current_item":
+        return null;
     }
+  };
+
+  const expectStringLiteral = (value: ExtractedLiteralValue, message: string): string => {
+    return typeof value === "string" ? value : fail(message);
   };
 
   type FieldEqPredicate = Extract<FilterExpr, { kind: "predicate" }> & {
@@ -252,6 +269,10 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       switch (binding.kind) {
         case "literal":
           return binding.value;
+        case "set_literal":
+          return fail(`With binding '${name}' is a set and cannot be used as a scalar value`);
+        case "array_literal":
+          return fail(`With binding '${name}' is an array and cannot be used as a scalar value`);
         case "binding_ref": {
           const resolvedType = schema.getType(normalizeTypeName(binding.name, activeModule));
           if (resolvedType) {
@@ -321,13 +342,18 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     return resolved;
   };
 
-  const resolveFilterValue = (value: ScalarValue | { kind: "binding_ref"; name: string } | { kind: "set_literal"; values: ScalarValue[] }): ScalarValue | ScalarValue[] => {
+  const resolveFilterValue = (
+    value: ScalarValue | { kind: "binding_ref"; name: string } | { kind: "set_literal"; values: ScalarValue[] } | { kind: "field_ref"; field: string },
+  ): ScalarValue | ScalarValue[] | { kind: "field_ref"; field: string } => {
     if (typeof value === "object" && value !== null && "kind" in value) {
       if (value.kind === "binding_ref") {
         return resolveWithBindingScalar(value.name);
       }
       if (value.kind === "set_literal") {
         return value.values;
+      }
+      if (value.kind === "field_ref") {
+        return value;
       }
     }
 
@@ -342,6 +368,10 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     switch (value.kind) {
       case "binding_ref":
         return resolveWithBindingScalar(value.name);
+      case "array_literal":
+        return JSON.stringify(value.values);
+      case "tuple_literal":
+        return JSON.stringify(value.values);
       default:
         return fail(`Expected scalar value in insert assignment, got ${value.kind}`);
     }
@@ -358,6 +388,14 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
 
     if (value.kind === "binding_ref") {
       return [resolveWithBindingScalar(value.name)];
+    }
+
+    if (value.kind === "array_literal") {
+      return [JSON.stringify(value.values)];
+    }
+
+    if (value.kind === "tuple_literal") {
+      return [JSON.stringify(value.values)];
     }
 
     return fail(`Expected set-compatible value in insert assignment, got ${value.kind}`);
@@ -391,25 +429,159 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         fail("IN filter only supports field targets");
         return {} as FilterExprIR;
       }
-      if (!knownFields.has(fieldName)) {
-        fail(`Unknown field '${fieldName}' on '${typeLabel}'`);
+
+      if (filter.values.kind === "set_literal") {
+        if (!knownFields.has(fieldName)) {
+          fail(`Unknown field '${fieldName}' on '${typeLabel}'`);
+        }
+
+        const field = requireValue(fieldByName.get(fieldName), `Unknown field '${fieldName}' on '${typeLabel}'`);
+        for (const v of filter.values.values) {
+          if (!isValidScalarValue(field.type, v)) {
+            fail(`Type mismatch for '${fieldName}' in IN filter: expected ${field.type}`);
+          }
+        }
+        return {
+          kind: "field_in",
+          column: fieldName,
+          op: filter.op,
+          values: filter.values.values,
+        };
       }
 
-      const field = requireValue(fieldByName.get(fieldName), `Unknown field '${fieldName}' on '${typeLabel}'`);
-      for (const v of filter.values) {
-        if (!isValidScalarValue(field.type, v)) {
-          fail(`Type mismatch for '${fieldName}' in IN filter: expected ${field.type}`);
+      const resolveInQuery = (): { typeName: string; filter?: FilterExpr; precompiledFilter?: FilterExprIR } => {
+        const valueExpr = filter.values;
+
+        if (valueExpr.kind === "set_literal") {
+          fail("Unsupported IN filter value expression");
         }
+
+        if (valueExpr.kind === "select") {
+          return {
+            typeName: valueExpr.query.typeName,
+            filter: valueExpr.query.clauses.filter,
+          };
+        }
+
+        const nameExpr = valueExpr as Extract<typeof valueExpr, { kind: "name" }>;
+
+        const binding = withBindings.get(nameExpr.name);
+        if (binding?.kind === "subquery") {
+          return {
+            typeName: binding.query.typeName,
+            filter: binding.query.clauses.filter,
+          };
+        }
+
+        const aliasName = normalizeTypeName(nameExpr.name, options.fallbackModule);
+        const alias = schema.getAlias(aliasName);
+        if (alias?.sourceType) {
+          if (alias.filter?.kind === "backlink_membership") {
+            return {
+              typeName: alias.sourceType,
+              precompiledFilter: {
+                kind: "backlink_contains",
+                op: alias.filter.op,
+                value: alias.filter.value,
+                column: alias.filter.field,
+                sources: resolveBacklinkSources(
+                  normalizeTypeName(alias.sourceType, alias.module ?? options.fallbackModule),
+                  alias.module ?? options.fallbackModule,
+                  alias.filter.link,
+                  alias.filter.sourceType,
+                ),
+              },
+            };
+          }
+
+          return {
+            typeName: alias.sourceType,
+            filter: alias.filter
+              && alias.filter.kind === "field_predicate"
+              ? {
+                  kind: "predicate",
+                  target: { kind: "field", field: alias.filter.field },
+                  op: alias.filter.op,
+                  value: alias.filter.value,
+                }
+              : undefined,
+          };
+        }
+
+        return {
+          typeName: nameExpr.name,
+          filter: undefined,
+        };
+      };
+
+      const inQuery = resolveInQuery();
+      const inTypeQualified = normalizeTypeName(inQuery.typeName, options.fallbackModule);
+      const inType = schema.getType(inTypeQualified);
+      if (!inType) {
+        fail(`Unknown type '${inTypeQualified}' in IN filter`);
       }
+      const resolvedInType = requireValue(inType, `Unknown type '${inTypeQualified}' in IN filter`);
+      const inTypeName = qualifiedTypeName(resolvedInType);
+      const sourceTables = schema
+        .listConcreteTypesAssignableTo(inTypeName)
+        .map((candidate) => {
+          const name = qualifiedTypeName(candidate);
+          return {
+            name,
+            table: tableNameForType(name),
+          };
+        });
+
+      const subFilter = inQuery.precompiledFilter ?? (inQuery.filter
+        ? compileFilterExpr(
+            new Map(collectFields(resolvedInType, true).map((entry) => [entry.name, entry])),
+            new Set(["id", ...collectFields(resolvedInType, true).map((entry) => entry.name)]),
+            inTypeName,
+            inQuery.filter,
+            {
+              allowBacklink: false,
+              fallbackModule: resolvedInType.module ?? options.fallbackModule,
+            },
+          )
+        : undefined);
+
       return {
-        kind: "field_in",
-        column: fieldName,
+        kind: "self_in_select",
         op: filter.op,
-        values: filter.values,
+        sourceTables: sourceTables.length > 0
+          ? sourceTables
+          : [{ name: inTypeName, table: tableNameForType(inTypeName) }],
+        filter: subFilter,
       };
     }
 
-    const value = resolveFilterValue(filter.value) as ScalarValue;
+    const resolvedFilterValue = resolveFilterValue(filter.value);
+
+    if (typeof resolvedFilterValue === "object" && resolvedFilterValue !== null && "kind" in resolvedFilterValue && resolvedFilterValue.kind === "field_ref") {
+      const filterTarget = filter.target;
+      const left = filterTarget.kind === "field"
+        ? filterTarget.field
+        : fail("Backlink filters do not support field-to-field comparisons");
+      const right = resolvedFilterValue.field;
+
+      const leftKnown = knownFields.has(left) || left.startsWith("@") || left === "__type__.name";
+      const rightKnown = knownFields.has(right) || right.startsWith("@") || right === "__type__.name";
+      if (!leftKnown) {
+        fail(`Unknown field '${left}' on '${typeLabel}'`);
+      }
+      if (!rightKnown) {
+        fail(`Unknown field '${right}' on '${typeLabel}'`);
+      }
+
+      return {
+        kind: "field_compare",
+        leftColumn: left,
+        rightColumn: right,
+        op: filter.op,
+      };
+    }
+
+    const value = resolvedFilterValue as ScalarValue;
     if (filter.target.kind === "backlink") {
       if (!options.allowBacklink) {
         fail("Backlink filters are currently supported only at top-level select scope");
@@ -576,11 +748,25 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
 
     for (const candidate of schema.listTypes()) {
       const candidateQualifiedName = qualifiedTypeName(candidate);
-      if (requestedSourceType && candidateQualifiedName !== requestedSourceType) {
+      if (requestedSourceType && !isAssignableTo(candidateQualifiedName, requestedSourceType)) {
         continue;
       }
 
-      for (const link of candidate.links ?? []) {
+      const sourceTables = schema
+        .listConcreteTypesAssignableTo(candidateQualifiedName)
+        .map((assignable) => {
+          const name = qualifiedTypeName(assignable);
+          return {
+            name,
+            table: tableNameForType(name),
+          };
+        });
+
+      const polymorphicSourceTables = sourceTables.length > 0
+        ? sourceTables
+        : [{ name: candidateQualifiedName, table: tableNameForType(candidateQualifiedName) }];
+
+      for (const link of collectLinks(candidate, true)) {
         const linkTarget = normalizeTypeName(link.targetType, candidate.module ?? "default");
         if (link.name !== linkName || linkTarget !== targetTypeQualifiedName) {
           continue;
@@ -591,6 +777,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           sources.push({
             sourceType: candidateQualifiedName,
             table: tableNameForType(candidateQualifiedName),
+            sourceTables: polymorphicSourceTables,
             storage: "table",
             linkTable: `${tableNameForType(candidateQualifiedName)}__${link.name.toLowerCase()}`,
           });
@@ -600,6 +787,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         sources.push({
           sourceType: candidateQualifiedName,
           table: tableNameForType(candidateQualifiedName),
+          sourceTables: polymorphicSourceTables,
           storage: "inline",
           inlineColumn: `${link.name}_id`,
         });
@@ -626,6 +814,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     },
     options: {
       allowBacklinkFilter: boolean;
+      aliasProjections?: Map<string, string>;
     },
     ): {
       pathId: string;
@@ -638,7 +827,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     scopeTree: ScopeTreeIR;
     appliedOverlays: OverlayIR[];
     filter?: FilterExprIR;
-    orderBy?: { column: string; direction: "asc" | "desc" };
+    orderBy?: OrderByIR<string>;
     limit?: number;
     offset?: number;
     inference: InferenceResult;
@@ -686,12 +875,12 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
             ? value
             : fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
           const parsed: unknown = JSON.parse(serialized);
-          if (!Array.isArray(parsed)) {
-            fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
-          }
+          const parsedArray = Array.isArray(parsed)
+            ? parsed
+            : fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
 
-          for (const entry of parsed as unknown[]) {
-            if (!isValidScalarValue(field.type, entry as ScalarValue)) {
+          for (const entry of parsedArray) {
+            if (!isValidScalarValue(field.type, entry)) {
               fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
             }
           }
@@ -740,6 +929,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
                 table: tableNameForType(targetType),
               },
             ],
+        propertyColumns: (link.properties ?? []).map((property) => property.name),
         multi: Boolean(link.multi),
         storage: usesLinkTable ? "table" : "inline",
         inlineColumn: usesLinkTable ? undefined : `${link.name}_id`,
@@ -848,8 +1038,9 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       }
 
       if (shapeElement.kind === "field") {
-        const computed = computedByName.get(shapeElement.name);
-        if (!knownFields.has(shapeElement.name) && computed) {
+        const resolvedFieldName = options.aliasProjections?.get(shapeElement.name) ?? shapeElement.name;
+        const computed = computedByName.get(resolvedFieldName);
+        if (!knownFields.has(resolvedFieldName) && computed) {
           if (computed.kind === "property") {
             const elementPathId = createPathId(pathId);
             if (computed.expr.kind === "field_ref") {
@@ -883,6 +1074,27 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
                   kind: "function_call",
                   functionName: computed.expr.name,
                   args: computed.expr.args.map((arg) => ({ kind: "literal", value: arg })),
+                },
+              });
+            } else if (computed.expr.kind === "link_aggregate") {
+              const relation = resolveForwardLink(typeDef, computed.expr.link);
+              const targetType = requireValue(
+                schema.getType(relation.targetType),
+                `Unknown link target type '${relation.targetType}' from '${qualifiedName}.${computed.expr.link}'`,
+              );
+              const targetFields = new Set(["id", ...collectFields(targetType, true).map((field) => field.name)]);
+              if (!targetFields.has(computed.expr.field)) {
+                fail(`Unknown field '${computed.expr.field}' on aggregate target '${relation.targetType}'`);
+              }
+              shapeElements.push({
+                kind: "computed",
+                name: shapeElement.name,
+                pathId: elementPathId,
+                expr: {
+                  kind: "link_aggregate",
+                  functionName: computed.expr.functionName,
+                  relation,
+                  column: computed.expr.field,
                 },
               });
             } else {
@@ -974,13 +1186,13 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         }
 
         const elementPathId = createPathId(pathId);
-        ensureField(shapeElement.name);
-        selectedColumns.add(shapeElement.name);
+        ensureField(resolvedFieldName);
+        selectedColumns.add(resolvedFieldName);
         shapeElements.push({
           kind: "field",
           name: shapeElement.name,
           pathId: elementPathId,
-          column: shapeElement.name,
+          column: resolvedFieldName,
         });
         shapeNames.add(shapeElement.name);
         scopeChildren.push({
@@ -1125,6 +1337,50 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           continue;
         }
 
+        if (shapeElement.expr.kind === "binding_ref") {
+          const boundValue = resolveWithBindingScalar(shapeElement.expr.name);
+          shapeElements.push({
+            kind: "computed",
+            name: shapeElement.name,
+            pathId: elementPathId,
+            expr: {
+              kind: "literal",
+              value: boundValue,
+            },
+          });
+          shapeNames.add(shapeElement.name);
+          scopeChildren.push({
+            pathId: elementPathId,
+            typeName: qualifiedName,
+            children: [],
+          });
+          continue;
+        }
+
+        if (shapeElement.expr.kind === "field_suffix_math") {
+          ensureField(shapeElement.expr.field);
+          selectedColumns.add(shapeElement.expr.field);
+          shapeElements.push({
+            kind: "computed",
+            name: shapeElement.name,
+            pathId: elementPathId,
+            expr: {
+              kind: "field_suffix_math",
+              field: shapeElement.expr.field,
+              fromEnd: shapeElement.expr.fromEnd,
+              op: shapeElement.expr.op,
+              constant: shapeElement.expr.constant,
+            },
+          });
+          shapeNames.add(shapeElement.name);
+          scopeChildren.push({
+            pathId: elementPathId,
+            typeName: qualifiedName,
+            children: [],
+          });
+          continue;
+        }
+
         shapeElements.push({
           kind: "computed",
           name: shapeElement.name,
@@ -1163,14 +1419,45 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       }
 
       const linkPathId = createPathId(pathId);
-      const relation = resolveForwardLink(typeDef, shapeElement.name);
+      const resolvedLinkName = options.aliasProjections?.get(shapeElement.name) ?? shapeElement.name;
+      const computedLink = computedByName.get(resolvedLinkName);
+      if (computedLink?.kind === "link" && computedLink.expr.kind === "backlink") {
+        hasBacklink = true;
+        const sources = resolveBacklinkSources(qualifiedName, scopeModule, computedLink.expr.link, computedLink.expr.sourceType);
+        const nestedSourceType = normalizeTypeName(computedLink.expr.sourceType ?? qualifiedName, scopeModule);
+        const nestedType = requireValue(
+          schema.getType(nestedSourceType),
+          `Unknown backlink source type '${nestedSourceType}' on '${qualifiedName}.${shapeElement.name}'`,
+        );
+        const nested = compileSelectForType(nestedType, linkPathId, shapeElement.shape, shapeElement.clauses, {
+          allowBacklinkFilter: false,
+        });
+        shapeElements.push({
+          kind: "backlink",
+          name: shapeElement.name,
+          pathId: linkPathId,
+          sources,
+          columns: nested.columns,
+          shape: nested.shape,
+          filter: nested.filter,
+          orderBy: nested.orderBy,
+          limit: nested.limit,
+          offset: nested.offset,
+          inference: nested.inference,
+        });
+        shapeNames.add(shapeElement.name);
+        scopeChildren.push(nested.scopeTree);
+        continue;
+      }
+
+      const relation = resolveForwardLink(typeDef, resolvedLinkName);
       const normalizedTypeFilter = shapeElement.typeFilter ? normalizeTypeName(shapeElement.typeFilter, scopeModule) : undefined;
       const filteredTargetTables = normalizedTypeFilter
         ? relation.targetTables.filter((candidate) => isAssignableTo(candidate.name, normalizedTypeFilter))
         : relation.targetTables;
 
-      if (normalizedTypeFilter && filteredTargetTables.length === 0) {
-        fail(`Type filter '${normalizedTypeFilter}' is not compatible with link '${qualifiedName}.${shapeElement.name}'`);
+        if (normalizedTypeFilter && filteredTargetTables.length === 0) {
+        fail(`Type filter '${normalizedTypeFilter}' is not compatible with link '${qualifiedName}.${resolvedLinkName}'`);
       }
 
       const effectiveTargetType = normalizedTypeFilter ?? relation.targetType;
@@ -1183,7 +1470,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       });
 
       if (relation.storage === "inline") {
-        selectedColumns.add(requireValue(relation.inlineColumn, `Missing inline storage metadata for '${shapeElement.name}'`));
+        selectedColumns.add(requireValue(relation.inlineColumn, `Missing inline storage metadata for '${resolvedLinkName}'`));
       }
 
       shapeElements.push({
@@ -1240,8 +1527,17 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         ? sourceTables.filter((source) => source.name === resolvedFilter.value)
         : sourceTables;
 
-    if (clauses.orderBy) {
-      ensureField(clauses.orderBy.field);
+    const resolvedOrderBy = clauses.orderBy
+      ? {
+          value: clauses.orderBy.field.startsWith("@")
+            ? clauses.orderBy.field.slice(1)
+            : clauses.orderBy.field,
+          direction: clauses.orderBy.direction,
+        }
+      : undefined;
+
+    if (resolvedOrderBy && !clauses.orderBy!.field.startsWith("@")) {
+      ensureField(resolvedOrderBy.value);
     }
 
     if (clauses.limit !== undefined && clauses.limit < 0) {
@@ -1270,12 +1566,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       },
       appliedOverlays: (context.overlays ?? []).filter((overlay) => overlay.table === table),
       filter: resolvedFilter,
-      orderBy: clauses.orderBy
-        ? {
-            column: clauses.orderBy.field,
-            direction: clauses.orderBy.direction,
-          }
-        : undefined,
+      orderBy: resolvedOrderBy,
       limit: clauses.limit,
       offset: clauses.offset,
       inference: inferSelect(
@@ -1306,6 +1597,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
 
   const resolveSelectSource = (selectStatement: SelectStatement): {
     typeDef: TypeDef;
+    aliasProjections?: Map<string, string>;
     clauses: {
       filter?: SelectStatement["filter"];
       orderBy?: SelectStatement["orderBy"];
@@ -1322,6 +1614,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       }
       return {
         typeDef: directType,
+        aliasProjections: undefined,
         clauses: {
           filter: selectStatement.filter,
           orderBy: selectStatement.orderBy,
@@ -1341,6 +1634,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         );
         return {
           typeDef: sourceType,
+          aliasProjections: undefined,
           clauses: {
             filter: mergeFilters(withQuery.clauses.filter, selectStatement.filter),
             orderBy: selectStatement.orderBy ?? withQuery.clauses.orderBy,
@@ -1353,16 +1647,49 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         const resolvedValue = resolveWithBindingScalar(selectStatement.typeName);
         return {
           typeDef: { name: "__scalar_result__", module: "std", fields: [{ name: "__value__", type: "str" as const }] },
+          aliasProjections: undefined,
           clauses: { filter: undefined, orderBy: undefined, limit: undefined, offset: undefined },
         } as any;
       }
     }
+
+    const schemaAlias = schema.getAlias(resolvedTypeName);
+    if (schemaAlias?.sourceType) {
+      const sourceType = requireValue(
+        schema.getType(normalizeTypeName(schemaAlias.sourceType, schemaAlias.module ?? activeModule)),
+        `Unknown type '${normalizeTypeName(schemaAlias.sourceType, schemaAlias.module ?? activeModule)}' in alias '${resolvedTypeName}'`,
+      );
+      const aliasFilter = schemaAlias.filter?.kind === "field_predicate"
+        ? {
+            kind: "predicate" as const,
+            target: { kind: "field" as const, field: schemaAlias.filter.field },
+            op: schemaAlias.filter.op,
+            value: schemaAlias.filter.value,
+          }
+        : undefined;
+      return {
+        typeDef: sourceType,
+        aliasProjections: schemaAlias.projections
+          ? new Map(schemaAlias.projections.map((projection) => [projection.name, projection.sourceField] as const))
+          : undefined,
+        clauses: {
+          filter: mergeFilters(aliasFilter, selectStatement.filter),
+          orderBy: selectStatement.orderBy,
+          limit: selectStatement.limit,
+          offset: selectStatement.offset,
+        },
+      };
+    }
+
     return fail(`Unknown type '${resolvedTypeName}'`);
   };
 
   if (statement.kind === "select_free") {
     const pathId = createPathId();
     const names = new Set<string>();
+    const asNestedFreeEntry = (
+      entry: import("../ir/model.js").SelectFreeIREntry,
+    ): import("../ir/model.js").SelectFreeIREntry<3> => entry as import("../ir/model.js").SelectFreeIREntry<3>;
 
     const compileFreeObjectExprToSelectFreeEntry = (expr: FreeObjectExpr, name: string): import("../ir/model.js").SelectFreeIREntry => {
       if (expr.kind === "literal") {
@@ -1422,7 +1749,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       }
       if (expr.kind === "cast") {
         const innerEntry = compileFreeObjectExprToSelectFreeEntry(expr.expr, name);
-        return { kind: "cast", name, castType: expr.castType, value: innerEntry };
+        return { kind: "cast", name, castType: expr.castType, value: asNestedFreeEntry(innerEntry) };
       }
       if (expr.kind === "path") {
         const normalizedHead = normalizeTypeName(expr.head, activeModule);
@@ -1446,7 +1773,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         return {
           kind: "concat",
           name,
-          parts: expr.parts.map((part) => compileFreeObjectExprToSelectFreeEntry(part, "")),
+          parts: expr.parts.map((part) => asNestedFreeEntry(compileFreeObjectExprToSelectFreeEntry(part, ""))),
         };
       }
       fail(`Unsupported free object expression kind '${expr.kind}'`);
@@ -1469,12 +1796,71 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
   }
 
   if (statement.kind === "select_expr") {
-    const compileExprToIREntry = (expr: FreeObjectExpr): import("../ir/model.js").SelectExprIREntry => {
+    const asNestedExprEntry = (
+      entry: import("../ir/model.js").SelectExprIREntry,
+    ): import("../ir/model.js").SelectExprIREntry<3> => entry as import("../ir/model.js").SelectExprIREntry<3>;
+
+    const compileExprToIREntry = (
+      expr: FreeObjectExpr,
+      currentItemBinding?: string,
+    ): import("../ir/model.js").SelectExprIREntry => {
       if (expr.kind === "literal") {
         return { kind: "literal", value: expr.value };
       }
       if (expr.kind === "set_literal") {
         return { kind: "set_literal", values: [...expr.values] };
+      }
+      if (expr.kind === "set_expr") {
+        return {
+          kind: "set_expr",
+          values: expr.values.map((value) => asNestedExprEntry(compileExprToIREntry(value, currentItemBinding))),
+        };
+      }
+      if (expr.kind === "binding_ref") {
+        if (currentItemBinding && expr.name === currentItemBinding) {
+          return { kind: "current_item", bindingName: expr.name };
+        }
+        let bindingValue = withBindings.get(expr.name);
+        if (!bindingValue) {
+          const resolvedAliasName = normalizeTypeName(expr.name, activeModule);
+          const alias = schema.getAlias(resolvedAliasName);
+          if (alias?.values) {
+            return { kind: "set_literal", values: [...alias.values] };
+          }
+
+          const resolvedType = schema.getType(resolvedAliasName);
+          if (resolvedType) {
+            const isEnumScalarType = resolvedType.fields.length === 1
+              && resolvedType.fields[0]?.name === "__enum__"
+              && resolvedType.fields[0]?.enumValues
+              && resolvedType.fields[0].enumValues.length > 0;
+            if (isEnumScalarType) {
+              fail("enum path expression lacks an enum member name, as in 'color_enum_t.GREEN'");
+            }
+          }
+
+          fail(`Unknown binding '${expr.name}'`);
+        }
+        bindingValue = requireValue(bindingValue, `Unknown binding '${expr.name}'`);
+        if (bindingValue.kind === "literal") {
+          return { kind: "literal", value: bindingValue.value };
+        }
+        if (bindingValue.kind === "set_literal") {
+          return { kind: "set_literal", values: [...bindingValue.values] };
+        }
+        if (bindingValue.kind === "array_literal") {
+          return { kind: "set_literal", values: [...bindingValue.values] };
+        }
+        if (bindingValue.kind === "enum_path") {
+          return { kind: "enum_path", enumType: normalizeTypeName(bindingValue.enumType, activeModule), member: bindingValue.member };
+        }
+        if (bindingValue.kind === "path") {
+          return compileExprToIREntry({ kind: "path", head: bindingValue.head, tail: bindingValue.tail }, currentItemBinding);
+        }
+        if (bindingValue.kind === "binding_ref") {
+          return compileExprToIREntry({ kind: "binding_ref", name: bindingValue.name }, currentItemBinding);
+        }
+        fail(`Unsupported binding kind '${bindingValue.kind}'`);
       }
       if (expr.kind === "enum_path") {
         const normalizedEnumType = normalizeTypeName(expr.enumType, activeModule);
@@ -1547,7 +1933,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         fail(`Unknown type or enum '${normalizedHead}'`);
       }
       if (expr.kind === "cast") {
-        const innerEntry = compileExprToIREntry(expr.expr);
+        const innerEntry = compileExprToIREntry(expr.expr, currentItemBinding);
         const isBuiltinScalar = ["str", "int", "float", "bool", "json", "datetime", "duration", "local_datetime", "local_date", "local_time", "relative_duration", "date_duration", "uuid"].includes(expr.castType);
         const resolvedCastType = isBuiltinScalar ? expr.castType : normalizeTypeName(expr.castType, activeModule);
         const castTypeDef = isBuiltinScalar ? undefined : schema.getType(resolvedCastType);
@@ -1560,14 +1946,14 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
               if (jsonInnerValue === null) {
                 return { kind: "cast", castType: resolvedCastType, value: { kind: "literal", value: null } };
               }
-              if (typeof jsonInnerValue !== "string") {
-                const jsonType = typeof jsonInnerValue === "number" ? "JSON number" : typeof jsonInnerValue === "boolean" ? "JSON boolean" : "JSON value";
-                fail(`expected JSON string or null for enum cast, got ${jsonType}`);
+              const jsonInnerString = typeof jsonInnerValue === "string"
+                ? jsonInnerValue
+                : fail(`expected JSON string or null for enum cast, got ${typeof jsonInnerValue === "number" ? "JSON number" : typeof jsonInnerValue === "boolean" ? "JSON boolean" : "JSON value"}`);
+
+              if (!allEnumValues.includes(jsonInnerString)) {
+                fail(`invalid input value for enum '${resolvedCastType}': "${jsonInnerString}"`);
               }
-              if (!allEnumValues.includes(jsonInnerValue as string)) {
-                fail(`invalid input value for enum '${resolvedCastType}': "${jsonInnerValue}"`);
-              }
-              return { kind: "cast", castType: resolvedCastType, value: { kind: "literal", value: jsonInnerValue } };
+              return { kind: "cast", castType: resolvedCastType, value: { kind: "literal", value: jsonInnerString } };
             }
             const coerceEnumValue = (entry: import("../ir/model.js").SelectExprIREntry): import("../ir/model.js").SelectExprIREntry => {
               if (entry.kind === "set_literal") {
@@ -1584,19 +1970,33 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
                   }),
                 };
               }
+              if (entry.kind === "set_expr") {
+                return {
+                  kind: "set_expr",
+                  values: entry.values.map((item) => {
+                    const rawValue = extractLiteralValue(item);
+                    const enumValue = expectStringLiteral(rawValue, `Cannot cast to enum '${resolvedCastType}': expected string value`);
+                    if (!allEnumValues.includes(enumValue)) {
+                      fail(`invalid input value for enum '${resolvedCastType}': "${enumValue}"`);
+                    }
+                    return { kind: "literal", value: enumValue };
+                  }),
+                };
+              }
+              if (entry.kind === "current_item") {
+                return entry;
+              }
               const rawValue = extractLiteralValue(entry);
-              if (typeof rawValue !== "string") {
-                fail(`Cannot cast to enum '${resolvedCastType}': expected string value`);
+              const enumValue = expectStringLiteral(rawValue, `Cannot cast to enum '${resolvedCastType}': expected string value`);
+              if (!allEnumValues.includes(enumValue)) {
+                fail(`invalid input value for enum '${resolvedCastType}': "${enumValue}"`);
               }
-              if (!allEnumValues.includes(rawValue as string)) {
-                fail(`invalid input value for enum '${resolvedCastType}': "${rawValue}"`);
-              }
-              return { kind: "literal", value: rawValue };
+              return { kind: "literal", value: enumValue };
             };
             return {
               kind: "cast",
               castType: resolvedCastType,
-              value: coerceEnumValue(innerEntry),
+              value: asNestedExprEntry(coerceEnumValue(innerEntry)),
             };
           }
           fail(`Unsupported cast type '${resolvedCastType}'`);
@@ -1605,14 +2005,14 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           return {
             kind: "cast",
             castType: "str",
-            value: innerEntry,
+            value: asNestedExprEntry(innerEntry),
           };
         }
         if (resolvedCastType === "json") {
           return {
             kind: "cast",
             castType: "json",
-            value: innerEntry,
+            value: asNestedExprEntry(innerEntry),
           };
         }
         fail(`Unsupported cast type '${resolvedCastType}'`);
@@ -1620,16 +2020,88 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       if (expr.kind === "concat") {
         return {
           kind: "concat",
-          parts: expr.parts.map(compileExprToIREntry),
+          parts: expr.parts.map((part) => asNestedExprEntry(compileExprToIREntry(part, currentItemBinding))),
         };
       }
       if (expr.kind === "function_call") {
-        fail(`Unsupported expression kind in select_expr: ${expr.kind}`);
+        const resolved = resolveFunctionOrFail(expr.call.name, expr.call.args.length);
+        return {
+          kind: "function_call",
+          functionName: resolved.qualifiedName,
+          args: expr.call.args.map((arg): import("../ir/model.js").SelectExprIREntry<3> => {
+            if (arg.kind === "literal") {
+              return { kind: "literal", value: arg.value };
+            }
+            if (arg.kind === "binding_ref") {
+              if (currentItemBinding && arg.name === currentItemBinding) {
+                return { kind: "current_item", bindingName: arg.name };
+              }
+              const bindingValue = withBindings.get(arg.name);
+              if (bindingValue?.kind === "set_literal") {
+                return { kind: "set_literal", values: [...bindingValue.values] };
+              }
+              if (bindingValue?.kind === "array_literal") {
+                return { kind: "set_literal", values: [...bindingValue.values] };
+              }
+              const scalar = resolveWithBindingScalar(arg.name);
+              return { kind: "literal", value: scalar };
+            }
+            if (arg.kind === "set_literal") {
+              return { kind: "set_literal", values: [...arg.values] };
+            }
+            if (arg.kind === "array_literal") {
+              return { kind: "set_literal", values: [...arg.values] };
+            }
+            const nested = compileFunctionArgInFreeObject(arg);
+            if (nested.kind === "literal") {
+              return { kind: "literal", value: nested.value };
+            }
+            if (nested.kind === "set_literal") {
+              return { kind: "set_literal", values: [...nested.values] };
+            }
+            if (nested.kind === "array_literal") {
+              return { kind: "set_literal", values: [...nested.values] };
+            }
+            if (nested.kind === "function_call") {
+              return {
+                kind: "function_call",
+                functionName: nested.functionName,
+                args: nested.args.map((nestedArg): import("../ir/model.js").SelectExprIREntry<2> => {
+                  if (nestedArg.kind === "literal") {
+                    return { kind: "literal", value: nestedArg.value };
+                  }
+                  if (nestedArg.kind === "set_literal") {
+                    return { kind: "set_literal", values: [...nestedArg.values] };
+                  }
+                  if (nestedArg.kind === "array_literal") {
+                    return { kind: "set_literal", values: [...nestedArg.values] };
+                  }
+                  fail("Unsupported nested function argument in select_expr");
+                  throw new Error("unreachable");
+                }),
+              };
+            }
+            fail("Unsupported function argument in select_expr");
+            throw new Error("unreachable");
+          }),
+        };
       }
       if (expr.kind === "select") {
         // Check if this is actually a binding reference (e.g., WITH x := enum.RED SELECT x)
         const bindingValue = withBindings.get(expr.typeName);
         if (bindingValue) {
+          if (currentItemBinding && expr.typeName === currentItemBinding) {
+            return { kind: "current_item", bindingName: expr.typeName };
+          }
+          if (bindingValue.kind === "literal") {
+            return { kind: "literal", value: bindingValue.value };
+          }
+          if (bindingValue.kind === "set_literal") {
+            return { kind: "set_literal", values: [...bindingValue.values] };
+          }
+          if (bindingValue.kind === "array_literal") {
+            return { kind: "set_literal", values: [...bindingValue.values] };
+          }
           if (bindingValue.kind === "enum_path") {
             return { kind: "enum_path", enumType: bindingValue.enumType, member: bindingValue.member };
           }
@@ -1668,14 +2140,54 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         }
         fail(`Unsupported expression kind in select_expr: ${expr.kind}`);
       }
+      if (expr.kind === "is_type") {
+        return {
+          kind: "is_type",
+          value: asNestedExprEntry(compileExprToIREntry(expr.expr, currentItemBinding)),
+          typeName: normalizeTypeName(expr.typeName, activeModule),
+        };
+      }
+      if (expr.kind === "select_expr_subquery") {
+        const innerBinding = expr.alias ?? currentItemBinding;
+        return {
+          kind: "select_expr_subquery",
+          alias: expr.alias,
+          value: asNestedExprEntry(compileExprToIREntry(expr.expr, innerBinding)),
+          orderBy: expr.orderBy
+            ? {
+                value: asNestedExprEntry(compileExprToIREntry(expr.orderBy.expr, innerBinding)),
+                direction: expr.orderBy.direction,
+              }
+            : undefined,
+        };
+      }
       fail(`Unsupported expression kind in select_expr: ${(expr as FreeObjectExpr).kind}`);
       throw new Error("unreachable");
     };
+
+    const inferredCurrentBinding = (
+      statement.expr.kind === "binding_ref"
+      && withBindings.get(statement.expr.name)?.kind === "set_literal"
+    )
+      ? statement.expr.name
+      : (
+        statement.expr.kind === "select"
+        && withBindings.get(statement.expr.typeName)?.kind === "set_literal"
+      )
+        ? statement.expr.typeName
+        : undefined;
 
     const entry = compileExprToIREntry(statement.expr);
     return {
       kind: "select_expr",
       entries: [entry],
+      currentBinding: inferredCurrentBinding,
+      orderBy: statement.orderBy
+        ? {
+            value: compileExprToIREntry(statement.orderBy.expr, inferredCurrentBinding),
+            direction: statement.orderBy.direction,
+          }
+        : undefined,
     };
   }
 
@@ -1714,6 +2226,9 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     ["id", { name: "id", type: "uuid" as const, required: true }],
     ...userFields.map((field) => [field.name, field] as const),
   ]);
+  const insertRewriteFields = new Set((typeDef.mutationRewrites ?? [])
+    .filter((rewrite) => Boolean(rewrite.onInsert))
+    .map((rewrite) => rewrite.field));
 
   const typeName = statement.kind === "for" ? statement.body.typeName : statement.typeName;
 
@@ -1727,31 +2242,31 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     ensureField(fieldName);
     const field = requireValue(fieldByName.get(fieldName), `Unknown field '${fieldName}' on '${typeName}'`);
 
-    if (field.multi) {
-      if (typeof value !== "string") {
-        fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
-      }
-
-      try {
-        const serialized = typeof value === "string"
-          ? value
-          : fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
-        const parsed: unknown = JSON.parse(serialized);
-        if (!Array.isArray(parsed)) {
+      if (field.multi) {
+        if (typeof value !== "string") {
           fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
         }
 
-        for (const entry of parsed as unknown[]) {
-          if (!isValidScalarValue(field.type, entry as ScalarValue)) {
-            fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
+        try {
+          const serialized = typeof value === "string"
+            ? value
+            : fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
+          const parsed: unknown = JSON.parse(serialized);
+          const parsedArray = Array.isArray(parsed)
+            ? parsed
+            : fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
+
+          for (const entry of parsedArray) {
+            if (!isValidScalarValue(field.type, entry)) {
+              fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
+            }
+            if (field.enumValues && typeof entry === "string" && !field.enumValues.includes(entry)) {
+              fail(`invalid input value for enum '${typeName}': "${entry}"`);
+            }
           }
-          if (field.enumValues && typeof entry === "string" && !field.enumValues.includes(entry)) {
-            fail(`invalid input value for enum '${typeName}': "${entry}"`);
-          }
+        } catch {
+          fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
         }
-      } catch {
-        fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
-      }
       return;
     }
 
@@ -1771,7 +2286,10 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       orderBy: resolvedRootType.clauses.orderBy,
       limit: resolvedRootType.clauses.limit,
       offset: resolvedRootType.clauses.offset,
-    }, { allowBacklinkFilter: true });
+    }, {
+      allowBacklinkFilter: true,
+      aliasProjections: resolvedRootType.aliasProjections,
+    });
 
     return {
       kind: "select",
@@ -1795,6 +2313,30 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
   if (statement.kind === "insert") {
     const pathId = createPathId();
     const pendingInlineLinkValue = "__gel_pending_inline_link__";
+    const pendingGeneratedValueForField = (fieldName: string): ScalarValue => {
+      const field = fieldByName.get(fieldName);
+      if (!field) {
+        return "__gel_pending_insert_rewrite__";
+      }
+
+      if (field.multi) {
+        return "[]";
+      }
+
+      switch (field.type) {
+        case "int":
+        case "float":
+          return 0;
+        case "bool":
+          return false;
+        case "json":
+          return "null";
+        case "uuid":
+          return pendingInlineLinkValue;
+        default:
+          return "__gel_pending_insert_rewrite__";
+      }
+    };
     if (typeDef.abstract) {
       fail(`cannot insert into abstract object type '${qualifiedTypeName(typeDef)}'`);
     }
@@ -1823,6 +2365,9 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         for (const item of value.values) {
           validateInsertLinkExpr(linkName, item);
         }
+        return;
+      }
+      if (value.kind === "for") {
         return;
       }
 
@@ -1869,6 +2414,14 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
 
     for (const field of userFields) {
       if (field.required && !(field.name in scalarValues)) {
+        if (insertRewriteFields.has(field.name)) {
+          scalarValues[field.name] = pendingGeneratedValueForField(field.name);
+          continue;
+        }
+        if (field.hasDefault) {
+          scalarValues[field.name] = pendingGeneratedValueForField(field.name);
+          continue;
+        }
         fail(`Missing required field '${field.name}'`);
       }
     }
@@ -1909,6 +2462,30 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       }
     }
 
+    const linkByName = new Map((typeDef.links ?? []).map((link) => [link.name, link] as const));
+
+    const validateUpdateLinkExpr = (linkName: string, value: InsertValue): void => {
+      if (typeof value !== "object" || value === null || !("kind" in value)) {
+        if (typeof value !== "string" && value !== null) {
+          fail(`Link '${linkName}' assignments require object ids or subqueries`);
+        }
+        return;
+      }
+
+      if (value.kind === "binding_ref" || value.kind === "select" || value.kind === "insert" || value.kind === "for") {
+        return;
+      }
+      if (value.kind === "set") {
+        for (const item of value.values) {
+          validateUpdateLinkExpr(linkName, item);
+        }
+        return;
+      }
+
+      fail(`Unsupported update expression for link '${linkName}'`);
+    };
+
+    const scalarValues: Record<string, ScalarValue> = {};
     const updateFields = Object.entries(statement.values);
     if (updateFields.length === 0) {
       fail("Update requires at least one field assignment");
@@ -1918,7 +2495,23 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       if (field === "id") {
         fail("'id' is server-generated and cannot be assigned");
       }
-      validateFieldValue(field, value);
+
+      if (knownFields.has(field)) {
+        const fieldDef = requireValue(fieldByName.get(field), `Unknown field '${field}' on '${statement.typeName}'`);
+        const scalar = fieldDef.multi
+          ? JSON.stringify(resolveInsertSetValues(value))
+          : resolveInsertScalarValue(value);
+        validateFieldValue(field, scalar);
+        scalarValues[field] = scalar;
+        continue;
+      }
+
+      if (linkByName.has(field)) {
+        validateUpdateLinkExpr(field, value);
+        continue;
+      }
+
+      fail(`Unknown field '${field}' on '${statement.typeName}'`);
     }
 
     return {
@@ -1931,7 +2524,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
             value: resolveFilterValue(predicateFilter.value) as ScalarValue,
           }
         : undefined,
-      values: statement.values,
+      values: scalarValues,
       overlays: [
         {
           table,
@@ -2109,7 +2702,7 @@ const coerceCastScalarValue = (castType: string, value: unknown, context: string
   }
 };
 
-const isValidScalarValue = (type: ScalarType, value: ScalarValue): boolean => {
+const isValidScalarValue = (type: ScalarType, value: unknown): value is ScalarValue => {
   if (value === null) {
     return true;
   }
@@ -2137,6 +2730,12 @@ const isValidScalarValue = (type: ScalarType, value: ScalarValue): boolean => {
         } catch {
           return false;
         }
+      }
+      if (Array.isArray(value)) {
+        return true;
+      }
+      if (value !== null && typeof value === "object") {
+        return true;
       }
       return false;
     case "datetime":

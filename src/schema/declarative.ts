@@ -4,8 +4,10 @@ import type {
   AccessPolicyCondition,
   AccessPolicyDef,
   AnnotationDef,
+  ConstraintDef,
   AccessPolicyOperation,
   ComputedDef,
+  CollectionTypeDef,
   ComputedValuePart,
   FunctionParamDef,
   FunctionVolatility,
@@ -16,6 +18,12 @@ import type {
   TriggerInsertAction,
   TriggerValueExpr,
 } from "../types.js";
+import { AnnotationRegistry, normalizeAnnotationName } from "./annos.js";
+import { OperatorKind, ReturnTypeModifier, type OperatorCode, type OperatorParameter, CreateOperator, lookupOperators, Operator } from "./operators.js";
+import { SchemaCardinality } from "./properties.js";
+import { ScalarRegistry } from "./scalar.js";
+import type { ScalarTypeDeclaration } from "./scalar.js";
+import { TriggerKind as SchemaTriggerKind, TriggerScope as SchemaTriggerScope } from "./triggers.js";
 
 export interface SchemaModule {
   name: string;
@@ -26,7 +34,9 @@ export interface PropertyMember {
   name: string;
   scalar: ScalarType;
   required: boolean;
+  hasDefault?: boolean;
   multi: boolean;
+  collection?: CollectionTypeDef;
   overloaded: boolean;
   annotations: AnnotationDef[];
   enumValues?: string[];
@@ -35,12 +45,15 @@ export interface PropertyMember {
     onInsert?: MutationRewriteExpr;
     onUpdate?: MutationRewriteExpr;
   };
+  constraints: ConstraintDef[];
 }
 
 export interface LinkProperty {
   name: string;
   scalar: ScalarType;
   required: boolean;
+  hasDefault?: boolean;
+  collection?: CollectionTypeDef;
   annotations: AnnotationDef[];
 }
 
@@ -49,6 +62,8 @@ export interface LinkMember {
   name: string;
   target: string;
   required: boolean;
+  hasDefault?: boolean;
+  defaultTargetValues?: string[];
   multi: boolean;
   overloaded: boolean;
   annotations: AnnotationDef[];
@@ -87,6 +102,12 @@ export interface AbstractAnnotationDeclaration extends AbstractAnnotationDef {
   annotations: AnnotationDef[];
 }
 
+export interface ConstraintDeclaration {
+  module: string;
+  name: string;
+  annotations: AnnotationDef[];
+}
+
 export interface PermissionDeclaration {
   module: string;
   name: string;
@@ -107,19 +128,58 @@ export interface FunctionDeclaration {
   };
 }
 
-export interface ScalarTypeDeclaration {
-  name: string;
+export interface OperatorDeclaration {
   module: string;
-  enumValues: string[];
+  name: string;
+  kind: OperatorKind;
+  params: FunctionParamDef[];
+  returnType: string;
+  returnTypemod: ReturnTypeModifier;
+  language?: string;
+  fromOperator?: string[];
+  fromFunction?: string[];
+  fromExpr?: boolean;
+  code?: string;
+  recursive?: boolean;
+  derivativeOf?: string;
+}
+
+export interface AliasDeclaration {
+  module: string;
+  name: string;
+  values?: ScalarValue[];
+  sourceType?: string;
+  projections?: Array<{
+    name: string;
+    sourceField: string;
+  }>;
+  filter?:
+    | {
+        kind: "field_predicate";
+        field: string;
+        op: "=" | "!=" | "like" | "ilike";
+        value: ScalarValue;
+      }
+    | {
+        kind: "backlink_membership";
+        op: "in" | "not_in";
+        value: ScalarValue;
+        link: string;
+        sourceType?: string;
+        field: string;
+      };
 }
 
 export interface DeclarativeSchema {
   modules: SchemaModule[];
   types: ObjectTypeDeclaration[];
   functions?: FunctionDeclaration[];
+  operators?: OperatorDeclaration[];
   abstractAnnotations?: AbstractAnnotationDeclaration[];
   permissions?: PermissionDeclaration[];
   scalarTypes?: ScalarTypeDeclaration[];
+  constraints?: ConstraintDeclaration[];
+  aliases?: AliasDeclaration[];
 }
 
 type TokenKind =
@@ -139,12 +199,14 @@ type TokenKind =
   | "equals"
   | "bang_eq"
   | "qeq"
+  | "coalesce"
   | "assign"
   | "arrow"
   | "concat"
   | "lt"
   | "gt"
   | "minus"
+  | "plus"
   | "star"
   | "pipe"
   | "eof";
@@ -155,37 +217,12 @@ interface Token {
   index: number;
 }
 
-const BUILTIN_SCALARS = new Set<string>([
-  "str",
-  "int",
-  "float",
-  "bool",
-  "json",
-  "datetime",
-  "duration",
-  "local_datetime",
-  "local_date",
-  "local_time",
-  "relative_duration",
-  "date_duration",
-  "uuid",
-  "int16",
-  "int32",
-  "int64",
-  "float32",
-  "float64",
-  "bigint",
-  "decimal",
-  "bytes",
-]);
-const STANDARD_ANNOTATIONS = new Set(["title", "description", "deprecated"]);
-
 class Parser {
   private readonly tokens: Token[];
   private readonly source: string;
-  private readonly scalarAliases = new Map<string, ScalarType>();
-  private readonly enumValues = new Map<string, string[]>();
+  private readonly scalarRegistry = new ScalarRegistry();
   private index = 0;
+  private readonly annotationRegistry = new AnnotationRegistry();
 
   constructor(source: string) {
     this.source = source;
@@ -197,8 +234,11 @@ class Parser {
     const types: ObjectTypeDeclaration[] = [];
     const permissions: PermissionDeclaration[] = [];
     const functions: FunctionDeclaration[] = [];
+    const operators: OperatorDeclaration[] = [];
     const abstractAnnotations: AbstractAnnotationDeclaration[] = [];
     const scalarTypes: ScalarTypeDeclaration[] = [];
+    const constraintDeclarations: ConstraintDeclaration[] = [];
+    const aliases: AliasDeclaration[] = [];
 
     while (!this.match("eof")) {
       this.expectWord("module", "Expected 'module' declaration");
@@ -244,6 +284,32 @@ class Parser {
           continue;
         }
 
+        if (this.peekWordAt(0) === "operator") {
+          operators.push(this.parseOperatorDeclaration(moduleName));
+          continue;
+        }
+
+        if (this.peekWordAt(0) === "create" && this.peekWordAt(1) === "operator") {
+          this.consume();
+          this.consume();
+          operators.push(this.parseOperatorDeclaration(moduleName));
+          continue;
+        }
+
+        if (this.peekWordAt(0) === "alter" && this.peekWordAt(1) === "operator") {
+          this.consume();
+          this.consume();
+          this.parseAlterOperator(moduleName, operators);
+          continue;
+        }
+
+        if (this.peekWordAt(0) === "drop" && this.peekWordAt(1) === "operator") {
+          this.consume();
+          this.consume();
+          this.parseDropOperator(moduleName, operators);
+          continue;
+        }
+
         if (this.peekWordAt(0) === "drop" && this.peekWordAt(1) === "function") {
           this.consume();
           this.consume();
@@ -256,8 +322,21 @@ class Parser {
           continue;
         }
 
+        if (this.peekWordAt(0) === "abstract" && this.peekWordAt(1) === "constraint") {
+          constraintDeclarations.push(this.parseAbstractConstraint(moduleName));
+          continue;
+        }
+
         if (this.peekWordAt(0) === "scalar" && this.peekWordAt(1) === "type") {
           this.parseScalarType(moduleName, scalarTypes);
+          continue;
+        }
+
+        if (this.peekWordAt(0) === "alias") {
+          const alias = this.parseAlias(moduleName);
+          if (alias) {
+            aliases.push(alias);
+          }
           continue;
         }
 
@@ -270,14 +349,522 @@ class Parser {
       }
     }
 
+    this.annotationRegistry.validatePending();
+
     return {
       modules,
       types,
       functions: functions.length ? functions : undefined,
+      operators: operators.length ? operators : undefined,
       permissions,
       abstractAnnotations: abstractAnnotations.length ? abstractAnnotations : undefined,
       scalarTypes: scalarTypes.length ? scalarTypes : undefined,
+      constraints: constraintDeclarations.length ? constraintDeclarations : undefined,
+      aliases: aliases.length ? aliases : undefined,
     };
+  }
+
+  private parseAlias(moduleName: string): AliasDeclaration | undefined {
+    this.expectWord("alias", "Expected 'alias' declaration");
+    const name = this.expect("word", "Expected alias name").text;
+
+    if (this.match("lbrace")) {
+      while (!this.match("rbrace")) {
+        this.skipStatementInBlock();
+      }
+      this.expect("semi", "Expected ';' after alias declaration");
+      return undefined;
+    }
+
+    this.expect("assign", "Expected ':=' in alias declaration");
+    if (this.peekIs("lbrace")) {
+      this.expect("lbrace", "Expected '{' in alias declaration");
+
+      const values: ScalarValue[] = [];
+      while (!this.match("rbrace")) {
+        values.push(this.readScalarValue("Expected alias literal value"));
+        this.match("comma");
+      }
+
+      this.expect("semi", "Expected ';' after alias declaration");
+      return {
+        module: moduleName,
+        name,
+        values,
+      };
+    }
+
+    if (this.peekIsScalarValue()) {
+      const value = this.readScalarValue("Expected alias literal value");
+      this.expect("semi", "Expected ';' after alias declaration");
+      return {
+        module: moduleName,
+        name,
+        values: [value],
+      };
+    }
+
+    const hasParens = this.match("lparen");
+    if (this.matchWord("select")) {
+      const sourceType = this.expect("word", "Expected source type name in alias declaration").text;
+      let filter: AliasDeclaration["filter"];
+      let unsupportedTail = false;
+      let projections: AliasDeclaration["projections"];
+
+      if (this.peekIs("lbrace")) {
+        this.consume();
+        const parsedProjections: Array<{ name: string; sourceField: string }> = [];
+        while (!this.peekIs("rbrace") && !this.peekIs("eof")) {
+          if (!(this.peekIs("word") && this.peekAt(1).kind === "assign")) {
+            unsupportedTail = true;
+            while (!this.peekIs("rbrace") && !this.peekIs("eof")) {
+              this.consume();
+            }
+            break;
+          }
+
+          const aliasField = this.expect("word", "Expected alias field name in alias projection").text;
+          this.expect("assign", "Expected ':=' in alias projection");
+
+          if (this.peekIs("word") && this.peekAt(1).kind === "dot") {
+            this.consume();
+            this.consume();
+          } else if (this.peekIs("dot")) {
+            this.consume();
+          }
+
+          if (!this.peekIs("word")) {
+            unsupportedTail = true;
+            while (!this.peekIs("rbrace") && !this.peekIs("eof")) {
+              this.consume();
+            }
+            break;
+          }
+
+          const sourceField = this.consume().text;
+          parsedProjections.push({ name: aliasField, sourceField });
+
+          if (this.peekIs("comma")) {
+            this.consume();
+          } else if (!this.peekIs("rbrace")) {
+            unsupportedTail = true;
+            while (!this.peekIs("rbrace") && !this.peekIs("eof")) {
+              this.consume();
+            }
+            break;
+          }
+        }
+
+        this.expect("rbrace", "Expected '}' to close alias projection");
+        if (parsedProjections.length > 0) {
+          projections = parsedProjections;
+        }
+      }
+
+      if (!unsupportedTail && this.matchWord("filter")) {
+        if (this.match("dot")) {
+          const field = this.expect("word", "Expected field name after '.' in alias filter").text;
+          const opToken = this.expectOneOf(["equals", "bang_eq", "word"], "Expected alias filter operator");
+          const op =
+            opToken.kind === "equals"
+              ? "="
+              : opToken.kind === "bang_eq"
+              ? "!="
+              : opToken.text.toLowerCase() === "like"
+              ? "like"
+              : opToken.text.toLowerCase() === "ilike"
+              ? "ilike"
+              : undefined;
+
+          if (!op) {
+            this.skipStatementInBlock();
+            return undefined;
+          }
+
+          const value = this.readScalarValue("Expected scalar literal value in alias filter");
+          filter = { kind: "field_predicate", field, op, value };
+        } else if (this.peekIsScalarValue()) {
+          const value = this.readScalarValue("Expected scalar literal value in alias filter");
+          let op: "in" | "not_in";
+          if (this.matchWord("not")) {
+            this.expectWord("in", "Expected 'IN' after 'NOT' in alias filter");
+            op = "not_in";
+          } else {
+            this.expectWord("in", "Expected 'IN' in alias filter");
+            op = "in";
+          }
+
+          if (this.peekIs("word") && this.peekAt(1).kind === "dot") {
+            this.consume();
+            this.consume();
+          }
+
+          this.expect("lt", "Expected '.<' backlink expression in alias filter");
+          const link = this.expect("word", "Expected backlink link name in alias filter").text;
+          let sourceType: string | undefined;
+          if (this.match("lbracket")) {
+            this.expectWord("is", "Expected 'IS' in backlink type filter");
+            sourceType = this.expect("word", "Expected source type in backlink filter").text;
+            this.expect("rbracket", "Expected ']' to close backlink type filter");
+          }
+          this.expect("dot", "Expected '.' after backlink in alias filter");
+          const sourceField = this.expect("word", "Expected source field in backlink filter").text;
+          filter = {
+            kind: "backlink_membership",
+            op,
+            value,
+            link,
+            sourceType,
+            field: sourceField,
+          };
+        } else if (this.peekIs("word")) {
+          this.expect("word", "Expected type name in alias filter");
+          this.expect("dot", "Expected '.' in alias filter");
+          const field = this.expect("word", "Expected field name in alias filter").text;
+          const opToken = this.expectOneOf(["equals", "bang_eq", "word"], "Expected alias filter operator");
+          const op =
+            opToken.kind === "equals"
+              ? "="
+              : opToken.kind === "bang_eq"
+              ? "!="
+              : opToken.text.toLowerCase() === "like"
+              ? "like"
+              : opToken.text.toLowerCase() === "ilike"
+              ? "ilike"
+              : undefined;
+
+          if (!op) {
+            this.skipStatementInBlock();
+            return undefined;
+          }
+
+          const value = this.readScalarValue("Expected scalar literal value in alias filter");
+          filter = { kind: "field_predicate", field, op, value };
+        } else {
+          unsupportedTail = true;
+        }
+      }
+
+      if (hasParens) {
+        if (this.peekIs("rparen")) {
+          this.consume();
+        } else {
+          unsupportedTail = true;
+          let depth = 1;
+          while (depth > 0 && !this.peekIs("eof")) {
+            const token = this.consume();
+            if (token.kind === "lparen") {
+              depth += 1;
+            } else if (token.kind === "rparen") {
+              depth -= 1;
+            }
+          }
+        }
+      } else {
+        while (!this.peekIs("semi") && !this.peekIs("eof")) {
+          unsupportedTail = true;
+          this.consume();
+        }
+      }
+      this.expect("semi", "Expected ';' after alias declaration");
+      if (unsupportedTail) {
+        return undefined;
+      }
+      return {
+        module: moduleName,
+        name,
+        sourceType,
+        projections,
+        filter,
+      };
+    }
+
+    if (hasParens) {
+      let depth = 1;
+      while (depth > 0 && !this.peekIs("eof")) {
+        const token = this.consume();
+        if (token.kind === "lparen") {
+          depth += 1;
+        } else if (token.kind === "rparen") {
+          depth -= 1;
+        }
+      }
+      this.match("semi");
+      return undefined;
+    }
+
+    this.skipStatementInBlock();
+    return undefined;
+  }
+
+  private parseOperatorDeclaration(moduleName: string): OperatorDeclaration {
+    this.matchWord("operator");
+    let kind: OperatorKind | undefined;
+    if (this.peekWordAt(0) === "infix") {
+      this.consume();
+      kind = OperatorKind.Infix;
+    } else if (this.peekWordAt(0) === "prefix") {
+      this.consume();
+      kind = OperatorKind.Prefix;
+    } else if (this.peekWordAt(0) === "postfix") {
+      this.consume();
+      kind = OperatorKind.Postfix;
+    } else if (this.peekWordAt(0) === "ternary") {
+      this.consume();
+      kind = OperatorKind.Ternary;
+    }
+
+    const nameToken = this.expect("word", "Expected operator name");
+    const name = nameToken.text;
+    const params = this.parseFunctionParameters();
+    const returns = this.parseFunctionReturnSpec();
+
+    const declaration: OperatorDeclaration = {
+      module: moduleName,
+      name,
+      kind: kind ?? this.inferOperatorKind(params),
+      params,
+      returnType: returns.type,
+      returnTypemod: this.returnSpecToTypemod(returns.optional, returns.setOf),
+    };
+
+    if (this.matchWord("using")) {
+      const code = this.parseOperatorUsingClause();
+      declaration.language = code.language;
+      declaration.fromFunction = code.fromFunction;
+      declaration.fromOperator = code.fromOperator;
+      declaration.fromExpr = code.fromExpr;
+      declaration.code = code.code;
+      this.expect("semi", "Expected ';' after operator declaration");
+    } else if (this.match("lbrace")) {
+      while (!this.match("rbrace")) {
+        if (this.matchWord("using")) {
+          const code = this.parseOperatorUsingClause();
+          declaration.language = code.language;
+          declaration.fromFunction = code.fromFunction;
+          declaration.fromOperator = code.fromOperator;
+          declaration.fromExpr = code.fromExpr;
+          declaration.code = code.code;
+          this.expect("semi", "Expected ';' after operator using clause");
+          continue;
+        }
+
+        if (this.matchWord("set")) {
+          const key = this.expect("word", "Expected operator setting name").text;
+          this.expect("assign", "Expected ':=' after operator setting name");
+          if (key === "recursive") {
+            declaration.recursive = this.readBooleanLiteral("Expected boolean value for operator recursive setting");
+          } else if (key === "derivative_of") {
+            declaration.derivativeOf = this.expect("word", "Expected operator name for derivative_of").text;
+          } else {
+            this.skipStatementInBlock();
+            continue;
+          }
+          this.expect("semi", "Expected ';' after operator setting");
+          continue;
+        }
+
+        this.skipStatementInBlock();
+      }
+      this.expect("semi", "Expected ';' after operator block");
+    } else {
+      const token = this.peek();
+      throw new AppError("E_SYNTAX", "Expected operator body using clause or block", 1, token.index + 1);
+    }
+
+    this.validateOperatorDeclaration(declaration);
+    return declaration;
+  }
+
+  private parseOperatorUsingClause(): OperatorCode {
+    const token = this.peek();
+    const language = this.expect("word", "Expected operator language after using").text;
+    const code: OperatorCode = { language };
+
+    if (this.matchWord("operator")) {
+      const source = this.expect("word", "Expected source operator name").text;
+      code.fromOperator = [source];
+      return code;
+    }
+
+    if (this.matchWord("function")) {
+      const fn = this.expect("word", "Expected source function name").text;
+      code.fromFunction = [fn];
+      return code;
+    }
+
+    if (this.matchWord("expr")) {
+      code.fromExpr = true;
+      return code;
+    }
+
+    if (token.kind === "string" || this.peek().kind === "string") {
+      code.code = this.readStringLiteral("Expected operator code string literal");
+      return code;
+    }
+
+    if (this.peek().kind === "lparen") {
+      code.code = this.readParenthesizedRaw();
+      return code;
+    }
+
+    const fallback = this.peek();
+    throw new AppError("E_SYNTAX", "Unsupported operator using clause", 1, fallback.index + 1);
+  }
+
+  private parseAlterOperator(moduleName: string, operators: OperatorDeclaration[]): void {
+    const name = this.expect("word", "Expected operator name in alter statement").text;
+    const params = this.parseFunctionParameters();
+    const index = this.findOperatorIndex(operators, moduleName, name, params);
+    if (index < 0) {
+      const token = this.peek();
+      throw new AppError("E_SYNTAX", `Unknown operator '${name}' for alter`, 1, token.index + 1);
+    }
+
+    const next = { ...operators[index] };
+    this.expect("lbrace", "Expected '{' in alter operator block");
+    while (!this.match("rbrace")) {
+      if (this.matchWord("set")) {
+        const field = this.expect("word", "Expected operator field after 'set'").text;
+        this.expect("assign", "Expected ':=' after operator field");
+        if (field === "recursive") {
+          next.recursive = this.readBooleanLiteral("Expected recursive boolean value");
+        } else if (field === "derivative_of") {
+          next.derivativeOf = this.expect("word", "Expected derivative operator name").text;
+        } else {
+          this.skipStatementInBlock();
+          continue;
+        }
+        this.expect("semi", "Expected ';' after operator set clause");
+        continue;
+      }
+
+      if (this.matchWord("using")) {
+        const code = this.parseOperatorUsingClause();
+        next.language = code.language;
+        next.fromFunction = code.fromFunction;
+        next.fromOperator = code.fromOperator;
+        next.fromExpr = code.fromExpr;
+        next.code = code.code;
+        this.expect("semi", "Expected ';' after operator using clause");
+        continue;
+      }
+
+      this.skipStatementInBlock();
+    }
+
+    this.expect("semi", "Expected ';' after alter operator block");
+    this.validateOperatorDeclaration(next);
+    operators[index] = next;
+  }
+
+  private parseDropOperator(moduleName: string, operators: OperatorDeclaration[]): void {
+    const name = this.expect("word", "Expected operator name in drop statement").text;
+    const params = this.parseFunctionParameters();
+    this.expect("semi", "Expected ';' after drop operator statement");
+    const index = this.findOperatorIndex(operators, moduleName, name, params);
+    if (index >= 0) {
+      operators.splice(index, 1);
+    }
+  }
+
+  private inferOperatorKind(params: FunctionParamDef[]): OperatorKind {
+    if (params.length === 1) {
+      return OperatorKind.Prefix;
+    }
+    if (params.length === 2) {
+      return OperatorKind.Infix;
+    }
+    return OperatorKind.Ternary;
+  }
+
+  private returnSpecToTypemod(optional: boolean, setOf: boolean): ReturnTypeModifier {
+    if (setOf) {
+      return ReturnTypeModifier.SetOf;
+    }
+    if (optional) {
+      return ReturnTypeModifier.Optional;
+    }
+    return ReturnTypeModifier.Singleton;
+  }
+
+  private findOperatorIndex(
+    operators: OperatorDeclaration[],
+    moduleName: string,
+    name: string,
+    params: FunctionParamDef[],
+  ): number {
+    const signature = this.functionSignature(moduleName, name, params);
+    return operators.findIndex((op) => this.functionSignature(op.module, op.name, op.params) === signature);
+  }
+
+  private validateOperatorDeclaration(op: OperatorDeclaration): void {
+    const mockSchema: {
+      getOperator(fullname: string): Operator | undefined;
+      setOperator(_operator: Operator): void;
+      getOperatorsByShortname(name: string): Operator[];
+    } = {
+      getOperator: () => undefined,
+      setOperator: () => {},
+      getOperatorsByShortname: (name) => {
+        void name;
+        return [];
+      },
+    };
+
+    const params: OperatorParameter[] = op.params.map((param) => ({
+      name: param.name,
+      type: {
+        name: param.type,
+        getDisplayname: () => param.type,
+        isArray: () => param.type.startsWith("array<"),
+        isTuple: () => param.type.startsWith("tuple<"),
+        isRange: () => param.type.startsWith("range<"),
+        isMultirange: () => param.type.startsWith("multirange<"),
+      },
+      asStr: () => `${param.type}`,
+    }));
+
+    const operator = new Operator({
+      fullname: `${op.module}::${op.name}(${params.map((p) => p.asStr(mockSchema as any)).join(",")})`,
+      shortname: op.name,
+      params,
+      returnType: {
+        name: op.returnType,
+        getDisplayname: () => op.returnType,
+      },
+      returnTypemod: op.returnTypemod,
+      operatorKind: op.kind,
+      language: op.language,
+      fromFunction: op.fromFunction,
+      fromOperator: op.fromOperator,
+      fromExpr: op.fromExpr,
+      code: op.code,
+      recursive: op.recursive,
+      derivativeOf: op.derivativeOf,
+    });
+
+    new CreateOperator().createBegin(mockSchema as any, operator);
+    lookupOperators(op.name, mockSchema as any, { default: [] });
+  }
+
+  private readBooleanLiteral(message: string): boolean {
+    const token = this.peek();
+    if (token.kind !== "word") {
+      throw new AppError("E_SYNTAX", message, 1, token.index + 1);
+    }
+
+    const value = token.text.toLowerCase();
+    if (value === "true") {
+      this.consume();
+      return true;
+    }
+    if (value === "false") {
+      this.consume();
+      return false;
+    }
+
+    throw new AppError("E_SYNTAX", message, 1, token.index + 1);
   }
 
   private parseFunctionDeclaration(moduleName: string): FunctionDeclaration {
@@ -394,7 +981,7 @@ class Parser {
 
       if (this.matchWord("create") || this.matchWord("alter")) {
         this.expectWord("annotation", "Expected 'annotation' clause");
-        const annotationName = this.normalizeAnnotationName(moduleName, this.expect("word", "Expected annotation name").text);
+        const annotationName = normalizeAnnotationName(moduleName, this.expect("word", "Expected annotation name").text);
         this.expect("assign", "Expected ':=' in annotation clause");
         const value = this.readStringLiteral("Expected annotation string value");
         this.expect("semi", "Expected ';' after annotation clause");
@@ -409,7 +996,7 @@ class Parser {
 
       if (this.matchWord("drop")) {
         this.expectWord("annotation", "Expected 'annotation' after 'drop'");
-        const annotationName = this.normalizeAnnotationName(moduleName, this.expect("word", "Expected annotation name").text);
+        const annotationName = normalizeAnnotationName(moduleName, this.expect("word", "Expected annotation name").text);
         this.expect("semi", "Expected ';' after drop annotation clause");
         const existing = next.annotations.findIndex((annotation) => annotation.name === annotationName);
         if (existing >= 0) {
@@ -640,6 +1227,11 @@ class Parser {
         continue;
       }
 
+      if (this.peekWordAt(0) === "constraint") {
+        this.skipStatementInBlock();
+        continue;
+      }
+
       members.push(this.parseMember(moduleName));
     }
 
@@ -662,7 +1254,7 @@ class Parser {
     this.expectWord("abstract", "Expected 'abstract' in annotation declaration");
     const inheritable = this.matchWord("inheritable");
     this.expectWord("annotation", "Expected 'annotation' in abstract annotation declaration");
-    const name = this.normalizeAnnotationName(moduleName, this.expect("word", "Expected annotation name").text);
+    const name = normalizeAnnotationName(moduleName, this.expect("word", "Expected annotation name").text);
 
     const annotations: AnnotationDef[] = [];
     if (this.match("lbrace")) {
@@ -672,12 +1264,43 @@ class Parser {
     }
 
     this.expect("semi", "Expected ';' after abstract annotation declaration");
-    return {
+    const declaration: AbstractAnnotationDeclaration = {
       module: moduleName,
       name,
       inheritable,
       annotations,
     };
+    this.annotationRegistry.register(declaration);
+    return declaration;
+  }
+
+  private parseAbstractConstraint(moduleName: string): ConstraintDeclaration {
+    this.expectWord("abstract", "Expected 'abstract' in constraint declaration");
+    this.expectWord("constraint", "Expected 'constraint' after 'abstract'");
+    const name = this.normalizeConstraintName(moduleName, this.expect("word", "Expected constraint name").text);
+    const annotations: AnnotationDef[] = [];
+
+    if (this.match("lparen")) {
+      this.skipParentheses();
+    }
+
+    if (this.match("lbrace")) {
+      while (!this.match("rbrace")) {
+        if (this.peekWordAt(0) === "annotation") {
+          this.consume();
+          const annotationName = normalizeAnnotationName(moduleName, this.expect("word", "Expected annotation name").text);
+          this.expect("assign", "Expected ':=' in annotation declaration");
+          const value = this.readStringLiteral("Expected annotation string value");
+          this.match("semi");
+          annotations.push({ name: annotationName, value });
+          continue;
+        }
+        this.skipStatementInBlock();
+      }
+    }
+
+    this.match("semi");
+    return { module: moduleName, name, annotations };
   }
 
   private isAbstractAnnotationDeclarationStart(): boolean {
@@ -709,7 +1332,7 @@ class Parser {
   private parseAnnotationMutation(moduleName: string, annotations: AnnotationDef[]): void {
     if (this.matchWord("drop")) {
       this.expectWord("annotation", "Expected 'annotation' after 'drop'");
-      const name = this.normalizeAnnotationName(moduleName, this.expect("word", "Expected annotation name").text);
+      const name = normalizeAnnotationName(moduleName, this.expect("word", "Expected annotation name").text);
       this.expect("semi", "Expected ';' after drop annotation");
       const index = annotations.findIndex((item) => item.name === name);
       if (index >= 0) {
@@ -724,7 +1347,7 @@ class Parser {
       this.expectWord("annotation", "Expected annotation declaration");
     }
 
-    const name = this.normalizeAnnotationName(moduleName, this.expect("word", "Expected annotation name").text);
+    const name = normalizeAnnotationName(moduleName, this.expect("word", "Expected annotation name").text);
     this.expect("assign", "Expected ':=' in annotation declaration");
     const value = this.readStringLiteral("Expected annotation string value");
     this.expect("semi", "Expected ';' after annotation declaration");
@@ -763,6 +1386,11 @@ class Parser {
         continue;
       }
 
+      if (this.matchWord("optional")) {
+        required = false;
+        continue;
+      }
+
       break;
     }
 
@@ -788,32 +1416,40 @@ class Parser {
 
     if (this.match("arrow")) {
       const targetToken = this.expect("word", "Expected property or link target type");
-      this.consumeTypeTail();
+      const collection = this.consumeTypeTail(targetToken.text);
       if (memberKind === "property" || (memberKind === undefined && this.isScalarLike(targetToken.text))) {
         const { scalar, enumValues, enumTypeName } = this.readScalarType(moduleName, targetToken.text);
 
         let annotations: AnnotationDef[] = [];
         let rewrite: PropertyMember["rewrite"] | undefined;
+        let propertyConstraints: ConstraintDef[] = [];
+        let hasDefault = false;
         if (this.match("lbrace")) {
           const parsed = this.parsePropertyBody(moduleName, name);
           rewrite = parsed.rewrite;
           annotations = parsed.annotations;
+          propertyConstraints = parsed.constraints;
+          hasDefault = parsed.hasDefault;
           this.expect("rbrace", "Expected '}' after property body");
         }
 
-        this.match("semi");
+      this.match("semi");
+      const cardinality = multi ? SchemaCardinality.Many : SchemaCardinality.One;
         return {
           kind: "property",
           name,
           scalar,
-          required,
-          multi,
+          required: cardinality === SchemaCardinality.Many ? false : required,
+          hasDefault,
+          multi: cardinality === SchemaCardinality.Many,
+          collection,
           overloaded,
-          annotations,
-          rewrite,
-          enumValues,
-          enumTypeName,
-        };
+        annotations,
+        rewrite,
+        constraints: propertyConstraints,
+        enumValues,
+        enumTypeName,
+      };
       }
 
       const target = this.normalizeTypeName(moduleName, targetToken.text);
@@ -823,11 +1459,29 @@ class Parser {
       }
       const annotations: AnnotationDef[] = [];
       const linkProperties: LinkProperty[] = [];
+      let hasDefault = false;
+      let defaultTargetValues: string[] | undefined;
 
       if (this.match("lbrace")) {
         while (!this.match("rbrace")) {
           if (this.isAnnotationMutationStart()) {
             this.parseAnnotationMutation(moduleName, annotations);
+            continue;
+          }
+
+          if (this.peekWordAt(0) === "default") {
+            hasDefault = true;
+            this.consume();
+            this.expect("assign", "Expected ':=' after 'default'");
+            const literals = this.readStatementStringLiteralsInBlock();
+            if (literals.length > 0) {
+              defaultTargetValues = literals;
+            }
+            continue;
+          }
+
+          if (this.peekWordAt(0) === "readonly") {
+            this.skipStatementInBlock();
             continue;
           }
 
@@ -844,11 +1498,14 @@ class Parser {
           const propName = this.expect("word", "Expected link property name").text;
           if (this.match("arrow")) {
             const typeName = this.expect("word", "Expected link property scalar type").text;
-            this.consumeTypeTail();
+            const linkCollection = this.consumeTypeTail(typeName);
             const { scalar: linkScalar } = this.readScalarType(moduleName, typeName);
             let linkPropertyAnnotations: AnnotationDef[] = [];
+            let linkPropertyHasDefault = false;
             if (this.match("lbrace")) {
-              linkPropertyAnnotations = this.parseLinkPropertyBody(moduleName);
+              const parsed = this.parseLinkPropertyBody(moduleName);
+              linkPropertyAnnotations = parsed.annotations;
+              linkPropertyHasDefault = parsed.hasDefault;
               this.expect("rbrace", "Expected '}' after link property body");
             }
             this.match("semi");
@@ -857,6 +1514,8 @@ class Parser {
               name: propName,
               scalar: linkScalar,
               required: linkPropertyRequired,
+              hasDefault: linkPropertyHasDefault,
+              collection: linkCollection,
               annotations: linkPropertyAnnotations,
             });
             continue;
@@ -864,15 +1523,25 @@ class Parser {
 
           if (this.match("colon")) {
             const typeName = this.expect("word", "Expected link property scalar type").text;
-            this.consumeTypeTail();
+            const linkCollection = this.consumeTypeTail(typeName);
             const { scalar: linkScalar2 } = this.readScalarType(moduleName, typeName);
+            let linkPropertyAnnotations: AnnotationDef[] = [];
+            let linkPropertyHasDefault = false;
+            if (this.match("lbrace")) {
+              const parsed = this.parseLinkPropertyBody(moduleName);
+              linkPropertyAnnotations = parsed.annotations;
+              linkPropertyHasDefault = parsed.hasDefault;
+              this.expect("rbrace", "Expected '}' after link property body");
+            }
             this.match("semi");
 
             linkProperties.push({
               name: propName,
               scalar: linkScalar2,
               required: linkPropertyRequired,
-              annotations: [],
+              hasDefault: linkPropertyHasDefault,
+              collection: linkCollection,
+              annotations: linkPropertyAnnotations,
             });
             continue;
           }
@@ -887,6 +1556,8 @@ class Parser {
         name,
         target,
         required,
+        hasDefault,
+        defaultTargetValues,
         multi,
         overloaded,
         annotations,
@@ -895,31 +1566,154 @@ class Parser {
     }
 
     this.expect("colon", "Expected ':' in property declaration");
-    const scalarToken = this.expect("word", "Expected property scalar type");
-    this.consumeTypeTail();
-    const { scalar, enumValues, enumTypeName } = this.readScalarType(moduleName, scalarToken.text);
+    const targetToken = this.expect("word", "Expected property scalar type");
+    const collection = this.consumeTypeTail(targetToken.text);
+
+    if (memberKind === "link" || (memberKind === undefined && !this.isScalarLike(targetToken.text))) {
+      const target = this.normalizeTypeName(moduleName, targetToken.text);
+      while (this.match("pipe")) {
+        this.expect("word", "Expected union link target type");
+        this.consumeTypeTail();
+      }
+      const annotations: AnnotationDef[] = [];
+      const linkProperties: LinkProperty[] = [];
+      let hasDefault = false;
+      let defaultTargetValues: string[] | undefined;
+
+      if (this.match("lbrace")) {
+        while (!this.match("rbrace")) {
+          if (this.isAnnotationMutationStart()) {
+            this.parseAnnotationMutation(moduleName, annotations);
+            continue;
+          }
+
+          if (this.peekWordAt(0) === "default") {
+            hasDefault = true;
+            this.consume();
+            this.expect("assign", "Expected ':=' after 'default'");
+            const literals = this.readStatementStringLiteralsInBlock();
+            if (literals.length > 0) {
+              defaultTargetValues = literals;
+            }
+            continue;
+          }
+
+          if (this.peekWordAt(0) === "readonly") {
+            this.skipStatementInBlock();
+            continue;
+          }
+
+          let linkPropertyRequired = false;
+          if (this.matchWord("required")) {
+            linkPropertyRequired = true;
+          }
+
+          this.matchWord("single");
+          this.matchWord("multi");
+          this.matchWord("overloaded");
+          this.matchWord("property");
+
+          const propName = this.expect("word", "Expected link property name").text;
+          if (this.match("arrow")) {
+            const typeName = this.expect("word", "Expected link property scalar type").text;
+            const linkCollection = this.consumeTypeTail(typeName);
+            const { scalar: linkScalar } = this.readScalarType(moduleName, typeName);
+            let linkPropertyAnnotations: AnnotationDef[] = [];
+            let linkPropertyHasDefault = false;
+            if (this.match("lbrace")) {
+              const parsed = this.parseLinkPropertyBody(moduleName);
+              linkPropertyAnnotations = parsed.annotations;
+              linkPropertyHasDefault = parsed.hasDefault;
+              this.expect("rbrace", "Expected '}' after link property body");
+            }
+            this.match("semi");
+
+            linkProperties.push({
+              name: propName,
+              scalar: linkScalar,
+              required: linkPropertyRequired,
+              hasDefault: linkPropertyHasDefault,
+              collection: linkCollection,
+              annotations: linkPropertyAnnotations,
+            });
+            continue;
+          }
+
+          if (this.match("colon")) {
+            const typeName = this.expect("word", "Expected link property scalar type").text;
+            const linkCollection = this.consumeTypeTail(typeName);
+            const { scalar: linkScalar2 } = this.readScalarType(moduleName, typeName);
+            let linkPropertyAnnotations: AnnotationDef[] = [];
+            let linkPropertyHasDefault = false;
+            if (this.match("lbrace")) {
+              const parsed = this.parseLinkPropertyBody(moduleName);
+              linkPropertyAnnotations = parsed.annotations;
+              linkPropertyHasDefault = parsed.hasDefault;
+              this.expect("rbrace", "Expected '}' after link property body");
+            }
+            this.match("semi");
+
+            linkProperties.push({
+              name: propName,
+              scalar: linkScalar2,
+              required: linkPropertyRequired,
+              hasDefault: linkPropertyHasDefault,
+              collection: linkCollection,
+              annotations: linkPropertyAnnotations,
+            });
+            continue;
+          }
+
+          this.skipStatementInBlock();
+        }
+      }
+
+      this.match("semi");
+      return {
+        kind: "link",
+        name,
+        target,
+        required,
+        hasDefault,
+        defaultTargetValues,
+        multi,
+        overloaded,
+        annotations,
+        properties: linkProperties,
+      };
+    }
+
+    const { scalar, enumValues, enumTypeName } = this.readScalarType(moduleName, targetToken.text);
 
     let annotations: AnnotationDef[] = [];
     let rewrite: PropertyMember["rewrite"] | undefined;
+    let propertyConstraints: ConstraintDef[] = [];
+    let hasDefault = false;
     if (this.match("lbrace")) {
       const parsed = this.parsePropertyBody(moduleName, name);
       rewrite = parsed.rewrite;
       annotations = parsed.annotations;
+      propertyConstraints = parsed.constraints;
+      hasDefault = parsed.hasDefault;
       this.expect("rbrace", "Expected '}' after property body");
     }
 
     this.match("semi");
+    const cardinality = multi ? SchemaCardinality.Many : SchemaCardinality.One;
     return {
       kind: "property",
       name,
       scalar,
-      required,
-      multi,
+      required: cardinality === SchemaCardinality.Many ? false : required,
+      hasDefault,
+      multi: cardinality === SchemaCardinality.Many,
+      collection,
       overloaded,
       annotations,
       rewrite,
       enumValues,
       enumTypeName,
+      constraints: propertyConstraints,
     };
   }
 
@@ -965,6 +1759,9 @@ class Parser {
     if (this.match("lparen")) {
       this.expectWord("select", "Expected 'select' in computed declaration");
       const selectExpr = this.parseComputedSelectExpr(moduleName);
+      if (!this.peekIs("rparen")) {
+        this.skipComputedSelectTail();
+      }
       this.expect("rparen", "Expected ')' after computed select expression");
       return {
         kind: "link",
@@ -990,11 +1787,14 @@ class Parser {
     if (first.kind === "function_call") {
       return {
         kind: "property",
-        expr: {
-          kind: "function_call",
-          name: first.name,
-          args: first.args,
-        },
+        expr: first,
+      };
+    }
+
+    if (first.kind === "link_aggregate") {
+      return {
+        kind: "property",
+        expr: first,
       };
     }
 
@@ -1070,7 +1870,10 @@ class Parser {
 
   private parseComputedValuePartOrLinkExpr(
     moduleName: string,
-  ): ComputedValuePart | Extract<ComputedDef, { kind: "link" }>['expr'] | { kind: "function_call"; name: string; args: ScalarValue[] } {
+  ): ComputedValuePart
+      | Extract<ComputedDef, { kind: "link" }>['expr']
+      | { kind: "function_call"; name: string; args: ScalarValue[] }
+      | { kind: "link_aggregate"; functionName: "sum"; link: string; field: string } {
     if (this.peek().kind === "dot") {
       this.consume();
 
@@ -1111,9 +1914,29 @@ class Parser {
       if (this.peekAt(1).kind === "lparen") {
         this.consume();
         this.consume();
+
+        if (word.toLowerCase() === "sum" && this.peek().kind === "dot") {
+          this.consume();
+          const link = this.expect("word", "Expected link name in aggregate expression").text;
+          this.expect("dot", "Expected '.' between link and field in aggregate expression");
+          const field = this.expect("word", "Expected field name in aggregate expression").text;
+          this.expect("rparen", "Expected ')' after aggregate expression");
+          return {
+            kind: "link_aggregate",
+            functionName: "sum",
+            link,
+            field,
+          };
+        }
+
         const args: ScalarValue[] = [];
         while (!this.match("rparen")) {
-          args.push(this.readScalarValue("Expected function argument"));
+          if (this.peek().kind === "string" || this.peek().kind === "number" || this.peek().kind === "word") {
+            args.push(this.readScalarValue("Expected function argument"));
+          } else {
+            this.skipFunctionArgumentExpression();
+            args.push(null);
+          }
           this.match("comma");
         }
         return {
@@ -1128,6 +1951,12 @@ class Parser {
       this.consume();
       const typeName = this.expect("word", "Expected type name in cast").text;
       this.expect("gt", "Expected '>' after type name in cast");
+      if (this.match("dot")) {
+        return {
+          kind: "field_ref",
+          field: this.expect("word", "Expected field name after cast").text,
+        };
+      }
       const value = this.readScalarValue("Expected value after type cast");
       return {
         kind: "literal",
@@ -1166,9 +1995,11 @@ class Parser {
   private parsePropertyBody(
     moduleName: string,
     fieldName: string,
-  ): { rewrite: PropertyMember["rewrite"]; annotations: AnnotationDef[] } {
+  ): { rewrite: PropertyMember["rewrite"]; annotations: AnnotationDef[]; constraints: ConstraintDef[]; hasDefault: boolean } {
     const rewrite: PropertyMember["rewrite"] = {};
     const annotations: AnnotationDef[] = [];
+    const constraints: ConstraintDef[] = [];
+    let hasDefault = false;
 
     while (!this.peekIs("rbrace")) {
       if (this.isAnnotationMutationStart()) {
@@ -1176,7 +2007,18 @@ class Parser {
         continue;
       }
 
-      if (this.peekWordAt(0) === "constraint" || this.peekWordAt(0) === "default" || this.peekWordAt(0) === "readonly") {
+      if (this.peekWordAt(0) === "constraint") {
+        constraints.push(this.parseConstraintClause(moduleName));
+        continue;
+      }
+
+      if (this.peekWordAt(0) === "default") {
+        hasDefault = true;
+        this.skipStatementInBlock();
+        continue;
+      }
+
+      if (this.peekWordAt(0) === "readonly") {
         this.skipStatementInBlock();
         continue;
       }
@@ -1200,11 +2042,35 @@ class Parser {
       }
     }
 
-    return { rewrite, annotations };
+    return { rewrite, annotations, constraints, hasDefault };
   }
 
-  private parseLinkPropertyBody(moduleName: string): AnnotationDef[] {
+  private parseConstraintClause(moduleName: string): ConstraintDef {
+    this.expectWord("constraint", "Expected 'constraint' in property block");
+    const name = this.normalizeConstraintName(moduleName, this.expect("word", "Expected constraint name").text);
     const annotations: AnnotationDef[] = [];
+
+    if (this.match("lparen")) {
+      this.skipParentheses();
+    }
+
+    if (this.match("lbrace")) {
+      while (!this.match("rbrace")) {
+        if (this.isAnnotationMutationStart()) {
+          this.parseAnnotationMutation(moduleName, annotations);
+          continue;
+        }
+        this.skipStatementInBlock();
+      }
+    }
+
+    this.match("semi");
+    return { name, annotations };
+  }
+
+  private parseLinkPropertyBody(moduleName: string): { annotations: AnnotationDef[]; hasDefault: boolean } {
+    const annotations: AnnotationDef[] = [];
+    let hasDefault = false;
 
     while (!this.peekIs("rbrace")) {
       if (this.isAnnotationMutationStart()) {
@@ -1212,17 +2078,58 @@ class Parser {
         continue;
       }
 
+      if (this.peekWordAt(0) === "default") {
+        hasDefault = true;
+        this.skipStatementInBlock();
+        continue;
+      }
+
       this.skipStatementInBlock();
     }
 
-    return annotations;
+    return { annotations, hasDefault };
+  }
+
+  private readStatementStringLiteralsInBlock(): string[] {
+    const literals: string[] = [];
+    let depth = 0;
+
+    while (!this.peekIs("eof")) {
+      const token = this.peek();
+
+      if (token.kind === "semi" && depth === 0) {
+        this.consume();
+        return literals;
+      }
+
+      if (token.kind === "rbrace" && depth === 0) {
+        return literals;
+      }
+
+      if (token.kind === "lbrace" || token.kind === "lparen" || token.kind === "lbracket") {
+        depth += 1;
+      } else if (token.kind === "rbrace" || token.kind === "rparen" || token.kind === "rbracket") {
+        if (depth > 0) {
+          depth -= 1;
+        }
+      }
+
+      if (token.kind === "string") {
+        literals.push(token.text);
+      }
+
+      this.consume();
+    }
+
+    return literals;
   }
 
   private parseTrigger(moduleName: string): TriggerDef {
     const name = this.expect("word", "Expected trigger name").text;
     this.expectWord("after", "Expected 'after' in trigger declaration");
     const eventToken = this.expect("word", "Expected trigger event").text;
-    if (eventToken !== "insert" && eventToken !== "update" && eventToken !== "delete") {
+    const eventKind = this.parseTriggerKind(eventToken);
+    if (!eventKind) {
       const token = this.peek();
       throw new AppError("E_SYNTAX", `Unsupported trigger event '${eventToken}'`, 1, token.index + 1);
     }
@@ -1230,11 +2137,12 @@ class Parser {
     let scope: TriggerDef["scope"] = "each";
     if (this.matchWord("for")) {
       const scopeToken = this.expect("word", "Expected trigger scope ('each' or 'all')").text;
-      if (scopeToken !== "each" && scopeToken !== "all") {
+      const parsedScope = this.parseTriggerScope(scopeToken);
+      if (!parsedScope) {
         const token = this.peek();
         throw new AppError("E_SYNTAX", `Unsupported trigger scope '${scopeToken}'`, 1, token.index + 1);
       }
-      scope = scopeToken;
+      scope = parsedScope === SchemaTriggerScope.Each ? "each" : "all";
     }
 
     let when: TriggerDef["when"];
@@ -1258,11 +2166,46 @@ class Parser {
 
     return {
       name,
-      event: eventToken,
+      event: this.toLegacyTriggerKind(eventKind),
       scope,
       when,
       actions,
     };
+  }
+
+  private parseTriggerKind(value: string): SchemaTriggerKind | undefined {
+    const lowered = value.toLowerCase();
+    if (lowered === "insert") {
+      return SchemaTriggerKind.Insert;
+    }
+    if (lowered === "update") {
+      return SchemaTriggerKind.Update;
+    }
+    if (lowered === "delete") {
+      return SchemaTriggerKind.Delete;
+    }
+    return undefined;
+  }
+
+  private parseTriggerScope(value: string): SchemaTriggerScope | undefined {
+    const lowered = value.toLowerCase();
+    if (lowered === "each") {
+      return SchemaTriggerScope.Each;
+    }
+    if (lowered === "all" || lowered === "statement") {
+      return SchemaTriggerScope.Statement;
+    }
+    return undefined;
+  }
+
+  private toLegacyTriggerKind(kind: SchemaTriggerKind): TriggerDef["event"] {
+    if (kind === SchemaTriggerKind.Insert) {
+      return "insert";
+    }
+    if (kind === SchemaTriggerKind.Update) {
+      return "update";
+    }
+    return "delete";
   }
 
   private parseAccessPolicy(moduleName: string): AccessPolicyDef {
@@ -1553,52 +2496,13 @@ class Parser {
   }
 
   private readScalarType(moduleName: string, name: string): { scalar: ScalarType; enumValues?: string[]; enumTypeName?: string } {
-    const normalized = name.includes("::") ? name.split("::").at(-1)! : name;
-    const lowered = normalized.toLowerCase();
-
-    const mapped: Record<string, ScalarType> = {
-      str: "str",
-      bytes: "str",
-      json: "json",
-      bool: "bool",
-      uuid: "uuid",
-      datetime: "datetime",
-      duration: "duration",
-      local_datetime: "local_datetime",
-      local_date: "local_date",
-      local_time: "local_time",
-      relative_duration: "relative_duration",
-      date_duration: "date_duration",
-      int: "int",
-      int16: "int",
-      int32: "int",
-      int64: "int",
-      bigint: "int",
-      float: "float",
-      float32: "float",
-      float64: "float",
-      decimal: "float",
-      array: "str",
-      tuple: "str",
-    };
-
-    if (mapped[lowered]) {
-      return { scalar: mapped[lowered] };
+    const resolution = this.scalarRegistry.resolve(name, moduleName);
+    if (resolution) {
+      return resolution;
     }
 
-    const alias = this.scalarAliases.get(normalized) ?? this.scalarAliases.get(lowered);
-    if (alias) {
-      const enumVals = this.getEnumValues(normalized);
-      const enumTypeName = name.includes("::") ? name : `${moduleName}::${normalized}`;
-      return { scalar: alias, enumValues: enumVals, enumTypeName };
-    }
-
-    if (!BUILTIN_SCALARS.has(lowered)) {
-      const token = this.peek();
-      throw new AppError("E_SYNTAX", `Unknown scalar type '${name}'`, 1, token.index + 1);
-    }
-
-    return { scalar: lowered as ScalarType };
+    const token = this.peek();
+    throw new AppError("E_SYNTAX", `Unknown scalar type '${name}'`, 1, token.index + 1);
   }
 
   private parseScalarType(moduleName: string, scalarTypes: ScalarTypeDeclaration[]): void {
@@ -1611,16 +2515,13 @@ class Parser {
     if (this.matchWord("extending")) {
       if (this.matchWord("enum")) {
         enumVals = this.parseEnumValues();
-        this.enumValues.set(name, enumVals);
-        this.enumValues.set(name.toLowerCase(), enumVals);
         alias = "str";
       } else {
         alias = this.readScalarType(moduleName, this.expect("word", "Expected scalar base type").text).scalar;
       }
     }
 
-    this.scalarAliases.set(name, alias);
-    this.scalarAliases.set(name.toLowerCase(), alias);
+    this.scalarRegistry.register(name, { scalar: alias, enumValues: enumVals });
 
     if (enumVals) {
       scalarTypes.push({ name, module: moduleName, enumValues: enumVals });
@@ -1647,10 +2548,6 @@ class Parser {
     return values;
   }
 
-  getEnumValues(name: string): string[] | undefined {
-    return this.enumValues.get(name) ?? this.enumValues.get(name.toLowerCase());
-  }
-
   private skipAngleTypeArgs(): void {
     this.expect("lt", "Expected '<'");
     let depth = 1;
@@ -1666,10 +2563,74 @@ class Parser {
     }
   }
 
-  private consumeTypeTail(): void {
-    while (this.peekIs("lt")) {
-      this.skipAngleTypeArgs();
+  private consumeTypeTail(baseTypeName?: string): CollectionTypeDef | undefined {
+    const lowered = baseTypeName
+      ? (baseTypeName.includes("::") ? baseTypeName.split("::").at(-1)! : baseTypeName).toLowerCase()
+      : undefined;
+
+    if (!this.peekIs("lt")) {
+      if (lowered === "array") {
+        return { kind: "array" };
+      }
+      if (lowered === "tuple") {
+        return { kind: "tuple" };
+      }
+      return undefined;
     }
+
+    if (lowered !== "tuple") {
+      while (this.peekIs("lt")) {
+        this.skipAngleTypeArgs();
+      }
+      return lowered === "array" ? { kind: "array" } : undefined;
+    }
+
+    this.expect("lt", "Expected '<' in tuple type expression");
+    let depth = 1;
+    const parts: Array<Array<{ kind: string; text?: string }>> = [];
+    let current: Array<{ kind: string; text?: string }> = [];
+
+    while (depth > 0) {
+      const token = this.consume();
+      if (token.kind === "lt") {
+        depth += 1;
+        current.push(token);
+        continue;
+      }
+      if (token.kind === "gt") {
+        depth -= 1;
+        if (depth === 0) {
+          if (current.length > 0) {
+            parts.push(current);
+          }
+          break;
+        }
+        current.push(token);
+        continue;
+      }
+      if (depth === 1 && token.kind === "comma") {
+        parts.push(current);
+        current = [];
+        continue;
+      }
+      current.push(token);
+    }
+
+    const elementNames = parts
+      .map((part) => {
+        const colonIndex = part.findIndex((token) => token.kind === "colon");
+        if (colonIndex <= 0) {
+          return undefined;
+        }
+        const candidate = part[colonIndex - 1];
+        return candidate.kind === "word" ? candidate.text : undefined;
+      })
+      .filter((name): name is string => typeof name === "string");
+
+    return {
+      kind: "tuple",
+      elementNames: elementNames.length === parts.length ? elementNames : undefined,
+    };
   }
 
   private isTypeDeclarationStart(): boolean {
@@ -1680,9 +2641,7 @@ class Parser {
   }
 
   private isScalarLike(name: string): boolean {
-    const normalized = name.includes("::") ? name.split("::").at(-1)! : name;
-    const lowered = normalized.toLowerCase();
-    return BUILTIN_SCALARS.has(lowered) || this.scalarAliases.has(normalized) || this.scalarAliases.has(lowered);
+    return this.scalarRegistry.isScalarLike(name);
   }
 
   private skipDeclaration(): void {
@@ -1752,6 +2711,83 @@ class Parser {
     }
   }
 
+  private skipFunctionArgumentExpression(): void {
+    let parenDepth = 0;
+    let bracketDepth = 0;
+    let braceDepth = 0;
+
+    while (!this.peekIs("eof")) {
+      const token = this.peek();
+      if (
+        parenDepth === 0
+        && bracketDepth === 0
+        && braceDepth === 0
+        && (token.kind === "comma" || token.kind === "rparen")
+      ) {
+        return;
+      }
+
+      this.consume();
+      if (token.kind === "lparen") {
+        parenDepth += 1;
+      } else if (token.kind === "rparen") {
+        if (parenDepth === 0) {
+          return;
+        }
+        parenDepth -= 1;
+      } else if (token.kind === "lbracket") {
+        bracketDepth += 1;
+      } else if (token.kind === "rbracket") {
+        if (bracketDepth > 0) {
+          bracketDepth -= 1;
+        }
+      } else if (token.kind === "lbrace") {
+        braceDepth += 1;
+      } else if (token.kind === "rbrace") {
+        if (braceDepth > 0) {
+          braceDepth -= 1;
+        }
+      }
+    }
+  }
+
+  private skipComputedSelectTail(): void {
+    let parenDepth = 0;
+    while (!this.peekIs("eof")) {
+      const token = this.peek();
+      if (token.kind === "rparen" && parenDepth === 0) {
+        return;
+      }
+
+      this.consume();
+      if (token.kind === "lparen") {
+        parenDepth += 1;
+      } else if (token.kind === "rparen") {
+        if (parenDepth > 0) {
+          parenDepth -= 1;
+        }
+      }
+    }
+  }
+
+  private skipParentheses(): void {
+    let depth = 1;
+    while (depth > 0) {
+      const token = this.consume();
+      if (token.kind === "lparen") {
+        depth += 1;
+        continue;
+      }
+      if (token.kind === "rparen") {
+        depth -= 1;
+        continue;
+      }
+      if (token.kind === "eof") {
+        throw new AppError("E_SYNTAX", "Unterminated parentheses", 1, token.index + 1);
+      }
+    }
+  }
+
   private skipBlockBody(): void {
     let depth = 1;
     while (depth > 0) {
@@ -1775,13 +2811,9 @@ class Parser {
     return `${moduleName}::${name}`;
   }
 
-  private normalizeAnnotationName(moduleName: string, name: string): string {
+  private normalizeConstraintName(moduleName: string, name: string): string {
     if (name.includes("::")) {
       return name;
-    }
-
-    if (STANDARD_ANNOTATIONS.has(name)) {
-      return `std::${name}`;
     }
 
     return `${moduleName}::${name}`;
@@ -1795,6 +2827,27 @@ class Parser {
 
     this.index += 1;
     return token.text;
+  }
+
+  private peekIsScalarValue(): boolean {
+    const token = this.peek();
+    if (token.kind === "string" || token.kind === "number" || token.kind === "minus") {
+      return true;
+    }
+    if (token.kind !== "word") {
+      return false;
+    }
+    const normalized = token.text.toLowerCase();
+    return normalized === "true" || normalized === "false" || normalized === "null";
+  }
+
+  private expectOneOf(kinds: TokenKind[], message: string): Token {
+    const token = this.peek();
+    if (!kinds.includes(token.kind)) {
+      throw new AppError("E_SYNTAX", message, 1, token.index + 1);
+    }
+    this.index += 1;
+    return token;
   }
 
   private readScalarValue(message: string): ScalarValue {
@@ -1962,6 +3015,12 @@ const tokenize = (source: string): Token[] => {
       continue;
     }
 
+    if (ch === "?" && source[i + 1] === "?") {
+      tokens.push({ kind: "coalesce", text: "??", index: i });
+      i += 2;
+      continue;
+    }
+
     if (ch === "?" && source[i + 1] === "=") {
       tokens.push({ kind: "qeq", text: "?=", index: i });
       i += 2;
@@ -2028,6 +3087,12 @@ const tokenize = (source: string): Token[] => {
       continue;
     }
 
+    if (ch === "+") {
+      tokens.push({ kind: "plus", text: "+", index: i });
+      i += 1;
+      continue;
+    }
+
     if (ch === "|") {
       tokens.push({ kind: "pipe", text: "|", index: i });
       i += 1;
@@ -2072,6 +3137,31 @@ const tokenize = (source: string): Token[] => {
       }
 
       tokens.push({ kind: "number", text: source.slice(start, i), index: start });
+      continue;
+    }
+
+    if (ch === "@" && /[A-Za-z_]/.test(source[i + 1] ?? "")) {
+      const start = i;
+      i += 2;
+      while (i < source.length) {
+        if (/[A-Za-z0-9_]/.test(source[i])) {
+          i += 1;
+          continue;
+        }
+
+        if (source[i] === ":" && source[i + 1] === ":") {
+          i += 2;
+          continue;
+        }
+
+        break;
+      }
+
+      tokens.push({
+        kind: "word",
+        text: source.slice(start, i),
+        index: start,
+      });
       continue;
     }
 

@@ -15,9 +15,23 @@ export type ScalarType =
 
 export type ScalarValue = string | number | boolean | null;
 
+export type CollectionTypeDef =
+  | {
+      kind: "array";
+    }
+  | {
+      kind: "tuple";
+      elementNames?: string[];
+    };
+
 export interface AnnotationDef {
   name: string;
   value: string;
+}
+
+export interface ConstraintDef {
+  name: string;
+  annotations: AnnotationDef[];
 }
 
 export type FunctionVolatility = "Immutable" | "Stable" | "Volatile" | "Modifying";
@@ -78,6 +92,32 @@ export interface FunctionDef {
   body: FunctionBodyDef;
 }
 
+export interface AliasDef {
+  module: string;
+  name: string;
+  values?: ScalarValue[];
+  sourceType?: string;
+  projections?: Array<{
+    name: string;
+    sourceField: string;
+  }>;
+  filter?:
+    | {
+        kind: "field_predicate";
+        field: string;
+        op: "=" | "!=" | "like" | "ilike";
+        value: ScalarValue;
+      }
+    | {
+        kind: "backlink_membership";
+        op: "in" | "not_in";
+        value: ScalarValue;
+        link: string;
+        sourceType?: string;
+        field: string;
+      };
+}
+
 export type ComputedValuePart =
   | {
       kind: "field_ref";
@@ -113,6 +153,12 @@ export type ComputedDef = {
             kind: "function_call";
             name: string;
             args: ScalarValue[];
+          }
+        | {
+            kind: "link_aggregate";
+            functionName: "sum";
+            link: string;
+            field: string;
           };
     }
   | {
@@ -240,7 +286,10 @@ export interface FieldDef {
   name: string;
   type: ScalarType;
   required?: boolean;
+  hasDefault?: boolean;
   multi?: boolean;
+  collection?: CollectionTypeDef;
+  constraints?: ConstraintDef[];
   annotations?: AnnotationDef[];
   enumValues?: string[];
   enumTypeName?: string;
@@ -250,13 +299,18 @@ export interface LinkPropertyDef {
   name: string;
   type: ScalarType;
   required?: boolean;
+  hasDefault?: boolean;
+  collection?: CollectionTypeDef;
   annotations?: AnnotationDef[];
 }
 
 export interface LinkDef {
   name: string;
   targetType: string;
+  overloaded?: boolean;
   multi?: boolean;
+  hasDefault?: boolean;
+  defaultTargetValues?: string[];
   properties?: LinkPropertyDef[];
   annotations?: AnnotationDef[];
 }
