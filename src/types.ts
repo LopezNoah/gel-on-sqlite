@@ -32,7 +32,23 @@ export interface AnnotationDef {
 export interface ConstraintDef {
   name: string;
   annotations: AnnotationDef[];
+  delegated?: boolean;
+  params?: Array<{
+    name: string;
+    value: ScalarValue;
+  }>;
 }
+
+export type FieldDefaultExpr =
+  | {
+      kind: "literal";
+      value: ScalarValue;
+    }
+  | {
+      kind: "function_call";
+      name: string;
+      args: ScalarValue[];
+    };
 
 export type FunctionVolatility = "Immutable" | "Stable" | "Volatile" | "Modifying";
 
@@ -287,10 +303,13 @@ export interface FieldDef {
   type: ScalarType;
   required?: boolean;
   hasDefault?: boolean;
+  defaultExpr?: FieldDefaultExpr;
+  readonly?: boolean;
   multi?: boolean;
   collection?: CollectionTypeDef;
   constraints?: ConstraintDef[];
   annotations?: AnnotationDef[];
+  targetTypeName?: string;
   enumValues?: string[];
   enumTypeName?: string;
 }
@@ -300,9 +319,12 @@ export interface LinkPropertyDef {
   type: ScalarType;
   required?: boolean;
   hasDefault?: boolean;
+  readonly?: boolean;
   collection?: CollectionTypeDef;
   annotations?: AnnotationDef[];
 }
+
+export type OnTargetDeleteAction = "restrict" | "delete_source" | "allow" | "deferred_restrict";
 
 export interface LinkDef {
   name: string;
@@ -310,6 +332,8 @@ export interface LinkDef {
   overloaded?: boolean;
   multi?: boolean;
   hasDefault?: boolean;
+  readonly?: boolean;
+  onTargetDelete?: OnTargetDeleteAction;
   defaultTargetValues?: string[];
   properties?: LinkPropertyDef[];
   annotations?: AnnotationDef[];
@@ -321,6 +345,9 @@ export interface TypeDef {
   abstract?: boolean;
   extends?: string[];
   annotations?: AnnotationDef[];
+  indexes?: Array<{
+    expr: string;
+  }>;
   fields: FieldDef[];
   links?: LinkDef[];
   computeds?: ComputedDef[];

@@ -188,31 +188,31 @@ SET {
     w := (SELECT DETACHED W FILTER .name = 'w4')
 };
 
-# INSERT X {name := 'x0'};
-# INSERT Y {name := 'y0', x := (SELECT X LIMIT 1)};
-# UPDATE X SET {y := (SELECT Y LIMIT 1)};
+INSERT X {name := 'x0'};
+INSERT Y {name := 'y0', x := (SELECT X LIMIT 1)};
+UPDATE X SET {y := (SELECT Y LIMIT 1)};
 
-# INSERT Z {
-#     ck := (SELECT C FILTER .val = 'F00'),
-#     stw := (SELECT S FILTER .name = 'name0'),
-# };
-# INSERT Z {
-#     ck := (SELECT K LIMIT 1),
-#     stw := {
-#         (SELECT S FILTER .name = 'name0'),
-#         (SELECT W FILTER .name = 'w1' LIMIT 1),
-#         (SELECT T FILTER .name = 'name0'),
-#     }
-# };
+INSERT Z {
+    ck := (SELECT C FILTER .val = 'F00'),
+    stw := (SELECT S FILTER .name = 'name0'),
+};
+INSERT Z {
+    ck := (SELECT K LIMIT 1),
+    stw := {
+        (SELECT S FILTER .name = 'name0'),
+        (SELECT W FILTER .name = 'w1' LIMIT 1),
+        (SELECT T FILTER .name = 'name0'),
+    }
+};
 
-# # cross-module data
-# INSERT DefA {a := 'DefA'};
-# INSERT test::TestB {b := 'TestB', blink := (SELECT DefA LIMIT 1)};
-# INSERT DefB {other := (SELECT test::TestB LIMIT 1)};
-# INSERT test::TestC {c := 'TestC'};
-# INSERT DefC {other := (SELECT test::TestC LIMIT 1)};
-# UPDATE test::TestC
-# SET {clink := (SELECT DefC LIMIT 1)};
+# cross-module data
+INSERT DefA {a := 'DefA'};
+INSERT test::TestB {b := 'TestB', blink := (SELECT DefA LIMIT 1)};
+INSERT DefB {other := (SELECT test::TestB LIMIT 1)};
+INSERT test::TestC {c := 'TestC'};
+INSERT DefC {other := (SELECT test::TestC LIMIT 1)};
+UPDATE test::TestC
+SET {clink := (SELECT DefC LIMIT 1)};
 
 # # on delete
 INSERT TargetA {name := 't0'};

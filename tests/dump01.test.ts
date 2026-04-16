@@ -336,7 +336,7 @@ describe("TestDump01", () => {
     );
   });
 
-  it.skip("should expose function annotations", () => {
+  it("should expose function annotations", () => {
     h.assertQueryResult(
       `
       WITH MODULE schema
@@ -369,7 +369,7 @@ describe("TestDump01", () => {
     );
   });
 
-  it.skip("should expose indexes", () => {
+  it("should expose indexes", () => {
     h.assertQueryResult(
       `
       WITH MODULE schema
@@ -398,7 +398,7 @@ describe("TestDump01", () => {
     );
   });
 
-  it.skip("should expose custom scalars", () => {
+  it("should expose custom scalars", () => {
     h.assertQueryResult(
       `
       WITH MODULE schema
@@ -462,7 +462,7 @@ describe("TestDump01", () => {
     );
   });
 
-  it.skip("should expose custom scalar constraints on M", () => {
+  it("should expose custom scalar constraints on M", () => {
     h.assertQueryResult(
       `
       WITH MODULE schema
@@ -512,7 +512,7 @@ describe("TestDump01", () => {
     );
   });
 
-  it.skip("should expose custom scalar targets on N", () => {
+  it("should expose custom scalar targets on N", () => {
     h.assertQueryResult(
       `
       WITH MODULE schema
@@ -548,7 +548,7 @@ describe("TestDump01", () => {
     );
   });
 
-  it.skip("should preserve bases and ancestors order", () => {
+  it("should preserve bases and ancestors order", () => {
     h.assertQueryResult(
       `
       WITH MODULE schema
@@ -587,7 +587,7 @@ describe("TestDump01", () => {
     );
   });
 
-  it.skip("should expose delegated constraints", () => {
+  it("should expose delegated constraints", () => {
     h.assertQueryResult(
       `
       WITH MODULE schema
@@ -1230,7 +1230,7 @@ describe("TestDump01", () => {
     );
   });
 
-  it.skip("should validate self/mutually-referencing types X and Y", () => {
+  it("should validate self/mutually-referencing types X and Y", () => {
     h.assertQueryResult(
       `
       SELECT X {
@@ -1258,7 +1258,7 @@ describe("TestDump01", () => {
     );
   });
 
-  it.skip("should validate Z with union link types", () => {
+  it("should validate Z with union link types", () => {
     h.assertQueryResult(
       `
       SELECT Z {
@@ -1291,7 +1291,7 @@ describe("TestDump01", () => {
     );
   });
 
-  it.skip("should validate cross module types DefA", () => {
+  it("should validate cross module types DefA", () => {
     h.assertQueryResult(
       `
       SELECT DefA {a};
@@ -1300,7 +1300,7 @@ describe("TestDump01", () => {
     );
   });
 
-  it.skip("should validate cross module types DefB", () => {
+  it("should validate cross module types DefB", () => {
     h.assertQueryResult(
       `
       SELECT DefB {
@@ -1327,7 +1327,7 @@ describe("TestDump01", () => {
     );
   });
 
-  it.skip("should validate cross module types DefC", () => {
+  it("should validate cross module types DefC", () => {
     h.assertQueryResult(
       `
       SELECT DefC {
@@ -1354,7 +1354,7 @@ describe("TestDump01", () => {
     );
   });
 
-  it.skip("should validate on delete delete source", () => {
+  it("should validate on delete delete source", () => {
     h.assertQueryResult(
       `
       SELECT SourceA {
@@ -1386,7 +1386,7 @@ describe("TestDump01", () => {
     );
   });
 
-  it.skip("should validate on delete allow", () => {
+  it("should validate on delete allow", () => {
     h.assertQueryResult(
       `
       SELECT SourceA {
@@ -1428,7 +1428,7 @@ describe("TestDump01", () => {
     );
   });
 
-  it.skip("should validate on delete restrict", () => {
+  it("should validate on delete restrict", () => {
     h.assertQueryResult(
       `
       SELECT SourceA {

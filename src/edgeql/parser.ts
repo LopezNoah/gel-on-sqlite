@@ -751,6 +751,14 @@ class Parser {
 
     const fieldName = this.expect("identifier", "Expected field name after '.'").lexeme;
     if (fieldName === "__type__") {
+      if (this.peek().kind === "dot") {
+        this.consume();
+        const suffix = this.expect("identifier", "Expected 'name' after '__type__.'").lexeme;
+        if (suffix !== "name") {
+          const token = this.peek();
+          throw new AppError("E_SYNTAX", "Expected '__type__.name'", token.line, token.column);
+        }
+      }
       return {
         kind: "type_name",
       };

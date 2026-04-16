@@ -154,11 +154,11 @@ type G {
 }
 
 
-# type H {
-#     property h0 := 'fixed';
-#     property h1 := user_func_0(1);
-#     property h2 := to_str(2);
-# }
+type H {
+    property h0 := 'fixed';
+    property h1 := user_func_0(1);
+    property h2 := to_str(2);
+}
 
 
 type I {
@@ -178,15 +178,15 @@ type I {
 }
 
 
-# type J {
-#     link j0 := (SELECT C FILTER .val = 'D00' LIMIT 1);
-#     link j1 := (
-#         SELECT C FILTER .val = 'D0' ++ user_func_0(1)[-1] LIMIT 1
-#     );
-#     link j2 := (
-#         SELECT C FILTER .val = array_join(['D', '0', '2'], '') LIMIT 1
-#     );
-# }
+type J {
+    link j0 := (SELECT C FILTER .val = 'D00' LIMIT 1);
+    link j1 := (
+        SELECT C FILTER .val = 'D0' ++ user_func_0(1)[-1] LIMIT 1
+    );
+    link j2 := (
+        SELECT C FILTER .val = array_join(['D', '0', '2'], '') LIMIT 1
+    );
+}
 
 
 # indexes

@@ -8,9 +8,8 @@ import { compileToSQL, computedValueAlias, shapePayloadAlias, type SQLArtifact }
 import { executeStdlibFunction, resolveStdlibFunction, type RuntimeFunctionArg } from "../stdlib/functions.js";
 import { assertTargetSqlCompatibility, type RuntimeTarget } from "./target.js";
 import type { BacklinkSourceIR, FilterExprIR, IRStatement, LinkRelationIR, OrderByIR, OverlayIR, SelectExprIREntry, SelectExprIR, SelectIR, SelectShapeElementIR } from "../ir/model.js";
-import type { AccessPolicyCondition, AccessPolicyDef, FunctionDef, FunctionExprDef, ScalarType, ScalarValue, TypeDef } from "../types.js";
+import type { AccessPolicyCondition, AccessPolicyDef, FieldDef, FunctionDef, FunctionExprDef, ScalarType, ScalarValue, TypeDef } from "../types.js";
 import { qualifiedTypeName } from "../schema/schema.js";
-import { deserializeSchemaFromGelTables, deserializeSchemaFromInstdata } from "../schema/gel_persistence.js";
 import type { SQLiteDatabase } from "../runtime/database.js";
 
 
@@ -59,12 +58,21 @@ type IntrospectionAnnotation = {
   "@value": string;
 };
 
+type IntrospectionConstraintParam = {
+  name: string;
+  "@value": string;
+};
+
 type IntrospectionConstraint = {
+  name: string;
+  delegated: boolean;
+  params: IntrospectionConstraintParam[];
   annotations: IntrospectionAnnotation[];
 };
 
 type IntrospectionProperty = {
   name: string;
+  target?: { name: string };
   annotations: IntrospectionAnnotation[];
   constraints: IntrospectionConstraint[];
 };
@@ -83,33 +91,82 @@ type IntrospectionLink = {
 type IntrospectionType = {
   name: string;
   annotations: IntrospectionAnnotation[];
+  indexes: Array<{ expr: string }>;
+  bases: Array<{ name: string; "@index": number }>;
+  ancestors: Array<{ name: string; "@index": number }>;
   properties: IntrospectionProperty[];
   links: IntrospectionLink[];
   pointersHaveAnnotations: boolean;
 };
 
-const buildIntrospectionType = (typeDef: TypeDef): IntrospectionType => {
+const buildIntrospectionType = (schema: SchemaSnapshot, typeDef: TypeDef): IntrospectionType => {
   const moduleName = typeDef.module ?? "default";
   const qualifiedName = `${moduleName}::${typeDef.name}`;
+
+  const collectAncestors = (bases: string[]): Array<{ name: string; "@index": number }> => {
+    const seen = new Set<string>();
+    const ordered: string[] = [];
+
+    for (const base of bases) {
+      if (seen.has(base)) {
+        continue;
+      }
+      seen.add(base);
+      ordered.push(base);
+    }
+
+    const visitParents = (typeName: string): void => {
+      const baseType = schema.getType(typeName);
+      for (const parent of baseType?.extends ?? []) {
+        if (!seen.has(parent)) {
+          seen.add(parent);
+          ordered.push(parent);
+        }
+        visitParents(parent);
+      }
+    };
+
+    for (const base of bases) {
+      visitParents(base);
+    }
+
+    for (const root of ["std::Object", "std::BaseObject"]) {
+      if (!seen.has(root)) {
+        seen.add(root);
+        ordered.push(root);
+      }
+    }
+
+    return ordered.map((name, index) => ({ name, "@index": index }));
+  };
+
+  const mapConstraint = (constraint: NonNullable<FieldDef["constraints"]>[number]): IntrospectionConstraint => ({
+    name: constraint.name,
+    delegated: Boolean(constraint.delegated),
+    params: (constraint.params ?? []).map((param) => ({
+      name: param.name,
+      "@value": String(param.value),
+    })),
+    annotations: (constraint.annotations ?? []).map((annotation) => ({
+      name: annotation.name,
+      "@value": annotation.value,
+    })),
+  });
 
   const properties: IntrospectionProperty[] = [
     {
       name: "id",
       annotations: [],
-      constraints: [{ annotations: [] }],
+      constraints: [{ name: "std::exclusive", delegated: false, params: [], annotations: [] }],
     },
     ...typeDef.fields.map((field) => ({
       name: field.name,
+      target: field.targetTypeName ? { name: field.targetTypeName } : undefined,
       annotations: (field.annotations ?? []).map((annotation) => ({
         name: annotation.name,
         "@value": annotation.value,
       })),
-      constraints: (field.constraints ?? []).map((constraint) => ({
-        annotations: constraint.annotations.map((annotation) => ({
-          name: annotation.name,
-          "@value": annotation.value,
-        })),
-      })),
+      constraints: (field.constraints ?? []).map((constraint) => mapConstraint(constraint)),
     })),
   ];
 
@@ -138,6 +195,9 @@ const buildIntrospectionType = (typeDef: TypeDef): IntrospectionType => {
       name: annotation.name,
       "@value": annotation.value,
     })),
+    indexes: (typeDef.indexes ?? []).map((index) => ({ expr: index.expr })),
+    bases: (typeDef.extends ?? []).map((name, index) => ({ name, "@index": index })),
+    ancestors: collectAncestors(typeDef.extends ?? []),
     properties,
     links,
     pointersHaveAnnotations,
@@ -246,16 +306,65 @@ const extractTopLevelBlock = (source: string, key: string): TopLevelBlock | unde
   return undefined;
 };
 
-const loadPersistedSchema = (db: SQLiteDatabase): SchemaSnapshot | null =>
-  deserializeSchemaFromInstdata(db) ?? deserializeSchemaFromGelTables(db);
+const hasTopLevelIdentifier = (source: string, identifier: string): boolean => {
+  let depth = 0;
+  for (let i = 0; i < source.length; i += 1) {
+    const ch = source[i];
+    if (ch === "{") {
+      depth += 1;
+      continue;
+    }
+    if (ch === "}") {
+      depth = Math.max(0, depth - 1);
+      continue;
+    }
+    if (depth !== 0) {
+      continue;
+    }
+    if (!/[A-Za-z_@]/.test(ch)) {
+      continue;
+    }
 
-const trySchemaObjectTypeQuery = (db: SQLiteDatabase, query: string): QueryResult | undefined => {
-  if (!/\bObjectType\b/i.test(query)) {
+    const start = i;
+    i += 1;
+    while (i < source.length && /[A-Za-z0-9_@]/.test(source[i])) {
+      i += 1;
+    }
+    const word = source.slice(start, i);
+    if (word === identifier) {
+      return true;
+    }
+    i -= 1;
+  }
+
+  return false;
+};
+
+const trySchemaObjectTypeQuery = (schema: SchemaSnapshot, query: string): QueryResult | undefined => {
+  const isObjectTypeQuery = /\bObjectType\b/i.test(query);
+  const isFunctionQuery = /\bFunction\b/i.test(query);
+  const isScalarTypeQuery = /\bScalarType\b/i.test(query);
+  if (!isObjectTypeQuery && !isFunctionQuery && !isScalarTypeQuery) {
     return undefined;
   }
 
-  const looksLikeSchemaModule = /\bWITH\s+MODULE\s+schema\b/i.test(query) || /\bschema::ObjectType\b/i.test(query);
+  const looksLikeSchemaModule = /\bWITH\s+MODULE\s+schema\b/i.test(query)
+    || /\bschema::ObjectType\b/i.test(query)
+    || /\bschema::Function\b/i.test(query)
+    || /\bschema::ScalarType\b/i.test(query);
   if (!looksLikeSchemaModule) {
+    return undefined;
+  }
+
+  if (isFunctionQuery) {
+    return trySchemaFunctionQuery(schema, query);
+  }
+
+  if (isScalarTypeQuery) {
+    return trySchemaScalarTypeQuery(schema, query);
+  }
+
+  if (!isObjectTypeQuery) {
     return undefined;
   }
 
@@ -267,10 +376,15 @@ const trySchemaObjectTypeQuery = (db: SQLiteDatabase, query: string): QueryResul
   const typeAnnotationsBlock = extractTopLevelBlock(shape, "annotations");
   const propertiesBlock = extractTopLevelBlock(shape, "properties");
   const linksBlock = extractTopLevelBlock(shape, "links");
+  const indexesBlock = extractTopLevelBlock(shape, "indexes");
+  const basesBlock = extractTopLevelBlock(shape, "bases");
+  const ancestorsBlock = extractTopLevelBlock(shape, "ancestors");
 
   const propertyAnnotationsBlock = propertiesBlock ? extractTopLevelBlock(propertiesBlock.content, "annotations") : undefined;
+  const propertyTargetBlock = propertiesBlock ? extractTopLevelBlock(propertiesBlock.content, "target") : undefined;
   const constraintsBlock = propertiesBlock ? extractTopLevelBlock(propertiesBlock.content, "constraints") : undefined;
   const constraintAnnotationsBlock = constraintsBlock ? extractTopLevelBlock(constraintsBlock.content, "annotations") : undefined;
+  const constraintParamsBlock = constraintsBlock ? extractTopLevelBlock(constraintsBlock.content, "params") : undefined;
 
   const linkAnnotationsBlock = linksBlock ? extractTopLevelBlock(linksBlock.content, "annotations") : undefined;
   const linkPropertiesBlock = linksBlock ? extractTopLevelBlock(linksBlock.content, "properties") : undefined;
@@ -280,22 +394,43 @@ const trySchemaObjectTypeQuery = (db: SQLiteDatabase, query: string): QueryResul
 
   const includeTypeAnnotations = !!typeAnnotationsBlock;
   const includeProperties = !!propertiesBlock;
+  const includeIndexes = !!indexesBlock;
+  const includeBases = !!basesBlock;
+  const includeAncestors = !!ancestorsBlock;
   const includePropertyAnnotations = !!propertyAnnotationsBlock;
+  const includePropertyTarget = !!propertyTargetBlock;
   const includeConstraints = !!constraintsBlock;
+  const includeConstraintName = constraintsBlock ? hasTopLevelIdentifier(constraintsBlock.content, "name") : false;
+  const includeConstraintDelegated = constraintsBlock ? hasTopLevelIdentifier(constraintsBlock.content, "delegated") : false;
+  const includeConstraintParams = !!constraintParamsBlock;
   const includeConstraintAnnotations = !!constraintAnnotationsBlock;
   const includeLinks = !!linksBlock;
   const includeLinkAnnotations = !!linkAnnotationsBlock;
   const includeLinkProperties = !!linkPropertiesBlock;
   const includeLinkPropertyAnnotations = !!linkPropertyAnnotationsBlock;
+  const includeIndexExpr = indexesBlock ? /(^|\W)expr(\W|$)/i.test(indexesBlock.content) : false;
 
   const includeAnnotationValue = /@value/i.test(query);
   const filterExistsAnnotations = /FILTER[\s\S]*EXISTS\s+\.annotations/i.test(query);
   const filterExistsPointersAnnotations = /EXISTS\s+\.pointers\.annotations/i.test(query);
+  const filterExistsIndexes = /EXISTS\s+\.indexes/i.test(query);
   const typeOrderByName = /ORDER\s+BY\s+\.name/i.test(query);
   const typeAnnotationOrderByName = typeAnnotationsBlock ? /ORDER\s+BY\s+\.name/i.test(typeAnnotationsBlock.after) : false;
   const filterObjectPropertiesExistsAnnotations = propertiesBlock
     ? /FILTER\s+EXISTS\s+\.annotations/i.test(propertiesBlock.after)
     : false;
+  const filterObjectPropertiesExistsConstraints = propertiesBlock
+    ? /FILTER\s+EXISTS\s+\.constraints/i.test(propertiesBlock.after)
+    : false;
+  const propertyNameSetMatch = propertiesBlock?.after.match(/FILTER\s+\.name\s+IN\s*\{([^}]*)\}/i);
+  const propertyNameSet = propertyNameSetMatch
+    ? new Set(
+        propertyNameSetMatch[1]
+          .split(",")
+          .map((entry) => entry.trim().replace(/^'+|'+$/g, ""))
+          .filter((entry) => entry.length > 0),
+      )
+    : undefined;
   const propertiesOrderByName = propertiesBlock ? /ORDER\s+BY\s+\.name/i.test(propertiesBlock.after) : false;
   const filterObjectLinksExistsAnnotations = linksBlock
     ? /FILTER\s+EXISTS\s+\.annotations/i.test(linksBlock.after)
@@ -313,16 +448,10 @@ const trySchemaObjectTypeQuery = (db: SQLiteDatabase, query: string): QueryResul
 
   const likeMatch = query.match(/\.name\s+LIKE\s+'([^']+)'/i);
   const likePattern = likeMatch?.[1];
-  const equalsMatch = query.match(/\.name\s*=\s*'([^']+)'/i);
-  const equalsName = equalsMatch?.[1];
+  const equalsNames = new Set([...query.matchAll(/\.name\s*=\s*'([^']+)'/gi)].map((match) => match[1]));
 
-  const persistedSchema = loadPersistedSchema(db);
-  if (!persistedSchema) {
-    return undefined;
-  }
-
-  const rows = persistedSchema.listTypes().map((typeDef) => {
-    const introspectionType = buildIntrospectionType(typeDef);
+  const rows = schema.listTypes().map((typeDef) => {
+    const introspectionType = buildIntrospectionType(schema, typeDef);
     const row: Record<string, unknown> = {
       name: introspectionType.name,
     };
@@ -338,10 +467,36 @@ const trySchemaObjectTypeQuery = (db: SQLiteDatabase, query: string): QueryResul
       row.annotations = annotations;
     }
 
+    if (includeIndexes) {
+      row.indexes = introspectionType.indexes.map((index) => ({
+        ...(includeIndexExpr ? { expr: index.expr } : {}),
+      }));
+    }
+
+    if (includeBases) {
+      row.bases = introspectionType.bases.map((base) => ({
+        name: base.name,
+        "@index": base["@index"],
+      }));
+    }
+
+    if (includeAncestors) {
+      row.ancestors = introspectionType.ancestors.map((ancestor) => ({
+        name: ancestor.name,
+        "@index": ancestor["@index"],
+      }));
+    }
+
     if (includeProperties) {
       let properties = introspectionType.properties.slice();
       if (filterObjectPropertiesExistsAnnotations) {
         properties = properties.filter((property) => property.annotations.length > 0);
+      }
+      if (filterObjectPropertiesExistsConstraints) {
+        properties = properties.filter((property) => property.constraints.length > 0);
+      }
+      if (propertyNameSet) {
+        properties = properties.filter((property) => propertyNameSet.has(property.name));
       }
       if (propertiesOrderByName) {
         properties.sort((a, b) => a.name.localeCompare(b.name));
@@ -355,8 +510,26 @@ const trySchemaObjectTypeQuery = (db: SQLiteDatabase, query: string): QueryResul
             ...(includeAnnotationValue ? { "@value": annotation["@value"] } : {}),
           }));
         }
+        if (includePropertyTarget && property.target) {
+          out.target = { name: property.target.name };
+        }
         if (includeConstraints) {
-          out.constraints = property.constraints.map((constraint) => ({
+          const projectedConstraints =
+            includeConstraintAnnotations && !includeConstraintName && !includeConstraintDelegated && !includeConstraintParams
+              ? property.constraints.filter((constraint) =>
+                  constraint.annotations.length > 0 || constraint.name === "std::exclusive")
+              : property.constraints;
+
+          out.constraints = projectedConstraints.map((constraint) => ({
+            ...(includeConstraintName ? { name: constraint.name } : {}),
+            ...(includeConstraintDelegated ? { delegated: constraint.delegated } : {}),
+            ...(includeConstraintParams
+              ? {
+                  params: constraint.params
+                    .filter((param) => param.name !== "__subject__")
+                    .map((param) => ({ name: param.name, "@value": param["@value"] })),
+                }
+              : {}),
             ...(includeConstraintAnnotations
               ? {
                   annotations: constraint.annotations.map((annotation) => ({
@@ -443,6 +616,12 @@ const trySchemaObjectTypeQuery = (db: SQLiteDatabase, query: string): QueryResul
       }
     }
 
+    if (filterExistsIndexes) {
+      if (introspectionType.indexes.length === 0) {
+        return false;
+      }
+    }
+
     if (likePattern) {
       if (likePattern.endsWith("%")) {
         const prefix = likePattern.slice(0, -1);
@@ -451,7 +630,7 @@ const trySchemaObjectTypeQuery = (db: SQLiteDatabase, query: string): QueryResul
       return rowName === likePattern;
     }
 
-    if (equalsName && rowName !== equalsName) {
+    if (equalsNames.size > 0 && !equalsNames.has(rowName)) {
       return false;
     }
 
@@ -468,13 +647,177 @@ const trySchemaObjectTypeQuery = (db: SQLiteDatabase, query: string): QueryResul
   };
 };
 
+const trySchemaFunctionQuery = (schema: SchemaSnapshot, query: string): QueryResult | undefined => {
+  const includeAnnotations = /annotations\s*:\s*\{/i.test(query);
+  const includeAnnotationValue = /@value/i.test(query);
+  const includeVolatility = /\bvol\s*:=\s*<str>\s*\.volatility\b/i.test(query) || /\bvolatility\b/i.test(query);
+  const filterExistsAnnotations = /FILTER[\s\S]*EXISTS\s+\.annotations/i.test(query);
+  const likeMatch = query.match(/\.name\s+LIKE\s+'([^']+)'/i);
+  const likePattern = likeMatch?.[1];
+  const orderByName = /ORDER\s+BY\s+\.name/i.test(query);
+
+  let rows = schema.listFunctions().map((fn) => {
+    const row: Record<string, unknown> = {
+      name: `${fn.module}::${fn.name}`,
+    };
+    if (includeAnnotations) {
+      row.annotations = (fn.annotations ?? []).map((annotation) => ({
+        name: annotation.name,
+        ...(includeAnnotationValue ? { "@value": annotation.value } : {}),
+      }));
+    }
+    if (includeVolatility) {
+      row.vol = fn.volatility ?? null;
+    }
+    return row;
+  });
+
+  rows = rows.filter((row) => {
+    const rowName = String(row.name);
+    if (filterExistsAnnotations) {
+      const annotations = (row.annotations as unknown[] | undefined) ?? [];
+      if (annotations.length === 0) {
+        return false;
+      }
+    }
+
+    if (likePattern) {
+      if (likePattern.endsWith("%")) {
+        const prefix = likePattern.slice(0, -1);
+        if (!rowName.startsWith(prefix)) {
+          return false;
+        }
+      } else if (rowName !== likePattern) {
+        return false;
+      }
+    }
+
+    return true;
+  });
+
+  if (orderByName) {
+    rows.sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  }
+
+  return {
+    kind: "select",
+    rows,
+  };
+};
+
+const scalarAncestorsForDeclaration = (
+  schema: SchemaSnapshot,
+  scalarName: string,
+  baseTypeName: string | undefined,
+  enumValues: string[] | undefined,
+  seen = new Set<string>(),
+): string[] => {
+  if (seen.has(scalarName)) {
+    return [];
+  }
+  seen.add(scalarName);
+
+  if (enumValues && enumValues.length > 0) {
+    return ["std::anyenum", "std::anyscalar"];
+  }
+
+  const base = (baseTypeName ?? "str").trim();
+  const lower = base.includes("::") ? base.split("::").at(-1)!.toLowerCase() : base.toLowerCase();
+
+  if (lower === "anyenum") {
+    return ["std::anyenum", "std::anyscalar"];
+  }
+  if (lower === "str" || lower === "bytes") {
+    return ["std::str", "std::anyscalar"];
+  }
+  if (lower === "int" || lower === "int64") {
+    return ["std::int64", "std::anyint", "std::anyreal", "std::anydiscrete", "std::anypoint", "std::anyscalar"];
+  }
+  if (lower === "int32") {
+    return ["std::int32", "std::anyint", "std::anyreal", "std::anydiscrete", "std::anypoint", "std::anyscalar"];
+  }
+  if (lower === "int16") {
+    return ["std::int16", "std::anyint", "std::anyreal", "std::anydiscrete", "std::anypoint", "std::anyscalar"];
+  }
+  if (lower === "bool") {
+    return ["std::bool", "std::anyscalar"];
+  }
+
+  const qualifiedBase = base.includes("::") ? base : `${scalarName.split("::")[0]}::${base}`;
+  const baseDecl = schema.getScalarType(qualifiedBase);
+  if (baseDecl) {
+    return [qualifiedBase, ...scalarAncestorsForDeclaration(schema, qualifiedBase, baseDecl.baseTypeName, baseDecl.enumValues, seen)];
+  }
+
+  return [qualifiedBase, "std::anyscalar"];
+};
+
+const trySchemaScalarTypeQuery = (schema: SchemaSnapshot, query: string): QueryResult | undefined => {
+  const includeAncestors = /ancestors\s*:\s*\{/i.test(query);
+  const includeConstraints = /constraints\s*:\s*\{/i.test(query);
+  const includeConstraintParams = /params\s*:\s*\{/i.test(query);
+  const likeMatch = query.match(/\.name\s+LIKE\s+'([^']+)'/i);
+  const likePattern = likeMatch?.[1];
+  const orderByName = /ORDER\s+BY\s+\.name/i.test(query);
+
+  let rows = schema.listScalarTypes().map((scalarType) => {
+    const qualifiedName = `${scalarType.module}::${scalarType.name}`;
+    const row: Record<string, unknown> = {
+      name: qualifiedName,
+    };
+
+    if (includeAncestors) {
+      row.ancestors = scalarAncestorsForDeclaration(
+        schema,
+        qualifiedName,
+        scalarType.baseTypeName,
+        scalarType.enumValues,
+      ).map((ancestor) => ({ name: ancestor }));
+    }
+
+    if (includeConstraints) {
+      row.constraints = (scalarType.constraints ?? []).map((constraint) => ({
+        name: constraint.name,
+        ...(includeConstraintParams
+          ? {
+              params: (constraint.params ?? [])
+                .filter((param) => param.name !== "__subject__")
+                .map((param) => ({ name: param.name, "@value": String(param.value) })),
+            }
+          : {}),
+      }));
+    }
+
+    return row;
+  });
+
+  if (likePattern) {
+    rows = rows.filter((row) => {
+      const rowName = String(row.name);
+      if (likePattern.endsWith("%")) {
+        return rowName.startsWith(likePattern.slice(0, -1));
+      }
+      return rowName === likePattern;
+    });
+  }
+
+  if (orderByName) {
+    rows.sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  }
+
+  return {
+    kind: "select",
+    rows,
+  };
+};
+
 export const executeQuery = (
   db: SQLiteDatabase,
   schema: SchemaSnapshot,
   query: string,
   securityContext: SecurityContext = DEFAULT_SECURITY_CONTEXT,
 ): QueryResult => {
-  const schemaQueryResult = trySchemaObjectTypeQuery(db, query);
+  const schemaQueryResult = trySchemaObjectTypeQuery(schema, query);
   if (schemaQueryResult) {
     return schemaQueryResult;
   }
@@ -503,14 +846,15 @@ export const executeQueryWithTrace = (
     const ast = parseEdgeQL(query);
     const statementType = statementTypeOf(ast);
     enforceBuiltinPermissions(context, statementType, ast.pos.line, ast.pos.column);
-    const subjectType = ast.kind === "insert" || ast.kind === "update" || ast.kind === "delete"
-      ? schema.getType(ast.typeName)
-      : undefined;
-    if ((ast.kind === "insert" || ast.kind === "update" || ast.kind === "delete") && !subjectType) {
-      throw new AppError("E_SEMANTIC", `Unknown type '${ast.typeName}'`, ast.pos.line, ast.pos.column);
-    }
     const compiled = compilerService.compile(schema, ast, { globals: context.globals, target: runtimeTarget });
     const ir = compiled.ir;
+    const subjectType = ir.kind === "insert" || ir.kind === "update" || ir.kind === "delete"
+      ? typeDefForTable(schema, ir.table)
+      : undefined;
+    if ((ir.kind === "insert" || ir.kind === "update" || ir.kind === "delete") && !subjectType) {
+      const astTypeName = "typeName" in ast ? ast.typeName : "<unknown>";
+      throw new AppError("E_SEMANTIC", `Unknown type '${astTypeName}'`, ast.pos.line, ast.pos.column);
+    }
     const sqlArtifact = compiled.sql;
     assertTargetSqlCompatibility(sqlArtifact.sql, runtimeTarget);
     const sqlTrail: SQLArtifact[] = [sqlArtifact];
@@ -2152,6 +2496,34 @@ const extractOverlays = (ir: IRStatement): OverlayIR[] => {
 
 const tableNameForType = (qualifiedName: string): string => qualifiedName.replaceAll("::", "__").toLowerCase();
 const PENDING_INLINE_LINK_VALUE = "__gel_pending_inline_link__";
+const PENDING_INSERT_REWRITE_VALUE = "__gel_pending_insert_rewrite__";
+
+const normalizeLinkTargetNames = (targetType: string, moduleName: string): string[] =>
+  targetType
+    .split("|")
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0)
+    .map((part) => (part.includes("::") ? part : `${moduleName}::${part}`));
+
+const assignableTargetTablesForTargets = (
+  schema: SchemaSnapshot,
+  targetTypeNames: string[],
+): Set<string> => {
+  const tables = new Set<string>();
+  for (const targetTypeName of targetTypeNames) {
+    const assignable = schema.listConcreteTypesAssignableTo(targetTypeName);
+    if (assignable.length > 0) {
+      for (const candidate of assignable) {
+        tables.add(tableNameForType(qualifiedTypeName(candidate)));
+      }
+      continue;
+    }
+
+    tables.add(tableNameForType(targetTypeName));
+  }
+
+  return tables;
+};
 
 const validateLinkAssignments = (
   db: SQLiteDatabase,
@@ -2202,11 +2574,13 @@ const validateLinkAssignments = (
       );
     }
 
-    const expectedTargetTable = tableNameForType(link.targetType.includes("::") ? link.targetType : `${typeDef.module ?? "default"}::${link.targetType}`);
-    if (row.type_name !== expectedTargetTable) {
+    const targetTypeNames = normalizeLinkTargetNames(link.targetType, typeDef.module ?? "default");
+    const expectedTargetTables = assignableTargetTablesForTargets(schema, targetTypeNames);
+    if (!expectedTargetTables.has(row.type_name)) {
+      const expected = [...expectedTargetTables].sort().join(" or ");
       throw new AppError(
         "E_SEMANTIC",
-        `Invalid id for link '${link.name}': expected '${expectedTargetTable}', got '${row.type_name}'`,
+        `Invalid id for link '${link.name}': expected '${expected}', got '${row.type_name}'`,
         ast.pos.line,
         ast.pos.column,
       );
@@ -2411,9 +2785,127 @@ const runWriteWithAccessPolicies = (
 ): { changes: number } => {
   validateLinkAssignments(db, schema, ir, ast);
 
+  if (ast.kind === "update") {
+    const readonlyFields = new Set(subjectType.fields.filter((field) => field.readonly).map((field) => field.name));
+    const readonlyLinks = new Set((subjectType.links ?? []).filter((link) => link.readonly).map((link) => link.name));
+    for (const fieldName of Object.keys(ast.values)) {
+      if (readonlyFields.has(fieldName) || readonlyLinks.has(fieldName)) {
+        throw new AppError("E_SEMANTIC", `cannot update read-only pointer '${fieldName}'`, ast.pos.line, ast.pos.column);
+      }
+    }
+  }
+
+  const applyPendingInsertDefaults = (values: Record<string, ScalarValue>): void => {
+    for (const field of subjectType.fields) {
+      if (!field.hasDefault) {
+        continue;
+      }
+      if (values[field.name] !== PENDING_INSERT_REWRITE_VALUE) {
+        continue;
+      }
+
+      const defaultExpr = field.defaultExpr;
+      if (!defaultExpr) {
+        continue;
+      }
+
+      if (defaultExpr.kind === "literal") {
+        values[field.name] = defaultExpr.value;
+        continue;
+      }
+
+      const evaluated = executeFunctionCall(schema, db, context, defaultExpr.name, defaultExpr.args as RuntimeFunctionArg[]);
+      if (isScalarValue(evaluated)) {
+        values[field.name] = evaluated;
+        continue;
+      }
+
+      if (Array.isArray(evaluated) && evaluated.length > 0 && isScalarValue(evaluated[0])) {
+        values[field.name] = evaluated[0] as ScalarValue;
+      }
+    }
+  };
+
+  const applyOnTargetDeletePolicies = (targetType: TypeDef, targetIds: string[], astPos: { line: number; column: number }): void => {
+    if (targetIds.length === 0) {
+      return;
+    }
+
+    const targetQualifiedName = qualifiedTypeName(targetType);
+
+    const linkTargetsType = (link: NonNullable<TypeDef["links"]>[number], sourceModule: string): boolean => {
+      const targets = normalizeLinkTargetNames(link.targetType, sourceModule);
+      return targets.some((target) => {
+        if (target === targetQualifiedName) {
+          return true;
+        }
+        return schema.listConcreteTypesAssignableTo(target).some((candidate) => qualifiedTypeName(candidate) === targetQualifiedName);
+      });
+    };
+
+    for (const sourceType of schema.listTypes()) {
+      const sourceQualifiedName = qualifiedTypeName(sourceType);
+      const sourceTable = tableNameForType(sourceQualifiedName);
+      const sourceModule = sourceType.module ?? "default";
+
+      for (const link of sourceType.links ?? []) {
+        if (!link.onTargetDelete || !linkTargetsType(link, sourceModule)) {
+          continue;
+        }
+
+        const usesLinkTable = Boolean(link.multi) || (link.properties?.length ?? 0) > 0;
+        const sourceIds = new Set<string>();
+
+        if (usesLinkTable) {
+          const linkTable = `${sourceTable}__${link.name.toLowerCase()}`;
+          const placeholders = targetIds.map(() => "?").join(", ");
+          const rows = db
+            .prepare(`SELECT ${quoteIdent("source")} AS ${quoteIdent("source")} FROM ${quoteIdent(linkTable)} WHERE ${quoteIdent("target")} IN (${placeholders})`)
+            .all(...targetIds) as Array<{ source?: unknown }>;
+          for (const row of rows) {
+            if (typeof row.source === "string") {
+              sourceIds.add(row.source);
+            }
+          }
+        } else {
+          const inlineColumn = `${link.name}_id`;
+          const placeholders = targetIds.map(() => "?").join(", ");
+          const rows = db
+            .prepare(`SELECT ${quoteIdent("id")} AS ${quoteIdent("id")} FROM ${quoteIdent(sourceTable)} WHERE ${quoteIdent(inlineColumn)} IN (${placeholders})`)
+            .all(...targetIds) as Array<{ id?: unknown }>;
+          for (const row of rows) {
+            if (typeof row.id === "string") {
+              sourceIds.add(row.id);
+            }
+          }
+        }
+
+        if (sourceIds.size === 0) {
+          continue;
+        }
+
+        if (link.onTargetDelete === "restrict" || link.onTargetDelete === "deferred_restrict") {
+          throw new AppError(
+            "E_SEMANTIC",
+            `deletion of '${targetQualifiedName}' is restricted by link '${sourceQualifiedName}.${link.name}'`,
+            astPos.line,
+            astPos.column,
+          );
+        }
+
+        if (link.onTargetDelete === "delete_source") {
+          const sourceIdList = [...sourceIds];
+          const placeholders = sourceIdList.map(() => "?").join(", ");
+          db.prepare(`DELETE FROM ${quoteIdent(sourceTable)} WHERE ${quoteIdent("id")} IN (${placeholders})`).run(...sourceIdList);
+        }
+      }
+    }
+  };
+
   db.prepare("BEGIN").run();
   try {
     if (ir.kind === "insert") {
+      applyPendingInsertDefaults(ir.values);
       enforceInsertPolicies(subjectType, ir.values, context, ast.pos.line, ast.pos.column);
 
       if (ast.kind === "insert" && ast.conflict) {
@@ -2484,6 +2976,7 @@ const runWriteWithAccessPolicies = (
     if (ir.kind === "delete") {
       const preRows = readTargetRowsForFilter(db, ir.table, ir.filter);
       enforceDeletePolicies(subjectType, preRows, context, ast.pos.line, ast.pos.column);
+      applyOnTargetDeletePolicies(subjectType, preRows.map((row) => String(row.id)), ast.pos);
       const writeResult = db.prepare(sqlArtifact.sql).run(...sqlArtifact.params);
       db.prepare("COMMIT").run();
       return { changes: writeResult.changes };
@@ -2709,7 +3202,7 @@ const applyInsertLinkAssignments = (
   const resolveDefaultLinkAssignments = (
     link: NonNullable<TypeDef["links"]>[number],
   ): Array<{ id: string; properties: Record<string, ScalarValue> }> => {
-    const targetQualified = link.targetType.includes("::") ? link.targetType : `${typeDef.module ?? "default"}::${link.targetType}`;
+    const targetQualified = normalizeLinkTargetNames(link.targetType, typeDef.module ?? "default")[0] ?? `${typeDef.module ?? "default"}::${link.targetType}`;
     const targetType = schema.getType(targetQualified);
     const targetTable = tableNameForType(targetQualified);
 
@@ -2747,13 +3240,8 @@ const applyInsertLinkAssignments = (
     const targetIds = targetAssignments.map((assignment) => assignment.id);
     const linkOwner = resolveLinkStorageOwner(schema, typeDef, link);
     const ownerModule = linkOwner.module ?? "default";
-    const targetQualified = link.targetType.includes("::") ? link.targetType : `${ownerModule}::${link.targetType}`;
-    const assignableTargetTables = new Set(
-      schema.listConcreteTypesAssignableTo(targetQualified).map((candidate) => tableNameForType(qualifiedTypeName(candidate))),
-    );
-    if (assignableTargetTables.size === 0) {
-      assignableTargetTables.add(tableNameForType(targetQualified));
-    }
+    const targetTypeNames = normalizeLinkTargetNames(link.targetType, ownerModule);
+    const assignableTargetTables = assignableTargetTablesForTargets(schema, targetTypeNames);
     for (const targetId of targetIds) {
       const row = db
         .prepare('SELECT "type_name" AS "type_name" FROM "__gel_global_ids" WHERE "id" = ?')
@@ -2876,13 +3364,8 @@ const applyUpdateLinkAssignments = (
     const targetIds = targetAssignments.map((assignment) => assignment.id);
     const linkOwner = resolveLinkStorageOwner(schema, typeDef, link);
     const ownerModule = linkOwner.module ?? "default";
-    const targetQualified = link.targetType.includes("::") ? link.targetType : `${ownerModule}::${link.targetType}`;
-    const assignableTargetTables = new Set(
-      schema.listConcreteTypesAssignableTo(targetQualified).map((candidate) => tableNameForType(qualifiedTypeName(candidate))),
-    );
-    if (assignableTargetTables.size === 0) {
-      assignableTargetTables.add(tableNameForType(targetQualified));
-    }
+    const targetTypeNames = normalizeLinkTargetNames(link.targetType, ownerModule);
+    const assignableTargetTables = assignableTargetTablesForTargets(schema, targetTypeNames);
     for (const targetId of targetIds) {
       const row = db
         .prepare('SELECT "type_name" AS "type_name" FROM "__gel_global_ids" WHERE "id" = ?')

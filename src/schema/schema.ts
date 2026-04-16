@@ -1,5 +1,6 @@
 import type { AliasDef, AnnotationDef, FieldDef, FunctionDef, TypeDef } from "../types.js";
 import { AnnotationSet } from "./annos.js";
+import type { ScalarTypeDeclaration } from "./scalar.js";
 
 export interface SchemaDelta {
   createTypes?: TypeDef[];
@@ -10,11 +11,15 @@ export class SchemaSnapshot {
   private readonly typesByName: Map<string, TypeDef>;
   private readonly functionsBySignature: Map<string, FunctionDef>;
   private readonly aliasesByName: Map<string, AliasDef>;
+  private readonly scalarTypesByName: Map<string, ScalarTypeDeclaration>;
 
-  constructor(types: TypeDef[] = [], functions: FunctionDef[] = [], aliases: AliasDef[] = []) {
+  constructor(types: TypeDef[] = [], functions: FunctionDef[] = [], aliases: AliasDef[] = [], scalarTypes: ScalarTypeDeclaration[] = []) {
     this.typesByName = new Map(types.map((t) => [qualifiedTypeName(t), cloneTypeDef(t)]));
     this.functionsBySignature = new Map(functions.map((fn) => [functionSignature(fn), cloneFunctionDef(fn)]));
     this.aliasesByName = new Map(aliases.map((alias) => [qualifiedAliasName(alias), cloneAliasDef(alias)]));
+    this.scalarTypesByName = new Map(
+      scalarTypes.map((scalarType) => [qualifiedScalarTypeName(scalarType), cloneScalarTypeDeclaration(scalarType)] as const),
+    );
   }
 
   getType(name: string): TypeDef | undefined {
@@ -58,6 +63,15 @@ export class SchemaSnapshot {
 
   listAliases(): AliasDef[] {
     return [...this.aliasesByName.values()].map((alias) => cloneAliasDef(alias));
+  }
+
+  getScalarType(name: string): ScalarTypeDeclaration | undefined {
+    const existing = this.scalarTypesByName.get(name);
+    return existing ? cloneScalarTypeDeclaration(existing) : undefined;
+  }
+
+  listScalarTypes(): ScalarTypeDeclaration[] {
+    return [...this.scalarTypesByName.values()].map(cloneScalarTypeDeclaration);
   }
 
   listConcreteTypesAssignableTo(name: string): TypeDef[] {
@@ -125,7 +139,7 @@ export class SchemaSnapshot {
       typeDef.fields.push({ ...update.field });
     }
 
-    return new SchemaSnapshot([...next.values()], this.listFunctions(), this.listAliases());
+    return new SchemaSnapshot([...next.values()], this.listFunctions(), this.listAliases(), this.listScalarTypes());
   }
 }
 
@@ -140,6 +154,8 @@ export const functionSignature = (fn: FunctionDef): string => {
 };
 
 const qualifiedAliasName = (alias: AliasDef): string => `${alias.module}::${alias.name}`;
+
+const qualifiedScalarTypeName = (scalarType: ScalarTypeDeclaration): string => `${scalarType.module}::${scalarType.name}`;
 
 const cloneAliasDef = (alias: AliasDef): AliasDef => ({
   ...alias,
@@ -167,6 +183,22 @@ const cloneAliasDef = (alias: AliasDef): AliasDef => ({
           field: alias.filter.field,
         }
     : undefined,
+});
+
+const cloneScalarTypeDeclaration = (scalarType: ScalarTypeDeclaration): ScalarTypeDeclaration => ({
+  name: scalarType.name,
+  module: scalarType.module,
+  enumValues: scalarType.enumValues ? [...scalarType.enumValues] : undefined,
+  baseTypeName: scalarType.baseTypeName,
+  constraints: scalarType.constraints
+    ? scalarType.constraints.map((constraint) => ({
+        name: constraint.name,
+        annotations: constraint.annotations.map((annotation) => ({ ...annotation })),
+        delegated: constraint.delegated,
+        params: constraint.params ? constraint.params.map((param) => ({ ...param })) : undefined,
+      }))
+    : undefined,
+  annotations: scalarType.annotations?.map((annotation) => ({ ...annotation })),
 });
 
 const cloneComputedDef = (
@@ -221,8 +253,22 @@ const cloneTypeDef = (typeDef: TypeDef): TypeDef => ({
   ...typeDef,
   extends: typeDef.extends ? [...typeDef.extends] : undefined,
   annotations: cloneAnnotations(typeDef.annotations),
+  indexes: typeDef.indexes ? typeDef.indexes.map((index) => ({ ...index })) : undefined,
   fields: typeDef.fields.map((f) => ({
     ...f,
+    defaultExpr: f.defaultExpr
+      ? f.defaultExpr.kind === "function_call"
+        ? { kind: "function_call", name: f.defaultExpr.name, args: [...f.defaultExpr.args] }
+        : { kind: "literal", value: f.defaultExpr.value }
+      : undefined,
+    constraints: f.constraints
+      ? f.constraints.map((constraint) => ({
+          name: constraint.name,
+          annotations: cloneAnnotations(constraint.annotations) ?? [],
+          delegated: constraint.delegated,
+          params: constraint.params ? constraint.params.map((param) => ({ ...param })) : undefined,
+        }))
+      : undefined,
     annotations: cloneAnnotations(f.annotations),
   })),
   links: typeDef.links?.map((l) => ({
