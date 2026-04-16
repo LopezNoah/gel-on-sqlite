@@ -349,16 +349,20 @@ class Parser {
   }
 
   private parseFreeObjectExpr(): FreeObjectExpr {
+    return this.parseFreeObjectPrimaryExpr();
+  }
+
+  private parseFreeObjectPrimaryExpr(): FreeObjectExpr {
     if (this.peek().kind === "lparen") {
       this.consume();
-      const expr = this.parseFreeObjectConcatExpr();
+      const expr = this.parseFreeObjectExprWithPrecedence();
       this.expect("rparen", "Expected ')' after parenthesized expression");
       return expr;
     }
 
     if (this.peek().kind === "kw_distinct") {
       this.consume();
-      return this.parseFreeObjectExpr();
+      return this.parseFreeObjectPrimaryExpr();
     }
 
     if (this.peek().kind === "kw_select") {
@@ -369,13 +373,13 @@ class Parser {
       this.consume();
       const castType = this.expect("identifier", "Expected type name in cast").lexeme;
       this.expect("gt", "Expected '>' after cast type");
-      const expr = this.parseFreeObjectExpr();
+      const expr = this.parseFreeObjectPrimaryExpr();
       return { kind: "cast", castType, expr };
     }
 
     if (this.peek().kind === "lbrace") {
       this.consume();
-      const values = this.parseDelimited("rbrace", () => this.parseFreeObjectConcatExpr(), "Expected ',' in set literal");
+      const values = this.parseDelimited("rbrace", () => this.parseFreeObjectExprWithPrecedence(), "Expected ',' in set literal");
       this.expect("rbrace", "Expected '}' after set literal");
       if (values.every((v) => v.kind === "literal")) {
         return { kind: "set_literal", values: values.map((v) => (v as { kind: "literal"; value: ScalarValue }).value) };
@@ -420,27 +424,50 @@ class Parser {
     };
   }
 
-  private parseFreeObjectConcatExpr(): FreeObjectExpr {
-    let left = this.parseFreeObjectExpr();
-    while (this.peek().kind === "concat") {
-      this.consume();
-      const right = this.parseFreeObjectExpr();
-      if (left.kind === "concat") {
-        left = { kind: "concat", parts: [...left.parts, right] };
-      } else {
-        left = { kind: "concat", parts: [left, right] };
+  private parseFreeObjectExprWithPrecedence(minPrecedence = 0): FreeObjectExpr {
+    let left = this.parseFreeObjectPrimaryExpr();
+
+    while (true) {
+      if (this.peek().kind === "concat") {
+        const precedence = 20;
+        if (precedence < minPrecedence) {
+          break;
+        }
+
+        this.consume();
+        const right = this.parseFreeObjectExprWithPrecedence(precedence + 1);
+        if (left.kind === "concat") {
+          left = { kind: "concat", parts: [...left.parts, right] };
+        } else {
+          left = { kind: "concat", parts: [left, right] };
+        }
+        continue;
       }
+
+      if (this.peek().kind === "kw_is") {
+        const precedence = 10;
+        if (precedence < minPrecedence) {
+          break;
+        }
+
+        this.consume();
+        const typeName = this.expect("identifier", "Expected type name after 'is'").lexeme;
+        left = {
+          kind: "is_type",
+          expr: left,
+          typeName,
+        };
+        continue;
+      }
+
+      break;
     }
-    if (this.peek().kind === "kw_is") {
-      this.consume();
-      const typeName = this.expect("identifier", "Expected type name after 'is'").lexeme;
-      return {
-        kind: "is_type",
-        expr: left,
-        typeName,
-      };
-    }
+
     return left;
+  }
+
+  private parseFreeObjectConcatExpr(): FreeObjectExpr {
+    return this.parseFreeObjectExprWithPrecedence();
   }
 
   private parseSelectExprSubquery(): FreeObjectExpr {
@@ -510,7 +537,7 @@ class Parser {
   }
 
   private parseInlineSelectExpr(): { kind: "select"; typeName: string; shape: ShapeElement[]; clauses: ClauseChain } {
-    if (this.peek().kind === "identifier" && this.peek().lexeme.toLowerCase() === "detached") {
+    if (this.peek().kind === "kw_detached") {
       this.consume();
     }
     const typeName = this.expect("identifier", "Expected type name in inline select").lexeme;
@@ -823,7 +850,7 @@ class Parser {
   }
 
   private parseIfElseArg(initialThenArg: FunctionCallArgExpr): FunctionCallArgExpr {
-    if (!(this.peek().kind === "identifier" && this.peek().lexeme.toLowerCase() === "if")) {
+    if (this.peek().kind !== "kw_if") {
       return initialThenArg;
     }
     this.consume();
@@ -831,7 +858,7 @@ class Parser {
     const conditionField = this.parseIfConditionField();
     this.expect("equals", "Expected '=' in IF condition");
     const conditionValue = this.readValue();
-    if (!(this.peek().kind === "kw_else" || (this.peek().kind === "identifier" && this.peek().lexeme.toLowerCase() === "else"))) {
+    if (this.peek().kind !== "kw_else") {
       const token = this.peek();
       throw new AppError("E_SYNTAX", "Expected 'else' in IF expression", token.line, token.column);
     }
@@ -1193,7 +1220,7 @@ class Parser {
       const values = this.parseDelimited("rbracket", () => this.readValue(), "Expected ',' in array literal");
       this.expect("rbracket", "Expected ']' after array literal");
       return {
-        kind: "array",
+        kind: "array_literal",
         values,
       };
     }
@@ -1282,7 +1309,7 @@ class Parser {
     };
   }
 
-  private readTupleLiteralValue(): { kind: "tuple"; values: ScalarValue[] | Record<string, ScalarValue> } {
+  private readTupleLiteralValue(): { kind: "tuple_literal"; values: ScalarValue[] | Record<string, ScalarValue> } {
     const items: ScalarValue[] = [];
     const named: Record<string, ScalarValue> = {};
     let hasNamed = false;
@@ -1310,7 +1337,7 @@ class Parser {
 
     this.expect("rparen", "Expected ')' after tuple literal");
     return {
-      kind: "tuple",
+      kind: "tuple_literal",
       values: hasNamed ? named : items,
     };
   }
@@ -1762,7 +1789,7 @@ class Parser {
       const values = this.parseDelimited("rbracket", () => this.readValue(), "Expected ',' in array literal with binding");
       this.expect("rbracket", "Expected ']' after array literal with binding");
       return {
-        kind: "set_literal",
+        kind: "array_literal",
         values,
       };
     }
@@ -1780,19 +1807,20 @@ class Parser {
       };
     }
 
+    if (this.peek().kind === "kw_detached" && this.peekNext().kind === "identifier") {
+      this.consume();
+      const typeName = this.consume().lexeme;
+      return {
+        kind: "subquery",
+        query: {
+          typeName,
+          shape: [{ kind: "field", name: "id" }],
+          clauses: {},
+        },
+      };
+    }
+
     if (this.peek().kind === "identifier") {
-      if (this.peek().lexeme.toLowerCase() === "detached" && this.peekNext().kind === "identifier") {
-        this.consume();
-        const typeName = this.consume().lexeme;
-        return {
-          kind: "subquery",
-          query: {
-            typeName,
-            shape: [{ kind: "field", name: "id" }],
-            clauses: {},
-          },
-        };
-      }
 
       const name = this.peek().lexeme;
       if (this.atQualifiedIdentifier()) {
@@ -1834,7 +1862,7 @@ class Parser {
       direction = "desc";
     }
 
-    if (this.peek().kind === "identifier" && this.peek().lexeme.toLowerCase() === "then") {
+    if (this.peek().kind === "kw_then") {
       this.consume();
       this.parseFieldReference("order by");
       if (this.peek().kind === "kw_asc" || this.peek().kind === "kw_desc") {
@@ -1962,7 +1990,7 @@ class Parser {
         }
       }
       this.expect("rbracket", "Expected ']' after array literal");
-      return JSON.stringify(values);
+      return values as unknown as ScalarValue;
     }
 
     throw new AppError("E_SYNTAX", "Expected a literal value", token.line, token.column);

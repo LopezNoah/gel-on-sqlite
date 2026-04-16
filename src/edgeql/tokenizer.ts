@@ -33,6 +33,9 @@ export type TokenKind =
   | "kw_conflict"
   | "kw_on"
   | "kw_else"
+  | "kw_if"
+  | "kw_then"
+  | "kw_detached"
   | "identifier"
   | "string"
   | "number"
@@ -98,6 +101,9 @@ const KEYWORDS: Record<string, TokenKind> = {
   conflict: "kw_conflict",
   on: "kw_on",
   else: "kw_else",
+  if: "kw_if",
+  then: "kw_then",
+  detached: "kw_detached",
 };
 
 export const tokenize = (input: string): Token[] => {

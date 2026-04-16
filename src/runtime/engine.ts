@@ -847,6 +847,15 @@ const coerceUnknownToScalar = (value: unknown): ScalarValue | undefined => {
   if (isScalarValue(value)) {
     return value;
   }
+
+  if (Array.isArray(value) || (value !== null && typeof value === "object")) {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return undefined;
+    }
+  }
+
   return undefined;
 };
 
@@ -2554,10 +2563,15 @@ const resolveInsertTargets = (
 
           const properties: Record<string, ScalarValue> = {};
           for (const [key, raw] of Object.entries(row)) {
-            if (!key.startsWith("@") || !isScalarValue(raw)) {
+            if (!key.startsWith("@")) {
               continue;
             }
-            properties[key] = raw;
+
+            const scalar = coerceUnknownToScalar(raw);
+            if (scalar === undefined) {
+              continue;
+            }
+            properties[key] = scalar;
           }
 
           return { id: row.id, properties };
@@ -2588,10 +2602,15 @@ const resolveInsertTargets = (
 
         const properties: Record<string, ScalarValue> = {};
         for (const [key, raw] of Object.entries(row)) {
-          if (!key.startsWith("@") || !isScalarValue(raw)) {
+          if (!key.startsWith("@")) {
             continue;
           }
-          properties[key] = raw;
+
+          const scalar = coerceUnknownToScalar(raw);
+          if (scalar === undefined) {
+            continue;
+          }
+          properties[key] = scalar;
         }
 
         return { id: row.id, properties };
@@ -2628,10 +2647,15 @@ const resolveInsertTargets = (
           }
           const properties: Record<string, ScalarValue> = {};
           for (const [key, raw] of Object.entries(row)) {
-            if (!key.startsWith("@") || !isScalarValue(raw)) {
+            if (!key.startsWith("@")) {
               continue;
             }
-            properties[key] = raw;
+
+            const scalar = coerceUnknownToScalar(raw);
+            if (scalar === undefined) {
+              continue;
+            }
+            properties[key] = scalar;
           }
           rows.push({ id: row.id, properties });
         }

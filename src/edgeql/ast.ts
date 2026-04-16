@@ -80,15 +80,28 @@ export interface WithBinding {
   value: WithBindingValue;
 }
 
+export interface SetLiteralValue {
+  kind: "set_literal";
+  values: ScalarValue[];
+}
+
+export interface ArrayLiteralValue {
+  kind: "array_literal";
+  values: ScalarValue[];
+}
+
+export interface TupleLiteralValue {
+  kind: "tuple_literal";
+  values: ScalarValue[] | Record<string, ScalarValue>;
+}
+
 export type WithBindingValue =
   | {
       kind: "literal";
       value: ScalarValue;
     }
-  | {
-      kind: "set_literal";
-      values: ScalarValue[];
-    }
+  | SetLiteralValue
+  | ArrayLiteralValue
   | {
       kind: "binding_ref";
       name: string;
@@ -194,14 +207,8 @@ export type FunctionCallArgExpr =
       kind: "binding_ref";
       name: string;
     }
-  | {
-      kind: "set_literal";
-      values: ScalarValue[];
-    }
-  | {
-      kind: "array_literal";
-      values: ScalarValue[];
-    }
+  | SetLiteralValue
+  | ArrayLiteralValue
   | {
       kind: "function_call";
       call: FunctionCallExpr;
@@ -355,14 +362,8 @@ export interface InsertStatement {
 
 export type InsertValue =
   | ScalarValue
-  | {
-      kind: "array";
-      values: ScalarValue[];
-    }
-  | {
-      kind: "tuple";
-      values: ScalarValue[] | Record<string, ScalarValue>;
-    }
+  | ArrayLiteralValue
+  | TupleLiteralValue
   | {
       kind: "binding_ref";
       name: string;

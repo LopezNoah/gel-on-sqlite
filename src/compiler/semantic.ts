@@ -265,6 +265,8 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           return binding.value;
         case "set_literal":
           return fail(`With binding '${name}' is a set and cannot be used as a scalar value`);
+        case "array_literal":
+          return fail(`With binding '${name}' is an array and cannot be used as a scalar value`);
         case "binding_ref": {
           const resolvedType = schema.getType(normalizeTypeName(binding.name, activeModule));
           if (resolvedType) {
@@ -360,9 +362,9 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     switch (value.kind) {
       case "binding_ref":
         return resolveWithBindingScalar(value.name);
-      case "array":
+      case "array_literal":
         return JSON.stringify(value.values);
-      case "tuple":
+      case "tuple_literal":
         return JSON.stringify(value.values);
       default:
         return fail(`Expected scalar value in insert assignment, got ${value.kind}`);
@@ -382,11 +384,11 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       return [resolveWithBindingScalar(value.name)];
     }
 
-    if (value.kind === "array") {
+    if (value.kind === "array_literal") {
       return [JSON.stringify(value.values)];
     }
 
-    if (value.kind === "tuple") {
+    if (value.kind === "tuple_literal") {
       return [JSON.stringify(value.values)];
     }
 
@@ -1840,6 +1842,9 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         if (bindingValue.kind === "set_literal") {
           return { kind: "set_literal", values: [...bindingValue.values] };
         }
+        if (bindingValue.kind === "array_literal") {
+          return { kind: "set_literal", values: [...bindingValue.values] };
+        }
         if (bindingValue.kind === "enum_path") {
           return { kind: "enum_path", enumType: normalizeTypeName(bindingValue.enumType, activeModule), member: bindingValue.member };
         }
@@ -2033,6 +2038,9 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
               if (bindingValue?.kind === "set_literal") {
                 return { kind: "set_literal", values: [...bindingValue.values] };
               }
+              if (bindingValue?.kind === "array_literal") {
+                return { kind: "set_literal", values: [...bindingValue.values] };
+              }
               const scalar = resolveWithBindingScalar(arg.name);
               return { kind: "literal", value: scalar };
             }
@@ -2087,6 +2095,9 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
             return { kind: "literal", value: bindingValue.value };
           }
           if (bindingValue.kind === "set_literal") {
+            return { kind: "set_literal", values: [...bindingValue.values] };
+          }
+          if (bindingValue.kind === "array_literal") {
             return { kind: "set_literal", values: [...bindingValue.values] };
           }
           if (bindingValue.kind === "enum_path") {
@@ -2717,6 +2728,12 @@ const isValidScalarValue = (type: ScalarType, value: ScalarValue): boolean => {
         } catch {
           return false;
         }
+      }
+      if (Array.isArray(value as unknown)) {
+        return true;
+      }
+      if (typeof (value as unknown) === "object") {
+        return true;
       }
       return false;
     case "datetime":
