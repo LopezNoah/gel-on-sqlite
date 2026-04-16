@@ -314,7 +314,12 @@ const compileShapeObjectExpr = (
     }
 
     if (element.kind === "link") {
-      pairs.push(`json(${compileLinkArrayExpr(element, sourceAlias, params, target)})`);
+      const linkArrayExpr = compileLinkArrayExpr(element, sourceAlias, params, target);
+      if (element.relation.multi) {
+        pairs.push(`json(${linkArrayExpr})`);
+      } else {
+        pairs.push(`json(COALESCE(json_extract(${linkArrayExpr}, '$[0]'), 'null'))`);
+      }
       continue;
     }
 

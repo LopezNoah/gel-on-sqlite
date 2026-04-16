@@ -730,6 +730,13 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     return schema.listConcreteTypesAssignableTo(targetTypeName).some((candidate) => qualifiedTypeName(candidate) === candidateTypeName);
   };
 
+  const linkTargetNames = (targetType: string, moduleName: string): string[] =>
+    targetType
+      .split("|")
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0)
+      .map((entry) => normalizeTypeName(entry, moduleName));
+
   let nextPathOrdinal = 0;
   const createPathId = (parentPathId?: string): string => {
     const current = `p${nextPathOrdinal}`;
@@ -767,8 +774,9 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         : [{ name: candidateQualifiedName, table: tableNameForType(candidateQualifiedName) }];
 
       for (const link of collectLinks(candidate, true)) {
-        const linkTarget = normalizeTypeName(link.targetType, candidate.module ?? "default");
-        if (link.name !== linkName || linkTarget !== targetTypeQualifiedName) {
+        const targets = linkTargetNames(link.targetType, candidate.module ?? "default");
+        const matchesTarget = targets.some((target) => isAssignableTo(targetTypeQualifiedName, target));
+        if (link.name !== linkName || !matchesTarget) {
           continue;
         }
 
@@ -903,16 +911,23 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         `Unknown link '${linkName}' on '${ownerQualifiedName}'`,
       );
 
-      const targetType = normalizeTypeName(link.targetType, ownerScopeModule);
-      const targetTables = schema
-        .listConcreteTypesAssignableTo(targetType)
-        .map((candidate) => {
-          const name = qualifiedTypeName(candidate);
-          return {
-            name,
-            table: tableNameForType(name),
-          };
-        })
+      const targetTypeNames = linkTargetNames(link.targetType, ownerScopeModule);
+      const targetType = targetTypeNames[0] ?? normalizeTypeName(link.targetType, ownerScopeModule);
+      const targetTableEntries = targetTypeNames.flatMap((targetTypeName) => {
+        const assignable = schema.listConcreteTypesAssignableTo(targetTypeName);
+        if (assignable.length > 0) {
+          return assignable.map((candidate) => {
+            const name = qualifiedTypeName(candidate);
+            return {
+              name,
+              table: tableNameForType(name),
+            };
+          });
+        }
+
+        return [{ name: targetTypeName, table: tableNameForType(targetTypeName) }];
+      });
+      const targetTables = [...new Map(targetTableEntries.map((entry) => [entry.name, entry] as const)).values()]
         .sort((a, b) => a.name.localeCompare(b.name));
 
       const usesLinkTable = Boolean(link.multi) || (link.properties?.length ?? 0) > 0;
@@ -1527,7 +1542,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         ? sourceTables.filter((source) => source.name === resolvedFilter.value)
         : sourceTables;
 
-    const resolvedOrderBy = clauses.orderBy
+    let resolvedOrderBy = clauses.orderBy
       ? {
           value: clauses.orderBy.field.startsWith("@")
             ? clauses.orderBy.field.slice(1)
@@ -1537,7 +1552,20 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       : undefined;
 
     if (resolvedOrderBy && !clauses.orderBy!.field.startsWith("@")) {
-      ensureField(resolvedOrderBy.value);
+      const computedTypeNameAlias = shapeElements.find(
+        (element) =>
+          element.name === resolvedOrderBy!.value
+          && element.kind === "computed"
+          && element.expr.kind === "type_name",
+      );
+      if (computedTypeNameAlias) {
+        resolvedOrderBy = {
+          ...resolvedOrderBy,
+          value: "__source_type",
+        };
+      } else {
+        ensureField(resolvedOrderBy.value);
+      }
     }
 
     if (clauses.limit !== undefined && clauses.limit < 0) {

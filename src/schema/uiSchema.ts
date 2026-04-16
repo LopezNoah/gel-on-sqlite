@@ -15,6 +15,8 @@ import { scalarTypeDeclarationToTypeDef } from "./scalar.js";
 const cloneConstraint = (constraint: ConstraintDef): ConstraintDef => ({
   name: constraint.name,
   annotations: constraint.annotations.map((annotation) => ({ ...annotation })),
+  delegated: constraint.delegated,
+  params: constraint.params ? constraint.params.map((param) => ({ ...param })) : undefined,
 });
 
 const cloneConstraints = (constraints: ConstraintDef[]): ConstraintDef[] => constraints.map(cloneConstraint);
@@ -39,6 +41,7 @@ export const schemaSnapshotFromDeclarative = (schema: DeclarativeSchema): Schema
     [...typeDefs, ...scalarTypeDefs],
     functionDefsFromDeclarative(schema),
     aliasDefsFromDeclarative(schema),
+    schema.scalarTypes ?? [],
   );
 };
 
@@ -75,7 +78,9 @@ export const aliasDefsFromDeclarative = (schema: DeclarativeSchema): AliasDef[] 
 };
 
 export const scalarTypeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] => {
-  return (schema.scalarTypes ?? []).map(scalarTypeDeclarationToTypeDef);
+  return (schema.scalarTypes ?? [])
+    .filter((scalarType) => (scalarType.enumValues ?? []).length > 0)
+    .map(scalarTypeDeclarationToTypeDef);
 };
 
 export const functionDefsFromDeclarative = (schema: DeclarativeSchema): FunctionDef[] => {
@@ -242,8 +247,9 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
                 .map((constraint) => ({
                   name: constraint.name,
                   annotations: mergeConstraintAnnotations(constraint.name, constraint.annotations),
+                  delegated: constraint.delegated,
+                  params: constraint.params ? constraint.params.map((param) => ({ ...param })) : undefined,
                 }))
-                .filter((constraint) => constraint.annotations.length > 0)
             : [];
 
         fields.push({
@@ -251,10 +257,13 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
           type: member.scalar,
           required: member.required,
           hasDefault: member.hasDefault,
+          defaultExpr: member.defaultExpr ? { ...member.defaultExpr, ...(member.defaultExpr.kind === "function_call" ? { args: [...member.defaultExpr.args] } : {}) } : undefined,
+          readonly: member.readonly,
           multi: member.multi,
           collection: member.collection,
           annotations: (member.annotations ?? []).length ? [...member.annotations] : undefined,
           constraints: resolvedConstraints,
+          targetTypeName: member.targetTypeName,
           enumValues: member.enumValues,
           enumTypeName: member.enumTypeName,
         });
@@ -378,12 +387,15 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
         targetType: normalizeTypeName(member.target, typeDecl.module),
         overloaded: member.overloaded,
         multi: member.multi,
+        readonly: member.readonly,
+        onTargetDelete: member.onTargetDelete,
         properties: member.properties.length
           ? member.properties.map((property) => ({
               name: property.name,
               type: property.scalar,
               required: property.required,
               hasDefault: property.hasDefault,
+              readonly: property.readonly,
               annotations: property.annotations.length ? [...property.annotations] : undefined,
             }))
           : undefined,
@@ -408,6 +420,7 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
       abstract: typeDecl.abstract,
       extends: (typeDecl.extends ?? []).length ? [...typeDecl.extends] : undefined,
       annotations: resolvedTypeAnnotations.length ? resolvedTypeAnnotations : undefined,
+      indexes: (typeDecl.indexes ?? []).length ? (typeDecl.indexes ?? []).map((index) => ({ ...index })) : undefined,
       fields,
       links: links.length ? links : undefined,
       computeds: computeds.length ? computeds : undefined,
@@ -485,6 +498,8 @@ export const declarativeSchemaFromTypeDefs = (types: TypeDef[], functions: Funct
                 target: normalizeTypeName(link.targetType, moduleName),
                 required: Boolean(idField?.required),
                 hasDefault: Boolean(idField?.hasDefault),
+                readonly: Boolean(link.readonly),
+                onTargetDelete: link.onTargetDelete,
                 multi: Boolean(link.multi),
                 overloaded: Boolean(link.overloaded),
                 annotations: [...(link.annotations ?? [])],
@@ -493,6 +508,7 @@ export const declarativeSchemaFromTypeDefs = (types: TypeDef[], functions: Funct
                   scalar: property.type,
                   required: Boolean(property.required),
                   collection: property.collection,
+                  readonly: Boolean(property.readonly),
                   annotations: [...(property.annotations ?? [])],
                 })),
               };
@@ -515,9 +531,16 @@ export const declarativeSchemaFromTypeDefs = (types: TypeDef[], functions: Funct
                 scalar: field.type,
                 required: Boolean(field.required),
                 hasDefault: Boolean(field.hasDefault),
+                defaultExpr: field.defaultExpr
+                  ? field.defaultExpr.kind === "function_call"
+                    ? { kind: "function_call", name: field.defaultExpr.name, args: [...field.defaultExpr.args] }
+                    : { kind: "literal", value: field.defaultExpr.value }
+                  : undefined,
+                readonly: Boolean(field.readonly),
                 multi: Boolean(field.multi),
                 overloaded: false,
                 annotations: [...(field.annotations ?? [])],
+                targetTypeName: field.targetTypeName,
                 constraints: fieldConstraints,
                 rewrite: rewrite
                   ? {
@@ -568,6 +591,7 @@ export const declarativeSchemaFromTypeDefs = (types: TypeDef[], functions: Funct
               abstract: Boolean(typeDef.abstract),
               extends: [...(typeDef.extends ?? [])],
               annotations: [...(typeDef.annotations ?? [])],
+              indexes: [...(typeDef.indexes ?? [])],
               members: members.sort((a, b) => a.name.localeCompare(b.name)),
               triggers: [...(typeDef.triggers ?? [])],
               accessPolicies: [...(typeDef.accessPolicies ?? [])],
@@ -736,6 +760,10 @@ export const renderDeclarativeSchema = (schema: DeclarativeSchema): string => {
           lines.push("      };");
         }
         lines.push("    };");
+      }
+
+      for (const index of typeDecl.indexes ?? []) {
+        lines.push(`    index on (${index.expr});`);
       }
 
       for (const trigger of typeDecl.triggers) {
@@ -988,6 +1016,13 @@ const renderComputedExpr = (expr: Extract<TypeMember, { kind: "computed" }>['exp
 };
 
 const normalizeTypeName = (name: string, moduleName: string): string => {
+  if (name.includes("|")) {
+    return name
+      .split("|")
+      .map((part) => normalizeTypeName(part.trim(), moduleName))
+      .join("|");
+  }
+
   if (name.includes("::")) {
     return name;
   }
@@ -995,6 +1030,13 @@ const normalizeTypeName = (name: string, moduleName: string): string => {
 };
 
 const shortTypeName = (name: string, moduleName: string): string => {
+  if (name.includes("|")) {
+    return name
+      .split("|")
+      .map((part) => shortTypeName(part.trim(), moduleName))
+      .join(" | ");
+  }
+
   const [targetModule, targetName] = name.includes("::") ? name.split("::") : [moduleName, name];
   if (targetModule === moduleName) {
     return targetName;

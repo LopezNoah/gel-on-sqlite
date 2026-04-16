@@ -1,4 +1,4 @@
-import type { ScalarType, TypeDef } from "../types.js";
+import type { AnnotationDef, ConstraintDef, ScalarType, TypeDef } from "../types.js";
 import * as errors from "./errors.js"; // Assuming errors.ts is in the same directory
 
 const BUILTIN_SCALARS: ScalarType[] = [
@@ -47,7 +47,10 @@ export const scalarToSqlType = (scalar: ScalarType): string => SQL_TYPE_MAP[scal
 export interface ScalarTypeDeclaration {
   name: string;
   module: string;
-  enumValues: string[];
+  enumValues?: string[];
+  baseTypeName?: string;
+  constraints?: ConstraintDef[];
+  annotations?: AnnotationDef[];
 }
 
 export interface ScalarResolution {
@@ -220,7 +223,7 @@ export const scalarTypeDeclarationToTypeDef = (
     {
       name: "__enum__",
       type: "str",
-      enumValues: [...decl.enumValues],
+      enumValues: [...(decl.enumValues ?? [])],
     },
   ],
 });
