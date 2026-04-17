@@ -91,7 +91,7 @@ export interface SchemaLink extends LinkDef {
   pureComputable?: boolean;
   fromAlias?: boolean;
   owned?: boolean;
-  onTargetDelete?: LinkTargetDeleteAction;
+  onTargetDelete?: LinkDef["onTargetDelete"];
   onSourceDelete?: LinkSourceDeleteAction;
   targetDescriptor?: LinkTargetDescriptor;
   pointers?: LinkPropertyDescriptor[];
@@ -196,7 +196,7 @@ export const validateLink = (link: SchemaLink): void => {
     );
   }
 
-  if (link.required && link.onTargetDelete === LinkTargetDeleteAction.DeferredRestrict) {
+  if (link.required && link.onTargetDelete === "deferred_restrict") {
     throw new errors.InvalidLinkTargetError("required links may not use `on target delete deferred restrict`");
   }
 };
@@ -636,9 +636,17 @@ export const applyPolicyCommand = (
       },
 ): SchemaLink => {
   if (command.kind === "set_target_delete_policy") {
+    const mappedValue: LinkDef["onTargetDelete"] =
+      command.value === LinkTargetDeleteAction.Restrict
+        ? "restrict"
+        : command.value === LinkTargetDeleteAction.DeleteSource
+          ? "delete_source"
+          : command.value === LinkTargetDeleteAction.Allow
+            ? "allow"
+            : "deferred_restrict";
     return {
       ...link,
-      onTargetDelete: command.value,
+      onTargetDelete: mappedValue,
     };
   }
 

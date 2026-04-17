@@ -597,8 +597,13 @@ const shapeRequiresFallbackLowering = (shape: SelectShapeElementIR[], target: Ru
       }
     }
 
-    if (element.kind === "link" && shapeRequiresFallbackLowering(element.shape, target)) {
-      return true;
+    if (element.kind === "link") {
+      if ((element.relation.targetTables?.length ?? 0) > 1) {
+        return true;
+      }
+      if (shapeRequiresFallbackLowering(element.shape, target)) {
+        return true;
+      }
     }
   }
 

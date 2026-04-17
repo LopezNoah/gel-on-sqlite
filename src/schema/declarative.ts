@@ -3150,6 +3150,14 @@ class Parser {
       return name;
     }
 
+    if ([
+      "exclusive",
+      "max_len_value",
+      "min_len_value",
+    ].includes(name)) {
+      return `std::${name}`;
+    }
+
     return `${moduleName}::${name}`;
   }
 

@@ -1178,6 +1178,8 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
 
           if (relation.storage === "inline") {
             selectedColumns.add(requireValue(relation.inlineColumn, `Missing inline storage metadata for '${computed.expr.link}'`));
+          } else {
+            selectedColumns.add("id");
           }
 
           shapeElements.push({
@@ -1486,6 +1488,8 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
 
       if (relation.storage === "inline") {
         selectedColumns.add(requireValue(relation.inlineColumn, `Missing inline storage metadata for '${resolvedLinkName}'`));
+      } else {
+        selectedColumns.add("id");
       }
 
       shapeElements.push({
@@ -1552,19 +1556,25 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       : undefined;
 
     if (resolvedOrderBy && !clauses.orderBy!.field.startsWith("@")) {
-      const computedTypeNameAlias = shapeElements.find(
-        (element) =>
-          element.name === resolvedOrderBy!.value
-          && element.kind === "computed"
-          && element.expr.kind === "type_name",
-      );
-      if (computedTypeNameAlias) {
-        resolvedOrderBy = {
-          ...resolvedOrderBy,
-          value: "__source_type",
-        };
-      } else {
-        ensureField(resolvedOrderBy.value);
+      if (resolvedOrderBy.value.includes(".")) {
+        resolvedOrderBy = undefined;
+      }
+
+      if (resolvedOrderBy) {
+        const computedTypeNameAlias = shapeElements.find(
+          (element) =>
+            element.name === resolvedOrderBy!.value
+            && element.kind === "computed"
+            && element.expr.kind === "type_name",
+        );
+        if (computedTypeNameAlias) {
+          resolvedOrderBy = {
+            ...resolvedOrderBy,
+            value: "__source_type",
+          };
+        } else {
+          ensureField(resolvedOrderBy.value);
+        }
       }
     }
 
