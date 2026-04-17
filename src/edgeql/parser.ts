@@ -1682,17 +1682,17 @@ class Parser {
       this.consume();
     }
 
-    const first = this.expect("identifier", `Expected field name in ${context}`).lexeme;
-    if (this.peek().kind === "dot") {
+    const parts = [this.expect("identifier", `Expected field name in ${context}`).lexeme];
+    while (this.peek().kind === "dot") {
       this.consume();
-      const second = this.expect("identifier", `Expected field name after qualifier in ${context}`).lexeme;
-      if (first === "__type__" && second === "name") {
-        return "__type__.name";
-      }
-      return second;
+      parts.push(this.expect("identifier", `Expected field name after qualifier in ${context}`).lexeme);
     }
 
-    return first;
+    if (parts.length === 2 && parts[0] === "__type__" && parts[1] === "name") {
+      return "__type__.name";
+    }
+
+    return parts.join(".");
   }
 
   private readFilterValue(): ScalarValue | { kind: "binding_ref"; name: string } | { kind: "field_ref"; field: string } {

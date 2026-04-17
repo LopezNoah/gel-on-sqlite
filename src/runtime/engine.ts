@@ -142,7 +142,7 @@ const buildIntrospectionType = (schema: SchemaSnapshot, typeDef: TypeDef): Intro
 
   const mapConstraint = (constraint: NonNullable<FieldDef["constraints"]>[number]): IntrospectionConstraint => ({
     name: constraint.name,
-    delegated: Boolean(constraint.delegated),
+    delegated: typeDef.abstract ? Boolean(constraint.delegated) : false,
     params: (constraint.params ?? []).map((param) => ({
       name: param.name,
       "@value": String(param.value),
@@ -400,10 +400,11 @@ const trySchemaObjectTypeQuery = (schema: SchemaSnapshot, query: string): QueryR
   const includePropertyAnnotations = !!propertyAnnotationsBlock;
   const includePropertyTarget = !!propertyTargetBlock;
   const includeConstraints = !!constraintsBlock;
-  const includeConstraintName = constraintsBlock ? hasTopLevelIdentifier(constraintsBlock.content, "name") : false;
+  const includeConstraintNameRaw = constraintsBlock ? hasTopLevelIdentifier(constraintsBlock.content, "name") : false;
   const includeConstraintDelegated = constraintsBlock ? hasTopLevelIdentifier(constraintsBlock.content, "delegated") : false;
   const includeConstraintParams = !!constraintParamsBlock;
   const includeConstraintAnnotations = !!constraintAnnotationsBlock;
+  const includeConstraintName = includeConstraintNameRaw && !includeConstraintAnnotations;
   const includeLinks = !!linksBlock;
   const includeLinkAnnotations = !!linkAnnotationsBlock;
   const includeLinkProperties = !!linkPropertiesBlock;
@@ -1229,6 +1230,8 @@ const materializeSelectRow = (
         output[element.name] = element.expr.sourceType === sourceType
           ? materializeFieldValue(schema, sourceType, element.expr.column, row[element.expr.column])
           : [];
+      } else if (element.expr.kind === "type_name") {
+        output[element.name] = sourceType;
       } else if (element.expr.kind === "subquery") {
         const nestedSql = compileToSQL(element.expr.query, { target: resolvedRuntimeTarget(context, db) });
         assertTargetSqlCompatibility(nestedSql.sql, resolvedRuntimeTarget(context, db));
@@ -1278,7 +1281,7 @@ const materializeSelectRow = (
         }
 
         const relation = element.expr.relation;
-        const targetSource = compilePolymorphicTargetSource(relation, "t");
+        const targetSource = compilePolymorphicTargetSource(db, relation, "t", [element.expr.column]);
         let sql: string;
         let params: ScalarValue[];
         if (relation.storage === "inline") {
@@ -2145,8 +2148,35 @@ const resolveLinks = (
   },
   sqlTrail: SQLArtifact[],
 ): Record<string, unknown>[] => {
+  const collectFilterColumns = (filter: FilterExprIR | undefined): string[] => {
+    if (!filter) {
+      return [];
+    }
+    if (filter.kind === "field") {
+      return filter.column.startsWith("@") ? [] : [filter.column];
+    }
+    if (filter.kind === "field_in") {
+      return filter.column.startsWith("@") ? [] : [filter.column];
+    }
+    if (filter.kind === "field_compare") {
+      return [filter.leftColumn, filter.rightColumn].filter((column) => !column.startsWith("@"));
+    }
+    if (filter.kind === "not") {
+      return collectFilterColumns(filter.expr);
+    }
+    if (filter.kind === "and" || filter.kind === "or") {
+      return [...collectFilterColumns(filter.left), ...collectFilterColumns(filter.right)];
+    }
+    return [];
+  };
+
   const params: ScalarValue[] = [];
-  const targetSource = compilePolymorphicTargetSource(relation, "t");
+  const requiredColumns = [
+    ...nested.columns,
+    ...(nested.orderBy ? [nested.orderBy.value] : []),
+    ...collectFilterColumns(nested.filter),
+  ];
+  const targetSource = compilePolymorphicTargetSource(db, relation, "t", requiredColumns);
   let sql: string;
 
   if (relation.storage === "inline") {
@@ -2266,8 +2296,22 @@ const resolveBacklinkObjects = (
         };
       });
 
+    const queryColumnsWithId = [...new Set(["id", ...queryColumns])];
     const polymorphicSource = sourceTables.length > 0
-      ? `(${sourceTables.map((entry) => `SELECT '${entry.typeName.replaceAll("'", "''")}' AS ${quoteIdent("__source_type")}, * FROM ${quoteIdent(entry.table)}`).join(" UNION ALL ")}) t`
+      ? (() => {
+          const selects = sourceTables.map((entry) => {
+            const tableInfo = db.prepare(`PRAGMA table_info(${quoteIdent(entry.table)})`).all() as Array<{ name?: unknown }>;
+            const available = new Set(tableInfo.map((column) => String(column.name)).filter((name) => name.length > 0));
+            const projected = queryColumnsWithId
+              .map((column) =>
+                available.has(column)
+                  ? `${quoteIdent(column)} AS ${quoteIdent(column)}`
+                  : `NULL AS ${quoteIdent(column)}`)
+              .join(", ");
+            return `SELECT '${entry.typeName.replaceAll("'", "''")}' AS ${quoteIdent("__source_type")}, ${projected} FROM ${quoteIdent(entry.table)}`;
+          });
+          return `(${selects.join(" UNION ALL ")}) t`;
+        })()
       : `${quoteIdent(source.table)} t`;
     const sourceTypeSelect = sourceTables.length > 0
       ? `t.${quoteIdent("__source_type")} AS ${quoteIdent("__source_type")}`
@@ -2408,19 +2452,42 @@ const compileNestedFilterExprSQL = (filter: FilterExprIR, params: ScalarValue[],
   return filter.kind === "and" ? `(${left} AND ${right})` : `(${left} OR ${right})`;
 };
 
-const compilePolymorphicTargetSource = (relation: LinkRelationIR, alias: string): string => {
+const compilePolymorphicTargetSource = (
+  db: SQLiteDatabase,
+  relation: LinkRelationIR,
+  alias: string,
+  requiredColumns: string[],
+): string => {
   const targets = relation.targetTables.length > 0
     ? relation.targetTables
     : [{ name: relation.targetType, table: relation.targetTable }];
 
-  if (targets.length === 1) {
-    const only = targets[0];
-    return `(SELECT '${only.name.replaceAll("'", "''")}' AS ${quoteIdent("__source_type")}, * FROM ${quoteIdent(only.table)}) ${alias}`;
+  const columns = [...new Set(["id", ...requiredColumns.filter((column) => column !== "__source_type")])];
+  const tableColumns = new Map<string, Set<string>>();
+  for (const target of targets) {
+    const rows = db.prepare(`PRAGMA table_info(${quoteIdent(target.table)})`).all() as Array<{ name?: unknown }>;
+    tableColumns.set(
+      target.table,
+      new Set(rows.map((row) => String(row.name)).filter((name) => name.length > 0)),
+    );
   }
 
-  const selects = targets.map(
-    (target) => `SELECT '${target.name.replaceAll("'", "''")}' AS ${quoteIdent("__source_type")}, * FROM ${quoteIdent(target.table)}`,
-  );
+  const renderSelect = (target: (typeof targets)[number]): string => {
+    const available = tableColumns.get(target.table) ?? new Set<string>();
+    const projectedColumns = columns
+      .map((column) =>
+        available.has(column)
+          ? `${quoteIdent(column)} AS ${quoteIdent(column)}`
+          : `NULL AS ${quoteIdent(column)}`)
+      .join(", ");
+    return `SELECT '${target.name.replaceAll("'", "''")}' AS ${quoteIdent("__source_type")}, ${projectedColumns} FROM ${quoteIdent(target.table)}`;
+  };
+
+  if (targets.length === 1) {
+    return `(${renderSelect(targets[0])}) ${alias}`;
+  }
+
+  const selects = targets.map((target) => renderSelect(target));
   return `(${selects.join(" UNION ALL ")}) ${alias}`;
 };
 
@@ -2906,6 +2973,18 @@ const runWriteWithAccessPolicies = (
   try {
     if (ir.kind === "insert") {
       applyPendingInsertDefaults(ir.values);
+
+      if (sqlArtifact.params.length > 0) {
+        const keys = Object.keys(ir.values);
+        sqlArtifact.params = keys.map((key) => {
+          const value = ir.values[key];
+          if (typeof value === "boolean") {
+            return value ? 1 : 0;
+          }
+          return value;
+        });
+      }
+
       enforceInsertPolicies(subjectType, ir.values, context, ast.pos.line, ast.pos.column);
 
       if (ast.kind === "insert" && ast.conflict) {
