@@ -49,6 +49,7 @@ export const aliasDefsFromDeclarative = (schema: DeclarativeSchema): AliasDef[] 
   return (schema.aliases ?? []).map((alias) => ({
     module: alias.module,
     name: alias.name,
+    exprText: alias.exprText,
     values: alias.values ? [...alias.values] : undefined,
     sourceType: alias.sourceType,
     projections: alias.projections
@@ -739,11 +740,11 @@ export const renderDeclarativeSchema = (schema: DeclarativeSchema): string => {
         }
 
         if (member.properties.length === 0 && (member.annotations ?? []).length === 0) {
-          lines.push(`    ${prefix}${member.name} -> ${shortTypeName(member.target, moduleName)};`);
+          lines.push(`    ${prefix}${member.name}: ${shortTypeName(member.target, moduleName)};`);
           continue;
         }
 
-        lines.push(`    ${prefix}${member.name} -> ${shortTypeName(member.target, moduleName)} {`);
+        lines.push(`    ${prefix}${member.name}: ${shortTypeName(member.target, moduleName)} {`);
         for (const annotation of member.annotations ?? []) {
           lines.push(`      annotation ${shortTypeName(annotation.name, moduleName)} := ${quoteString(annotation.value)};`);
         }

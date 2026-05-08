@@ -14,6 +14,12 @@ export type FilterTarget =
       kind: "backlink";
       link: string;
       sourceType?: string;
+    }
+  | {
+      kind: "backlink_property";
+      link: string;
+      sourceType?: string;
+      property: string;
     };
 
 export type FilterValue =
@@ -25,6 +31,12 @@ export type FilterValue =
   | {
       kind: "field_ref";
       field: string;
+    }
+  | {
+      kind: "backlink_property_ref";
+      link: string;
+      sourceType?: string;
+      property: string;
     }
   | SetLiteralValue;
 
@@ -52,6 +64,12 @@ export type FilterExpr =
         | {
             kind: "name";
             name: string;
+          }
+        | {
+            kind: "backlink_property_ref";
+            link: string;
+            sourceType?: string;
+            property: string;
           };
     }
   | {
@@ -67,6 +85,10 @@ export type FilterExpr =
   | {
       kind: "not";
       expr: FilterExpr;
+    }
+  | {
+      kind: "free_expr";
+      expr: FreeObjectExpr;
     };
 
 export interface WithBinding {
@@ -122,6 +144,16 @@ export type WithBindingValue =
       kind: "path";
       head: string;
       tail: string;
+    }
+  | {
+      kind: "path_chain";
+      parts: string[];
+    }
+  | {
+      kind: "backlink_path";
+      head: string;
+      link: string;
+      sourceType?: string;
     };
 
 export interface WithModuleAlias {
@@ -132,6 +164,7 @@ export interface WithModuleAlias {
 export interface OrderExpr {
   field: string;
   direction: "asc" | "desc";
+  then?: OrderExpr;
 }
 
 export interface ClauseChain {
@@ -165,6 +198,11 @@ export type ComputedExpr =
       kind: "subquery";
       typeName: string;
       shape: ShapeElement[];
+      clauses: ClauseChain;
+    }
+  | {
+      kind: "select_expr";
+      expr: FreeObjectExpr;
       clauses: ClauseChain;
     }
   | {
@@ -206,6 +244,10 @@ export type FunctionCallArgExpr =
   | {
       kind: "function_call";
       call: FunctionCallExpr;
+    }
+  | {
+      kind: "expr";
+      expr: FreeObjectExpr;
     };
 
 export interface FunctionCallExpr {
@@ -228,11 +270,13 @@ export type ShapeElement =
       kind: "computed";
       name: string;
       expr: ComputedExpr;
+      multi?: boolean;
     }
   | {
       kind: "backlink";
       name: string;
       expr: BacklinkExpr;
+      shape?: ShapeElement[];
     }
   | {
       kind: "link";
@@ -268,8 +312,15 @@ export type FreeObjectExpr =
       values: FreeObjectExpr[];
     }
   | {
+      kind: "distinct";
+      expr: FreeObjectExpr;
+    }
+  | {
       kind: "binding_ref";
       name: string;
+    }
+  | {
+      kind: "current_item";
     }
   | {
       kind: "select";
@@ -297,6 +348,72 @@ export type FreeObjectExpr =
       tail: string;
     }
   | {
+      kind: "backlink_path";
+      link: string;
+      sourceType?: string;
+    }
+  | {
+      kind: "field_access";
+      expr: FreeObjectExpr;
+      field: string;
+    }
+  | {
+      kind: "shape_projection";
+      expr: FreeObjectExpr;
+      shape: ShapeElement[];
+    }
+  | {
+      kind: "index_access";
+      expr: FreeObjectExpr;
+      index: number;
+    }
+  | {
+      kind: "tuple";
+      values: FreeObjectExpr[];
+    }
+  | {
+      kind: "exists";
+      expr: FreeObjectExpr;
+    }
+  | {
+      kind: "compare";
+      op: "=" | "!=" | ">" | "<";
+      left: FreeObjectExpr;
+      right: FreeObjectExpr;
+    }
+  | {
+      kind: "and";
+      left: FreeObjectExpr;
+      right: FreeObjectExpr;
+    }
+  | {
+      kind: "or";
+      left: FreeObjectExpr;
+      right: FreeObjectExpr;
+    }
+  | {
+      kind: "not";
+      expr: FreeObjectExpr;
+    }
+  | {
+      kind: "math";
+      op: "+";
+      left: FreeObjectExpr;
+      right: FreeObjectExpr;
+    }
+  | {
+      kind: "if_else";
+      thenExpr: FreeObjectExpr;
+      condition: FreeObjectExpr;
+      elseExpr: FreeObjectExpr;
+    }
+  | {
+      kind: "for_expr";
+      variable: string;
+      iterator: FreeObjectExpr;
+      body: FreeObjectExpr;
+    }
+  | {
       kind: "concat";
       parts: FreeObjectExpr[];
     }
@@ -313,6 +430,8 @@ export type FreeObjectExpr =
         expr: FreeObjectExpr;
         direction: "asc" | "desc";
       };
+      limit?: number;
+      offset?: number;
     };
 
 export interface SelectFreeStatement {
@@ -425,7 +544,7 @@ export interface ForStatement {
   withModuleAliases?: WithModuleAlias[];
   variable: string;
   iteratorExpr: FreeObjectExpr;
-  body: InsertStatement | SelectStatement;
+  body: InsertStatement | SelectStatement | SelectExprStatement | SelectFreeStatement;
   pos: SourcePos;
 }
 

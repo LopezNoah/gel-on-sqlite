@@ -1,5 +1,5 @@
 import { AppError } from "../errors.js";
-import type { FilterExprIR, IRStatement, SelectIR, SelectShapeElementIR } from "../ir/model.js";
+import type { FilterExprIR, IRStatement, LinkRelationIR, SelectIR, SelectShapeElementIR } from "../ir/model.js";
 import { canLowerStdlibFunctionToSql, type RuntimeTarget } from "../runtime/target.js";
 import type { ScalarValue } from "../types.js";
 
@@ -186,16 +186,26 @@ const compileLinkArrayExpr = (
     junctionAlias,
   );
 
+  const linkPropertyColumns = new Set(element.relation.propertyColumns ?? []);
+  const orderByTargetColumns = element.orderBy && !linkPropertyColumns.has(element.orderBy.value)
+    ? [element.orderBy.value]
+    : [];
+  const requiredTargetColumns = [
+    ...element.columns,
+    ...orderByTargetColumns,
+    ...collectFieldFilterColumns(element.filter).filter((column) => !column.startsWith("@")),
+  ];
+
   const whereClauses: string[] = [];
-  let fromClause = `${compilePolymorphicTargetSource(element.relation, targetAlias)}`;
+  let fromClause = `${compilePolymorphicTargetSource(element.relation, targetAlias, requiredTargetColumns)}`;
 
   if (element.relation.storage === "inline") {
-    fromClause = `${compilePolymorphicTargetSource(element.relation, targetAlias)}`;
+    fromClause = `${compilePolymorphicTargetSource(element.relation, targetAlias, requiredTargetColumns)}`;
     whereClauses.push(
       `${targetAlias}.${quoteIdent("id")} = ${sourceAlias}.${quoteIdent(requiredInlineColumn(element.relation.inlineColumn))}`,
     );
   } else {
-    fromClause = `${compilePolymorphicTargetSource(element.relation, targetAlias)} JOIN ${quoteIdent(requiredLinkTable(element.relation.linkTable))} ${junctionAlias} ON ${junctionAlias}.${quoteIdent("target")} = ${targetAlias}.${quoteIdent("id")}`;
+    fromClause = `${compilePolymorphicTargetSource(element.relation, targetAlias, requiredTargetColumns)} JOIN ${quoteIdent(requiredLinkTable(element.relation.linkTable))} ${junctionAlias} ON ${junctionAlias}.${quoteIdent("target")} = ${targetAlias}.${quoteIdent("id")}`;
     whereClauses.push(`${junctionAlias}.${quoteIdent("source")} = ${sourceAlias}.${quoteIdent("id")}`);
   }
 
@@ -209,7 +219,6 @@ const compileLinkArrayExpr = (
   }
 
   if (element.orderBy) {
-    const linkPropertyColumns = new Set(element.relation.propertyColumns ?? []);
     const orderAlias = element.relation.storage === "table" && linkPropertyColumns.has(element.orderBy.value)
       ? requiredAlias(junctionAlias)
       : targetAlias;
@@ -276,7 +285,7 @@ const compileShapeObjectExpr = (
 
     if (element.kind === "computed") {
       if (element.expr.kind === "field_ref") {
-        pairs.push(`${sourceAlias}.${quoteIdent(element.expr.column)}`);
+        pairs.push(filterColumnSql(element.expr.column, sourceAlias, linkPropertyAlias));
       } else if (element.expr.kind === "literal") {
         if (linkPropertyAlias && element.name.startsWith("@")) {
           pairs.push(`${linkPropertyAlias}.${quoteIdent(element.name.slice(1))}`);
@@ -290,11 +299,11 @@ const compileShapeObjectExpr = (
           `CASE WHEN ${sourceTypeExpr} = ${quoteLiteral(element.expr.sourceType)} THEN ${sourceAlias}.${quoteIdent(element.expr.column)} ELSE json('[]') END`,
         );
       } else if (element.expr.kind === "type_name") {
-        pairs.push(`json_object('name', ${sourceTypeExpr})`);
+        pairs.push(sourceTypeExpr);
       } else if (element.expr.kind === "concat") {
         const sqlParts = element.expr.parts.map((part) => {
           if (part.kind === "field_ref") {
-            return `COALESCE(${sourceAlias}.${quoteIdent(part.column)}, '')`;
+            return `COALESCE(${filterColumnSql(part.column, sourceAlias, linkPropertyAlias)}, '')`;
           }
 
           params.push(encodeParam(part.value));
@@ -365,19 +374,28 @@ const compileLinkAggregateExpr = (
 ): string => {
   const targetAlias = `a_${Math.abs(hashString(`${sourceAlias}:${expr.relation.sourceType}:${expr.relation.targetType}:${expr.column}`)).toString(16)}`;
   const relation = expr.relation;
-  let fromClause = compilePolymorphicTargetSource(relation, targetAlias);
+  const linkPropertyColumns = new Set(relation.propertyColumns ?? []);
+  const aggregateUsesLinkProperty = relation.storage === "table" && linkPropertyColumns.has(expr.column);
+  let fromClause = compilePolymorphicTargetSource(relation, targetAlias, aggregateUsesLinkProperty ? [] : [expr.column]);
   let whereClause: string;
+  let aggregateColumn = `${targetAlias}.${quoteIdent(expr.column)}`;
 
   if (relation.storage === "inline") {
     whereClause = `${targetAlias}.${quoteIdent("id")} = ${sourceAlias}.${quoteIdent(requiredInlineColumn(relation.inlineColumn))}`;
   } else {
-    const junctionAlias = `aj_${Math.abs(hashString(`${sourceAlias}:${relation.sourceType}:${relation.targetType}`)).toString(16)}`;
+    const junctionAlias = linkAggregateJunctionAlias(relation, sourceAlias);
     fromClause = `${fromClause} JOIN ${quoteIdent(requiredLinkTable(relation.linkTable))} ${junctionAlias} ON ${junctionAlias}.${quoteIdent("target")} = ${targetAlias}.${quoteIdent("id")}`;
     whereClause = `${junctionAlias}.${quoteIdent("source")} = ${sourceAlias}.${quoteIdent("id")}`;
+    if (aggregateUsesLinkProperty) {
+      aggregateColumn = `${junctionAlias}.${quoteIdent(expr.column)}`;
+    }
   }
 
-  return `COALESCE((SELECT SUM(${targetAlias}.${quoteIdent(expr.column)}) FROM ${fromClause} WHERE ${whereClause}), 0)`;
+  return `COALESCE((SELECT SUM(${aggregateColumn}) FROM ${fromClause} WHERE ${whereClause}), 0)`;
 };
+
+const linkAggregateJunctionAlias = (relation: LinkRelationIR, sourceAlias: string): string =>
+  `aj_${Math.abs(hashString(`${sourceAlias}:${relation.sourceType}:${relation.targetType}`)).toString(16)}`;
 
 const quoteIdent = (ident: string): string => `"${ident.replaceAll('"', '""')}"`;
 
@@ -540,6 +558,61 @@ const compileFilterExprSQL = (
     return compileBacklinkFilterPredicate(sourceAlias, filter, params);
   }
 
+  if (filter.kind === "link_property_exists") {
+    if (filter.relation.storage !== "table" || !filter.relation.linkTable) {
+      return "0";
+    }
+    const alias = `lp_${Math.abs(hashString(`${filter.relation.sourceType}:${filter.relation.linkTable}:${filter.property}`)).toString(16)}`;
+    return `EXISTS (SELECT 1 FROM ${quoteIdent(filter.relation.linkTable)} ${alias} WHERE ${alias}.${quoteIdent("source")} = ${sourceAlias}.${quoteIdent("id")} AND ${alias}.${quoteIdent(filter.property)} IS NOT NULL)`;
+  }
+
+  if (filter.kind === "link_property_compare_exists") {
+    if (filter.relation.storage !== "table" || !filter.relation.linkTable) {
+      return "0";
+    }
+    const relationAlias = `lp_${Math.abs(hashString(`${filter.relation.sourceType}:${filter.relation.linkTable}:${filter.property}:${filter.targetColumn}`)).toString(16)}`;
+    const clauses = (filter.relation.targetTables.length > 0 ? filter.relation.targetTables : [{ name: filter.relation.targetType, table: filter.relation.targetTable }]).map((target, index) => {
+      const targetAlias = `${relationAlias}_t${index}`;
+      const left = `${targetAlias}.${quoteIdent(filter.targetColumn)}`;
+      const right = `${relationAlias}.${quoteIdent(filter.property)}`;
+      const comparison = filter.op === "="
+        ? `${left} = ${right}`
+        : filter.op === "!="
+          ? `${left} != ${right}`
+          : filter.op === "like"
+            ? `${left} LIKE ${right}`
+            : `LOWER(${left}) LIKE LOWER(${right})`;
+      return `EXISTS (SELECT 1 FROM ${quoteIdent(filter.relation.linkTable!)} ${relationAlias} JOIN ${quoteIdent(target.table)} ${targetAlias} ON ${targetAlias}.${quoteIdent("id")} = ${relationAlias}.${quoteIdent("target")} WHERE ${relationAlias}.${quoteIdent("source")} = ${sourceAlias}.${quoteIdent("id")} AND ${comparison})`;
+    });
+    return clauses.length === 1 ? clauses[0]! : `(${clauses.join(" OR ")})`;
+  }
+
+  if (filter.kind === "backlink_property_compare" || filter.kind === "backlink_property_in") {
+    const clauses = filter.sources
+      .filter((source) => source.storage === "table" && source.linkTable)
+      .map((source, index) => {
+        const alias = `bp_${index}`;
+        const left = `${sourceAlias}.${quoteIdent(filter.column)}`;
+        const right = `${alias}.${quoteIdent(filter.property)}`;
+        const comparison = filter.kind === "backlink_property_in"
+          ? `${left} ${filter.op === "in" ? "IN" : "NOT IN"} (SELECT ${right} FROM ${quoteIdent(source.linkTable!)} ${alias} WHERE ${alias}.${quoteIdent("target")} = ${sourceAlias}.${quoteIdent("id")} AND ${right} IS NOT NULL)`
+          : `EXISTS (SELECT 1 FROM ${quoteIdent(source.linkTable!)} ${alias} WHERE ${alias}.${quoteIdent("target")} = ${sourceAlias}.${quoteIdent("id")} AND ${(
+              filter.op === "="
+                ? `${left} = ${right}`
+                : filter.op === "!="
+                  ? `${left} != ${right}`
+                  : filter.op === "like"
+                    ? `${left} LIKE ${right}`
+                    : `LOWER(${left}) LIKE LOWER(${right})`
+            )})`;
+        return comparison;
+      });
+    if (clauses.length === 0) {
+      return filter.kind === "backlink_property_in" && filter.op === "not_in" ? "1" : "0";
+    }
+    return filter.kind === "backlink_property_in" && filter.op === "not_in" ? `(${clauses.join(" AND ")})` : `(${clauses.join(" OR ")})`;
+  }
+
   if (filter.kind === "not") {
     return `(NOT ${compileFilterExprSQL(filter.expr, sourceAlias, params, linkPropertyAlias)})`;
   }
@@ -578,6 +651,18 @@ const collectFieldFilterColumns = (filter: FilterExprIR | undefined): string[] =
     return [];
   }
 
+  if (filter.kind === "link_property_exists") {
+    return [];
+  }
+
+  if (filter.kind === "link_property_compare_exists") {
+    return [];
+  }
+
+  if (filter.kind === "backlink_property_compare" || filter.kind === "backlink_property_in") {
+    return [filter.column];
+  }
+
   if (filter.kind === "not") {
     return collectFieldFilterColumns(filter.expr);
   }
@@ -598,7 +683,7 @@ const shapeRequiresFallbackLowering = (shape: SelectShapeElementIR[], target: Ru
     }
 
     if (element.kind === "link") {
-      if ((element.relation.targetTables?.length ?? 0) > 1) {
+      if (element.relation.targetType.includes("|")) {
         return true;
       }
       if (shapeRequiresFallbackLowering(element.shape, target)) {
@@ -698,6 +783,12 @@ const compileStdlibFunctionCallSQL = (
       return `CAST(${argSql[0]} AS TEXT)`;
     case "std::len":
       return `length(COALESCE(CAST(${argSql[0]} AS TEXT), ''))`;
+    case "std::count":
+      return `count(${argSql[0]})`;
+    case "std::max":
+      return `max(${argSql[0]})`;
+    case "std::min":
+      return `min(${argSql[0]})`;
     case "std::str_lower":
       return `lower(COALESCE(CAST(${argSql[0]} AS TEXT), ''))`;
     case "std::str_upper":
@@ -752,21 +843,25 @@ const normalizeDateTimeSQLInput = (dateExpr: string): string =>
 const compilePolymorphicTargetSource = (
   relation: Extract<SelectShapeElementIR, { kind: "link" }>["relation"],
   alias: string,
+  requiredColumns: string[],
 ): string => {
   const targets = relation.targetTables.length > 0
     ? relation.targetTables
     : [{ name: relation.targetType, table: relation.targetTable }];
 
+  const columns = [...new Set(["id", ...requiredColumns.filter((column) => column !== "__source_type")])];
+  const projected = columns.map((column) => `${quoteIdent(column)} AS ${quoteIdent(column)}`).join(", ");
+
   if (targets.length === 1) {
     const only = targets[0];
     return `(
-      SELECT ${quoteLiteral(only.name)} AS ${quoteIdent("__source_type")}, *
+      SELECT ${quoteLiteral(only.name)} AS ${quoteIdent("__source_type")}, ${projected}
       FROM ${quoteIdent(only.table)}
     ) ${alias}`;
   }
 
   const selects = targets.map(
-    (target) => `SELECT ${quoteLiteral(target.name)} AS ${quoteIdent("__source_type")}, * FROM ${quoteIdent(target.table)}`,
+    (target) => `SELECT ${quoteLiteral(target.name)} AS ${quoteIdent("__source_type")}, ${projected} FROM ${quoteIdent(target.table)}`,
   );
   return `(${selects.join(" UNION ALL ")}) ${alias}`;
 };

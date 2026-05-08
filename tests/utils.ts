@@ -27,15 +27,31 @@ function inferredModuleNameFromSchema(schemaName: string): string {
   if (idx < 0) {
     return "default";
   }
-  return schemaName.slice(idx + 1).toLowerCase().replace(/_/g, "::");
+  return schemaName.slice(idx + 1).toLowerCase().split("_").join("::");
 }
 
 function stripHashComments(source: string): string {
-  return source.replace(/^\s*#.*$/gm, "");
+  let output = "";
+  let inComment = false;
+  for (const ch of source) {
+    if (inComment) {
+      if (ch === "\n") {
+        inComment = false;
+        output += ch;
+      }
+      continue;
+    }
+    if (ch === "#") {
+      inComment = true;
+      continue;
+    }
+    output += ch;
+  }
+  return output;
 }
 
 function hasExplicitModuleDeclaration(source: string): boolean {
-  const withoutComments = source.replace(/^\s*#.*$/gm, "");
+  const withoutComments = stripHashComments(source);
   return withoutComments.trimStart().startsWith("module ");
 }
 
@@ -45,22 +61,6 @@ function wrapModule(moduleName: string, source: string): string {
     return cleanSource;
   }
   return `module ${moduleName} {\n${cleanSource}\n}`;
-}
-
-function qualifyUnqualifiedTypes(source: string, moduleName: string): string {
-  return source
-    .replace(/\b(INSERT|UPDATE|DELETE)\s+([A-Za-z_]\w*(?:::[A-Za-z_]\w*)?)\b/gi, (_match, keyword: string, typeName: string) => {
-      if (typeName.includes("::")) return _match;
-      return `${keyword} ${moduleName}::${typeName}`;
-    })
-    .replace(/\bSELECT\s+([A-Za-z_]\w*(?:::[A-Za-z_]\w*)?)\s*(?=[\{<\s]|$)/gi, (_match, typeName: string) => {
-      if (typeName.includes("::") || ["MODULE", "DETACHED", "DISTINCT", "count", "array_agg", "array_join", "str_lower"].includes(typeName)) return _match;
-      return `SELECT ${moduleName}::${typeName}`;
-    })
-    .replace(/\bFILTER\s+\.__type__\.name\s*=\s*'([A-Za-z_]\w*)'/gi, (_match, typeName: string) => {
-      if (typeName.includes("::")) return _match;
-      return `FILTER .__type__.name = '${moduleName}::${typeName}'`;
-    });
 }
 
 function loadSchemaSource(schemaDir: string, schemaName: string): string {
@@ -93,10 +93,12 @@ function loadSchemaSource(schemaDir: string, schemaName: string): string {
 export class QueryHarness {
   db: any;
   schema: any;
+  private readonly defaultModule: string;
 
-  private constructor(db: any, schema: any) {
+  private constructor(db: any, schema: any, defaultModule = "default") {
     this.db = db;
     this.schema = schema;
+    this.defaultModule = defaultModule;
   }
 
   /**
@@ -131,7 +133,7 @@ export class QueryHarness {
         schemaSource = loadSchemaSource(schemaDir, options.schema);
       }
 
-      const decl = parseDeclarativeSchema(schemaSource);
+      const decl = parseDeclarativeSchema(schemaSource, { parserEngine: "new_sdl", legacySyntaxCompat: true },);
       snapshot = schemaSnapshotFromDeclarative(decl);
       materializeSchema(db, snapshot);
       ensureGelSchemaTables(db);
@@ -139,31 +141,16 @@ export class QueryHarness {
       serializeSchemaToInstdata(db, snapshot);
     }
 
-    const harness = new QueryHarness(db, snapshot);
+    const fallbackModule = options.schema ? inferredModuleNameFromSchema(options.schema) : "default";
+    const harness = new QueryHarness(db, snapshot, fallbackModule);
 
     const shouldRunSetup = Boolean(options.setup)
       && (!shouldReuseExistingDb || options.runSetupOnReuse === true);
 
     if (shouldRunSetup && options.setup) {
       const p = path.join(__dirname, "schemas", `${options.setup}.edgeql`);
-      const rawSource = stripHashComments(fs.readFileSync(p, "utf-8"));
-
-      const setModuleMatch = rawSource.match(/^\s*SET\s+MODULE\s+([A-Za-z_][\w:]*);/im);
-      const fallbackModule = options.schema ? inferredModuleNameFromSchema(options.schema) : "default";
-      const currentModule = setModuleMatch ? setModuleMatch[1] : fallbackModule;
-
-      const setupSource = rawSource.replace(/^\s*SET\s+MODULE\s+[^;]+;\s*$/gim, "");
-
-      let setupQueries = setupSource
-        .split(/;\s*$/m)
-        .filter(s => s.trim().length > 0);
-
-      for (const q of setupQueries) {
-        const qualified = /^\s*WITH\b/i.test(q)
-          ? q
-          : qualifyUnqualifiedTypes(q, currentModule);
-        harness.script(qualified + ";");
-      }
+      const rawSource = fs.readFileSync(p, "utf-8");
+      harness.script(rawSource);
     }
 
     return harness;
@@ -177,7 +164,7 @@ export class QueryHarness {
    * Execute a multi-statement script (semicolon-separated)
    */
   script(s: string) {
-    return executeScript(this.db, this.schema, s);
+    return executeScript(this.db, this.schema, s, undefined, { defaultModule: this.defaultModule });
   }
 
   /**
@@ -196,6 +183,6 @@ export class QueryHarness {
    * Simulates the 'Dump/Restore' or 'Branch' behavior
    */
   clone() {
-    return new QueryHarness(this.db, this.schema);
+    return new QueryHarness(this.db, this.schema, this.defaultModule);
   }
 }

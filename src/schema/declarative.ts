@@ -25,7 +25,32 @@ import { OperatorKind, ReturnTypeModifier, type OperatorCode, type OperatorParam
 import { SchemaCardinality } from "./properties.js";
 import { ScalarRegistry } from "./scalar.js";
 import type { ScalarTypeDeclaration } from "./scalar.js";
+import { parseDeclarativeSchemaWithNewSDL, UnsupportedSDLFeatureError } from "./sdl_adapter.js";
 import { TriggerKind as SchemaTriggerKind, TriggerScope as SchemaTriggerScope } from "./triggers.js";
+
+const isWhitespace = (ch: string | undefined): boolean =>
+  ch === " " || ch === "\t" || ch === "\n" || ch === "\r" || ch === "\f" || ch === "\v";
+
+const isDigit = (ch: string | undefined): boolean =>
+  ch !== undefined && ch >= "0" && ch <= "9";
+
+const isIdentifierStart = (ch: string | undefined): boolean =>
+  ch !== undefined && ((ch >= "A" && ch <= "Z") || (ch >= "a" && ch <= "z") || ch === "_");
+
+const isIdentifierPart = (ch: string | undefined): boolean =>
+  isIdentifierStart(ch) || isDigit(ch);
+
+const isSimpleDotPath = (value: string): boolean => {
+  if (value[0] !== "." || !isIdentifierStart(value[1])) {
+    return false;
+  }
+  for (let i = 2; i < value.length; i += 1) {
+    if (!isIdentifierPart(value[i])) {
+      return false;
+    }
+  }
+  return true;
+};
 
 export interface SchemaModule {
   name: string;
@@ -159,6 +184,7 @@ export interface OperatorDeclaration {
 export interface AliasDeclaration {
   module: string;
   name: string;
+  exprText?: string;
   values?: ScalarValue[];
   sourceType?: string;
   projections?: Array<{
@@ -194,6 +220,25 @@ export interface DeclarativeSchema {
   aliases?: AliasDeclaration[];
 }
 
+export interface DeclarativeParseOptions {
+  legacySyntaxCompat?: boolean;
+  parserEngine?: DeclarativeParserEngine;
+}
+
+export type DeclarativeParserEngine = "legacy" | "new_sdl" | "auto";
+
+const DEFAULT_DECLARATIVE_PARSE_OPTIONS: Readonly<Required<DeclarativeParseOptions>> = {
+  legacySyntaxCompat: true,
+  parserEngine: "new_sdl",
+};
+
+const normalizeDeclarativeParseOptions = (
+  options: DeclarativeParseOptions,
+): Required<DeclarativeParseOptions> => ({
+  ...DEFAULT_DECLARATIVE_PARSE_OPTIONS,
+  ...options,
+});
+
 type TokenKind =
   | "word"
   | "string"
@@ -223,6 +268,11 @@ type TokenKind =
   | "pipe"
   | "eof";
 
+type ObjectTypeKind = 
+  | "abstract"
+  | "type"
+  | "extending";
+
 interface Token {
   kind: TokenKind;
   text: string;
@@ -232,13 +282,15 @@ interface Token {
 class Parser {
   private readonly tokens: Token[];
   private readonly source: string;
+  private readonly options: Required<DeclarativeParseOptions>;
   private readonly scalarRegistry = new ScalarRegistry();
   private index = 0;
   private readonly annotationRegistry = new AnnotationRegistry();
   private readonly constraintParamsByName = new Map<string, string[]>();
 
-  constructor(source: string) {
+  constructor(source: string, options: DeclarativeParseOptions = {}) {
     this.source = source;
+    this.options = normalizeDeclarativeParseOptions(options);
     this.tokens = tokenize(source);
   }
 
@@ -381,7 +433,42 @@ class Parser {
     this.expectWord("alias", "Expected 'alias' declaration");
     const name = this.expect("word", "Expected alias name").text;
 
-    if (this.match("lbrace")) {
+    if (this.peekIs("lbrace")) {
+      const exprStart = this.peek().index;
+      this.consume();
+      if (this.matchWord("using")) {
+        this.expect("lparen", "Expected '(' after alias using");
+        if (this.matchWord("select")) {
+          const sourceType = this.expect("word", "Expected source type name in alias using").text;
+          let filter: AliasDeclaration["filter"];
+          if (this.matchWord("filter")) {
+            if (this.match("dot") || (this.peekIs("word") && this.peekAt(1).kind === "dot" && (this.consume(), this.match("dot")))) {
+              const field = this.expect("word", "Expected field name in alias filter").text;
+              const opToken = this.expectOneOf(["equals", "bang_eq", "word"], "Expected alias filter operator");
+              const op = opToken.kind === "equals"
+                ? "="
+                : opToken.kind === "bang_eq"
+                  ? "!="
+                  : opToken.text.toLowerCase() === "like"
+                    ? "like"
+                    : opToken.text.toLowerCase() === "ilike"
+                      ? "ilike"
+                      : undefined;
+              if (op) {
+                const value = this.readScalarValue("Expected scalar literal value in alias filter");
+                filter = { kind: "field_predicate", field, op, value };
+              }
+            }
+          }
+          while (!this.match("rparen") && !this.peekIs("eof")) {
+            this.consume();
+          }
+          this.match("semi");
+          this.expect("rbrace", "Expected '}' after alias declaration");
+          this.expect("semi", "Expected ';' after alias declaration");
+          return { module: moduleName, name, exprText: this.source.slice(exprStart, this.peek().index).trim(), sourceType, filter };
+        }
+      }
       while (!this.match("rbrace")) {
         this.skipStatementInBlock();
       }
@@ -390,6 +477,7 @@ class Parser {
     }
 
     this.expect("assign", "Expected ':=' in alias declaration");
+    const exprStart = this.peek().index;
     if (this.peekIs("lbrace")) {
       this.expect("lbrace", "Expected '{' in alias declaration");
 
@@ -403,6 +491,7 @@ class Parser {
       return {
         module: moduleName,
         name,
+        exprText: this.source.slice(exprStart, this.peek().index).trim(),
         values,
       };
     }
@@ -413,7 +502,28 @@ class Parser {
       return {
         module: moduleName,
         name,
+        exprText: this.source.slice(exprStart, this.peek().index).trim(),
         values: [value],
+      };
+    }
+
+    if (this.peekIs("lbracket")) {
+      const start = this.peek().index;
+      let depth = 0;
+      while (!this.peekIs("eof")) {
+        const token = this.peek();
+        if (token.kind === "lbracket") depth += 1;
+        if (token.kind === "rbracket") depth -= 1;
+        this.consume();
+        if (depth === 0) break;
+      }
+      const end = this.peek().index;
+      this.expect("semi", "Expected ';' after alias declaration");
+      return {
+        module: moduleName,
+        name,
+        exprText: this.source.slice(exprStart, this.peek().index).trim(),
+        values: [JSON.parse(this.source.slice(start, end)) as ScalarValue],
       };
     }
 
@@ -438,6 +548,30 @@ class Parser {
 
           const aliasField = this.expect("word", "Expected alias field name in alias projection").text;
           this.expect("assign", "Expected ':=' in alias projection");
+
+          if (this.matchWord("exists")) {
+            if (this.match("lparen")) {
+              let depth = 1;
+              while (depth > 0 && !this.peekIs("eof")) {
+                const token = this.consume();
+                if (token.kind === "lparen") {
+                  depth += 1;
+                } else if (token.kind === "rparen") {
+                  depth -= 1;
+                }
+              }
+            }
+            if (this.peekIs("comma")) {
+              this.consume();
+            } else if (!this.peekIs("rbrace")) {
+              unsupportedTail = true;
+              while (!this.peekIs("rbrace") && !this.peekIs("eof")) {
+                this.consume();
+              }
+              break;
+            }
+            continue;
+          }
 
           if (this.peekIs("word") && this.peekAt(1).kind === "dot") {
             this.consume();
@@ -496,6 +630,16 @@ class Parser {
 
           const value = this.readScalarValue("Expected scalar literal value in alias filter");
           filter = { kind: "field_predicate", field, op, value };
+          while (this.matchWord("or")) {
+            if (this.match("dot")) {
+              this.expect("word", "Expected field name after '.' in alias filter");
+              this.expectOneOf(["equals", "bang_eq", "word"], "Expected alias filter operator");
+              this.readScalarValue("Expected scalar literal value in alias filter");
+            } else {
+              unsupportedTail = true;
+              break;
+            }
+          }
         } else if (this.peekIsScalarValue()) {
           const value = this.readScalarValue("Expected scalar literal value in alias filter");
           let op: "in" | "not_in";
@@ -580,12 +724,13 @@ class Parser {
         }
       }
       this.expect("semi", "Expected ';' after alias declaration");
-      if (unsupportedTail) {
+      if (unsupportedTail && !sourceType) {
         return undefined;
       }
       return {
         module: moduleName,
         name,
+        exprText: this.source.slice(exprStart, this.peek().index).trim(),
         sourceType,
         projections,
         filter,
@@ -593,6 +738,19 @@ class Parser {
     }
 
     if (hasParens) {
+      if (this.peekIs("word") && this.peekAt(1).kind === "lbrace") {
+        const sourceType = this.consume().text;
+        this.skipStatementInBlock();
+        this.expect("rparen", "Expected ')' after alias declaration");
+        this.match("semi");
+        return {
+          module: moduleName,
+          name,
+          exprText: this.source.slice(exprStart, this.peek().index).trim(),
+          sourceType,
+        };
+      }
+
       let depth = 1;
       while (depth > 0 && !this.peekIs("eof")) {
         const token = this.consume();
@@ -603,11 +761,31 @@ class Parser {
         }
       }
       this.match("semi");
-      return undefined;
+      return {
+        module: moduleName,
+        name,
+        exprText: this.source.slice(exprStart, this.peek().index).trim(),
+      };
+    }
+
+    if (this.peekIs("word") && this.peekAt(1).kind === "lbrace") {
+      const sourceType = this.consume().text;
+      this.skipStatementInBlock();
+      this.match("semi");
+      return {
+        module: moduleName,
+        name,
+        exprText: this.source.slice(exprStart, this.peek().index).trim(),
+        sourceType,
+      };
     }
 
     this.skipStatementInBlock();
-    return undefined;
+    return {
+      module: moduleName,
+      name,
+      exprText: this.source.slice(exprStart, this.peek().index).trim(),
+    };
   }
 
   private parseOperatorDeclaration(moduleName: string): OperatorDeclaration {
@@ -1290,7 +1468,7 @@ class Parser {
 
     this.match("semi");
     const body = this.source.slice(start.index + 1, endIndex).trim();
-    const expr = /^\.[A-Za-z_][\w]*$/.test(body) ? body : `(${body})`;
+    const expr = isSimpleDotPath(body) ? body : `(${body})`;
     return { expr };
   }
 
@@ -1483,7 +1661,7 @@ class Parser {
       });
     }
 
-    if (this.match("arrow")) {
+    if (this.matchPointerArrow()) {
       const targetToken = this.expect("word", "Expected property or link target type");
       const collection = this.consumeTypeTail(targetToken.text);
       if (memberKind === "property" || (memberKind === undefined && this.isScalarLike(targetToken.text))) {
@@ -1583,7 +1761,7 @@ class Parser {
           this.matchWord("property");
 
           const propName = this.expect("word", "Expected link property name").text;
-          if (this.match("arrow")) {
+          if (this.matchPointerArrow()) {
             const typeName = this.expect("word", "Expected link property scalar type").text;
             const linkCollection = this.consumeTypeTail(typeName);
             const { scalar: linkScalar } = this.readScalarType(moduleName, typeName);
@@ -1719,7 +1897,7 @@ class Parser {
           this.matchWord("property");
 
           const propName = this.expect("word", "Expected link property name").text;
-          if (this.match("arrow")) {
+          if (this.matchPointerArrow()) {
             const typeName = this.expect("word", "Expected link property scalar type").text;
             const linkCollection = this.consumeTypeTail(typeName);
             const { scalar: linkScalar } = this.readScalarType(moduleName, typeName);
@@ -2775,6 +2953,25 @@ class Parser {
     return `${first}_${second}`;
   }
 
+  private matchPointerArrow(): boolean {
+    if (!this.peekIs("arrow")) {
+      return false;
+    }
+
+    if (!this.options.legacySyntaxCompat) {
+      const token = this.peek();
+      throw new AppError(
+        "E_SYNTAX",
+        "Legacy pointer type separator '->' is disabled; use ':' for pointer type annotations",
+        1,
+        token.index + 1,
+      );
+    }
+
+    this.consume();
+    return true;
+  }
+
   private readScalarType(moduleName: string, name: string): { scalar: ScalarType; enumValues?: string[]; enumTypeName?: string } {
     const resolution = this.scalarRegistry.resolve(name, moduleName);
     if (resolution) {
@@ -3297,7 +3494,7 @@ const tokenize = (source: string): Token[] => {
   while (i < source.length) {
     const ch = source[i];
 
-    if (/\s/.test(ch)) {
+    if (isWhitespace(ch)) {
       i += 1;
       continue;
     }
@@ -3471,10 +3668,10 @@ const tokenize = (source: string): Token[] => {
       continue;
     }
 
-    if (/\d/.test(ch)) {
+    if (isDigit(ch)) {
       const start = i;
       i += 1;
-      while (i < source.length && /[\d.]/.test(source[i])) {
+      while (i < source.length && (isDigit(source[i]) || source[i] === ".")) {
         i += 1;
       }
 
@@ -3482,11 +3679,11 @@ const tokenize = (source: string): Token[] => {
       continue;
     }
 
-    if (ch === "@" && /[A-Za-z_]/.test(source[i + 1] ?? "")) {
+    if (ch === "@" && isIdentifierStart(source[i + 1])) {
       const start = i;
       i += 2;
       while (i < source.length) {
-        if (/[A-Za-z0-9_]/.test(source[i])) {
+        if (isIdentifierPart(source[i])) {
           i += 1;
           continue;
         }
@@ -3507,11 +3704,11 @@ const tokenize = (source: string): Token[] => {
       continue;
     }
 
-    if (/[A-Za-z_]/.test(ch)) {
+    if (isIdentifierStart(ch)) {
       const start = i;
       i += 1;
       while (i < source.length) {
-        if (/[A-Za-z0-9_]/.test(source[i])) {
+        if (isIdentifierPart(source[i])) {
           i += 1;
           continue;
         }
@@ -3539,9 +3736,56 @@ const tokenize = (source: string): Token[] => {
   return tokens;
 };
 
-export const parseDeclarativeSchema = (source: string): DeclarativeSchema => {
-  const parser = new Parser(source);
+const parseDeclarativeSchemaLegacy = (
+  source: string,
+  options: Required<DeclarativeParseOptions>,
+): DeclarativeSchema => {
+  const parser = new Parser(source, options);
   return parser.parse();
+};
+
+const asSchemaParseError = (err: unknown): AppError => {
+  if (err instanceof AppError) {
+    return err;
+  }
+
+  if (err instanceof Error) {
+    return new AppError("E_SYNTAX", err.message, 1, 1);
+  }
+
+  return new AppError("E_SYNTAX", "Unknown SDL parse error", 1, 1);
+};
+
+export const parseDeclarativeSchema = (
+  source: string,
+  options: DeclarativeParseOptions = {},
+): DeclarativeSchema => {
+  const normalized = normalizeDeclarativeParseOptions(options);
+
+  if (normalized.parserEngine === "legacy") {
+    return parseDeclarativeSchemaLegacy(source, normalized);
+  }
+
+  if (normalized.parserEngine === "new_sdl") {
+    try {
+      return parseDeclarativeSchemaWithNewSDL(source, {
+        legacySyntaxCompat: normalized.legacySyntaxCompat,
+      });
+    } catch (err) {
+      if (err instanceof UnsupportedSDLFeatureError) {
+        return parseDeclarativeSchemaLegacy(source, normalized);
+      }
+      throw asSchemaParseError(err);
+    }
+  }
+
+  try {
+    return parseDeclarativeSchemaWithNewSDL(source, {
+      legacySyntaxCompat: normalized.legacySyntaxCompat,
+    });
+  } catch {
+    return parseDeclarativeSchemaLegacy(source, normalized);
+  }
 };
 
 export const gelSchema = (strings: TemplateStringsArray, ...values: unknown[]): DeclarativeSchema => {

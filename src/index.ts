@@ -36,7 +36,7 @@ const initialSchemaSource = `module default {
 
   type Project {
     required name: str;
-    required owner -> User;
+    required owner: User;
   }
 }`;
 
