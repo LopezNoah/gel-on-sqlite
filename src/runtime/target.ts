@@ -30,6 +30,9 @@ const BASE_SQL_NATIVE_STDLIB_LOWERING = new Set<string>([
   "std::datetime_of_statement",
   "std::to_str",
   "std::len",
+  "std::count",
+  "std::max",
+  "std::min",
   "std::str_lower",
   "std::str_upper",
 ]);

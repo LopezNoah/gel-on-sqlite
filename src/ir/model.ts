@@ -41,6 +41,7 @@ export interface OverlayIR {
 export interface OrderByIR<TValue = string> {
   value: TValue;
   direction: "asc" | "desc";
+  then?: OrderByIR<TValue>;
 }
 
 export interface PageIR {
@@ -105,6 +106,7 @@ export interface BacklinkSourceIR {
   storage: "inline" | "table";
   inlineColumn?: string;
   linkTable?: string;
+  propertyColumns?: string[];
 }
 
 export interface LinkRelationIR {
@@ -160,6 +162,32 @@ export type FilterExprIR =
       sources: BacklinkSourceIR[];
       op: "=" | "!=";
       value: ScalarValue;
+    }
+  | {
+      kind: "link_property_exists";
+      relation: LinkRelationIR;
+      property: string;
+    }
+  | {
+      kind: "link_property_compare_exists";
+      relation: LinkRelationIR;
+      targetColumn: string;
+      property: string;
+      op: "=" | "!=" | "like" | "ilike";
+    }
+  | {
+      kind: "backlink_property_compare";
+      sources: BacklinkSourceIR[];
+      column: string;
+      property: string;
+      op: "=" | "!=" | "like" | "ilike";
+    }
+  | {
+      kind: "backlink_property_in";
+      sources: BacklinkSourceIR[];
+      column: string;
+      property: string;
+      op: "in" | "not_in";
     }
   | {
       kind: "and";
@@ -402,6 +430,104 @@ export type SelectExprIREntry<D extends Depth = 4> =
       field: string;
       fieldType: string;
     }
+  | {
+      kind: "current_item_field";
+      bindingName: string;
+      field: string;
+    }
+  | (D extends 0
+      ? never
+      : {
+          kind: "distinct";
+          value: SelectExprIREntry<Dec<D>>;
+        })
+  | (D extends 0
+      ? never
+      : {
+          kind: "field_access";
+          value: SelectExprIREntry<Dec<D>>;
+          field: string;
+        })
+  | (D extends 0
+      ? never
+      : {
+          kind: "shape_projection";
+          value: SelectExprIREntry<Dec<D>>;
+          fields: Array<{
+            name: string;
+            sourceField: string;
+          }>;
+        })
+  | (D extends 0
+      ? never
+      : {
+          kind: "select";
+          query: SelectIR;
+        })
+  | (D extends 0
+      ? never
+      : {
+          kind: "tuple";
+          values: SelectExprIREntry<Dec<D>>[];
+        })
+  | (D extends 0
+      ? never
+      : {
+          kind: "index_access";
+          value: SelectExprIREntry<Dec<D>>;
+          index: number;
+        })
+  | (D extends 0
+      ? never
+      : {
+          kind: "exists";
+          value: SelectExprIREntry<Dec<D>>;
+        })
+  | (D extends 0
+      ? never
+      : {
+          kind: "compare";
+          op: "=" | "!=" | ">" | "<";
+          left: SelectExprIREntry<Dec<D>>;
+          right: SelectExprIREntry<Dec<D>>;
+        })
+  | (D extends 0
+      ? never
+      : {
+          kind: "and" | "or";
+          left: SelectExprIREntry<Dec<D>>;
+          right: SelectExprIREntry<Dec<D>>;
+        })
+  | (D extends 0
+      ? never
+      : {
+          kind: "not";
+          expr: SelectExprIREntry<Dec<D>>;
+        })
+  | (D extends 0
+      ? never
+      : {
+          kind: "math";
+          op: "+";
+          left: SelectExprIREntry<Dec<D>>;
+          right: SelectExprIREntry<Dec<D>>;
+        })
+  | (D extends 0
+      ? never
+      : {
+          kind: "if_else";
+          thenExpr: SelectExprIREntry<Dec<D>>;
+          condition: SelectExprIREntry<Dec<D>>;
+          elseExpr: SelectExprIREntry<Dec<D>>;
+        })
+  | (D extends 0
+      ? never
+      : {
+          kind: "for_expr";
+          variable: string;
+          iterator: SelectExprIREntry<Dec<D>>;
+          body: SelectExprIREntry<Dec<D>>;
+        })
   | (D extends 0
       ? never
       : {
@@ -425,6 +551,8 @@ export type SelectExprIREntry<D extends Depth = 4> =
             value: SelectExprIREntry<Dec<D>>;
             direction: "asc" | "desc";
           };
+          limit?: number;
+          offset?: number;
         })
   | (D extends 0 ? never : FunctionCallIR<SelectExprIREntry<Dec<D>>>)
   | {

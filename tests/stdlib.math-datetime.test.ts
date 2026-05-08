@@ -5,6 +5,18 @@ import { executeQuery, executeQueryWithTrace } from "../src/runtime/engine.js";
 import { gelSchema } from "../src/schema/declarative.js";
 import { schemaSnapshotFromDeclarative } from "../src/schema/uiSchema.js";
 
+const toRowObject = (value: unknown): Record<string, unknown> => {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  const row: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    row[key] = entry;
+  }
+  return row;
+};
+
 describe("stdlib: math and datetime", () => {
   let runtime: SQLiteRuntime | undefined;
 
@@ -24,7 +36,7 @@ describe("stdlib: math and datetime", () => {
       "select { abs := math::abs(-1), ceil := math::ceil(1.1), floor := math::floor(-1.1), lnexp := math::exp(math::ln(100)), mean := math::mean({1, 3, 5}), stddev := math::stddev({1, 3, 5}), var := math::var({1, 3, 5}), pi := math::pi(), e := math::e(), sin0 := math::sin(0), cos0 := math::cos(0), tan0 := math::tan(0), cot45 := math::cot(0.7853981633974483) };",
     ).rows;
 
-    const row = rows?.[0] ?? {};
+    const row = toRowObject(rows?.[0]);
     expect(row.abs).toBe(1);
     expect(row.ceil).toBe(2);
     expect(row.floor).toBe(-2);
@@ -51,7 +63,7 @@ describe("stdlib: math and datetime", () => {
       "select { now := std::datetime_current(), stmt := std::datetime_of_statement(), tx := std::datetime_of_transaction(), normalized := std::to_datetime('2024-01-02T03:04:05Z'), year := std::datetime_get('2024-01-02T03:04:05Z', 'year'), month := std::datetime_get('2024-01-02T03:04:05Z', 'month'), day := std::datetime_get('2024-01-02T03:04:05Z', 'day'), truncated := std::datetime_truncate('day', '2024-01-02T03:04:05Z'), as_str := std::to_str('2024-01-02T03:04:05Z') };",
     ).rows;
 
-    const row = rows?.[0] ?? {};
+    const row = toRowObject(rows?.[0]);
     expect(typeof row.now).toBe("string");
     expect(typeof row.stmt).toBe("string");
     expect(typeof row.tx).toBe("string");
@@ -74,7 +86,7 @@ describe("stdlib: math and datetime", () => {
       "select { local_dt := cal::to_local_datetime('2024-02-03T04:05:06'), local_d := cal::to_local_date('2024-02-03'), local_t := cal::to_local_time('04:05:06'), dur := std::to_duration('PT49H125M9S'), date_year := cal::date_get('2024-02-03', 'year'), time_minute := cal::time_get('04:05:06', 'minute'), dur_hours := std::duration_get('PT49H125M9S', 'hours'), dur_trunc_hours := std::duration_truncate('hours', 'PT49H125M9S'), dur_norm_hours := cal::duration_normalize_hours('PT49H125M9S'), dur_norm_days := cal::duration_normalize_days('PT49H125M9S') };",
     ).rows;
 
-    const row = rows?.[0] ?? {};
+    const row = toRowObject(rows?.[0]);
     expect(row.local_dt).toBe("2024-02-03T04:05:06");
     expect(row.local_d).toBe("2024-02-03");
     expect(row.local_t).toBe("04:05:06");

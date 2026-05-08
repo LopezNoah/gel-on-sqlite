@@ -38,13 +38,17 @@ export type TokenKind =
   | "kw_detached"
   | "identifier"
   | "string"
+  | "bytes_string"
   | "number"
   | "lbrace"
   | "rbrace"
   | "lparen"
   | "rparen"
+  | "lbracket"
+  | "rbracket"
   | "comma"
   | "colon"
+  | "coloncolon"
   | "equals"
   | "not_equals"
   | "assign"
@@ -52,13 +56,15 @@ export type TokenKind =
   | "dot"
   | "star"
   | "lt"
+  | "lte"
   | "gt"
+  | "gte"
   | "minus"
+  | "plus"
   | "concat"
+  | "coalesce"
   | "dollar"
   | "at"
-  | "lbracket"
-  | "rbracket"
   | "eof";
 
 export interface Token {
@@ -106,6 +112,11 @@ const KEYWORDS: Record<string, TokenKind> = {
   detached: "kw_detached",
 };
 
+const isDigit = (c: string): boolean => c >= "0" && c <= "9";
+const isAlpha = (c: string): boolean =>
+  (c >= "a" && c <= "z") || (c >= "A" && c <= "Z") || c === "_";
+const isAlphaNumeric = (c: string): boolean => isAlpha(c) || isDigit(c);
+
 export const tokenize = (input: string): Token[] => {
   const tokens: Token[] = [];
 
@@ -113,229 +124,314 @@ export const tokenize = (input: string): Token[] => {
   let line = 1;
   let column = 1;
 
+  const isAtEnd = (): boolean => i >= input.length;
+
+  const peek = (): string => (isAtEnd() ? "\0" : input[i]!);
+  const peekNext = (): string => (i + 1 >= input.length ? "\0" : input[i + 1]!);
+
+  const advance = (): string => {
+    const c = input[i]!;
+    i += 1;
+
+    if (c === "\n") {
+      line += 1;
+      column = 1;
+    } else {
+      column += 1;
+    }
+
+    return c;
+  };
+
+  const match = (expected: string): boolean => {
+    if (isAtEnd()) return false;
+    if (input[i] !== expected) return false;
+    advance();
+    return true;
+  };
+
   const push = (kind: TokenKind, lexeme: string, tokenLine: number, tokenColumn: number): void => {
     tokens.push({ kind, lexeme, line: tokenLine, column: tokenColumn });
   };
 
-  while (i < input.length) {
-    const c = input[i];
+  const syntaxError = (message: string, tokenLine: number, tokenColumn: number): never => {
+    throw new AppError("E_SYNTAX", message, tokenLine, tokenColumn);
+  };
 
-    if (c === " " || c === "\t" || c === "\r") {
-      i += 1;
-      column += 1;
-      continue;
-    }
+  const skipWhitespaceAndComments = (): void => {
+    while (!isAtEnd()) {
+      const c = peek();
 
-    if (c === "\n") {
-      i += 1;
-      line += 1;
-      column = 1;
-      continue;
-    }
-
-    if (c === "#") {
-      i += 1;
-      column += 1;
-      while (i < input.length && input[i] !== "\n") {
-        i += 1;
-        column += 1;
-      }
-      continue;
-    }
-
-    const tokenLine = line;
-    const tokenColumn = column;
-
-    if (c === "!" && input[i + 1] === "=") {
-      push("not_equals", "!=", tokenLine, tokenColumn);
-      i += 2;
-      column += 2;
-      continue;
-    }
-
-    if (c === ":") {
-      if (input[i + 1] === "=") {
-        push("assign", ":=", tokenLine, tokenColumn);
-        i += 2;
-        column += 2;
+      if (c === " " || c === "\t" || c === "\r" || c === "\n") {
+        advance();
         continue;
       }
 
-      push("colon", c, tokenLine, tokenColumn);
-      i += 1;
-      column += 1;
-      continue;
-    }
-
-    if (
-      c === "{"
-      || c === "}"
-      || c === ","
-      || c === ";"
-      || c === "="
-      || c === "."
-      || c === "*"
-      || c === "<"
-      || c === ">"
-      || c === "-"
-      || c === "$"
-      || c === "@"
-      || c === "["
-      || c === "]"
-      || c === "("
-      || c === ")"
-    ) {
-      if (c === "{") {
-        push("lbrace", c, tokenLine, tokenColumn);
-      } else if (c === "}") {
-        push("rbrace", c, tokenLine, tokenColumn);
-      } else if (c === ",") {
-        push("comma", c, tokenLine, tokenColumn);
-      } else if (c === ";") {
-        push("semi", c, tokenLine, tokenColumn);
-      } else if (c === ".") {
-        push("dot", c, tokenLine, tokenColumn);
-      } else if (c === "*") {
-        push("star", c, tokenLine, tokenColumn);
-      } else if (c === "<") {
-        push("lt", c, tokenLine, tokenColumn);
-      } else if (c === ">") {
-        push("gt", c, tokenLine, tokenColumn);
-      } else if (c === "-") {
-        push("minus", c, tokenLine, tokenColumn);
-      } else if (c === "$") {
-        push("dollar", c, tokenLine, tokenColumn);
-      } else if (c === "@") {
-        push("at", c, tokenLine, tokenColumn);
-      } else if (c === "[") {
-        push("lbracket", c, tokenLine, tokenColumn);
-      } else if (c === "]") {
-        push("rbracket", c, tokenLine, tokenColumn);
-      } else if (c === "(") {
-        push("lparen", c, tokenLine, tokenColumn);
-      } else if (c === ")") {
-        push("rparen", c, tokenLine, tokenColumn);
-      } else {
-        push("equals", c, tokenLine, tokenColumn);
+      if (c === "#") {
+        while (!isAtEnd() && peek() !== "\n") {
+          advance();
+        }
+        continue;
       }
 
-      i += 1;
-      column += 1;
+      break;
+    }
+  };
+
+  const scanString = (quote: "'" | '"', tokenLine: number, tokenColumn: number, kind: "string" | "bytes_string"): void => {
+    advance(); // opening quote
+
+    let value = "";
+
+    while (!isAtEnd()) {
+      const c = peek();
+
+      if (c === "\n") {
+        syntaxError("Unterminated string literal", tokenLine, tokenColumn);
+      }
+
+      if (c === quote) {
+        advance(); // closing quote
+        push(kind, value, tokenLine, tokenColumn);
+        return;
+      }
+
+      if (c === "\\") {
+        advance(); // backslash
+        if (isAtEnd()) {
+          syntaxError("Unterminated escape sequence", tokenLine, tokenColumn);
+        }
+
+        const esc = advance();
+        switch (esc) {
+          case "n":
+            value += "\n";
+            break;
+          case "r":
+            value += "\r";
+            break;
+          case "t":
+            value += "\t";
+            break;
+          case "\\":
+            value += "\\";
+            break;
+          case "'":
+            value += "'";
+            break;
+          case '"':
+            value += '"';
+            break;
+          default:
+            syntaxError(`Unsupported escape sequence '\\${esc}'`, tokenLine, tokenColumn);
+        }
+        continue;
+      }
+
+      value += advance();
+    }
+
+    syntaxError("Unterminated string literal", tokenLine, tokenColumn);
+  };
+
+  const scanNumber = (tokenLine: number, tokenColumn: number): void => {
+    let value = "";
+
+    while (isDigit(peek())) {
+      value += advance();
+    }
+
+    if (peek() === "." && isDigit(peekNext())) {
+      value += advance(); // '.'
+      while (isDigit(peek())) {
+        value += advance();
+      }
+    }
+
+    if (peek() === "n") {
+      value += advance();
+    }
+
+    push("number", value, tokenLine, tokenColumn);
+  };
+
+  const scanIdentifierOrKeyword = (tokenLine: number, tokenColumn: number): void => {
+    let value = "";
+
+    while (isAlphaNumeric(peek())) {
+      value += advance();
+    }
+
+    const lowered = value.toLowerCase();
+    const keyword = KEYWORDS[lowered];
+
+    if (keyword) {
+      push(keyword, lowered, tokenLine, tokenColumn);
+    } else {
+      push("identifier", value, tokenLine, tokenColumn);
+    }
+  };
+
+  while (!isAtEnd()) {
+    skipWhitespaceAndComments();
+    if (isAtEnd()) break;
+
+    const tokenLine = line;
+    const tokenColumn = column;
+    const c = peek();
+
+    // Byte strings: b'...' or b"..."
+    if ((c === "b" || c === "B") && (peekNext() === "'" || peekNext() === '"')) {
+      advance(); // consume b/B
+      scanString(peek() as "'" | '"', tokenLine, tokenColumn, "bytes_string");
       continue;
     }
 
-    if (c === "+" && input[i + 1] === "+") {
+    // Strings
+    if (c === "'" || c === '"') {
+      scanString(c, tokenLine, tokenColumn, "string");
+      continue;
+    }
+
+    // Multi-character operators first
+    if (c === ":" && peekNext() === "=") {
+      advance();
+      advance();
+      push("assign", ":=", tokenLine, tokenColumn);
+      continue;
+    }
+
+    if (c === ":" && peekNext() === ":") {
+      advance();
+      advance();
+      push("coloncolon", "::", tokenLine, tokenColumn);
+      continue;
+    }
+
+    if (c === "!" && peekNext() === "=") {
+      advance();
+      advance();
+      push("not_equals", "!=", tokenLine, tokenColumn);
+      continue;
+    }
+
+    if (c === "<" && peekNext() === "=") {
+      advance();
+      advance();
+      push("lte", "<=", tokenLine, tokenColumn);
+      continue;
+    }
+
+    if (c === ">" && peekNext() === "=") {
+      advance();
+      advance();
+      push("gte", ">=", tokenLine, tokenColumn);
+      continue;
+    }
+
+    if (c === "+" && peekNext() === "+") {
+      advance();
+      advance();
       push("concat", "++", tokenLine, tokenColumn);
-      i += 2;
-      column += 2;
       continue;
     }
 
-    if (c === "\"" || c === "'") {
-      const quote = c;
-      i += 1;
-      column += 1;
-
-      let value = "";
-      while (i < input.length && input[i] !== quote) {
-        if (input[i] === "\n") {
-          throw new AppError("E_SYNTAX", "Unterminated string literal", tokenLine, tokenColumn);
-        }
-
-        value += input[i];
-        i += 1;
-        column += 1;
-      }
-
-      if (input[i] !== quote) {
-        throw new AppError("E_SYNTAX", "Unterminated string literal", tokenLine, tokenColumn);
-      }
-
-      i += 1;
-      column += 1;
-      push("string", value, tokenLine, tokenColumn);
+    if (c === "?" && peekNext() === "?") {
+      advance();
+      advance();
+      push("coalesce", "??", tokenLine, tokenColumn);
       continue;
     }
 
-    if (c === "b" && (input[i + 1] === "\"" || input[i + 1] === "'")) {
-      const quote = input[i + 1];
-      i += 2;
-      column += 2;
+    // Single-character tokens
+    switch (c) {
+      case "{":
+        advance();
+        push("lbrace", "{", tokenLine, tokenColumn);
+        continue;
+      case "}":
+        advance();
+        push("rbrace", "}", tokenLine, tokenColumn);
+        continue;
+      case "(":
+        advance();
+        push("lparen", "(", tokenLine, tokenColumn);
+        continue;
+      case ")":
+        advance();
+        push("rparen", ")", tokenLine, tokenColumn);
+        continue;
+      case "[":
+        advance();
+        push("lbracket", "[", tokenLine, tokenColumn);
+        continue;
+      case "]":
+        advance();
+        push("rbracket", "]", tokenLine, tokenColumn);
+        continue;
+      case ",":
+        advance();
+        push("comma", ",", tokenLine, tokenColumn);
+        continue;
+      case ":":
+        advance();
+        push("colon", ":", tokenLine, tokenColumn);
+        continue;
+      case ";":
+        advance();
+        push("semi", ";", tokenLine, tokenColumn);
+        continue;
+      case ".":
+        advance();
+        push("dot", ".", tokenLine, tokenColumn);
+        continue;
+      case "*":
+        advance();
+        push("star", "*", tokenLine, tokenColumn);
+        continue;
+      case "=":
+        advance();
+        push("equals", "=", tokenLine, tokenColumn);
+        continue;
+      case "<":
+        advance();
+        push("lt", "<", tokenLine, tokenColumn);
+        continue;
+      case ">":
+        advance();
+        push("gt", ">", tokenLine, tokenColumn);
+        continue;
+      case "-":
+        advance();
+        push("minus", "-", tokenLine, tokenColumn);
+        continue;
+      case "+":
+        advance();
+        push("plus", "+", tokenLine, tokenColumn);
+        continue;
+      case "$":
+        advance();
+        push("dollar", "$", tokenLine, tokenColumn);
+        continue;
+      case "@":
+        advance();
+        push("at", "@", tokenLine, tokenColumn);
+        continue;
+    }
 
-      let value = "";
-      while (i < input.length && input[i] !== quote) {
-        if (input[i] === "\n") {
-          throw new AppError("E_SYNTAX", "Unterminated byte literal", tokenLine, tokenColumn);
-        }
-
-        value += input[i];
-        i += 1;
-        column += 1;
-      }
-
-      if (input[i] !== quote) {
-        throw new AppError("E_SYNTAX", "Unterminated byte literal", tokenLine, tokenColumn);
-      }
-
-      i += 1;
-      column += 1;
-      push("string", value, tokenLine, tokenColumn);
+    // Numbers
+    if (isDigit(c)) {
+      scanNumber(tokenLine, tokenColumn);
       continue;
     }
 
-    if (/[0-9]/.test(c)) {
-      let value = c;
-      i += 1;
-      column += 1;
-
-      while (i < input.length && /[0-9.]/.test(input[i])) {
-        value += input[i];
-        i += 1;
-        column += 1;
-      }
-
-      if (i < input.length && input[i] === "n") {
-        value += "n";
-        i += 1;
-        column += 1;
-      }
-
-      push("number", value, tokenLine, tokenColumn);
+    // Identifiers / keywords
+    if (isAlpha(c)) {
+      scanIdentifierOrKeyword(tokenLine, tokenColumn);
       continue;
     }
 
-    if (/[A-Za-z_]/.test(c)) {
-      let value = c;
-      i += 1;
-      column += 1;
-
-      while (i < input.length) {
-        const next = input[i];
-        if (/[A-Za-z0-9_]/.test(next)) {
-          value += next;
-          i += 1;
-          column += 1;
-        } else if (next === ":" && input[i + 1] === ":") {
-          value += "::";
-          i += 2;
-          column += 2;
-        } else {
-          break;
-        }
-      }
-
-      const lowered = value.toLowerCase();
-      const keyword = KEYWORDS[lowered];
-      if (keyword) {
-        push(keyword, lowered, tokenLine, tokenColumn);
-      } else {
-        push("identifier", value, tokenLine, tokenColumn);
-      }
-
-      continue;
-    }
-
-    throw new AppError("E_SYNTAX", `Unexpected token '${c}'`, tokenLine, tokenColumn);
+    syntaxError(`Unexpected token '${c}'`, tokenLine, tokenColumn);
   }
 
   tokens.push({ kind: "eof", lexeme: "", line, column });

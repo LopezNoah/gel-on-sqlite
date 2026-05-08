@@ -46,6 +46,16 @@ const DEFINITIONS: StdlibFunctionDef[] = [
   { name: "std::to_datetime", minArgs: 1, maxArgs: 1 },
   { name: "std::to_str", minArgs: 1, maxArgs: 1 },
   { name: "std::len", minArgs: 1, maxArgs: 1 },
+  { name: "std::count", minArgs: 1, maxArgs: 1 },
+  { name: "std::max", minArgs: 1, maxArgs: 1 },
+  { name: "std::min", minArgs: 1, maxArgs: 1 },
+  { name: "std::sum", minArgs: 1, maxArgs: 1 },
+  { name: "std::assert_exists", minArgs: 1, maxArgs: 1 },
+  { name: "std::assert_single", minArgs: 1, maxArgs: 1 },
+  { name: "std::range", minArgs: 2, maxArgs: 2 },
+  { name: "std::range_unpack", minArgs: 1, maxArgs: 1 },
+  { name: "std::array_agg", minArgs: 1, maxArgs: 1 },
+  { name: "std::array_unpack", minArgs: 1, maxArgs: 1 },
   { name: "std::str_lower", minArgs: 1, maxArgs: 1 },
   { name: "std::str_upper", minArgs: 1, maxArgs: 1 },
   { name: "std::to_duration", minArgs: 1, maxArgs: 1 },
@@ -168,6 +178,11 @@ export const executeStdlibFunction = (name: string, args: RuntimeFunctionArg[]):
       const separator = String(extractScalar(args[1]) ?? "");
       return values.join(separator);
     }
+    case "std::assert_exists":
+    case "std::assert_single":
+      return typeof args[0] === "object" && args[0] !== null && "kind" in args[0] && args[0].kind === "set"
+        ? args[0].values
+        : args[0];
     case "cal::to_local_datetime":
       return parseLocalDateTime(extractScalar(args[0]));
     case "cal::to_local_date":
@@ -186,6 +201,50 @@ export const executeStdlibFunction = (name: string, args: RuntimeFunctionArg[]):
         return 0;
       }
       return String(value).length;
+    }
+    case "std::sum": {
+      const values = toNumberList(args[0]);
+      if (values.length === 0) {
+        return 0;
+      }
+      return values.reduce((acc, value) => acc + value, 0);
+    }
+    case "std::max": {
+      const values = toNumberList(args[0]);
+      return values.length > 0 ? Math.max(...values) : null;
+    }
+    case "std::min": {
+      const values = toNumberList(args[0]);
+      return values.length > 0 ? Math.min(...values) : null;
+    }
+    case "std::range": {
+      const start = toNumber(args[0]);
+      const end = toNumber(args[1]);
+      const values: number[] = [];
+      for (let value = start; value < end; value += 1) {
+        values.push(value);
+      }
+      return values;
+    }
+    case "std::range_unpack":
+    case "std::array_unpack": {
+      const value = args[0];
+      if (typeof value === "object" && value !== null && "kind" in value) {
+        return [...value.values];
+      }
+      return Array.isArray(value) ? value : [value as ScalarValue];
+    }
+    case "std::count": {
+      if (typeof args[0] === "object" && args[0] !== null && "kind" in args[0]) {
+        return args[0].values.length;
+      }
+      return args[0] === null ? 0 : 1;
+    }
+    case "std::array_agg": {
+      if (typeof args[0] === "object" && args[0] !== null && "kind" in args[0]) {
+        return [...args[0].values];
+      }
+      return [args[0] as ScalarValue];
     }
     case "std::str_lower":
       return String(extractScalar(args[0]) ?? "").toLowerCase();

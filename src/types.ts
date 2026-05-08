@@ -111,6 +111,7 @@ export interface FunctionDef {
 export interface AliasDef {
   module: string;
   name: string;
+  exprText?: string;
   values?: ScalarValue[];
   sourceType?: string;
   projections?: Array<{
