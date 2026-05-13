@@ -1,12 +1,45 @@
 import { createHttpServer } from "./http/server.js";
-import { materializeSchema, openSQLite } from "./runtime/database.js";
+import { openSQLite } from "./runtime/database.js";
 import { executeQuery, executeQueryWithTrace } from "./runtime/engine.js";
 import { parseDeclarativeSchema } from "./schema/declarative.js";
+import { applySchemaSQL } from "./codegen/sql.js";
 import { applyMigrationPlan, planSchemaMigration, renderMigrationSQL } from "./schema/migrations.js";
 import { SchemaSnapshot } from "./schema/schema.js";
 import { declarativeSchemaFromTypeDefs, renderDeclarativeSchema, schemaSnapshotFromDeclarative } from "./schema/uiSchema.js";
 import { bootstrapGelSchema, deserializeSchemaFromGelTables, deserializeSchemaFromInstdata, ensureGelSchemaTables, serializeSchemaToGelTables, serializeSchemaToInstdata } from "./schema/gel_persistence.js";
 import type { TypeDef } from "./types.js";
+
+// Public API: codegen
+export {
+  renderSchemaSQL,
+  applySchemaSQL,
+  tableNameForType,
+  quoteIdent,
+  quoteLiteral,
+  collectFields,
+  collectLinks,
+  usesLinkTable,
+  inlineColumnName,
+  linkTableName,
+  multiPropertyTableName,
+  rewriteExprToSQL,
+  triggerExprToSQL,
+  compileTriggerWhenClause,
+  compileTriggerActionSQL,
+} from "./codegen/sql.js";
+
+export {
+  generateSchemaModel,
+  getOrGenerateSchemaModel,
+  registerGeneratedSchemaModel,
+  getRegisteredGeneratedSchemaModel,
+  listRegisteredGeneratedSchemaModels,
+  renderSchemaModelModule,
+} from "./codegen/schema.js";
+
+export {
+  resolveSchemaModelForCompile,
+} from "./codegen/schema_loader.js";
 
 const baseTypes: TypeDef[] = [
   {
@@ -59,7 +92,7 @@ if (schema.listTypes().length === 0) {
   declarativeSchema = declarativeSchemaFromTypeDefs(schema.listTypes(), schema.listFunctions());
   schemaSource = renderDeclarativeSchema(declarativeSchema);
 }
-materializeSchema(runtime.db, schema);
+applySchemaSQL(runtime.db, schema);
 bootstrapGelSchema(runtime.db, schema);
 
 const app = createHttpServer({

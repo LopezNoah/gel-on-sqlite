@@ -58,7 +58,7 @@ type RuntimeTypedAliasDef = {
   sourceType: string;
   filter?: {
     field: string;
-    op: "=" | "!=" | "like" | "ilike";
+    op: "=" | "!=" | "<" | "<=" | ">" | ">=" | "?=" | "?!=" | "like" | "ilike";
     value: ScalarValue;
   };
   filterValues?: {
@@ -531,7 +531,7 @@ const runtimeAliasLikeMatches = (value: unknown, pattern: string): boolean => {
 
 const runtimeAliasPredicateMatches = (
   value: unknown,
-  op: "=" | "!=" | "like" | "ilike",
+  op: "=" | "!=" | "<" | "<=" | ">" | ">=" | "?=" | "?!=" | "like" | "ilike",
   expected: ScalarValue,
 ): boolean => {
   if (op === "=") {
@@ -541,7 +541,30 @@ const runtimeAliasPredicateMatches = (
     return value !== expected;
   }
   if (typeof expected !== "string") {
+    const left = typeof value === "number" ? value : Number(value);
+    const right = typeof expected === "number" ? expected : Number(expected);
+    if (Number.isFinite(left) && Number.isFinite(right)) {
+      if (op === "<") return left < right;
+      if (op === "<=") return left <= right;
+      if (op === ">") return left > right;
+      if (op === ">=") return left >= right;
+    }
     return false;
+  }
+  if (op === "<" || op === "<=" || op === ">" || op === ">=") {
+    if (typeof value !== "string") {
+      return false;
+    }
+    if (op === "<") return value < expected;
+    if (op === "<=") return value <= expected;
+    if (op === ">") return value > expected;
+    return value >= expected;
+  }
+  if (op === "?=") {
+    return value === null || value === undefined || value === expected;
+  }
+  if (op === "?!=") {
+    return value === null || value === undefined || value !== expected;
   }
   const left = op === "ilike" && typeof value === "string" ? value.toLowerCase() : value;
   const right = op === "ilike" ? expected.toLowerCase() : expected;
@@ -1208,9 +1231,11 @@ const tryRuntimeSelectExprEvaluation = (
   if (value === undefined) {
     return undefined;
   }
+  const topIsArrayAgg = ast.expr.kind === "function_call"
+    && ((ast.expr.call.name.includes("::") ? ast.expr.call.name.split("::").at(-1) : ast.expr.call.name)?.toLowerCase() === "array_agg");
   return {
     kind: "select",
-    rows: Array.isArray(value) ? value : [value],
+    rows: Array.isArray(value) ? (topIsArrayAgg ? [value] : value) : [value],
   };
 };
 
@@ -1556,6 +1581,56 @@ const resolveRuntimeStoredTypeName = (schema: SchemaSnapshot, storedTypeName: st
   }
 
   return storedTypeName;
+};
+
+const findRuntimeComputedMulti = (
+  schema: SchemaSnapshot,
+  typeName: string,
+  computedName: string,
+  seen = new Set<string>(),
+): boolean | undefined => {
+  if (seen.has(typeName)) {
+    return undefined;
+  }
+  seen.add(typeName);
+
+  const typeDef = schema.getType(typeName);
+  if (!typeDef) {
+    return undefined;
+  }
+
+  const direct = (typeDef.computeds ?? []).find((c) => c.name === computedName);
+  if (direct) {
+    return Boolean(direct.multi);
+  }
+
+  for (const baseName of typeDef.extends ?? []) {
+    const inherited = findRuntimeComputedMulti(schema, baseName, computedName, seen);
+    if (inherited !== undefined) {
+      return inherited;
+    }
+  }
+
+  return undefined;
+};
+
+const resolveRuntimeLinkIsMulti = (
+  schema: SchemaSnapshot,
+  sourceType: string,
+  relation: LinkRelationIR,
+  linkName: string,
+): boolean => {
+  const direct = findRuntimeLinkDef(schema, sourceType, linkName)?.link;
+  if (direct) {
+    return Boolean(direct.multi);
+  }
+
+  const relationSource = findRuntimeLinkDef(schema, relation.sourceType, linkName)?.link;
+  if (relationSource) {
+    return Boolean(relationSource.multi);
+  }
+
+  return relation.multi;
 };
 
 const resolvedRuntimeTarget = (context: SecurityContext, db: RuntimeDatabaseAdapter): RuntimeTarget =>

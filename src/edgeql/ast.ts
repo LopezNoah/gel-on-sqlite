@@ -5,6 +5,40 @@ export interface SourcePos {
   column: number;
 }
 
+export type PathStep =
+  | {
+      kind: "object_ref";
+      name: string;
+    }
+  | {
+      kind: "ptr";
+      name: string;
+      direction?: "outbound" | "inbound";
+      typeFilter?: string;
+      optional?: boolean;
+    }
+  | {
+      kind: "type_intersection";
+      typeName: string;
+    }
+  | {
+      kind: "splat";
+      depth: 1 | 2;
+      typeName?: string;
+      intersectionTypeName?: string;
+    };
+
+export interface ShapeElementModifiers {
+  cardinality?: "one" | "many" | "unknown";
+  required?: boolean;
+  operation?: "assign" | "append" | "subtract" | "materialize";
+  origin?: "explicit" | "default" | "splat_expansion" | "materialization";
+  where?: FreeObjectExpr;
+  orderBy?: OrderExpr[];
+  offset?: number;
+  limit?: number;
+}
+
 export type FilterTarget =
   | {
       kind: "field";
@@ -44,7 +78,7 @@ export type FilterExpr =
   | {
       kind: "predicate";
       target: FilterTarget;
-      op: "=" | "!=" | "like" | "ilike";
+      op: "=" | "!=" | "<" | "<=" | ">" | ">=" | "?=" | "?!=" | "like" | "ilike";
       value: FilterValue;
     }
   | {
@@ -136,6 +170,10 @@ export type WithBindingValue =
       };
     }
   | {
+      kind: "subquery_expr";
+      expr: FreeObjectExpr;
+    }
+  | {
       kind: "enum_path";
       enumType: string;
       member: string;
@@ -144,10 +182,12 @@ export type WithBindingValue =
       kind: "path";
       head: string;
       tail: string;
+      steps?: PathStep[];
     }
   | {
       kind: "path_chain";
       parts: string[];
+      steps?: PathStep[];
     }
   | {
       kind: "backlink_path";
@@ -172,6 +212,12 @@ export interface ClauseChain {
   orderBy?: OrderExpr;
   limit?: number;
   offset?: number;
+  groupBy?: FreeObjectExpr[];
+  using?: Record<string, FreeObjectExpr>;
+  window?: {
+    partitionBy?: FreeObjectExpr[];
+    orderBy?: OrderExpr[];
+  };
   _withBindings?: WithBinding[];
   _withModule?: string;
   _withModuleAliases?: WithModuleAlias[];
@@ -219,6 +265,20 @@ export type ComputedExpr =
       fromEnd: number;
       op: "negate" | "const_minus";
       constant?: number;
+    }
+  | {
+      kind: "parameter";
+      name: string;
+      castType?: string;
+    }
+  | {
+      kind: "global_ref";
+      name: string;
+    }
+  | {
+      kind: "type_intersection";
+      sourceType: string;
+      expr: FreeObjectExpr;
     };
 
 export interface BacklinkExpr {
@@ -248,6 +308,11 @@ export type FunctionCallArgExpr =
   | {
       kind: "expr";
       expr: FreeObjectExpr;
+    }
+  | {
+      kind: "parameter";
+      name: string;
+      castType?: string;
     };
 
 export interface FunctionCallExpr {
@@ -256,35 +321,35 @@ export interface FunctionCallExpr {
 }
 
 export type ShapeElement =
-  | {
+  | ({
       kind: "field";
       name: string;
-    }
-  | {
+    } & ShapeElementModifiers)
+  | ({
       kind: "splat";
       depth: 1 | 2;
       sourceType?: string;
       intersection?: boolean;
-    }
-  | {
+    } & ShapeElementModifiers)
+  | ({
       kind: "computed";
       name: string;
       expr: ComputedExpr;
       multi?: boolean;
-    }
-  | {
+    } & ShapeElementModifiers)
+  | ({
       kind: "backlink";
       name: string;
       expr: BacklinkExpr;
       shape?: ShapeElement[];
-    }
-  | {
+    } & ShapeElementModifiers)
+  | ({
       kind: "link";
       name: string;
       typeFilter?: string;
       shape: ShapeElement[];
       clauses: ClauseChain;
-    };
+    } & ShapeElementModifiers);
 
 export interface SelectStatement {
   kind: "select";
@@ -346,16 +411,29 @@ export type FreeObjectExpr =
       kind: "path";
       head: string;
       tail: string;
+      steps?: PathStep[];
+    }
+  | {
+      kind: "path_chain";
+      parts: string[];
+      steps?: PathStep[];
+    }
+  | {
+      kind: "path_steps";
+      steps: PathStep[];
+      partial?: boolean;
     }
   | {
       kind: "backlink_path";
       link: string;
       sourceType?: string;
+      optional?: boolean;
     }
   | {
       kind: "field_access";
       expr: FreeObjectExpr;
       field: string;
+      optional?: boolean;
     }
   | {
       kind: "shape_projection";
@@ -368,6 +446,12 @@ export type FreeObjectExpr =
       index: number;
     }
   | {
+      kind: "slice_access";
+      expr: FreeObjectExpr;
+      start?: number;
+      end?: number;
+    }
+  | {
       kind: "tuple";
       values: FreeObjectExpr[];
     }
@@ -377,7 +461,7 @@ export type FreeObjectExpr =
     }
   | {
       kind: "compare";
-      op: "=" | "!=" | ">" | "<";
+      op: "=" | "!=" | ">" | "<" | ">=" | "<=" | "?=" | "?!=";
       left: FreeObjectExpr;
       right: FreeObjectExpr;
     }
@@ -397,9 +481,20 @@ export type FreeObjectExpr =
     }
   | {
       kind: "math";
-      op: "+";
+      op: "+" | "-" | "*" | "/" | "//" | "%" | "^";
       left: FreeObjectExpr;
       right: FreeObjectExpr;
+    }
+  | {
+      kind: "logical";
+      op: "and" | "or";
+      left: FreeObjectExpr;
+      right: FreeObjectExpr;
+    }
+  | {
+      kind: "unary";
+      op: "not" | "neg";
+      expr: FreeObjectExpr;
     }
   | {
       kind: "if_else";
@@ -423,9 +518,29 @@ export type FreeObjectExpr =
       typeName: string;
     }
   | {
+      kind: "coalesce";
+      left: FreeObjectExpr;
+      right: FreeObjectExpr;
+    }
+  | {
+      kind: "parameter";
+      name: string;
+      castType?: string;
+    }
+  | {
+      kind: "substitution";
+      name: string;
+    }
+  | {
+      kind: "global_ref";
+      name: string;
+    }
+  | {
       kind: "select_expr_subquery";
       alias?: string;
       expr: FreeObjectExpr;
+      clauses?: ClauseChain;
+      filter?: FreeObjectExpr;
       orderBy?: {
         expr: FreeObjectExpr;
         direction: "asc" | "desc";
@@ -548,4 +663,109 @@ export interface ForStatement {
   pos: SourcePos;
 }
 
-export type Statement = SelectStatement | SelectFreeStatement | SelectExprStatement | InsertStatement | UpdateStatement | DeleteStatement | ForStatement;
+export interface ConfigureStatement {
+  kind: "configure";
+  with?: WithBinding[];
+  withModule?: string;
+  withModuleAliases?: WithModuleAlias[];
+  scope: "session" | "current_database" | "instance";
+  operation: "set" | "insert" | "reset";
+  target: string;
+  value?: FreeObjectExpr;
+  pos: SourcePos;
+}
+
+export interface TransactionStatement {
+  kind: "transaction";
+  with?: WithBinding[];
+  withModule?: string;
+  withModuleAliases?: WithModuleAlias[];
+  action: "start" | "commit" | "rollback";
+  isolation?: "serializable" | "repeatable_read";
+  pos: SourcePos;
+}
+
+export interface DDLStatement {
+  kind: "ddl";
+  with?: WithBinding[];
+  withModule?: string;
+  withModuleAliases?: WithModuleAlias[];
+  action: "create" | "alter" | "drop";
+  objectKind:
+    | "type"
+    | "scalar"
+    | "link"
+    | "property"
+    | "function"
+    | "constraint"
+    | "index"
+    | "trigger"
+    | "policy"
+    | "module"
+    | "database"
+    | "branch"
+    | "role"
+    | "extension"
+    | "alias"
+    | "global";
+  name: string;
+  value?: FreeObjectExpr;
+  pos: SourcePos;
+}
+
+export interface GroupStatement {
+  kind: "group";
+  with?: WithBinding[];
+  withModule?: string;
+  withModuleAliases?: WithModuleAlias[];
+  source: FreeObjectExpr;
+  by: FreeObjectExpr[];
+  using?: Array<{
+    alias: string;
+    expr: FreeObjectExpr;
+  }>;
+  shape?: ShapeElement[];
+  pos: SourcePos;
+}
+
+export interface DescribeStatement {
+  kind: "describe";
+  with?: WithBinding[];
+  withModule?: string;
+  withModuleAliases?: WithModuleAlias[];
+  objectKind: "schema" | "current_database" | "instance" | "type";
+  objectName?: string;
+  format?: "ddl" | "sdl" | "json" | "text";
+  pos: SourcePos;
+}
+
+export interface ExplainStatement {
+  kind: "explain";
+  with?: WithBinding[];
+  withModule?: string;
+  withModuleAliases?: WithModuleAlias[];
+  analyze: boolean;
+  query: Statement;
+  pos: SourcePos;
+}
+
+export type Statement = (
+  | SelectStatement
+  | SelectFreeStatement
+  | SelectExprStatement
+  | InsertStatement
+  | UpdateStatement
+  | DeleteStatement
+  | ForStatement
+  | ConfigureStatement
+  | TransactionStatement
+  | DDLStatement
+  | GroupStatement
+  | DescribeStatement
+  | ExplainStatement) & {
+  with?: WithBinding[];
+  withModule?: string;
+  withModuleAliases?: WithModuleAlias[];
+  typeName?: string;
+  filter?: FilterExpr;
+};
