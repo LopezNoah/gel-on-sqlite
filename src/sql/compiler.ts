@@ -1,6 +1,7 @@
 import { AppError } from "../errors.js";
-import type { FilterExprIR, IRStatement, LinkRelationIR, SelectIR, SelectShapeElementIR } from "../ir/model.js";
-import { canLowerStdlibFunctionToSql, type RuntimeTarget } from "../runtime/target.js";
+import type { FilterExprIR, IRStatement, LinkRelationIR, PathIdIR, SelectIR, SelectShapeElementIR } from "../ir/model.js";
+import type { RuntimeTarget } from "../runtime/target.js";
+import { canLowerStdlibFunctionSql, lowerStdlibFunctionSql } from "./stdlib_lowering.js";
 import type { ScalarValue } from "../types.js";
 
 export interface SQLArtifact {
@@ -247,13 +248,25 @@ const compileBacklinkArrayExpr = (
   params: ScalarValue[],
 ): string => {
   const sourceUnions = element.sources.map((source) => {
-    const sourceTableAlias = `b_${source.table}_${Math.abs(hashString(source.sourceType)).toString(16)}`;
+    const sourceTables = source.sourceTables && source.sourceTables.length > 0
+      ? source.sourceTables
+      : [{ name: source.sourceType, table: source.table }];
+    const junctionAlias = `bj_${source.table}_${Math.abs(hashString(source.sourceType)).toString(16)}`;
     if (source.storage === "inline") {
-      return `SELECT ${sourceTableAlias}.${quoteIdent("id")} AS ${quoteIdent("id")}, ${quoteLiteral(source.sourceType)} AS ${quoteIdent("type_name")} FROM ${quoteIdent(source.table)} ${sourceTableAlias} WHERE ${sourceTableAlias}.${quoteIdent(requiredInlineColumn(source.inlineColumn))} = ${sourceAlias}.${quoteIdent("id")}`;
+      const inlineUnion = sourceTables
+        .map((tableRef) => {
+          const stAlias = `b_${tableRef.table}_${Math.abs(hashString(source.sourceType)).toString(16)}`;
+          return `SELECT ${stAlias}.${quoteIdent("id")} AS ${quoteIdent("id")}, ${quoteLiteral(tableRef.name)} AS ${quoteIdent("type_name")} FROM ${quoteIdent(tableRef.table)} ${stAlias} WHERE ${stAlias}.${quoteIdent(requiredInlineColumn(source.inlineColumn))} = ${sourceAlias}.${quoteIdent("id")}`;
+        })
+        .join(" UNION ALL ");
+      return inlineUnion;
     }
 
-    const junctionAlias = `bj_${source.table}_${Math.abs(hashString(source.sourceType)).toString(16)}`;
-    return `SELECT ${sourceTableAlias}.${quoteIdent("id")} AS ${quoteIdent("id")}, ${quoteLiteral(source.sourceType)} AS ${quoteIdent("type_name")} FROM ${quoteIdent(source.table)} ${sourceTableAlias} JOIN ${quoteIdent(requiredLinkTable(source.linkTable))} ${junctionAlias} ON ${junctionAlias}.${quoteIdent("source")} = ${sourceTableAlias}.${quoteIdent("id")} WHERE ${junctionAlias}.${quoteIdent("target")} = ${sourceAlias}.${quoteIdent("id")}`;
+    const linkTable = requiredLinkTable(source.linkTable);
+    const fromClause = sourceTables.length === 1
+      ? `(SELECT ${quoteLiteral(sourceTables[0].name)} AS ${quoteIdent("__source_type")}, * FROM ${quoteIdent(sourceTables[0].table)}) s`
+      : `(${sourceTables.map((entry) => `SELECT ${quoteLiteral(entry.name)} AS ${quoteIdent("__source_type")}, * FROM ${quoteIdent(entry.table)}`).join(" UNION ALL ")}) s`;
+    return `SELECT s.${quoteIdent("id")} AS ${quoteIdent("id")}, s.${quoteIdent("__source_type")} AS ${quoteIdent("type_name")} FROM ${fromClause} JOIN ${quoteIdent(linkTable)} ${junctionAlias} ON ${junctionAlias}.${quoteIdent("source")} = s.${quoteIdent("id")} WHERE ${junctionAlias}.${quoteIdent("target")} = ${sourceAlias}.${quoteIdent("id")}`;
   });
 
   if (sourceUnions.length === 0) {
@@ -338,11 +351,17 @@ const compileShapeObjectExpr = (
   return `json_object(${pairs.join(", ")})`;
 };
 
-export const shapePayloadAlias = (pathId: string): string => `__shape_${sanitizePathId(pathId)}`;
+const resolvePathIdStr = (pathId: string | PathIdIR): string =>
+  typeof pathId === "string" ? pathId : pathId.id;
 
-export const computedValueAlias = (pathId: string): string => `__computed_${sanitizePathId(pathId)}`;
+export const shapePayloadAlias = (pathId: string | PathIdIR): string =>
+  `__shape_${sanitizePathId(pathId)}`;
 
-const sanitizePathId = (pathId: string): string => pathId.replaceAll(".", "_");
+export const computedValueAlias = (pathId: string | PathIdIR): string =>
+  `__computed_${sanitizePathId(pathId)}`;
+
+const sanitizePathId = (pathId: string | PathIdIR): string =>
+  resolvePathIdStr(pathId).replaceAll(".", "_");
 
 const requiredInlineColumn = (value: string | undefined): string => {
   if (!value) {
@@ -418,7 +437,7 @@ const encodeParam = (value: ScalarValue): ScalarValue => {
   return value;
 };
 
-const compileFilterPredicate = (lhsSql: string, op: "=" | "!=" | "like" | "ilike"): string => {
+const compileFilterPredicate = (lhsSql: string, op: "=" | "!=" | "<" | "<=" | ">" | ">=" | "?=" | "?!=" | "like" | "ilike"): string => {
   if (op === "=") {
     return `${lhsSql} = ?`;
   }
@@ -429,6 +448,18 @@ const compileFilterPredicate = (lhsSql: string, op: "=" | "!=" | "like" | "ilike
 
   if (op === "like") {
     return `${lhsSql} LIKE ?`;
+  }
+
+  if (op === "<" || op === "<=" || op === ">" || op === ">=") {
+    return `${lhsSql} ${op} ?`;
+  }
+
+  if (op === "?=") {
+    return `(${lhsSql} IS NULL OR ${lhsSql} = ?)`;
+  }
+
+  if (op === "?!=") {
+    return `(${lhsSql} IS NULL OR ${lhsSql} != ?)`;
   }
 
   return `LOWER(${lhsSql}) LIKE LOWER(?)`;
@@ -739,77 +770,7 @@ const compileStdlibFunctionCallSQL = (
     return null;
   }
 
-  const argSql = args as string[];
-  switch (expr.functionName) {
-    case "math::abs":
-      return `abs(${argSql[0]})`;
-    case "math::ceil":
-      return `ceil(${argSql[0]})`;
-    case "math::floor":
-      return `floor(${argSql[0]})`;
-    case "math::exp":
-      return `exp(${argSql[0]})`;
-    case "math::ln":
-      return `ln(${argSql[0]})`;
-    case "math::lg":
-      return `log(${argSql[0]})`;
-    case "math::log":
-      return `(ln(${argSql[0]}) / ln(${argSql[1]}))`;
-    case "math::pi":
-      return "pi()";
-    case "math::e":
-      return "exp(1.0)";
-    case "math::acos":
-      return `acos(${argSql[0]})`;
-    case "math::asin":
-      return `asin(${argSql[0]})`;
-    case "math::atan":
-      return `atan(${argSql[0]})`;
-    case "math::atan2":
-      return `atan2(${argSql[0]}, ${argSql[1]})`;
-    case "math::cos":
-      return `cos(${argSql[0]})`;
-    case "math::cot":
-      return `(1.0 / tan(${argSql[0]}))`;
-    case "math::sin":
-      return `sin(${argSql[0]})`;
-    case "math::tan":
-      return `tan(${argSql[0]})`;
-    case "std::datetime_current":
-    case "std::datetime_of_transaction":
-    case "std::datetime_of_statement":
-      return `strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`;
-    case "std::to_str":
-      return `CAST(${argSql[0]} AS TEXT)`;
-    case "std::len":
-      return `length(COALESCE(CAST(${argSql[0]} AS TEXT), ''))`;
-    case "std::count":
-      return `count(${argSql[0]})`;
-    case "std::max":
-      return `max(${argSql[0]})`;
-    case "std::min":
-      return `min(${argSql[0]})`;
-    case "std::str_lower":
-      return `lower(COALESCE(CAST(${argSql[0]} AS TEXT), ''))`;
-    case "std::str_upper":
-      return `upper(COALESCE(CAST(${argSql[0]} AS TEXT), ''))`;
-    case "std::datetime_get": {
-      const firstExpr = `LOWER(CAST(${argSql[0]} AS TEXT))`;
-      const secondExpr = `LOWER(CAST(${argSql[1]} AS TEXT))`;
-      const partExpr = `CASE WHEN ${firstExpr} IN ('year', 'month', 'day', 'hour', 'minute', 'second', 'epochseconds') THEN ${firstExpr} ELSE ${secondExpr} END`;
-      const dateExpr = normalizeDateTimeSQLInput(`CASE WHEN ${firstExpr} IN ('year', 'month', 'day', 'hour', 'minute', 'second', 'epochseconds') THEN ${argSql[1]} ELSE ${argSql[0]} END`);
-      return `CASE ${partExpr} WHEN 'year' THEN CAST(strftime('%Y', ${dateExpr}) AS INTEGER) WHEN 'month' THEN CAST(strftime('%m', ${dateExpr}) AS INTEGER) WHEN 'day' THEN CAST(strftime('%d', ${dateExpr}) AS INTEGER) WHEN 'hour' THEN CAST(strftime('%H', ${dateExpr}) AS INTEGER) WHEN 'minute' THEN CAST(strftime('%M', ${dateExpr}) AS INTEGER) WHEN 'second' THEN CAST(strftime('%S', ${dateExpr}) AS INTEGER) WHEN 'epochseconds' THEN CAST(strftime('%s', ${dateExpr}) AS INTEGER) ELSE NULL END`;
-    }
-    case "std::datetime_truncate": {
-      const firstExpr = `LOWER(CAST(${argSql[0]} AS TEXT))`;
-      const secondExpr = `LOWER(CAST(${argSql[1]} AS TEXT))`;
-      const partExpr = `CASE WHEN ${firstExpr} IN ('year', 'month', 'day', 'hour', 'minute', 'second') THEN ${firstExpr} ELSE ${secondExpr} END`;
-      const dateExpr = normalizeDateTimeSQLInput(`CASE WHEN ${firstExpr} IN ('year', 'month', 'day', 'hour', 'minute', 'second') THEN ${argSql[1]} ELSE ${argSql[0]} END`);
-      return `CASE ${partExpr} WHEN 'year' THEN strftime('%Y-01-01T00:00:00.000Z', ${dateExpr}) WHEN 'month' THEN strftime('%Y-%m-01T00:00:00.000Z', ${dateExpr}) WHEN 'day' THEN strftime('%Y-%m-%dT00:00:00.000Z', ${dateExpr}) WHEN 'hour' THEN strftime('%Y-%m-%dT%H:00:00.000Z', ${dateExpr}) WHEN 'minute' THEN strftime('%Y-%m-%dT%H:%M:00.000Z', ${dateExpr}) WHEN 'second' THEN strftime('%Y-%m-%dT%H:%M:%S.000Z', ${dateExpr}) ELSE strftime('%Y-%m-%dT%H:%M:%fZ', ${dateExpr}) END`;
-    }
-    default:
-      return null;
-  }
+  return lowerStdlibFunctionSql(target, expr.functionName, args as string[]);
 };
 
 const compileStdlibFunctionArgSQL = (
@@ -835,10 +796,7 @@ const compileStdlibFunctionArgSQL = (
 };
 
 const isLowerableStdlibFunctionName = (functionName: string, target: RuntimeTarget): boolean =>
-  canLowerStdlibFunctionToSql(target, functionName);
-
-const normalizeDateTimeSQLInput = (dateExpr: string): string =>
-  `replace(replace(CAST(${dateExpr} AS TEXT), 'T', ' '), 'Z', '')`;
+  canLowerStdlibFunctionSql(target, functionName);
 
 const compilePolymorphicTargetSource = (
   relation: Extract<SelectShapeElementIR, { kind: "link" }>["relation"],

@@ -123,6 +123,32 @@ describe("parseEdgeQL", () => {
     expect(() => parseEdgeQL("select default::User { id name };")).toThrow(/Expected ',' between shape entries/);
   });
 
+  it("parses interpolated strings in free expressions", () => {
+    const ast = parseEdgeQL("select ('Hello \\(1 + 2)!');");
+    if (ast.kind !== "select_expr") {
+      throw new Error("expected select_expr AST");
+    }
+
+    expect(ast.expr).toEqual({
+      kind: "concat",
+      parts: [
+        { kind: "literal", value: "Hello " },
+        {
+          kind: "math",
+          op: "+",
+          left: { kind: "literal", value: 1 },
+          right: { kind: "literal", value: 2 },
+        },
+        { kind: "literal", value: "!" },
+      ],
+    });
+  });
+
+  it("rejects interpolated strings in literal-only contexts", () => {
+    expect(() => parseEdgeQL("insert default::User { name := 'n-\\(.id)' };"))
+      .toThrow(/String interpolation is not allowed in literal-only context/);
+  });
+
   it("[SPEC-034.R9][SPEC-034.R10] parses computed fields and backlinks", () => {
     const ast = parseEdgeQL(
       "select default::User { name, nick := .name, role := 'reader', comments := .<author[is default::Comment] };",
@@ -409,5 +435,24 @@ describe("parseEdgeQL", () => {
     expect(statements).toHaveLength(2);
     expect(statements[0].kind).toBe("insert");
     expect(statements[1].kind).toBe("select");
+  });
+
+  it("parses script comments and applies SET MODULE to following statements", () => {
+    const statements = parseEdgeQLScript(
+      "# switch active module\nSET MODULE default;\n# unqualified names use default\ninsert User { name := 'Ari' };\nselect User { name };",
+    );
+
+    expect(statements).toHaveLength(2);
+    expect(statements[0]?.kind).toBe("insert");
+    expect(statements[1]?.kind).toBe("select");
+
+    if (statements[0]?.kind !== "insert" || statements[1]?.kind !== "select") {
+      throw new Error("expected insert/select statements");
+    }
+
+    expect(statements[0].typeName).toBe("User");
+    expect(statements[0].withModule).toBe("default");
+    expect(statements[1].typeName).toBe("User");
+    expect(statements[1].withModule).toBe("default");
   });
 });

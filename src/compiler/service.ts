@@ -1,12 +1,19 @@
 import { createHash } from "node:crypto";
 
+import "../codegen/generated/schema_model.js";
+
 import type { Statement } from "../edgeql/ast.js";
+import type { Statement as GelIRStatement } from "../ir/gel_ir.js";
 import type { IRStatement, OverlayIR } from "../ir/model.js";
 import type { RuntimeTarget } from "../runtime/target.js";
 import { qualifiedTypeName, type SchemaSnapshot } from "../schema/schema.js";
-import { compileToSQL, type SQLArtifact } from "../sql/compiler.js";
+import type { SQLArtifact } from "../sql/compiler.js";
+import { compileToSQL } from "../sql/compiler.js";
+import { compileGelIRToSQL, type GelIRSQLArtifact } from "../sql/gel_ir_compiler.js";
 import type { ScalarValue } from "../types.js";
 import { compileToIR } from "./semantic.js";
+import type { GeneratedSchema } from "../codegen/schema.js";
+import { compileASTToGelIR, isGelIRCompatibleStatement } from "./ast_to_ir.js";
 
 export interface CompilerCacheStats {
   hits: number;
@@ -22,18 +29,26 @@ export interface CompilerCacheMeta {
 
 export interface CompileArtifact {
   ir: IRStatement;
+  gelIr?: GelIRStatement;
+  usesGelIrSql: boolean;
   sql: SQLArtifact;
   cache: CompilerCacheMeta;
 }
 
 export interface CompileContext {
   overlays?: OverlayIR[];
+  params?: Record<string, ScalarValue>;
   globals?: Record<string, ScalarValue>;
   target?: RuntimeTarget;
+  schemaModel?: GeneratedSchema;
+  schemaModelName?: string;
+  experimentalGelIRSqlLowering?: boolean;
 }
 
 interface CachedCompile {
   ir: IRStatement;
+  gelIr?: GelIRStatement;
+  usesGelIrSql: boolean;
   sql: SQLArtifact;
 }
 
@@ -50,6 +65,8 @@ export class CompilerService {
       this.hits += 1;
       return {
         ir: cloneValue(cached.ir),
+        gelIr: cloneValue(cached.gelIr),
+        usesGelIrSql: cached.usesGelIrSql,
         sql: cloneValue(cached.sql),
         cache: {
           key,
@@ -60,15 +77,24 @@ export class CompilerService {
     }
 
     this.misses += 1;
-    const ir = compileToIR(schema, statement, { overlays: context.overlays, globals: context.globals });
-    const sql = compileToSQL(ir, { target: context.target });
+    const ir = compileToIR(schema, statement, {
+      overlays: context.overlays,
+      globals: context.globals,
+      schemaModel: context.schemaModel,
+      schemaModelName: context.schemaModelName,
+    });
+    const { sql, gelIr, usesGelIrSql } = compileSqlWithStranglerFig(schema, statement, ir, context);
     this.cache.set(key, {
       ir: cloneValue(ir),
+      gelIr: cloneValue(gelIr),
+      usesGelIrSql,
       sql: cloneValue(sql),
     });
 
     return {
       ir,
+      gelIr,
+      usesGelIrSql,
       sql,
       cache: {
         key,
@@ -114,7 +140,9 @@ export const buildCompileCacheKey = (schema: SchemaSnapshot, statement: Statemen
     rewritePhase: overlay.rewritePhase,
   })));
   const globalsFingerprint = stableJson(context.globals ?? {});
+  const paramsFingerprint = stableJson(context.params ?? {});
   const targetFingerprint = context.target ?? "sqlite";
+  const gelIrSqlLoweringFingerprint = String(resolveGelIrSqlLoweringEnabled(context));
 
   return createHash("sha256")
     .update(schemaFingerprint)
@@ -125,8 +153,55 @@ export const buildCompileCacheKey = (schema: SchemaSnapshot, statement: Statemen
     .update("|")
     .update(globalsFingerprint)
     .update("|")
+    .update(paramsFingerprint)
+    .update("|")
     .update(targetFingerprint)
+    .update("|")
+    .update(gelIrSqlLoweringFingerprint)
     .digest("hex");
+};
+
+const compileSqlWithStranglerFig = (
+  schema: SchemaSnapshot,
+  statement: Statement,
+  ir: IRStatement,
+  context: CompileContext,
+): { sql: SQLArtifact; gelIr?: GelIRStatement; usesGelIrSql: boolean } => {
+  if (statement.kind === "select" || statement.kind === "select_expr" || statement.kind === "select_free") {
+    return {
+      sql: compileToSQL(ir, { target: context.target ?? "sqlite", parameterValues: context.params, globalValues: context.globals }),
+      usesGelIrSql: false,
+    };
+  }
+
+  if (!isGelIRCompatibleStatement(statement)) {
+    throw new Error(`Statement kind '${statement.kind}' is not supported by GEL IR SQL lowering`);
+  }
+
+  const gelIr = compileASTToGelIR(statement, {
+    module: statement.withModule,
+    schema,
+    schemaModel: context.schemaModel,
+    schemaModelName: context.schemaModelName,
+  });
+
+  const sql = compileGelIRToSQL(gelIr as never, {
+    target: context.target ?? "sqlite",
+    parameterValues: context.params,
+    globalValues: context.globals,
+  }) as SQLArtifact & GelIRSQLArtifact;
+
+  return {
+    gelIr,
+    usesGelIrSql: true,
+    sql,
+  };
+};
+
+const resolveGelIrSqlLoweringEnabled = (context: CompileContext): boolean => {
+  // Kept for compile cache key stability; lowering is always on.
+  void context;
+  return true;
 };
 
 const fingerprintSchema = (schema: SchemaSnapshot): string => {
@@ -204,4 +279,9 @@ const sortValue = (value: unknown): unknown => {
   return value;
 };
 
-const cloneValue = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
+const cloneValue = <T>(value: T): T => {
+  if (value === undefined) {
+    return value;
+  }
+  return JSON.parse(JSON.stringify(value)) as T;
+};
