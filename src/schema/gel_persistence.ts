@@ -22,7 +22,6 @@ import type {
 import { GEL_SCHEMA_DDL, GEL_TABLE_NAMES } from "./gel_schema_tables.js";
 import type {
   AccessPolicyMetadata,
-  AnnotationMetadata,
   FunctionMetadata,
   LinkMetadata,
   ObjectTypeMetadata,
@@ -163,7 +162,6 @@ export const deserializeSchemaFromGelTables = (db: SQLiteDatabase): SchemaSnapsh
   const functionRows = rows.filter((r) => r.kind === "Function");
 
   const idToRow = new Map(rows.map((r) => [r.id, r]));
-  const nameToId = new Map(rows.map((r) => [r.name__internal, r.id]));
 
   const pointers = db.prepare(`SELECT * FROM gel_pointers`).all() as Array<{
     source_id: string;
@@ -292,8 +290,6 @@ export const deserializeSchemaFromGelTables = (db: SQLiteDatabase): SchemaSnapsh
 
       if (ptrRow.kind === "Property") {
         const meta = ptrRow.metadata ? (JSON.parse(ptrRow.metadata) as PropertyMetadata) : {} as PropertyMetadata;
-        const endpoint = endpointByPointer.get(ptr.pointer_id);
-
         if (meta.computed_expr) {
           const parsedExpr = parseComputedPropertyExpr(meta.computed_expr);
           const computedDef: ComputedDef = {
@@ -1113,23 +1109,6 @@ const serializeComputedExprPart = (part: { kind: string; field?: string; value?:
   return "";
 };
 
-const serializeComputedLinkExpr = (expr: ComputedDef["expr"]): string => {
-  if (expr.kind === "link_ref") {
-    let result = `.${expr.link}`;
-    if (expr.filter) {
-      result += ` { select filter .${expr.filter.field} ${expr.filter.op} ${JSON.stringify(expr.filter.value)} }`;
-    }
-    return result;
-  }
-  if (expr.kind === "backlink") {
-    let result = `.<${expr.link}`;
-    if (expr.sourceType) {
-      result += `[is ${expr.sourceType}]`;
-    }
-    return result;
-  }
-  return "";
-};
 
 const serializeRewriteExpr = (expr: NonNullable<MutationRewriteDef["onInsert"]>): string => {
   if (expr.kind === "datetime_of_statement") return "datetime_of_statement()";

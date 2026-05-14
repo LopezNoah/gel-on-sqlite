@@ -1190,7 +1190,7 @@ const tryRuntimeSelectExprEvaluation = (
       case "or":
         return Boolean(evalExpr(expr.left, env)) || Boolean(evalExpr(expr.right, env));
       case "not":
-        return !Boolean(evalExpr(expr.expr, env));
+        return !(evalExpr(expr.expr, env));
       case "select": {
         const sourceType = qualifyRuntimeTypeName(expr.typeName);
         let rows = readRuntimeTypedAliasSourceRows(db, schema, {
@@ -1614,25 +1614,6 @@ const findRuntimeComputedMulti = (
   return undefined;
 };
 
-const resolveRuntimeLinkIsMulti = (
-  schema: SchemaSnapshot,
-  sourceType: string,
-  relation: LinkRelationIR,
-  linkName: string,
-): boolean => {
-  const direct = findRuntimeLinkDef(schema, sourceType, linkName)?.link;
-  if (direct) {
-    return Boolean(direct.multi);
-  }
-
-  const relationSource = findRuntimeLinkDef(schema, relation.sourceType, linkName)?.link;
-  if (relationSource) {
-    return Boolean(relationSource.multi);
-  }
-
-  return relation.multi;
-};
-
 const resolvedRuntimeTarget = (context: SecurityContext, db: RuntimeDatabaseAdapter): RuntimeTarget =>
   context.runtimeTarget ?? db.target ?? "sqlite";
 
@@ -2014,7 +1995,7 @@ const tryEvaluateParsedRuntimeSelect = (
       return Boolean(evalFreeExpr(expr.left, env)) || Boolean(evalFreeExpr(expr.right, env));
     }
     if (expr.kind === "not") {
-      return !Boolean(evalFreeExpr(expr.expr, env));
+      return !(evalFreeExpr(expr.expr, env));
     }
     if (expr.kind === "shape_projection") {
       const base = evalFreeExpr(expr.expr, env);
@@ -2143,7 +2124,14 @@ const tryEvaluateParsedRuntimeSelect = (
       return expr.value;
     }
     if (expr.kind === "field_ref") {
-      return env.row?.[expr.field] ?? null;
+      if (!env.row) {
+        return null;
+      }
+      if (Object.prototype.hasOwnProperty.call(env.row, expr.field)) {
+        return env.row[expr.field] ?? null;
+      }
+      const rows = readForwardLink(env.row, rowTypeName(env.row, env.rowType), expr.field);
+      return multi ? rows : rows.length === 1 ? rows[0] : rows;
     }
     return null;
   };
@@ -2175,7 +2163,12 @@ const tryEvaluateParsedRuntimeSelect = (
           ? rows.map((child) => materialize(child, rowTypeName(child), element.shape!, { ...env, row: child, rowType: rowTypeName(child) }))
           : rows;
       } else if (element.kind === "link") {
+        const resolvedLink = findRuntimeLinkDef(schema, rowTypeName(row, typeName), element.name)
+          ?? findRuntimeLinkDef(schema, typeName, element.name);
+        const computedMulti = findRuntimeComputedMulti(schema, rowTypeName(row, typeName), element.name)
+          ?? findRuntimeComputedMulti(schema, typeName, element.name);
         const existing = row[element.name];
+        const isMulti = Array.isArray(existing) || (resolvedLink ? Boolean(resolvedLink.link.multi) : Boolean(computedMulti));
         let rows = Array.isArray(existing)
           ? existing as ParsedRuntimeRow[]
           : readForwardLink(row, rowTypeName(row, typeName), element.name);
@@ -2189,7 +2182,8 @@ const tryEvaluateParsedRuntimeSelect = (
         if (element.clauses.limit !== undefined) {
           rows = rows.slice(0, element.clauses.limit);
         }
-        out[element.name] = rows.map((child) => materialize(child, rowTypeName(child), element.shape, { ...env, row: child, rowType: rowTypeName(child) }));
+        const materialized = rows.map((child) => materialize(child, rowTypeName(child), element.shape, { ...env, row: child, rowType: rowTypeName(child) }));
+        out[element.name] = isMulti ? materialized : (materialized[0] ?? null);
       }
     }
     return out;
@@ -2234,16 +2228,19 @@ const tryEvaluateParsedRuntimeSelect = (
             ? filter.value.values
             : filter.value
       : filter.value;
+    const actual = filter.target.field === "__type__.name"
+      ? rowTypeName(row, typeName)
+      : row[filter.target.field];
     if (Array.isArray(expected)) {
-      return filter.op === "=" ? expected.includes(row[filter.target.field] as ScalarValue) : !expected.includes(row[filter.target.field] as ScalarValue);
+      return filter.op === "=" ? expected.includes(actual as ScalarValue) : !expected.includes(actual as ScalarValue);
     }
-    return runtimeAliasPredicateMatches(row[filter.target.field], filter.op, expected as ScalarValue);
+    return runtimeAliasPredicateMatches(actual, filter.op, expected as ScalarValue);
   };
 
   const evalSelect = (typeName: string, shape: ShapeElement[], clauses: SelectStatement["filter"] extends never ? never : { filter?: SelectStatement["filter"]; orderBy?: SelectStatement["orderBy"]; limit?: SelectStatement["limit"]; offset?: SelectStatement["offset"]; _withBindings?: WithBinding[] }, env: ParsedRuntimeEnv): ParsedRuntimeRow[] => {
     const bindings = evalBindings(clauses._withBindings, env);
     const source = bindings.get(typeName)
-      ?? (typeName === statement.typeName && selectedAliasNeedsParsedRuntime && selectedAliasStatement
+      ?? (typeName === statement.typeName && selectedAliasStatement
         ? evalSelect(selectedAliasStatement.typeName, selectedAliasStatement.shape, {
             filter: selectedAliasStatement.filter,
             orderBy: selectedAliasStatement.orderBy,
@@ -3172,7 +3169,7 @@ export const executeQueryWithTrace = (
         rows: materializeSelectExprRows(db, schema, ir, context, sqlTrail),
       };
     } else {
-      const writeResult = runWriteWithAccessPolicies(db, schema, ast, ir, sqlArtifact, subjectType!, context);
+      const writeResult = runWriteWithAccessPolicies(db, schema, ast, ir, sqlArtifact, subjectType!, context, compiled.usesGelIrSql);
 
       result = {
         kind: ir.kind,
@@ -3250,7 +3247,7 @@ export const executeQueryUnitWithTrace = (
       } else if (ir.kind === "select_expr") {
         result = { kind: "select", rows: materializeSelectExprRows(db, schema, ir, context, sqlTrail) };
       } else {
-        const writeResult = runWriteWithAccessPolicies(db, schema, ast, ir, sqlArtifact, subjectType!, context);
+        const writeResult = runWriteWithAccessPolicies(db, schema, ast, ir, sqlArtifact, subjectType!, context, compiled.usesGelIrSql);
         result = { kind: ir.kind, changes: writeResult.changes };
       }
 
@@ -3351,7 +3348,7 @@ const executeForLoop = (
       assertTargetSqlCompatibility(sqlArtifact.sql, runtimeTarget);
       const sqlTrail: SQLArtifact[] = [sqlArtifact];
 
-      const writeResult = runWriteWithAccessPolicies(db, schema, insertAst, ir, sqlArtifact, subjectType, context);
+      const writeResult = runWriteWithAccessPolicies(db, schema, insertAst, ir, sqlArtifact, subjectType, context, compiled.usesGelIrSql);
       const result = { kind: "insert" as const, changes: writeResult.changes };
 
       const currentOverlays = extractOverlays(ir);
@@ -4364,9 +4361,9 @@ const evaluateSelectExprEntry = (
     case "not": {
       const value = evaluateSelectExprEntry(schema, db, context, entry.expr, sqlTrail, evalContext);
       if (Array.isArray(value)) {
-        return value.map((item) => !Boolean(item));
+        return value.map((item) => !(item));
       }
-      return !Boolean(value);
+      return !(value);
     }
     case "math": {
       const leftValue = evaluateSelectExprEntry(schema, db, context, entry.left, sqlTrail, evalContext);
@@ -4457,21 +4454,9 @@ const evaluateSelectExprEntry = (
 
       if (Array.isArray(value)) {
         const out: unknown[] = [];
-        const seenObjectIds = new Set<string>();
         const pushValue = (candidate: unknown): void => {
           if (candidate === null || candidate === undefined) {
             return;
-          }
-          if (candidate && typeof candidate === "object" && !Array.isArray(candidate)) {
-            const candidateRow = candidate as Record<string, unknown>;
-            const objectId = candidateRow.id;
-            const hasLinkPropertyContext = Object.keys(candidateRow).some((key) => key.startsWith("@"));
-            if (!hasLinkPropertyContext && typeof objectId === "string") {
-              if (seenObjectIds.has(objectId)) {
-                return;
-              }
-              seenObjectIds.add(objectId);
-            }
           }
           out.push(candidate);
         };
@@ -4500,7 +4485,48 @@ const evaluateSelectExprEntry = (
         const row = item as Record<string, unknown>;
         const projected: Record<string, unknown> = {};
         for (const field of entry.fields) {
-          projected[field.name] = row[field.sourceField] ?? null;
+          if (field.expr) {
+            projected[field.name] = evaluateSelectExprEntry(schema, db, context, field.expr, sqlTrail, {
+              currentBinding: evalContext?.currentBinding,
+              currentValue: row,
+            });
+            continue;
+          }
+
+          const rawValue = field.sourceField ? row[field.sourceField] ?? null : null;
+          if (field.itemFields && Array.isArray(rawValue)) {
+            projected[field.name] = rawValue
+              .map((child) => {
+                if (!child || typeof child !== "object" || Array.isArray(child)) {
+                  return null;
+                }
+                const childRow = child as Record<string, unknown>;
+                const childProjected: Record<string, unknown> = {};
+                for (const itemField of field.itemFields ?? []) {
+                  if (itemField.expr) {
+                    const itemValue = evaluateSelectExprEntry(schema, db, context, itemField.expr, sqlTrail, {
+                      currentBinding: evalContext?.currentBinding,
+                      currentValue: childRow,
+                    });
+                    const childTypeName = typeof childRow.__source_type === "string"
+                      ? childRow.__source_type
+                      : typeof childRow.__type__ === "string"
+                        ? childRow.__type__
+                        : undefined;
+                    childProjected[itemField.name] = childTypeName
+                      ? itemField.multi ? [childTypeName] : childTypeName
+                      : itemValue;
+                  } else {
+                    childProjected[itemField.name] = itemField.sourceField ? childRow[itemField.sourceField] ?? null : null;
+                  }
+                }
+                return childProjected;
+              })
+              .filter((child): child is Record<string, unknown> => child !== null);
+            continue;
+          }
+
+          projected[field.name] = rawValue;
         }
         return projected;
       };
@@ -4651,8 +4677,19 @@ const evaluateSelectExprEntry = (
     }
     case "select_expr_subquery": {
       const value = evaluateSelectExprEntry(schema, db, context, entry.value, sqlTrail, evalContext);
-      const rows = Array.isArray(value) ? [...value] : [value];
+      let rows = Array.isArray(value) ? [...value] : [value];
+      if (entry.filter) {
+        const currentBinding = entry.alias ?? evalContext?.currentBinding ?? "__current__";
+        rows = rows.filter((row) => {
+          const filterValue = evaluateSelectExprEntry(schema, db, context, entry.filter!, sqlTrail, {
+            currentBinding,
+            currentValue: row,
+          });
+          return Array.isArray(filterValue) ? filterValue.some(Boolean) : Boolean(filterValue);
+        });
+      }
       if (entry.orderBy) {
+        const currentBinding = entry.alias ?? evalContext?.currentBinding ?? "__current__";
         const inferredEnumOrder = entry.orderBy.value.kind === "current_item"
           && rows.every((item) => typeof item === "string")
           ? (() => {
@@ -4677,7 +4714,7 @@ const evaluateSelectExprEntry = (
             context,
             entry.orderBy!.value,
             sqlTrail,
-            { currentBinding: entry.alias, currentValue: a },
+            { currentBinding, currentValue: a },
           );
           const bKey = evaluateSelectExprEntry(
             schema,
@@ -4685,7 +4722,7 @@ const evaluateSelectExprEntry = (
             context,
             entry.orderBy!.value,
             sqlTrail,
-            { currentBinding: entry.alias, currentValue: b },
+            { currentBinding, currentValue: b },
           );
           if (aKey === bKey) {
             return 0;
@@ -4766,7 +4803,7 @@ const materializeSelectExprRows = (
     return [];
   }
   const value = evaluateSelectExprEntry(schema, db, context, ir.entries[0], sqlTrail);
-  let rows = Array.isArray(value) ? [...value] : [value];
+  const rows = Array.isArray(value) ? [...value] : [value];
 
   if (ir.orderBy) {
     const enumOrder = ir.orderBy.value.kind === "cast"
@@ -6028,20 +6065,45 @@ const runWriteWithAccessPolicies = (
   db.prepare("BEGIN").run();
   try {
     if (ir.kind === "insert") {
-      applyPendingInsertDefaults(ir.values);
+      const insertValues: Record<string, ScalarValue> = { ...ir.values };
+      applyPendingInsertDefaults(insertValues);
 
-      if (sqlArtifact.params.length > 0) {
-        const keys = Object.keys(ir.values);
-        sqlArtifact.params = keys.map((key) => {
-          const value = ir.values[key];
-          if (typeof value === "boolean") {
-            return value ? 1 : 0;
+      if (ast.kind === "insert") {
+        for (const link of subjectType.links ?? []) {
+          if (link.multi || (link.properties?.length ?? 0) > 0) {
+            continue;
           }
-          return value;
-        });
+          if (!Object.prototype.hasOwnProperty.call(ast.values, link.name)) {
+            continue;
+          }
+
+          const inlineColumn = `${link.name}_id`;
+          const targets = resolveInsertTargets(db, schema, ast.values[link.name]!, context, ast);
+          insertValues[inlineColumn] = targets[0]?.id ?? null;
+        }
       }
 
-      enforceInsertPolicies(subjectType, ir.values, context, ast.pos.line, ast.pos.column);
+      const normalizedEntries = Object.entries(insertValues).filter(([column, value]) => {
+        if (column === "id") {
+          return false;
+        }
+        if (value === PENDING_INLINE_LINK_VALUE || value === PENDING_INSERT_REWRITE_VALUE) {
+          return false;
+        }
+        return true;
+      });
+
+      if (normalizedEntries.length === 0) {
+        sqlArtifact.sql = `INSERT INTO ${quoteIdent(ir.table)} DEFAULT VALUES`;
+        sqlArtifact.params = [];
+      } else {
+        const columns = normalizedEntries.map(([column]) => column);
+        const params = normalizedEntries.map(([, value]) => (typeof value === "boolean" ? (value ? 1 : 0) : value));
+        sqlArtifact.sql = `INSERT INTO ${quoteIdent(ir.table)} (${columns.map((column) => quoteIdent(column)).join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`;
+        sqlArtifact.params = params;
+      }
+
+      enforceInsertPolicies(subjectType, insertValues, context, ast.pos.line, ast.pos.column);
 
       if (ast.kind === "insert" && ast.conflict) {
         const conflictField = resolveConflictField(ast, subjectType);

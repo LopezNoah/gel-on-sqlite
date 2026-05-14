@@ -9,9 +9,10 @@ import {
   deserializeSchemaFromGelTables,
 } from "../src/schema/gel_persistence.js";
 import { executeQuery, executeScript } from "../src/runtime/engine.js";
-import { parseDeclarativeSchema } from "../src/schema/declarative.js";
+// import { parseDeclarativeSchema } from "../src/schema/declarative.js";
 import { schemaSnapshotFromDeclarative } from "../src/schema/uiSchema.js";
 import { expect } from "vitest";
+import { parseDeclarativeSchema } from "../src/schema/sdl_adapter.js";
 
 export interface HarnessOptions {
   schema?: string;      // Name of .esdl file in tests/schemas/
@@ -90,6 +91,16 @@ function loadSchemaSource(schemaDir: string, schemaName: string): string {
     .join("\n\n");
 }
 
+function defaultModuleForSchema(schemaDir: string, schemaName: string): string {
+  const idx = schemaName.lastIndexOf("_");
+  if (idx <= 0) {
+    return inferredModuleNameFromSchema(schemaName);
+  }
+
+  const defaultPath = path.join(schemaDir, `${schemaName.slice(0, idx)}_default.esdl`);
+  return fs.existsSync(defaultPath) ? "default" : inferredModuleNameFromSchema(schemaName);
+}
+
 export class QueryHarness {
   db: any;
   schema: any;
@@ -133,7 +144,7 @@ export class QueryHarness {
         schemaSource = loadSchemaSource(schemaDir, options.schema);
       }
 
-      const decl = parseDeclarativeSchema(schemaSource, { parserEngine: "new_sdl", legacySyntaxCompat: true },);
+      const decl = parseDeclarativeSchema(schemaSource, { legacySyntaxCompat: true },);
       snapshot = schemaSnapshotFromDeclarative(decl);
       materializeSchema(db, snapshot);
       ensureGelSchemaTables(db);
@@ -141,7 +152,9 @@ export class QueryHarness {
       serializeSchemaToInstdata(db, snapshot);
     }
 
-    const fallbackModule = options.schema ? inferredModuleNameFromSchema(options.schema) : "default";
+    const fallbackModule = options.schema
+      ? defaultModuleForSchema(path.join(__dirname, "schemas"), options.schema)
+      : "default";
     const harness = new QueryHarness(db, snapshot, fallbackModule);
 
     const shouldRunSetup = Boolean(options.setup)

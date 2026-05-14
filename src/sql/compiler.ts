@@ -129,7 +129,7 @@ const compileSelectToSQL = (ir: SelectIR, target: RuntimeTarget): SQLArtifact =>
       const expr =
         element.kind === "link"
           ? compileLinkArrayExpr(element, rootAlias, params, target)
-          : compileBacklinkArrayExpr(element, rootAlias, params);
+          : compileBacklinkArrayExpr(element, rootAlias);
       projections.push(`${expr} AS ${quoteIdent(alias)}`);
     }
   }
@@ -245,7 +245,6 @@ const compileLinkArrayExpr = (
 const compileBacklinkArrayExpr = (
   element: Extract<SelectShapeElementIR, { kind: "backlink" }>,
   sourceAlias: string,
-  params: ScalarValue[],
 ): string => {
   const sourceUnions = element.sources.map((source) => {
     const sourceTables = source.sourceTables && source.sourceTables.length > 0
@@ -345,7 +344,7 @@ const compileShapeObjectExpr = (
       continue;
     }
 
-    pairs.push(`json(${compileBacklinkArrayExpr(element, sourceAlias, params)})`);
+    pairs.push(`json(${compileBacklinkArrayExpr(element, sourceAlias)})`);
   }
 
   return `json_object(${pairs.join(", ")})`;

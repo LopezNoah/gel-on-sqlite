@@ -862,7 +862,8 @@ export class Parser {
       if (this.match("semicolon")) {
         continue;
       }
-      declarations.push(this.parseDeclaration());
+      const decl = this.parseDeclaration();
+      declarations.push(decl);
     }
 
     return { kind: "TypeBody", declarations };

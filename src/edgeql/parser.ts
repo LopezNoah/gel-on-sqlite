@@ -528,8 +528,8 @@ class Parser {
       this.consume();
     }
     const next = this.peek();
-    let body: InsertStatement | SelectStatement | SelectExprStatement | SelectFreeStatement;
-    body = this.withLocalBinding(variable, () => {
+    const body: InsertStatement | SelectStatement | SelectExprStatement | SelectFreeStatement
+      = this.withLocalBinding(variable, () => {
       if (next.kind === "kw_select") {
         const selectStart = this.consume();
         const freeOrExpr = this.parseSelectFreeOrExpr(selectStart, ctx, false);
@@ -3037,7 +3037,13 @@ class Parser {
   }
 
   private parseFilterTarget(): { kind: "field"; field: string } | { kind: "backlink"; link: string; sourceType?: string } | { kind: "backlink_property"; link: string; sourceType?: string; property: string } {
-    if (this.isNameToken(this.peek()) && this.peekNext().kind === "dot" && this.peekNth(2).kind === "lt") {
+    if (
+      this.isNameToken(this.peek())
+      && (
+        (this.peekNext().kind === "dot" && this.peekNth(2).kind === "lt")
+        || this.peekNext().kind === "backward_link"
+      )
+    ) {
       this.consume();
       const backlink = this.parseBacklinkReference("filter");
       if (this.peek().kind === "at") {
@@ -3867,11 +3873,7 @@ export const parseEdgeQLScript = (input: string, options: ParseEdgeQLOptions = {
   const piece = input.slice(startIndex).trim();
   if (piece.length > 0) {
     const setModule = parseSetModuleStatement(piece);
-    if (setModule) {
-      activeModule = setModule;
-    } else {
-      statements.push(parseEdgeQL(piece, { defaultModule: activeModule }));
-    }
+    statements.push(parseEdgeQL(piece, { defaultModule: setModule }));
   }
 
   return statements;

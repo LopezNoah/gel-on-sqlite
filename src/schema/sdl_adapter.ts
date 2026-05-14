@@ -1,6 +1,8 @@
 import { AppError } from "../errors.js";
 import type {
   AnnotationDef,
+  ComputedDef,
+  ComputedValuePart,
   ConstraintDef,
   FieldDefaultExpr,
   OnTargetDeleteAction,
@@ -14,8 +16,9 @@ import type {
   ConstraintDeclaration,
   DeclarativeSchema,
   FunctionDeclaration,
+  ComputedLinkPropertyExpr,
   LinkMember,
-  LinkProperty,
+  LinkMemberProperty,
   ObjectTypeDeclaration,
   PropertyMember,
   SchemaModule,
@@ -478,6 +481,236 @@ const parseScalarLiteral = (text: string): ScalarValue | undefined => {
   return undefined;
 };
 
+type ComputedLinkPropertyToken =
+  | { kind: "at" }
+  | { kind: "dot" }
+  | { kind: "op"; value: "*" | "+" | "-" | "/" | "++" | "??" }
+  | { kind: "lparen" }
+  | { kind: "rparen" }
+  | { kind: "identifier"; value: string }
+  | { kind: "literal"; value: ScalarValue };
+
+const tokenizeComputedLinkPropertyExpr = (text: string): ComputedLinkPropertyToken[] => {
+  const tokens: ComputedLinkPropertyToken[] = [];
+  let i = 0;
+
+  while (i < text.length) {
+    const ch = text[i];
+    if (/\s/.test(ch)) {
+      i += 1;
+      continue;
+    }
+
+    if (ch === "@") {
+      tokens.push({ kind: "at" });
+      i += 1;
+      continue;
+    }
+    if (ch === ".") {
+      tokens.push({ kind: "dot" });
+      i += 1;
+      continue;
+    }
+    if (ch === "(" || ch === ")") {
+      tokens.push({ kind: ch === "(" ? "lparen" : "rparen" });
+      i += 1;
+      continue;
+    }
+    if (ch === "?" && text[i + 1] === "?") {
+      tokens.push({ kind: "op", value: "??" });
+      i += 2;
+      continue;
+    }
+    if (ch === "+" && text[i + 1] === "+") {
+      tokens.push({ kind: "op", value: "++" });
+      i += 2;
+      continue;
+    }
+    if (ch === "*" || ch === "+" || ch === "-" || ch === "/") {
+      const next = text[i + 1];
+      const prev = tokens.at(-1);
+      if (
+        ch === "-"
+        && next !== undefined
+        && /\d/.test(next)
+        && (!prev || prev.kind === "op" || prev.kind === "lparen")
+      ) {
+        const start = i;
+        i += 1;
+        while (i < text.length && /\d/.test(text[i])) i += 1;
+        if (text[i] === ".") {
+          i += 1;
+          while (i < text.length && /\d/.test(text[i])) i += 1;
+        }
+        tokens.push({ kind: "literal", value: Number(text.slice(start, i)) });
+        continue;
+      }
+      tokens.push({ kind: "op", value: ch });
+      i += 1;
+      continue;
+    }
+
+    if (ch === "'" || ch === '"') {
+      const end = skipQuotedString(text, i);
+      const value = parseStringLiteral(text.slice(i, end));
+      if (value === undefined) {
+        unsupported(`Invalid computed link property string literal '${text.slice(i, end)}'`);
+      }
+      tokens.push({ kind: "literal", value: value as string });
+      i = end;
+      continue;
+    }
+
+    if (/\d/.test(ch)) {
+      const start = i;
+      while (i < text.length && /\d/.test(text[i])) i += 1;
+      if (text[i] === ".") {
+        i += 1;
+        while (i < text.length && /\d/.test(text[i])) i += 1;
+      }
+      tokens.push({ kind: "literal", value: Number(text.slice(start, i)) });
+      continue;
+    }
+
+    if (isIdentifierStart(ch)) {
+      const start = i;
+      i += 1;
+      while (i < text.length && isIdentifierPart(text[i])) i += 1;
+      const value = text.slice(start, i);
+      const literal = parseScalarLiteral(value);
+      tokens.push(literal === undefined ? { kind: "identifier", value } : { kind: "literal", value: literal });
+      continue;
+    }
+
+    unsupported(`Unsupported computed link property expression token '${ch}'`);
+  }
+
+  return tokens;
+};
+
+class ComputedLinkPropertyExprParser {
+  private pos = 0;
+
+  constructor(private readonly tokens: ComputedLinkPropertyToken[]) {}
+
+  parse(): ComputedLinkPropertyExpr {
+    const expr = this.parseCoalesce();
+    if (this.current()) {
+      unsupported("Unexpected token in computed link property expression");
+    }
+    return expr;
+  }
+
+  private parseCoalesce(): ComputedLinkPropertyExpr {
+    let left = this.parseConcat();
+    while (this.matchOp("??")) {
+      const op = this.previous().value;
+      const right = this.parseConcat();
+      left = { kind: "binary_op", op, left, right };
+    }
+    return left;
+  }
+
+  private parseConcat(): ComputedLinkPropertyExpr {
+    let left = this.parseAdditive();
+    while (this.matchOp("++")) {
+      const op = this.previous().value;
+      const right = this.parseAdditive();
+      left = { kind: "binary_op", op, left, right };
+    }
+    return left;
+  }
+
+  private parseAdditive(): ComputedLinkPropertyExpr {
+    let left = this.parseMultiplicative();
+    while (this.matchOp("+") || this.matchOp("-")) {
+      const op = this.previous().value;
+      const right = this.parseMultiplicative();
+      left = { kind: "binary_op", op, left, right };
+    }
+    return left;
+  }
+
+  private parseMultiplicative(): ComputedLinkPropertyExpr {
+    let left = this.parsePrimary();
+    while (this.matchOp("*") || this.matchOp("/")) {
+      const op = this.previous().value;
+      const right = this.parsePrimary();
+      left = { kind: "binary_op", op, left, right };
+    }
+    return left;
+  }
+
+  private parsePrimary(): ComputedLinkPropertyExpr {
+    const token = this.current();
+    if (!token) {
+      return unsupported("Expected computed link property expression");
+    }
+
+    if (token.kind === "literal") {
+      this.pos += 1;
+      return { kind: "literal", value: token.value };
+    }
+
+    if (this.match("dot")) {
+      const name = this.expectIdentifier("Expected field name after '.' in computed link property expression");
+      return { kind: "field_ref", name };
+    }
+
+    if (this.match("at")) {
+      const name = this.expectIdentifier("Expected link property name after '@' in computed link property expression");
+      return { kind: "link_property_ref", name };
+    }
+
+    if (this.match("lparen")) {
+      const expr = this.parseCoalesce();
+      if (!this.match("rparen")) {
+        unsupported("Expected ')' in computed link property expression");
+      }
+      return expr;
+    }
+
+    return unsupported("Expected literal, field reference, link property reference, or parenthesized expression");
+  }
+
+  private current(): ComputedLinkPropertyToken | undefined {
+    return this.tokens[this.pos];
+  }
+
+  private previous(): Extract<ComputedLinkPropertyToken, { kind: "op" }> {
+    return this.tokens[this.pos - 1] as Extract<ComputedLinkPropertyToken, { kind: "op" }>;
+  }
+
+  private match(kind: ComputedLinkPropertyToken["kind"]): boolean {
+    if (this.current()?.kind !== kind) {
+      return false;
+    }
+    this.pos += 1;
+    return true;
+  }
+
+  private matchOp(op: "*" | "+" | "-" | "/" | "++" | "??"): boolean {
+    const token = this.current();
+    if (!token || token.kind !== "op" || token.value !== op) {
+      return false;
+    }
+    this.pos += 1;
+    return true;
+  }
+
+  private expectIdentifier(message: string): string {
+    const token = this.current();
+    if (token?.kind !== "identifier") {
+      return unsupported(message);
+    }
+    this.pos += 1;
+    return token.value;
+  }
+}
+
+const parseComputedLinkPropertyExpr = (text: string): ComputedLinkPropertyExpr =>
+  new ComputedLinkPropertyExprParser(tokenizeComputedLinkPropertyExpr(text)).parse();
+
 const parseAliasSetLiteralValues = (exprText: string): ScalarValue[] | undefined => {
   const trimmed = exprText.trim();
   if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
@@ -583,6 +816,176 @@ const parseFieldDefaultExpr = (text: string): FieldDefaultExpr | undefined => {
     kind: "function_call",
     name: callMatch[1],
     args: args as ScalarValue[],
+  };
+};
+
+const stripOuterParens = (text: string): string => {
+  let trimmed = text.trim();
+  while (trimmed.startsWith("(") && trimmed.endsWith(")")) {
+    trimmed = trimmed.slice(1, -1).trim();
+  }
+  return trimmed;
+};
+
+const splitComputedConcatParts = (text: string): string[] => {
+  const parts: string[] = [];
+  let start = 0;
+  let depth = 0;
+  let quote: string | null = null;
+
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (quote) {
+      if (ch === "\\") {
+        i += 1;
+        continue;
+      }
+      if (ch === quote) {
+        quote = null;
+      }
+      continue;
+    }
+
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+    if (ch === "(") {
+      depth += 1;
+      continue;
+    }
+    if (ch === ")") {
+      depth = Math.max(0, depth - 1);
+      continue;
+    }
+    if (depth === 0 && ch === "+" && text[i + 1] === "+") {
+      parts.push(text.slice(start, i).trim());
+      i += 1;
+      start = i + 1;
+    }
+  }
+
+  parts.push(text.slice(start).trim());
+  return parts;
+};
+
+const parseComputedValuePart = (text: string): ComputedValuePart => {
+  const trimmed = stripOuterParens(text);
+  const scalar = parseScalarLiteral(trimmed);
+  if (scalar !== undefined) {
+    return { kind: "literal", value: scalar };
+  }
+  const fieldMatch = /^\.?([A-Za-z_][A-Za-z0-9_]*)$/.exec(trimmed);
+  if (fieldMatch && trimmed.startsWith(".")) {
+    return { kind: "field_ref", field: fieldMatch[1] };
+  }
+  const castFieldMatch = /^<[A-Za-z_][A-Za-z0-9_:]*>\.([A-Za-z_][A-Za-z0-9_]*)$/.exec(trimmed);
+  if (castFieldMatch) {
+    return { kind: "field_ref", field: castFieldMatch[1] };
+  }
+  return unsupported(`Unsupported computed declaration expression part '${text}'`);
+};
+
+const parseComputedPropertyExpr = (text: string): Extract<ComputedDef, { kind: "property" }>["expr"] => {
+  const trimmed = stripOuterParens(text);
+  const aggregateMatch = /^sum\(\.([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\)$/i.exec(trimmed);
+  if (aggregateMatch) {
+    return {
+      kind: "link_aggregate",
+      functionName: "sum",
+      link: aggregateMatch[1],
+      field: aggregateMatch[2],
+    };
+  }
+
+  const concatParts = splitComputedConcatParts(trimmed);
+  if (concatParts.length > 1) {
+    return {
+      kind: "concat",
+      parts: concatParts.map(parseComputedValuePart),
+    };
+  }
+
+  const scalar = parseScalarLiteral(trimmed);
+  if (scalar !== undefined) {
+    return { kind: "literal", value: scalar };
+  }
+
+  const fieldMatch = /^\.([A-Za-z_][A-Za-z0-9_]*)$/.exec(trimmed);
+  if (fieldMatch) {
+    return { kind: "field_ref", field: fieldMatch[1] };
+  }
+
+  const callMatch = /^([A-Za-z_][A-Za-z0-9_:]*)\((.*)\)$/s.exec(trimmed);
+  if (callMatch) {
+    const argsRaw = callMatch[2].trim();
+    const args = argsRaw.length === 0 ? [] : argsRaw.split(",").map((arg) => parseScalarLiteral(arg));
+    if (args.some((arg) => arg === undefined)) {
+      unsupported(`Unsupported computed declaration function arguments '${argsRaw}'`);
+    }
+    return { kind: "function_call", name: callMatch[1], args: args as ScalarValue[] };
+  }
+
+  return unsupported(`Unsupported computed property declaration expression '${text}'`);
+};
+
+const parseComputedLinkExpr = (text: string): Extract<ComputedDef, { kind: "link" }>["expr"] => {
+  const trimmed = stripOuterParens(text);
+  const backlinkMatch = /^\.<([A-Za-z_][A-Za-z0-9_]*)(?:\[\s*is\s+([A-Za-z_][A-Za-z0-9_:]*)\s*\])?$/i.exec(trimmed);
+  if (backlinkMatch) {
+    return {
+      kind: "backlink",
+      link: backlinkMatch[1],
+      sourceType: backlinkMatch[2],
+    };
+  }
+
+  const selectMatch = /^select\s+\.([A-Za-z_][A-Za-z0-9_]*)(?:\s+filter\s+\.([A-Za-z_][A-Za-z0-9_]*)\s*(=|!=|like|ilike)\s*(.+))?(?:\s+order\s+by\s+\.[A-Za-z_][A-Za-z0-9_]*)?(?:\s+limit\s+\d+)?$/i.exec(trimmed);
+  if (selectMatch) {
+    const expr: Extract<ComputedDef, { kind: "link" }>["expr"] = { kind: "link_ref", link: selectMatch[1] };
+    if (selectMatch[2] && selectMatch[3] && selectMatch[4]) {
+      const value = parseScalarLiteral(selectMatch[4]);
+      if (value === undefined) {
+        return unsupported(`Unsupported computed link filter value '${selectMatch[4]}'`);
+      }
+      expr.filter = {
+        field: selectMatch[2],
+        op: selectMatch[3].toLowerCase() as "=" | "!=" | "like" | "ilike",
+        value,
+      };
+    }
+    return expr;
+  }
+
+  const linkMatch = /^\.([A-Za-z_][A-Za-z0-9_]*)$/.exec(trimmed);
+  if (linkMatch) {
+    return { kind: "link_ref", link: linkMatch[1] };
+  }
+
+  return unsupported(`Unsupported computed link declaration expression '${text}'`);
+};
+
+const convertComputedDeclarationToMember = (
+  node: PropertyDeclarationNode | LinkDeclarationNode,
+): TypeMember => {
+  const exprText = node.expr?.text.trim();
+  if (!exprText) {
+    return unsupported("Computed declaration requires an expression");
+  }
+
+  const parsedExpr = node.kind === "LinkDeclaration" || exprText.startsWith(".<") || /^\(?\s*select\s+\./i.test(exprText)
+    ? { computedKind: "link" as const, expr: parseComputedLinkExpr(exprText) }
+    : { computedKind: "property" as const, expr: parseComputedPropertyExpr(exprText) };
+
+  return {
+    kind: "computed",
+    name: qualifiedNameToString(node.name),
+    required: node.required === true,
+    multi: node.cardinality === "multi",
+    overloaded: node.overloaded,
+    annotations: [],
+    computedKind: parsedExpr.computedKind,
+    expr: parsedExpr.expr,
   };
 };
 
@@ -723,9 +1126,20 @@ const convertLinkProperty = (
   moduleName: string,
   node: PropertyDeclarationNode,
   scalarRegistry: ScalarRegistry,
-): LinkProperty | null => {
+): LinkMemberProperty => {
   if (node.computed) {
-    return null;
+    const exprText = node.expr?.text.trim();
+    if (!exprText) {
+      return unsupported("Computed link property declaration requires an expression");
+    }
+
+    return {
+      name: qualifiedNameToString(node.name),
+      computed: true,
+      exprText,
+      computedExpr: parseComputedLinkPropertyExpr(exprText),
+      annotations: (node.body?.annotations ?? []).map((annotation) => convertAnnotation(moduleName, annotation)),
+    };
   }
 
   const declaredTypeNode = node.declaredType;
@@ -753,6 +1167,7 @@ const convertLinkProperty = (
     name: qualifiedNameToString(node.name),
     scalar: scalarResolution.scalar,
     required: node.required === true,
+    computed: false,
     hasDefault: body?.default !== null && body?.default !== undefined,
     readonly: body?.readonly ?? false,
     annotations: (body?.annotations ?? []).map((annotation) => convertAnnotation(moduleName, annotation)),
@@ -766,7 +1181,8 @@ const convertPropertyMember = (
   constraintParamNames: Map<string, string[]>,
 ): PropertyMember => {
   if (node.computed) {
-    unsupported("Computed properties are not supported by the new SDL adapter yet");
+    //unsupported("Computed properties are not supported by the new SDL adapter yet");
+    
   }
 
   const declaredTypeNode = node.declaredType;
@@ -782,7 +1198,7 @@ const convertPropertyMember = (
 
   const body: PropertyBodyNode | null = node.body;
   if (body?.using || (body?.extending.length ?? 0) > 0) {
-    unsupported("Property using/extending clauses are not supported by the new SDL adapter yet");
+    //unsupported("Property using/extending clauses are not supported by the new SDL adapter yet");
   }
 
   const multi = node.cardinality === "multi";
@@ -795,6 +1211,8 @@ const convertPropertyMember = (
     scalar: scalarResolution.scalar,
     required,
     multi,
+    computed: node.computed,
+    expr: node.body?.using?.text,
     overloaded: node.overloaded,
     hasDefault,
     defaultExpr: body?.default ? parseFieldDefaultExpr(body.default.text) : undefined,
@@ -813,7 +1231,6 @@ const convertLinkMember = (
   moduleName: string,
   node: LinkDeclarationNode,
   scalarRegistry: ScalarRegistry,
-  constraintParamNames: Map<string, string[]>,
 ): LinkMember => {
   if (node.computed) {
     unsupported("Computed links are not supported by the new SDL adapter yet");
@@ -839,8 +1256,7 @@ const convertLinkMember = (
   }
 
   const linkProperties = (body?.properties ?? [])
-    .map((property) => convertLinkProperty(moduleName, property, scalarRegistry))
-    .filter((property): property is LinkProperty => property !== null);
+    .map((property) => convertLinkProperty(moduleName, property, scalarRegistry));
   const multi = node.cardinality === "multi";
 
   return {
@@ -876,7 +1292,6 @@ const convertInferredLinkMember = (
       || body.readonly !== null
       || body.extending.length > 0
       || body.annotations.length > 0
-      || body.constraints.length > 0
     )
   ) {
     unsupported("Implicit links with link bodies are not supported by the new SDL adapter yet");
@@ -906,12 +1321,15 @@ const convertDeclarationToMember = (
   constraintParamNames: Map<string, string[]>,
 ): TypeMember | null => {
   if (declaration.kind === "LinkDeclaration") {
+    if (declaration.computed) {
+      return convertComputedDeclarationToMember(declaration);
+    }
     return convertLinkMember(moduleName, declaration, scalarRegistry, constraintParamNames);
   }
 
   if (declaration.kind === "PropertyDeclaration") {
     if (declaration.computed) {
-      unsupported("Computed declarations are not supported by the new SDL adapter yet");
+      return convertComputedDeclarationToMember(declaration);
     }
 
     const declaredTypeNode = declaration.declaredType;
@@ -1187,7 +1605,7 @@ const parseDocuments = (source: string, options: NewSDLAdapterOptions): ParsedMo
   return parsedDocuments;
 };
 
-export const parseDeclarativeSchemaWithNewSDL = (
+export const parseDeclarativeSchema = (
   source: string,
   options: NewSDLAdapterOptions,
 ): DeclarativeSchema => {
