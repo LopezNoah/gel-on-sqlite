@@ -347,13 +347,6 @@ export const tokenize = (input: string): Token[] => {
     return c;
   };
 
-  const match = (expected: string): boolean => {
-    if (isAtEnd()) return false;
-    if (input[i] !== expected) return false;
-    advance();
-    return true;
-  };
-
   const push = (kind: TokenKind, lexeme: string, tokenLine: number, tokenColumn: number): void => {
     tokens.push({ kind, lexeme, line: tokenLine, column: tokenColumn });
   };

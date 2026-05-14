@@ -7,7 +7,7 @@ import type {
   ScalarValue,
   TypeDef,
 } from "../types.js";
-import type { DeclarativeSchema, FunctionDeclaration, LinkMember, PropertyMember, TypeMember } from "./declarative.js";
+import type { ComputedLinkPropertyExpr, DeclarativeSchema, FunctionDeclaration, LinkMember, LinkProperty, PropertyMember, TypeMember } from "./declarative.js";
 import { AnnotationRegistry, AnnotationResolver, AnnotationSet } from "./annos.js";
 import { SchemaSnapshot } from "./schema.js";
 import { scalarTypeDeclarationToTypeDef } from "./scalar.js";
@@ -21,7 +21,8 @@ const cloneConstraint = (constraint: ConstraintDef): ConstraintDef => ({
 
 const cloneConstraints = (constraints: ConstraintDef[]): ConstraintDef[] => constraints.map(cloneConstraint);
 
-const inheritConstraints = (constraints: ConstraintDef[]): ConstraintDef[] => cloneConstraints(constraints);
+const isStoredLinkProperty = (property: LinkMember["properties"][number]): property is LinkProperty =>
+  property.computed !== true;
 
 const mergeConstraintSets = (base: ConstraintDef[], override: ConstraintDef[]): ConstraintDef[] => {
   const map = new Map<string, ConstraintDef>();
@@ -383,6 +384,7 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
         continue;
       }
 
+      const storedProperties = member.properties.filter(isStoredLinkProperty);
       links.push({
         name: member.name,
         targetType: normalizeTypeName(member.target, typeDecl.module),
@@ -390,8 +392,8 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
         multi: member.multi,
         readonly: member.readonly,
         onTargetDelete: member.onTargetDelete,
-        properties: member.properties.length
-          ? member.properties.map((property) => ({
+        properties: storedProperties.length
+          ? storedProperties.map((property) => ({
               name: property.name,
               type: property.scalar,
               required: property.required,
@@ -405,11 +407,11 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
         annotations: (member.annotations ?? []).length ? [...member.annotations] : undefined,
       });
 
-      if (!member.multi && member.properties.length === 0) {
+      if (!member.multi && storedProperties.length === 0) {
         fields.push({
           name: `${member.name}_id`,
           type: "uuid",
-          required: member.required,
+          required: false,
           hasDefault: member.hasDefault,
         });
       }
@@ -749,6 +751,11 @@ export const renderDeclarativeSchema = (schema: DeclarativeSchema): string => {
           lines.push(`      annotation ${shortTypeName(annotation.name, moduleName)} := ${quoteString(annotation.value)};`);
         }
         for (const linkProperty of member.properties) {
+          if (linkProperty.computed === true) {
+            lines.push(`      ${linkProperty.name} := ${renderComputedLinkPropertyExpr(linkProperty.computedExpr)};`);
+            continue;
+          }
+
           if ((linkProperty.annotations ?? []).length === 0) {
             lines.push(`      ${linkProperty.required ? "required " : ""}${linkProperty.name}: ${linkProperty.scalar};`);
             continue;
@@ -1014,6 +1021,22 @@ const renderComputedExpr = (expr: Extract<TypeMember, { kind: "computed" }>['exp
 
   const op = expr.filter.op;
   return `(select .${expr.link} filter .${expr.filter.field} ${op} ${renderScalarLiteral(expr.filter.value)})`;
+};
+
+const renderComputedLinkPropertyExpr = (expr: ComputedLinkPropertyExpr): string => {
+  if (expr.kind === "field_ref") {
+    return `.${expr.name}`;
+  }
+  if (expr.kind === "link_property_ref") {
+    return `@${expr.name}`;
+  }
+  if (expr.kind === "literal") {
+    return renderScalarLiteral(expr.value);
+  }
+
+  const left = expr.left.kind === "binary_op" ? `(${renderComputedLinkPropertyExpr(expr.left)})` : renderComputedLinkPropertyExpr(expr.left);
+  const right = expr.right.kind === "binary_op" ? `(${renderComputedLinkPropertyExpr(expr.right)})` : renderComputedLinkPropertyExpr(expr.right);
+  return `${left} ${expr.op} ${right}`;
 };
 
 const normalizeTypeName = (name: string, moduleName: string): string => {

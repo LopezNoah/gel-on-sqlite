@@ -1,6 +1,6 @@
 import { AppError } from "../errors.js";
 import { parseEdgeQL } from "../edgeql/parser.js";
-import type { ComputedExpr, FilterExpr, FreeObjectExpr, InsertValue, SelectExprStatement, SelectStatement, ShapeElement, Statement, WithBindingValue } from "../edgeql/ast.js";
+import type { ComputedExpr, FilterExpr, FreeObjectExpr, InsertValue, SelectStatement, ShapeElement, Statement, WithBindingValue } from "../edgeql/ast.js";
 import type {
   BacklinkSourceIR,
   FilterExprIR,
@@ -1086,7 +1086,6 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       triggers?: TriggerIR[];
       policies?: PolicyIR[];
   } => {
-    const pathIdStr = typeof pathId === "string" ? pathId : pathId.id;
     const pathIdIR = typeof pathId === "string" ? toPathIdIR(pathId) : pathId;
     const qualifiedName = qualifiedTypeName(typeDef);
     const scopeModule = typeDef.module ?? "default";
@@ -1114,40 +1113,6 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     const ensureField = (fieldName: string): void => {
       if (!knownFields.has(fieldName)) {
         fail(`Unknown field '${fieldName}' on '${qualifiedName}'`);
-      }
-    };
-
-    const validateFieldValue = (fieldName: string, value: ScalarValue): void => {
-      ensureField(fieldName);
-      const field = requireValue(fieldByName.get(fieldName), `Unknown field '${fieldName}' on '${qualifiedName}'`);
-
-      if (field.multi) {
-        if (typeof value !== "string") {
-          fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
-        }
-
-        try {
-          const serialized = typeof value === "string"
-            ? value
-            : fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
-          const parsed: unknown = JSON.parse(serialized);
-          const parsedArray = Array.isArray(parsed)
-            ? parsed
-            : fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
-
-          for (const entry of parsedArray) {
-            if (!isValidScalarValue(field.type, entry)) {
-              fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
-            }
-          }
-        } catch {
-          fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
-        }
-        return;
-      }
-
-      if (!isValidScalarValue(field.type, value)) {
-        fail(`Type mismatch for '${fieldName}': expected ${field.type}`);
       }
     };
 
@@ -2214,6 +2179,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
             name: string;
             sourceField?: string;
             expr?: import("../ir/model.js").SelectExprIREntry<3>;
+            multi?: boolean;
           }>;
         };
 
@@ -2259,6 +2225,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
                     itemFields.push({
                       name: subElement.name,
                       expr: asNestedExprEntry(compileExprToIREntry(adapted, currentItemBinding)),
+                      multi: Boolean(subElement.multi || subElement.cardinality === "many"),
                     });
                     continue;
                   }

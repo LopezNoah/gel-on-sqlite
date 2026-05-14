@@ -534,6 +534,7 @@ export type SelectExprIREntry<D extends Depth = 4> =
               name: string;
               sourceField?: string;
               expr?: SelectExprIREntry<Dec<D>>;
+              multi?: boolean;
             }>;
           }>;
         })

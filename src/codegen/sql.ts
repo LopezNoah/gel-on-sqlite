@@ -185,7 +185,6 @@ export const compileTriggerActionSQL = (
   sourceQualifiedName: string,
   action: TriggerInsertAction,
   event: TriggerDef["event"],
-  schema: SchemaSnapshot,
 ): string => {
   const targetTypeName = action.targetType.includes("::")
     ? action.targetType
@@ -332,7 +331,7 @@ export const renderSchemaSQL = (schema: SchemaSnapshot): string => {
     for (const trigger of triggers) {
       const whenClause = compileTriggerWhenClause(trigger.when, trigger.event);
       const actions = trigger.actions
-        .map((action) => compileTriggerActionSQL(qualifiedName, action, trigger.event, schema))
+        .map((action) => compileTriggerActionSQL(qualifiedName, action, trigger.event))
         .join(" ");
       if (actions.length === 0) continue;
       lines.push(

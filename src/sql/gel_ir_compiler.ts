@@ -234,22 +234,34 @@ const compileDmlAssignments = (
     if (containsUnionOperator(element.expr)) {
       const unionSql = compileValueSetSQL(element.expr, sourceAlias, params, target, options);
       if (!unionSql) {
-        return null;
+        if (ptr.outTarget.isScalar) {
+          return null;
+        }
+        continue;
       }
-      columns.push(ptr.outTarget.isScalar ? ptr.shortName : `${ptr.shortName}_id`);
-      values.push(ptr.outTarget.isScalar ? unionSql : `json_extract(${unionSql}, '$[0].id')`);
+      if (ptr.outTarget.isScalar) {
+        columns.push(ptr.shortName);
+        values.push(unionSql);
+      } else {
+        columns.push(`${ptr.shortName}_id`);
+        values.push(`json_extract(${unionSql}, '$[0].id')`);
+      }
       continue;
     }
     const valueSql = compileValueSetSQL(element.expr, sourceAlias, params, target, options);
     if (!valueSql) {
-      return null;
+      if (ptr.outTarget.isScalar) {
+        return null;
+      }
+      continue;
     }
     if (ptr.outTarget.isScalar) {
       columns.push(ptr.shortName);
       values.push(valueSql);
       continue;
     }
-    continue;
+    columns.push(`${ptr.shortName}_id`);
+    values.push(`json_extract(${valueSql}, '$[0].id')`);
   }
   return { columns, values };
 };
