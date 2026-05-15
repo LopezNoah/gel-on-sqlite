@@ -456,6 +456,10 @@ export type FreeObjectExpr =
       values: FreeObjectExpr[];
     }
   | {
+      kind: "array_literal_expr";
+      values: FreeObjectExpr[];
+    }
+  | {
       kind: "exists";
       expr: FreeObjectExpr;
     }

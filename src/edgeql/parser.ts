@@ -586,7 +586,7 @@ class Parser {
       return this.parseSelectExprTail(start, ctx, this.parseFreeObjectExpr(), expectEof);
     }
 
-    if (this.peek().kind === "lparen" || this.peek().kind === "lt" || this.peek().kind === "string" || this.atFunctionCall()) {
+    if (this.peek().kind === "lparen" || this.peek().kind === "lt" || this.peek().kind === "string" || this.peek().kind === "lbracket" || this.atFunctionCall()) {
       return this.parseSelectExprTail(start, ctx, this.parseFreeObjectExpr(), expectEof);
     }
 
@@ -1048,6 +1048,13 @@ class Parser {
         return { kind: "set_literal", values: values.map((v) => (v as { kind: "literal"; value: ScalarValue }).value) };
       }
       return { kind: "set_expr", values };
+    }
+
+    if (this.peek().kind === "lbracket") {
+      this.consume();
+      const values = this.parseDelimited("rbracket", () => this.parseFreeObjectExpr(), "Expected ',' in array literal");
+      this.expect("rbracket", "Expected ']' after array literal");
+      return { kind: "array_literal_expr", values };
     }
 
     if (this.peek().kind === "dot" || this.peek().kind === "backward_link" || this.peek().kind === "optional_link") {
