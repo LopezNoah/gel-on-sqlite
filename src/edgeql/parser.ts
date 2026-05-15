@@ -943,6 +943,8 @@ class Parser {
         this.expect("kw_in", "Expected 'in' after for variable");
         const iterator = this.parseFreeObjectIfElseExpr();
         binders.push({ variable, iterator });
+        this.localBindings.push(variable);
+        
       }
       if (this.peek().kind === "kw_union") {
         this.consume();
@@ -960,6 +962,7 @@ class Parser {
             variable: binders[index + 1]!.variable,
             iterator: binders[index + 1]!.iterator,
             body: parseBody(index + 1),
+            //filter: 
           };
         });
       };
@@ -970,6 +973,9 @@ class Parser {
         iterator: first.iterator,
         body: parseBody(0),
       };
+      for (const binder of binders) {
+        this.localBindings.push(binder.variable);
+      }
       let filter: FreeObjectExpr | undefined;
       if (this.peek().kind === "kw_filter") {
         this.consume();
@@ -977,10 +983,38 @@ class Parser {
       }
       const orderBy = this.parseExprOrderBy();
       const { limit, offset } = this.parseExprPagination();
+      for (const binder of binders) {
+        this.localBindings.pop();
+      }
       if (filter || orderBy || limit !== undefined || offset !== undefined) {
+        // const wrapLeaf = (node: FreeObjectExpr): FreeObjectExpr => {
+        //   if (node.kind === "for_expr") {
+        //     return {
+        //       kind: "for_expr",
+        //       variable: node.variable,
+        //       iterator: node.iterator,
+        //       body: {
+        //         kind: "select_expr_subquery",
+        //         expr: node.body,
+        //         filter,
+        //         orderBy,
+        //         limit,
+        //         offset,
+        //       },
+        //     };
+        //   }
+        //   return {
+        //     kind: "select_expr_subquery",
+        //     expr: node,
+        //     filter,
+        //     orderBy,
+        //     limit,
+        //     offset,
+        //   };
+        // };
+        // expr = wrapLeaf(expr);
         expr = {
-          kind: "select_expr_subquery",
-          expr,
+          ...expr,
           filter,
           orderBy,
           limit,
@@ -1189,6 +1223,11 @@ class Parser {
 
   private parseFreeObjectPostfixExpr(): FreeObjectExpr {
     let expr = this.parseFreeObjectPrimaryExpr();
+    expr = this.applyPostfixExprChain(expr);
+    return expr;
+  }
+
+  private applyPostfixExprChain(expr: FreeObjectExpr): FreeObjectExpr {
     const backlinkBindingName = "__gel_backlink_item__";
 
     while (true) {
@@ -1854,9 +1893,15 @@ class Parser {
     if (this.isNameToken(this.peek()) && this.peekNext().kind === "dot") {
       this.consume();
       this.consume();
+      const fieldName = this.expectName("Expected field name after '.'").lexeme;
+      if (this.peek().kind === "dot" || this.peek().kind === "lbracket" || this.peek().kind === "at" || this.peek().kind === "lbrace") {
+        let base: FreeObjectExpr = { kind: "field_access", expr: { kind: "current_item" }, field: fieldName };
+        base = this.applyPostfixExprChain(base);
+        return { kind: "select_expr", expr: base, clauses: {} };
+      }
       return {
         kind: "field_ref",
-        field: this.expectName("Expected field name after '.'").lexeme,
+        field: fieldName,
       };
     }
 
@@ -3204,7 +3249,7 @@ class Parser {
           const module = this.parseQualifiedName("Expected module name in module alias declaration");
           moduleAliases.push({ alias, module });
           aliasNames.add(alias);
-        } else {
+        } else if (this.isNameToken(this.peek())) {
           const name = this.expectName("Expected alias name in with block").lexeme;
           if (names.has(name)) {
             const token = this.peek();
@@ -3215,6 +3260,8 @@ class Parser {
           bindings.push({ name, value: this.parseWithBindingValue() });
           this.localBindings.push(name);
           scopedBindingNames.push(name);
+        } else {
+          break;
         }
 
         if (this.peek().kind !== "comma") {

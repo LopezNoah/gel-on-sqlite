@@ -4156,6 +4156,7 @@ const evaluateSelectExprEntry = (
   evalContext?: {
     currentBinding?: string;
     currentValue?: unknown;
+    bindings?: Record<string, unknown>;
   },
 ): unknown => {
   const resolveFieldAccessValue = (item: unknown, field: string): unknown => {
@@ -4233,6 +4234,11 @@ const evaluateSelectExprEntry = (
         return 0;
       }
       return null;
+    }
+
+    const computedLink = sourceType.computeds?.find((candidate) => candidate.kind === "link" && candidate.name === field);
+    if (computedLink && computedLink.kind === "link" && computedLink.expr.kind === "backlink") {
+      return resolveBacklinkPathValue(item, computedLink.expr.link, computedLink.expr.sourceType);
     }
 
     const resolvedLink = findRuntimeLinkDef(schema, sourceTypeName, field);
@@ -4459,6 +4465,9 @@ const evaluateSelectExprEntry = (
       if (evalContext?.currentBinding === entry.bindingName) {
         return evalContext.currentValue ?? null;
       }
+      if (evalContext?.bindings && entry.bindingName in evalContext.bindings) {
+        return evalContext.bindings[entry.bindingName] ?? null;
+      }
       return null;
     case "tuple": {
       const values = (entry.values as unknown[]).map((value) => {
@@ -4581,31 +4590,70 @@ const evaluateSelectExprEntry = (
         : (out[0] ?? null);
     }
     case "for_expr": {
-      const iteratorValue = evaluateSelectExprEntry(schema, db, context, entry.iterator, sqlTrail, evalContext);
-      const iteratorItems = Array.isArray(iteratorValue) ? iteratorValue : [iteratorValue];
-      const out: unknown[] = [];
-      const bodyProducesTupleValue = isTupleLikeSelectExprEntry(entry.body);
+  const iteratorValue = evaluateSelectExprEntry(schema, db, context, entry.iterator, sqlTrail, evalContext);
+  const iteratorItems = Array.isArray(iteratorValue) ? iteratorValue : [iteratorValue];
+  const out: unknown[] = [];
+  const bodyProducesTupleValue = isTupleLikeSelectExprEntry(entry.body);
 
-      for (const item of iteratorItems) {
-        const bodyValue = evaluateSelectExprEntry(
-          schema,
-          db,
-          context,
-          entry.body,
-          sqlTrail,
-          { currentBinding: entry.variable, currentValue: item },
-        );
-        if (Array.isArray(bodyValue) && !bodyProducesTupleValue) {
-          out.push(...bodyValue);
-        } else {
-          out.push(bodyValue);
-        }
+  for (const item of iteratorItems) {
+    const newBindings = { ...evalContext?.bindings, [entry.variable]: item };
+
+    const loopContext = {
+      currentBinding: entry.variable,
+      currentValue: item,
+      bindings: newBindings,
+    };
+
+    if (entry.filter) {
+      const filterValue = evaluateSelectExprEntry(
+        schema,
+        db,
+        context,
+        entry.filter,
+        sqlTrail,
+        loopContext,
+      );
+
+      const passes = Array.isArray(filterValue)
+        ? filterValue.some(Boolean)
+        : Boolean(filterValue);
+
+      if (!passes) {
+        continue;
       }
-
-      return out;
     }
+
+    const bodyValue = evaluateSelectExprEntry(
+      schema,
+      db,
+      context,
+      entry.body,
+      sqlTrail,
+      loopContext,
+    );
+
+    if (Array.isArray(bodyValue) && !bodyProducesTupleValue) {
+      out.push(...bodyValue);
+    } else {
+      out.push(bodyValue);
+    }
+  }
+
+  return out;
+}
     case "current_item_field": {
       if (evalContext?.currentBinding !== entry.bindingName) {
+        if (evalContext?.bindings && entry.bindingName in evalContext.bindings) {
+          const currentValue = evalContext.bindings[entry.bindingName];
+          if (currentValue && typeof currentValue === "object" && !Array.isArray(currentValue)) {
+            const row = currentValue as Record<string, unknown>;
+            if (Object.prototype.hasOwnProperty.call(row, entry.field)) {
+              return row[entry.field] ?? null;
+            }
+            return resolveFieldAccessValue(row, entry.field);
+          }
+          return null;
+        }
         return null;
       }
       const currentValue = evalContext.currentValue;
@@ -4908,6 +4956,7 @@ const evaluateSelectExprEntry = (
           const filterValue = evaluateSelectExprEntry(schema, db, context, entry.filter!, sqlTrail, {
             currentBinding,
             currentValue: row,
+            bindings: evalContext?.bindings,
           });
           return Array.isArray(filterValue) ? filterValue.some(Boolean) : Boolean(filterValue);
         });
@@ -4938,7 +4987,7 @@ const evaluateSelectExprEntry = (
             context,
             entry.orderBy!.value,
             sqlTrail,
-            { currentBinding, currentValue: a },
+            { currentBinding, currentValue: a, bindings: evalContext?.bindings },
           );
           const bKey = evaluateSelectExprEntry(
             schema,
@@ -4946,7 +4995,7 @@ const evaluateSelectExprEntry = (
             context,
             entry.orderBy!.value,
             sqlTrail,
-            { currentBinding, currentValue: b },
+            { currentBinding, currentValue: b, bindings: evalContext?.bindings },
           );
           if (aKey === bKey) {
             return 0;

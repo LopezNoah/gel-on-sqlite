@@ -621,6 +621,10 @@ export type SelectExprIREntry<D extends Depth = 4> =
           variable: string;
           iterator: SelectExprIREntry<Dec<D>>;
           body: SelectExprIREntry<Dec<D>>;
+          filter?: SelectExprIREntry;
+          orderBy?: OrderByIR<SelectExprIREntry>;
+          limit?: number;
+          offset?: number;
         })
   | (D extends 0
       ? never

@@ -507,6 +507,13 @@ export type FreeObjectExpr =
       variable: string;
       iterator: FreeObjectExpr;
       body: FreeObjectExpr;
+      filter?: FreeObjectExpr;
+      orderBy?: {
+        expr: FreeObjectExpr;
+        direction: "asc" | "desc";
+      };
+      limit?: number;
+      offset?: number;
     }
   | {
       kind: "concat";
