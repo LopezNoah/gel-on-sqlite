@@ -2946,6 +2946,14 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     wrapped = wrapped.body;
   }
 
+  const addedBindingNames: string[] = [];
+  for (const binding of expr.clauses?._withBindings ?? []) {
+    if (!withBindings.has(binding.name)) {
+      withBindings.set(binding.name, binding.value);
+      addedBindingNames.push(binding.name);
+    }
+  }
+
   try {
     return {
       kind: "select_expr_subquery",
@@ -2966,6 +2974,9 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
   } finally {
     for (const _ of pushedForBindings) {
       forBindingStack.pop();
+    }
+    for (const name of addedBindingNames) {
+      withBindings.delete(name);
     }
   }
 }
