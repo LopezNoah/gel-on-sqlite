@@ -1,6 +1,7 @@
 import { AppError } from "../errors.js";
 import type {
   AnnotationDef,
+  CollectionTypeDef,
   ComputedDef,
   ComputedValuePart,
   ConstraintDef,
@@ -24,6 +25,8 @@ import type {
   SchemaModule,
   TypeMember,
 } from "./declarative.js";
+import { tokenize, type Token } from "../edgeql/tokenizer.js";
+import { parseEdgeQL } from "../edgeql/parser.js";
 import type { ScalarTypeDeclaration } from "./scalar.js";
 import { ScalarRegistry } from "./scalar.js";
 import {
@@ -784,7 +787,7 @@ const parseAliasDeclaration = (
 };
 
 const parseFieldDefaultExpr = (text: string): FieldDefaultExpr | undefined => {
-  const scalar = parseScalarLiteral(text);
+  const scalar = parseScalarLiteral(text) ?? parseCastScalarLiteral(text);
   if (scalar !== undefined) {
     return {
       kind: "literal",
@@ -817,6 +820,44 @@ const parseFieldDefaultExpr = (text: string): FieldDefaultExpr | undefined => {
     name: callMatch[1],
     args: args as ScalarValue[],
   };
+};
+
+const parseCastScalarLiteral = (text: string): ScalarValue | undefined => {
+  const tokens = tokenize(text.trim());
+  let index = 0;
+  const consume = (): Token => tokens[index++]!;
+  const peek = (): Token => tokens[index]!;
+
+  if (consume().kind !== "lt") {
+    return undefined;
+  }
+
+  if (!isComputedLinkNameToken(peek())) {
+    return undefined;
+  }
+  consume();
+  while (peek().kind === "coloncolon") {
+    consume();
+    if (!isComputedLinkNameToken(peek())) {
+      return undefined;
+    }
+    consume();
+  }
+
+  if (consume().kind !== "gt") {
+    return undefined;
+  }
+
+  const literalToken = consume();
+  if (peek().kind !== "eof") {
+    return undefined;
+  }
+
+  if (literalToken.kind === "string") {
+    return literalToken.lexeme;
+  }
+
+  return parseScalarLiteral(literalToken.lexeme);
 };
 
 const stripOuterParens = (text: string): string => {
@@ -871,7 +912,7 @@ const splitComputedConcatParts = (text: string): string[] => {
 
 const parseComputedValuePart = (text: string): ComputedValuePart => {
   const trimmed = stripOuterParens(text);
-  const scalar = parseScalarLiteral(trimmed);
+  const scalar = parseScalarLiteral(trimmed) ?? parseCastScalarLiteral(trimmed);
   if (scalar !== undefined) {
     return { kind: "literal", value: scalar };
   }
@@ -906,7 +947,7 @@ const parseComputedPropertyExpr = (text: string): Extract<ComputedDef, { kind: "
     };
   }
 
-  const scalar = parseScalarLiteral(trimmed);
+  const scalar = parseScalarLiteral(trimmed) ?? parseCastScalarLiteral(trimmed);
   if (scalar !== undefined) {
     return { kind: "literal", value: scalar };
   }
@@ -931,6 +972,11 @@ const parseComputedPropertyExpr = (text: string): Extract<ComputedDef, { kind: "
 
 const parseComputedLinkExpr = (text: string): Extract<ComputedDef, { kind: "link" }>["expr"] => {
   const trimmed = stripOuterParens(text);
+  const selectTypeExpr = parseComputedSelectTypeLinkExpr(trimmed, text);
+  if (selectTypeExpr) {
+    return selectTypeExpr;
+  }
+
   const backlinkMatch = /^\.<([A-Za-z_][A-Za-z0-9_]*)(?:\[\s*is\s+([A-Za-z_][A-Za-z0-9_:]*)\s*\])?$/i.exec(trimmed);
   if (backlinkMatch) {
     return {
@@ -963,6 +1009,89 @@ const parseComputedLinkExpr = (text: string): Extract<ComputedDef, { kind: "link
   }
 
   return unsupported(`Unsupported computed link declaration expression '${text}'`);
+};
+
+const isComputedLinkNameToken = (token: Token | undefined): token is Token =>
+  token !== undefined && (
+    token.kind === "identifier"
+    || token.kind === "backtick_name"
+    || token.kind === "kw_named"
+    || token.kind === "kw_unreserved"
+    || token.kind === "kw_partial_reserved"
+    || token.kind === "kw_future_reserved"
+    || token.kind === "kw_current_reserved"
+    || token.kind.startsWith("kw_current_reserved_")
+  );
+
+const parseComputedSelectTypeLinkExpr = (
+  trimmed: string,
+  originalText: string,
+): Extract<ComputedDef, { kind: "link" }>["expr"] | undefined => {
+  const tokens = tokenize(trimmed);
+  let index = 0;
+  const peek = (): Token => tokens[index]!;
+  const consume = (): Token => tokens[index++]!;
+
+  if (peek().kind !== "kw_select") {
+    return undefined;
+  }
+  consume();
+
+  if (peek().kind === "kw_detached") {
+    consume();
+  }
+
+  if (!isComputedLinkNameToken(peek())) {
+    return undefined;
+  }
+
+  const typeParts = [consume().lexeme];
+  while (peek().kind === "coloncolon") {
+    consume();
+    if (!isComputedLinkNameToken(peek())) {
+      return undefined;
+    }
+    typeParts.push(consume().lexeme);
+  }
+
+  const nextKind = peek().kind;
+  if (
+    nextKind !== "eof"
+    && nextKind !== "kw_filter"
+    && nextKind !== "kw_order"
+    && nextKind !== "kw_limit"
+    && nextKind !== "kw_offset"
+  ) {
+    return undefined;
+  }
+
+  return {
+    kind: "select_type",
+    typeName: typeParts.join("::"),
+    exprText: originalText.trim(),
+  };
+};
+
+const parseLinkDefaultTargetValues = (text: string): string[] | undefined => {
+  let statement;
+  try {
+    statement = parseEdgeQL(stripOuterParens(text));
+  } catch {
+    return undefined;
+  }
+  if (statement.kind !== "select" || !statement.filter) {
+    return undefined;
+  }
+
+  if (statement.filter.kind === "predicate" && statement.filter.op === "=" && typeof statement.filter.value === "string") {
+    return [statement.filter.value];
+  }
+
+  if (statement.filter.kind === "in_predicate" && statement.filter.op === "in" && statement.filter.values.kind === "set_literal") {
+    return statement.filter.values.values.filter((value): value is string => typeof value === "string");
+  }
+
+  return undefined;
 };
 
 const convertComputedDeclarationToMember = (
@@ -1003,6 +1132,14 @@ const parseOnTargetDeleteAction = (text: string): OnTargetDeleteAction => {
   throw new AppError("E_SYNTAX", `Unsupported on target delete action '${text.trim()}'`, 1, 1);
 };
 
+const normalizeLinkTargetType = (moduleName: string, targetType: string): string =>
+  targetType
+    .split("|")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+    .map((entry) => normalizeTypeName(moduleName, entry))
+    .join(" | ");
+
 const parseIndexExpression = (node: IndexDeclarationNode): string => {
   const content = node.content.text.trim();
   if (!content.startsWith("on")) {
@@ -1040,7 +1177,7 @@ const parseIndexExpression = (node: IndexDeclarationNode): string => {
     unsupported(`Unsupported index suffix '${suffix}'`);
   }
 
-  return expr;
+  return expr.includes("++") ? `(${expr})` : expr;
 };
 
 const convertAnnotation = (moduleName: string, node: AnnotationAssignmentNode): AnnotationDef => {
@@ -1088,6 +1225,45 @@ const resolveFieldTargetTypeName = (moduleName: string, declaredType: string, en
   }
 
   return normalizeTypeName(moduleName, declaredType);
+};
+
+const splitTopLevelComma = (text: string): string[] => {
+  const parts: string[] = [];
+  let start = 0;
+  let depth = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (ch === "<" || ch === "(" || ch === "[") {
+      depth += 1;
+    } else if (ch === ">" || ch === ")" || ch === "]") {
+      depth = Math.max(0, depth - 1);
+    } else if (ch === "," && depth === 0) {
+      parts.push(text.slice(start, i).trim());
+      start = i + 1;
+    }
+  }
+  parts.push(text.slice(start).trim());
+  return parts.filter((part) => part.length > 0);
+};
+
+const extractCollectionType = (declaredType: string): CollectionTypeDef | undefined => {
+  const trimmed = declaredType.trim();
+  const lower = trimmed.toLowerCase();
+  if (lower.startsWith("array<") && trimmed.endsWith(">")) {
+    return { kind: "array" };
+  }
+  if (!lower.startsWith("tuple<") || !trimmed.endsWith(">")) {
+    return undefined;
+  }
+
+  const inner = trimmed.slice(trimmed.indexOf("<") + 1, -1);
+  const names = splitTopLevelComma(inner).map((part) => {
+    const colon = part.indexOf(":");
+    return colon > 0 ? part.slice(0, colon).trim() : undefined;
+  });
+  return names.every((name) => name !== undefined && name.length > 0)
+    ? { kind: "tuple", elementNames: names as string[] }
+    : { kind: "tuple" };
 };
 
 const parseConstraintParams = (
@@ -1142,13 +1318,11 @@ const convertLinkProperty = (
     };
   }
 
-  const declaredTypeNode = node.declaredType;
-  if (!declaredTypeNode) {
-    unsupported("Link property declaration requires a scalar type");
-  }
-
-  const declaredType = qualifiedNameToString(declaredTypeNode!);
-  const scalarResolution = scalarRegistry.resolve(declaredType, moduleName);
+  const declaredType = node.typeExpr?.text
+    ?? (node.declaredType ? qualifiedNameToString(node.declaredType) : undefined)
+    ?? unsupported("Link property declaration requires a scalar type");
+  const collection = extractCollectionType(declaredType);
+  const scalarResolution = collection ? { scalar: "json" as const } : scalarRegistry.resolve(declaredType, moduleName);
   if (!scalarResolution) {
     throw new AppError("E_SYNTAX", `Unknown scalar type '${declaredType}'`, 1, 1);
   }
@@ -1170,6 +1344,7 @@ const convertLinkProperty = (
     computed: false,
     hasDefault: body?.default !== null && body?.default !== undefined,
     readonly: body?.readonly ?? false,
+    collection,
     annotations: (body?.annotations ?? []).map((annotation) => convertAnnotation(moduleName, annotation)),
   };
 };
@@ -1185,13 +1360,11 @@ const convertPropertyMember = (
     
   }
 
-  const declaredTypeNode = node.declaredType;
-  if (!declaredTypeNode) {
-    unsupported("Property declaration requires a scalar type");
-  }
-
-  const declaredType = qualifiedNameToString(declaredTypeNode!);
-  const scalarResolution = scalarRegistry.resolve(declaredType, moduleName);
+  const declaredType = node.typeExpr?.text
+    ?? (node.declaredType ? qualifiedNameToString(node.declaredType) : undefined)
+    ?? unsupported("Property declaration requires a scalar type");
+  const collection = extractCollectionType(declaredType);
+  const scalarResolution = collection ? { scalar: "json" as const } : scalarRegistry.resolve(declaredType, moduleName);
   if (!scalarResolution) {
     throw new AppError("E_SYNTAX", `Unknown scalar type '${declaredType}'`, 1, 1);
   }
@@ -1217,8 +1390,9 @@ const convertPropertyMember = (
     hasDefault,
     defaultExpr: body?.default ? parseFieldDefaultExpr(body.default.text) : undefined,
     readonly: body?.readonly ?? false,
+    collection,
     annotations: (body?.annotations ?? []).map((annotation) => convertAnnotation(moduleName, annotation)),
-    targetTypeName: resolveFieldTargetTypeName(moduleName, declaredType, scalarResolution.enumTypeName),
+    targetTypeName: collection ? undefined : resolveFieldTargetTypeName(moduleName, declaredType, scalarResolution.enumTypeName),
     enumValues: scalarResolution.enumValues,
     enumTypeName: scalarResolution.enumTypeName,
     constraints: (body?.constraints ?? []).map((constraint) =>
@@ -1236,12 +1410,9 @@ const convertLinkMember = (
     unsupported("Computed links are not supported by the new SDL adapter yet");
   }
 
-  const declaredTypeNode = node.declaredType;
-  if (!declaredTypeNode) {
-    unsupported("Link declaration requires a target type");
-  }
-
-  const declaredType = qualifiedNameToString(declaredTypeNode!);
+  const declaredType = node.targetType?.text
+    ?? (node.declaredType ? qualifiedNameToString(node.declaredType) : undefined)
+    ?? unsupported("Link declaration requires a target type");
   const body: LinkBodyNode | null = node.body;
   if (body?.using || (body?.extending.length ?? 0) > 0) {
     unsupported("Link using/extending clauses are not supported by the new SDL adapter yet");
@@ -1262,11 +1433,12 @@ const convertLinkMember = (
   return {
     kind: "link",
     name: qualifiedNameToString(node.name),
-    target: normalizeTypeName(moduleName, declaredType),
+    target: normalizeLinkTargetType(moduleName, declaredType),
     required: multi ? false : node.required === true,
     multi,
     overloaded: node.overloaded,
     hasDefault: body?.default !== null && body?.default !== undefined,
+    defaultTargetValues: body?.default ? parseLinkDefaultTargetValues(body.default.text) : undefined,
     readonly: body?.readonly ?? false,
     onTargetDelete: body?.onTargetDelete ? parseOnTargetDeleteAction(body.onTargetDelete) : undefined,
     annotations: (body?.annotations ?? []).map((annotation) => convertAnnotation(moduleName, annotation)),
@@ -1278,10 +1450,9 @@ const convertInferredLinkMember = (
   moduleName: string,
   node: PropertyDeclarationNode,
 ): LinkMember => {
-  const declaredTypeNode = node.declaredType;
-  if (!declaredTypeNode) {
-    unsupported("Link declaration requires a target type");
-  }
+  const declaredType = node.typeExpr?.text
+    ?? (node.declaredType ? qualifiedNameToString(node.declaredType) : undefined)
+    ?? unsupported("Link declaration requires a target type");
 
   const body = node.body;
   if (
@@ -1297,12 +1468,11 @@ const convertInferredLinkMember = (
     unsupported("Implicit links with link bodies are not supported by the new SDL adapter yet");
   }
 
-  const declaredType = qualifiedNameToString(declaredTypeNode!);
   const multi = node.cardinality === "multi";
   return {
     kind: "link",
     name: qualifiedNameToString(node.name),
-    target: normalizeTypeName(moduleName, declaredType),
+    target: normalizeLinkTargetType(moduleName, declaredType),
     required: multi ? false : node.required === true,
     multi,
     overloaded: node.overloaded,
@@ -1324,7 +1494,7 @@ const convertDeclarationToMember = (
     if (declaration.computed) {
       return convertComputedDeclarationToMember(declaration);
     }
-    return convertLinkMember(moduleName, declaration, scalarRegistry, constraintParamNames);
+    return convertLinkMember(moduleName, declaration, scalarRegistry);
   }
 
   if (declaration.kind === "PropertyDeclaration") {
@@ -1332,13 +1502,10 @@ const convertDeclarationToMember = (
       return convertComputedDeclarationToMember(declaration);
     }
 
-    const declaredTypeNode = declaration.declaredType;
-    if (!declaredTypeNode) {
-      unsupported("Property or link declaration requires a declared type");
-    }
-
-    const declaredType = qualifiedNameToString(declaredTypeNode!);
-    const scalarResolution = scalarRegistry.resolve(declaredType, moduleName);
+    const declaredType = declaration.typeExpr?.text
+      ?? (declaration.declaredType ? qualifiedNameToString(declaration.declaredType) : undefined)
+      ?? unsupported("Property or link declaration requires a declared type");
+    const scalarResolution = extractCollectionType(declaredType) ? { scalar: "json" as const } : scalarRegistry.resolve(declaredType, moduleName);
     const inferredLink =
       !declaration.explicitKeyword
       && !scalarResolution
@@ -1636,6 +1803,16 @@ export const parseDeclarativeSchema = (
   const abstractAnnotations: AbstractAnnotationDeclaration[] = [];
   const constraints: ConstraintDeclaration[] = [];
   const aliases: AliasDeclaration[] = [];
+
+  for (const parsedModule of parsedModules) {
+    for (const declaration of parsedModule.document.declarations) {
+      if (declaration.kind === "ConstraintDeclaration" && declaration.abstract) {
+        const resolvedName = resolveDeclarationName(parsedModule.moduleName, declaration.name);
+        const name = normalizeConstraintName(resolvedName.moduleName, resolvedName.localName);
+        constraintParamNames.set(name, declaration.args.map((arg, index) => arg.name ?? `arg${index + 1}`));
+      }
+    }
+  }
 
   for (const parsedModule of parsedModules) {
     for (const declaration of parsedModule.document.declarations) {

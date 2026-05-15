@@ -1,5 +1,5 @@
 import type { FreeObjectExpr, WithBinding } from "../edgeql/ast.js";
-import type { ScalarValue } from "../types.js";
+import type { ComputedLinkPropertyDef, ScalarValue } from "../types.js";
 
 /* ---------------------------------- */
 /* Depth control                      */
@@ -161,6 +161,7 @@ export interface BacklinkSourceIR {
   inlineColumn?: string;
   linkTable?: string;
   propertyColumns?: string[];
+  computedProperties?: ComputedLinkPropertyDef[];
 }
 
 export interface LinkRelationIR {
@@ -169,6 +170,7 @@ export interface LinkRelationIR {
   targetTable: string;
   targetTables: SchemaTypeRefIR[];
   propertyColumns?: string[];
+  computedProperties?: ComputedLinkPropertyDef[];
   multi: boolean;
   storage: "inline" | "table";
   inlineColumn?: string;
@@ -242,6 +244,13 @@ export type FilterExprIR =
       column: string;
       property: string;
       op: "in" | "not_in";
+    }
+  | {
+      kind: "backlink_property_value_compare";
+      sources: BacklinkSourceIR[];
+      property: string;
+      value: ScalarValue;
+      op: "=" | "!=" | "<" | "<=" | ">" | ">=" | "?=" | "?!=" | "like" | "ilike";
     }
   | {
       kind: "and";
@@ -519,6 +528,11 @@ export type SelectExprIREntry<D extends Depth = 4> =
           value: SelectExprIREntry<Dec<D>>;
           field: string;
         })
+  | {
+      kind: "backlink_path";
+      link: string;
+      sourceType?: string;
+    }
   | (D extends 0
       ? never
       : {

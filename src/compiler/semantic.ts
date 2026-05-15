@@ -502,6 +502,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         targetTable: tableNameForType(targetType),
         targetTables,
         propertyColumns: (link.properties ?? []).map((property) => property.name),
+        computedProperties: (link.computedProperties ?? []).map((property) => ({ ...property })),
         multi: Boolean(link.multi),
         storage: usesLinkTable ? "table" : "inline",
         inlineColumn: usesLinkTable ? undefined : `${link.name}_id`,
@@ -749,6 +750,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
             targetTable: tableNameForType(targetType),
             targetTables,
             propertyColumns: (link.properties ?? []).map((property) => property.name),
+            computedProperties: (link.computedProperties ?? []).map((property) => ({ ...property })),
             multi: Boolean(link.multi),
             storage: usesLinkTable ? "table" : "inline",
             inlineColumn: usesLinkTable ? undefined : `${link.name}_id`,
@@ -803,7 +805,13 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
 
     const value = resolvedFilterValue as ScalarValue;
     if (filter.target.kind === "backlink_property") {
-      fail("Backlink link property filters are supported only when compared from a field target");
+      return {
+        kind: "backlink_property_value_compare",
+        sources: resolveBacklinkSources(typeLabel, options.fallbackModule, filter.target.link, filter.target.sourceType),
+        property: filter.target.property,
+        value,
+        op: filter.op,
+      };
     }
 
     if (filter.target.kind === "backlink") {
@@ -1158,6 +1166,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
               },
             ],
         propertyColumns: (link.properties ?? []).map((property) => property.name),
+        computedProperties: (link.computedProperties ?? []).map((property) => ({ ...property })),
         multi: Boolean(link.multi),
         storage: usesLinkTable ? "table" : "inline",
         inlineColumn: usesLinkTable ? undefined : `${link.name}_id`,
@@ -1365,23 +1374,30 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
             continue;
           }
 
+          if (computed.expr.kind === "select_type") {
+            fail(`Computed link '${qualifiedName}.${computed.name}' selects '${computed.expr.typeName}' and is not supported in query shapes yet`);
+          }
+
+          const computedLinkExpr = computed.expr.kind === "link_ref"
+            ? computed.expr
+            : fail(`Computed link '${qualifiedName}.${computed.name}' has unsupported expression kind '${computed.expr.kind}'`);
           const linkPathId = createPathId(pathId);
-          const relation = resolveForwardLink(typeDef, computed.expr.link);
+          const relation = resolveForwardLink(typeDef, computedLinkExpr.link);
           const targetType = requireValue(
             schema.getType(relation.targetType),
-            `Unknown link target type '${relation.targetType}' from '${qualifiedName}.${computed.expr.link}'`,
+            `Unknown link target type '${relation.targetType}' from '${qualifiedName}.${computedLinkExpr.link}'`,
           );
           const nested = compileSelectForType(
             targetType,
             linkPathId,
             [{ kind: "field", name: "id" }],
             {
-              filter: computed.expr.filter
+              filter: computedLinkExpr.filter
                 ? {
                     kind: "predicate",
-                    target: { kind: "field", field: computed.expr.filter.field },
-                    op: computed.expr.filter.op,
-                    value: computed.expr.filter.value,
+                    target: { kind: "field", field: computedLinkExpr.filter.field },
+                    op: computedLinkExpr.filter.op,
+                    value: computedLinkExpr.filter.value,
                   }
                 : undefined,
             },
@@ -1389,7 +1405,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           );
 
           if (relation.storage === "inline") {
-            selectedColumns.add(requireValue(relation.inlineColumn, `Missing inline storage metadata for '${computed.expr.link}'`));
+            selectedColumns.add(requireValue(relation.inlineColumn, `Missing inline storage metadata for '${computedLinkExpr.link}'`));
           } else {
             selectedColumns.add("id");
           }
@@ -1727,8 +1743,13 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         continue;
       }
 
-      const relation = resolveForwardLink(typeDef, resolvedLinkName);
-      const normalizedTypeFilter = shapeElement.typeFilter ? normalizeTypeName(shapeElement.typeFilter, scopeModule) : undefined;
+      const typeFilterName = shapeElement.typeFilter ? normalizeTypeName(shapeElement.typeFilter, scopeModule) : undefined;
+      const linkOwnerType = typeFilterName && !collectLinks(typeDef, true).some((link) => link.name === resolvedLinkName)
+        ? requireValue(schema.getType(typeFilterName), `Unknown type filter '${typeFilterName}'`)
+        : typeDef;
+      const relation = resolveForwardLink(linkOwnerType, resolvedLinkName);
+      const sourceTypeFilter = linkOwnerType === typeDef ? undefined : qualifiedTypeName(linkOwnerType);
+      const normalizedTypeFilter = sourceTypeFilter ? undefined : typeFilterName;
       const filteredTargetTables = normalizedTypeFilter
         ? relation.targetTables.filter((candidate) => isAssignableTo(candidate.name, normalizedTypeFilter))
         : relation.targetTables;
@@ -1744,7 +1765,10 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       );
       const nested = compileSelectForType(targetType, linkPathId, shapeElement.shape, shapeElement.clauses, {
         allowBacklinkFilter: false,
-        linkProperties: new Set(relation.propertyColumns ?? []),
+        linkProperties: new Set([
+          ...(relation.propertyColumns ?? []),
+          ...(relation.computedProperties ?? []).map((property) => property.name),
+        ]),
       });
 
       if (relation.storage === "inline") {
@@ -1764,7 +1788,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           targetTables: filteredTargetTables,
         },
         typeFilter: normalizedTypeFilter,
-        sourceTypeFilter: undefined,
+        sourceTypeFilter,
         columns: nested.columns,
         shape: nested.shape,
         filter: nested.filter,
@@ -2322,6 +2346,13 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           variable: expr.variable,
           iterator: asNestedExprEntry(compileExprToIREntry(expr.iterator, currentItemBinding)),
           body: asNestedExprEntry(compileExprToIREntry(expr.body, expr.variable)),
+        };
+      }
+      if (expr.kind === "backlink_path") {
+        return {
+          kind: "backlink_path",
+          link: expr.link,
+          sourceType: expr.sourceType,
         };
       }
       if (expr.kind === "binding_ref") {

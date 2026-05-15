@@ -2,7 +2,7 @@ import { AppError } from "../errors.js";
 import type { FilterExprIR, IRStatement, LinkRelationIR, PathIdIR, SelectIR, SelectShapeElementIR } from "../ir/model.js";
 import type { RuntimeTarget } from "../runtime/target.js";
 import { canLowerStdlibFunctionSql, lowerStdlibFunctionSql } from "./stdlib_lowering.js";
-import type { ScalarValue } from "../types.js";
+import type { ComputedLinkPropertyDef, ComputedLinkPropertyExpr, ScalarValue } from "../types.js";
 
 export interface SQLArtifact {
   sql: string;
@@ -185,14 +185,24 @@ const compileLinkArrayExpr = (
     params,
     target,
     junctionAlias,
+    element.relation.computedProperties,
   );
 
   const linkPropertyColumns = new Set(element.relation.propertyColumns ?? []);
+  const computedLinkPropertyByName = new Map((element.relation.computedProperties ?? []).map((property) => [property.name, property] as const));
+  const requestedComputedLinkProperties = element.shape.flatMap((shapeElement) => {
+    if (shapeElement.kind !== "computed" || shapeElement.expr.kind !== "field_ref" || !shapeElement.expr.column.startsWith("@")) {
+      return [];
+    }
+    const property = computedLinkPropertyByName.get(shapeElement.expr.column.slice(1));
+    return property ? [property] : [];
+  });
   const orderByTargetColumns = element.orderBy && !linkPropertyColumns.has(element.orderBy.value)
     ? [element.orderBy.value]
     : [];
   const requiredTargetColumns = [
     ...element.columns,
+    ...requestedComputedLinkProperties.flatMap((property) => collectComputedLinkPropertyTargetColumns(property.computedExpr)),
     ...orderByTargetColumns,
     ...collectFieldFilterColumns(element.filter).filter((column) => !column.startsWith("@")),
   ];
@@ -284,8 +294,10 @@ const compileShapeObjectExpr = (
   params: ScalarValue[],
   target: RuntimeTarget,
   linkPropertyAlias?: string,
+  computedLinkProperties: ComputedLinkPropertyDef[] = [],
 ): string => {
   const pairs: string[] = [];
+  const computedLinkPropertyByName = new Map(computedLinkProperties.map((property) => [property.name, property] as const));
 
   for (const element of shape) {
     pairs.push(quoteLiteral(element.name));
@@ -297,6 +309,12 @@ const compileShapeObjectExpr = (
 
     if (element.kind === "computed") {
       if (element.expr.kind === "field_ref") {
+        const linkPropertyName = element.expr.column.startsWith("@") ? element.expr.column.slice(1) : undefined;
+        const computedLinkProperty = linkPropertyName ? computedLinkPropertyByName.get(linkPropertyName) : undefined;
+        if (computedLinkProperty && linkPropertyAlias) {
+          pairs.push(compileComputedLinkPropertyExprSQL(computedLinkProperty.computedExpr, sourceAlias, linkPropertyAlias, params));
+          continue;
+        }
         pairs.push(filterColumnSql(element.expr.column, sourceAlias, linkPropertyAlias));
       } else if (element.expr.kind === "literal") {
         if (linkPropertyAlias && element.name.startsWith("@")) {
@@ -348,6 +366,49 @@ const compileShapeObjectExpr = (
   }
 
   return `json_object(${pairs.join(", ")})`;
+};
+
+const compileComputedLinkPropertyExprSQL = (
+  expr: ComputedLinkPropertyExpr,
+  targetAlias: string,
+  linkAlias: string,
+  params: ScalarValue[],
+): string => {
+  if (expr.kind === "literal") {
+    params.push(encodeParam(expr.value));
+    return "?";
+  }
+
+  if (expr.kind === "field_ref") {
+    return `${targetAlias}.${quoteIdent(expr.name)}`;
+  }
+
+  if (expr.kind === "link_property_ref") {
+    return `${linkAlias}.${quoteIdent(expr.name)}`;
+  }
+
+  const left = compileComputedLinkPropertyExprSQL(expr.left, targetAlias, linkAlias, params);
+  const right = compileComputedLinkPropertyExprSQL(expr.right, targetAlias, linkAlias, params);
+  if (expr.op === "++") {
+    return `(COALESCE(${left}, '') || COALESCE(${right}, ''))`;
+  }
+  if (expr.op === "??") {
+    return `COALESCE(${left}, ${right})`;
+  }
+  return `(${left} ${expr.op} ${right})`;
+};
+
+const collectComputedLinkPropertyTargetColumns = (expr: ComputedLinkPropertyExpr): string[] => {
+  if (expr.kind === "field_ref") {
+    return [expr.name];
+  }
+  if (expr.kind === "binary_op") {
+    return [
+      ...collectComputedLinkPropertyTargetColumns(expr.left),
+      ...collectComputedLinkPropertyTargetColumns(expr.right),
+    ];
+  }
+  return [];
 };
 
 const resolvePathIdStr = (pathId: string | PathIdIR): string =>
@@ -643,6 +704,21 @@ const compileFilterExprSQL = (
     return filter.kind === "backlink_property_in" && filter.op === "not_in" ? `(${clauses.join(" AND ")})` : `(${clauses.join(" OR ")})`;
   }
 
+  if (filter.kind === "backlink_property_value_compare") {
+    const clauses = filter.sources
+      .filter((source) => source.storage === "table" && source.linkTable)
+      .map((source, index) => {
+        const alias = `bpv_${index}`;
+        const column = `${alias}.${quoteIdent(filter.property)}`;
+        params.push(encodeParam(filter.value));
+        return `EXISTS (SELECT 1 FROM ${quoteIdent(source.linkTable!)} ${alias} WHERE ${alias}.${quoteIdent("target")} = ${sourceAlias}.${quoteIdent("id")} AND ${compileFilterPredicate(column, filter.op)})`;
+      });
+    if (clauses.length === 0) {
+      return "0";
+    }
+    return `(${clauses.join(" OR ")})`;
+  }
+
   if (filter.kind === "not") {
     return `(NOT ${compileFilterExprSQL(filter.expr, sourceAlias, params, linkPropertyAlias)})`;
   }
@@ -691,6 +767,10 @@ const collectFieldFilterColumns = (filter: FilterExprIR | undefined): string[] =
 
   if (filter.kind === "backlink_property_compare" || filter.kind === "backlink_property_in") {
     return [filter.column];
+  }
+
+  if (filter.kind === "backlink_property_value_compare") {
+    return [];
   }
 
   if (filter.kind === "not") {

@@ -8,7 +8,7 @@ import { compileToSQL, computedValueAlias, shapePayloadAlias, type SQLArtifact }
 import { executeStdlibFunction, resolveStdlibFunction, type RuntimeFunctionArg } from "../stdlib/functions.js";
 import { assertTargetSqlCompatibility, type RuntimeTarget } from "./target.js";
 import type { BacklinkSourceIR, FilterExprIR, IRStatement, LinkRelationIR, OrderByIR, OverlayIR, SelectExprIREntry, SelectExprIR, SelectIR, SelectShapeElementIR } from "../ir/model.js";
-import type { AccessPolicyCondition, AccessPolicyDef, AliasDef, FieldDef, FunctionDef, FunctionExprDef, ScalarType, ScalarValue, TypeDef } from "../types.js";
+import type { AccessPolicyCondition, AccessPolicyDef, AliasDef, ComputedLinkPropertyExpr, FieldDef, FunctionDef, FunctionExprDef, ScalarType, ScalarValue, TypeDef } from "../types.js";
 import { qualifiedTypeName } from "../schema/schema.js";
 import type { SQLiteDatabase } from "../runtime/database.js";
 
@@ -1793,7 +1793,14 @@ const tryEvaluateParsedRuntimeSelect = (
         }
         propsByTarget.set(linkRow.target, props);
       }
-      return [...new Map(rows.map((targetRow) => [String(targetRow.id), { ...targetRow, ...(typeof targetRow.id === "string" ? propsByTarget.get(targetRow.id) ?? {} : {}) }] as const)).values()];
+      return [...new Map(rows.map((targetRow) => {
+        const properties = typeof targetRow.id === "string" ? propsByTarget.get(targetRow.id) ?? {} : {};
+        const computedProperties = Object.fromEntries((resolved.link.computedProperties ?? []).map((property) => [
+          `@${property.name}`,
+          evaluateComputedLinkPropertyExpr(property.computedExpr, targetRow, properties),
+        ]));
+        return [String(targetRow.id), { ...targetRow, ...properties, ...computedProperties }] as const;
+      })).values()];
     }
 
     const targetId = row[`${resolved.link.name}_id`];
@@ -2012,11 +2019,29 @@ const tryEvaluateParsedRuntimeSelect = (
       let value = evalFreeExpr(expr.expr, env);
       if (Array.isArray(value)) {
         let items = [...value];
+        if (expr.filter) {
+          items = items.filter((item) => {
+            const bindings = new Map(env.bindings);
+            if (expr.alias && isRecordRow(item)) {
+              bindings.set(expr.alias, [item]);
+            }
+            const filterValue = evalFreeExpr(expr.filter!, { ...env, row: isRecordRow(item) ? item : env.row, bindings });
+            return Array.isArray(filterValue) ? filterValue.some(Boolean) : Boolean(filterValue);
+          });
+        }
         if (expr.orderBy) {
           const direction = expr.orderBy.direction === "desc" ? -1 : 1;
           items.sort((a, b) => {
-            const left = evalFreeExpr(expr.orderBy!.expr, { ...env, row: isRecordRow(a) ? a : env.row });
-            const right = evalFreeExpr(expr.orderBy!.expr, { ...env, row: isRecordRow(b) ? b : env.row });
+            const leftBindings = new Map(env.bindings);
+            const rightBindings = new Map(env.bindings);
+            if (expr.alias && isRecordRow(a)) {
+              leftBindings.set(expr.alias, [a]);
+            }
+            if (expr.alias && isRecordRow(b)) {
+              rightBindings.set(expr.alias, [b]);
+            }
+            const left = evalFreeExpr(expr.orderBy!.expr, { ...env, row: isRecordRow(a) ? a : env.row, bindings: leftBindings });
+            const right = evalFreeExpr(expr.orderBy!.expr, { ...env, row: isRecordRow(b) ? b : env.row, bindings: rightBindings });
             return String(left ?? "").localeCompare(String(right ?? "")) * direction;
           });
         }
@@ -3872,6 +3897,44 @@ const materializeFieldValue = (
   return coerceScalarForOutput(field.type, value);
 };
 
+const evaluateComputedLinkPropertyExpr = (
+  expr: ComputedLinkPropertyExpr,
+  targetRow: Record<string, unknown>,
+  linkProperties: Record<string, unknown>,
+): unknown => {
+  if (expr.kind === "literal") {
+    return expr.value;
+  }
+
+  if (expr.kind === "field_ref") {
+    return targetRow[expr.name] ?? null;
+  }
+
+  if (expr.kind === "link_property_ref") {
+    return linkProperties[`@${expr.name}`] ?? linkProperties[expr.name] ?? null;
+  }
+
+  const left = evaluateComputedLinkPropertyExpr(expr.left, targetRow, linkProperties);
+  if (expr.op === "??") {
+    return left ?? evaluateComputedLinkPropertyExpr(expr.right, targetRow, linkProperties);
+  }
+
+  const right = evaluateComputedLinkPropertyExpr(expr.right, targetRow, linkProperties);
+  if (expr.op === "++") {
+    return `${left ?? ""}${right ?? ""}`;
+  }
+  if (expr.op === "+") {
+    return Number(left) + Number(right);
+  }
+  if (expr.op === "-") {
+    return Number(left) - Number(right);
+  }
+  if (expr.op === "*") {
+    return Number(left) * Number(right);
+  }
+  return Number(left) / Number(right);
+};
+
 const findFieldDef = (
   schema: SchemaSnapshot,
   typeName: string,
@@ -4228,7 +4291,14 @@ const evaluateSelectExprEntry = (
     const loadedTargets = targetRowsWithProps
       .map(({ targetId, properties }) => {
         const target = loadTargetById(targetId);
-        return target ? { ...target, ...properties } : null;
+        if (!target) {
+          return null;
+        }
+        const computedProperties = Object.fromEntries((linkDef.computedProperties ?? []).map((property) => [
+          `@${property.name}`,
+          evaluateComputedLinkPropertyExpr(property.computedExpr, target, properties),
+        ]));
+        return { ...target, ...properties, ...computedProperties };
       })
       .filter((row): row is Record<string, unknown> => row !== null);
 
@@ -4236,6 +4306,57 @@ const evaluateSelectExprEntry = (
       return loadedTargets;
     }
     return loadedTargets[0] ?? null;
+  };
+
+  const resolveBacklinkPathValue = (item: unknown, link: string, sourceTypeFilter?: string): unknown[] => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      return [];
+    }
+    const target = item as Record<string, unknown>;
+    if (typeof target.id !== "string") {
+      return [];
+    }
+    const targetTypeName = typeof target.__source_type === "string"
+      ? target.__source_type
+      : (() => {
+          const row = db.prepare(`SELECT ${quoteIdent("type_name")} AS ${quoteIdent("type_name")} FROM ${quoteIdent("__gel_global_ids")} WHERE ${quoteIdent("id")} = ?`).all(target.id)[0] as { type_name?: unknown } | undefined;
+          return typeof row?.type_name === "string" ? resolveRuntimeStoredTypeName(schema, row.type_name) : undefined;
+        })();
+    const sourceTypes = sourceTypeFilter
+      ? schema.listConcreteTypesAssignableTo(qualifyRuntimeTypeName(sourceTypeFilter))
+      : schema.listTypes();
+    const out: Record<string, unknown>[] = [];
+    for (const sourceType of sourceTypes) {
+      const sourceTypeName = qualifiedTypeName(sourceType);
+      const resolved = findRuntimeLinkDef(schema, sourceTypeName, link);
+      if (!resolved) {
+        continue;
+      }
+      const targetNames = normalizeLinkTargetNames(resolved.link.targetType, sourceType.module ?? "default");
+      const canTarget = targetNames.some((candidate) => {
+        if (candidate === targetTypeName) {
+          return true;
+        }
+        return schema.listConcreteTypesAssignableTo(candidate).some((typeDef) => qualifiedTypeName(typeDef) === targetTypeName);
+      });
+      if (!canTarget) {
+        continue;
+      }
+      const sourceTable = tableNameForType(sourceTypeName);
+      if (resolved.link.multi || (resolved.link.properties?.length ?? 0) > 0) {
+        const owner = resolveLinkStorageOwner(schema, sourceType, resolved.link);
+        const linkTable = `${tableNameForType(qualifiedTypeName(owner))}__${resolved.link.name.toLowerCase()}`;
+        const rows = db.prepare(`SELECT s.*, l.* FROM ${quoteIdent(sourceTable)} s JOIN ${quoteIdent(linkTable)} l ON l.${quoteIdent("source")} = s.${quoteIdent("id")} WHERE l.${quoteIdent("target")} = ?`).all(target.id) as Record<string, unknown>[];
+        for (const row of rows) {
+          const props = Object.fromEntries((resolved.link.properties ?? []).map((property) => [`@${property.name}`, row[property.name] ?? null]));
+          out.push({ ...row, ...props, __source_type: sourceTypeName });
+        }
+      } else {
+        const rows = db.prepare(`SELECT * FROM ${quoteIdent(sourceTable)} WHERE ${quoteIdent(`${resolved.link.name}_id`)} = ?`).all(target.id) as Record<string, unknown>[];
+        out.push(...rows.map((row) => ({ ...row, __source_type: sourceTypeName })));
+      }
+    }
+    return out;
   };
 
   const isTupleLikeSelectExprEntry = (value: SelectExprIREntry): boolean => {
@@ -4249,6 +4370,76 @@ const evaluateSelectExprEntry = (
       return isTupleLikeSelectExprEntry(value.value);
     }
     return false;
+  };
+
+  const sameSelectExprSubject = (left: SelectExprIREntry, right: SelectExprIREntry): boolean => {
+    if (left.kind !== right.kind) {
+      return false;
+    }
+    if (left.kind === "field_access" && right.kind === "field_access") {
+      return left.field === right.field && sameSelectExprSubject(left.value, right.value);
+    }
+    if (left.kind === "select" && right.kind === "select") {
+      return left.query.sourceType === right.query.sourceType;
+    }
+    if (left.kind === "type_field_path" && right.kind === "type_field_path") {
+      return left.typeName === right.typeName && left.field === right.field;
+    }
+    if (left.kind === "current_item" && right.kind === "current_item") {
+      return left.bindingName === right.bindingName;
+    }
+    return false;
+  };
+
+  const evaluateSelectExprEntryWithSubject = (
+    expression: SelectExprIREntry,
+    subject: SelectExprIREntry,
+    subjectValue: unknown,
+    evalState: { currentBinding?: string; currentValue?: unknown } | undefined,
+  ): unknown => {
+    if (sameSelectExprSubject(expression, subject)) {
+      return subjectValue;
+    }
+
+    if (expression.kind === "field_access") {
+      const value = evaluateSelectExprEntryWithSubject(expression.value, subject, subjectValue, evalState);
+      if (Array.isArray(value)) {
+        return value.flatMap((item) => {
+          const fieldValue = resolveFieldAccessValue(item, expression.field);
+          return Array.isArray(fieldValue) ? fieldValue : fieldValue === null || fieldValue === undefined ? [] : [fieldValue];
+        });
+      }
+      return resolveFieldAccessValue(value, expression.field);
+    }
+
+    if (expression.kind === "compare") {
+      const leftValue = evaluateSelectExprEntryWithSubject(expression.left, subject, subjectValue, evalState);
+      const rightValue = evaluateSelectExprEntryWithSubject(expression.right, subject, subjectValue, evalState);
+      const leftItems = Array.isArray(leftValue) ? leftValue : [leftValue];
+      const rightItems = Array.isArray(rightValue) ? rightValue : [rightValue];
+      return leftItems.some((leftItem) => rightItems.some((rightItem) => {
+        if (expression.op === "=") return leftItem === rightItem;
+        if (expression.op === "!=") return leftItem !== rightItem;
+        if (expression.op === ">") return Number(leftItem) > Number(rightItem);
+        if (expression.op === ">=") return Number(leftItem) >= Number(rightItem);
+        if (expression.op === "<") return Number(leftItem) < Number(rightItem);
+        return Number(leftItem) <= Number(rightItem);
+      }));
+    }
+
+    if (expression.kind === "and") {
+      return Boolean(evaluateSelectExprEntryWithSubject(expression.left, subject, subjectValue, evalState))
+        && Boolean(evaluateSelectExprEntryWithSubject(expression.right, subject, subjectValue, evalState));
+    }
+    if (expression.kind === "or") {
+      return Boolean(evaluateSelectExprEntryWithSubject(expression.left, subject, subjectValue, evalState))
+        || Boolean(evaluateSelectExprEntryWithSubject(expression.right, subject, subjectValue, evalState));
+    }
+    if (expression.kind === "not") {
+      return !(evaluateSelectExprEntryWithSubject(expression.expr, subject, subjectValue, evalState));
+    }
+
+    return evaluateSelectExprEntry(schema, db, context, expression, sqlTrail, evalState);
   };
 
   switch (entry.kind) {
@@ -4476,6 +4667,9 @@ const evaluateSelectExprEntry = (
 
       return readOne(value);
     }
+    case "backlink_path": {
+      return resolveBacklinkPathValue(evalContext?.currentValue, entry.link, entry.sourceType);
+    }
     case "shape_projection": {
       const value = evaluateSelectExprEntry(schema, db, context, entry.value, sqlTrail, evalContext);
       const projectOne = (item: unknown): Record<string, unknown> | null => {
@@ -4676,6 +4870,36 @@ const evaluateSelectExprEntry = (
       return checkOne(value);
     }
     case "select_expr_subquery": {
+      const linkPropertyProjection = entry.value.kind === "field_access" && entry.value.field.startsWith("@")
+        ? { subject: entry.value.value, property: entry.value.field }
+        : undefined;
+      if (linkPropertyProjection && (entry.filter || entry.orderBy)) {
+        const subjectValue = evaluateSelectExprEntry(schema, db, context, linkPropertyProjection.subject, sqlTrail, evalContext);
+        let subjectRows = Array.isArray(subjectValue) ? [...subjectValue] : [subjectValue];
+        if (entry.filter) {
+          subjectRows = subjectRows.filter((row) => {
+            const filterValue = evaluateSelectExprEntryWithSubject(entry.filter!, linkPropertyProjection.subject, row, evalContext);
+            return Array.isArray(filterValue) ? filterValue.some(Boolean) : Boolean(filterValue);
+          });
+        }
+        if (entry.orderBy) {
+          subjectRows.sort((a, b) => {
+            const aKey = evaluateSelectExprEntryWithSubject(entry.orderBy!.value, linkPropertyProjection.subject, a, evalContext);
+            const bKey = evaluateSelectExprEntryWithSubject(entry.orderBy!.value, linkPropertyProjection.subject, b, evalContext);
+            if (aKey === bKey) {
+              return 0;
+            }
+            return String(aKey ?? "").localeCompare(String(bKey ?? "")) * (entry.orderBy!.direction === "desc" ? -1 : 1);
+          });
+        }
+        const offset = entry.offset ?? 0;
+        const sliced = entry.limit === undefined ? subjectRows.slice(offset) : subjectRows.slice(offset, offset + entry.limit);
+        return sliced.flatMap((row) => {
+          const value = resolveFieldAccessValue(row, linkPropertyProjection.property);
+          return Array.isArray(value) ? value : value === null || value === undefined ? [] : [value];
+        });
+      }
+
       const value = evaluateSelectExprEntry(schema, db, context, entry.value, sqlTrail, evalContext);
       let rows = Array.isArray(value) ? [...value] : [value];
       if (entry.filter) {
@@ -5092,6 +5316,7 @@ const resolveLinks = (
   };
 
   const linkPropertyColumns = new Set(relation.propertyColumns ?? []);
+  const computedLinkPropertyByName = new Map((relation.computedProperties ?? []).map((property) => [property.name, property] as const));
   const linkPropertyName = (column: string): string | undefined => {
     const property = column.startsWith("@") ? column.slice(1) : column;
     return linkPropertyColumns.has(property) ? property : undefined;
@@ -5144,11 +5369,37 @@ const resolveLinks = (
     }
     return [];
   });
+  const collectComputedExprTargetColumns = (expr: ComputedLinkPropertyExpr): string[] => {
+    if (expr.kind === "field_ref") {
+      return [expr.name];
+    }
+    if (expr.kind === "binary_op") {
+      return [...collectComputedExprTargetColumns(expr.left), ...collectComputedExprTargetColumns(expr.right)];
+    }
+    return [];
+  };
+  const collectComputedExprLinkProperties = (expr: ComputedLinkPropertyExpr): string[] => {
+    if (expr.kind === "link_property_ref") {
+      return [expr.name];
+    }
+    if (expr.kind === "binary_op") {
+      return [...collectComputedExprLinkProperties(expr.left), ...collectComputedExprLinkProperties(expr.right)];
+    }
+    return [];
+  };
+  const requestedComputedLinkProperties = nested.shape.flatMap((element) => {
+    if (element.kind !== "computed" || element.expr.kind !== "field_ref" || !element.expr.column.startsWith("@")) {
+      return [];
+    }
+    const property = computedLinkPropertyByName.get(element.expr.column.slice(1));
+    return property ? [property] : [];
+  });
 
   const params: ScalarValue[] = [];
   const linkPropertySelectColumns = relation.storage === "table"
     ? [...new Set([
         ...collectShapeLinkProperties(nested.shape),
+        ...requestedComputedLinkProperties.flatMap((property) => collectComputedExprLinkProperties(property.computedExpr)),
         ...collectFilterLinkProperties(nested.filter),
         ...(nested.orderBy ? (() => {
           const property = linkPropertyName(nested.orderBy.value);
@@ -5158,6 +5409,7 @@ const resolveLinks = (
     : [];
   const requiredColumns = [
     ...nested.columns,
+    ...requestedComputedLinkProperties.flatMap((property) => collectComputedExprTargetColumns(property.computedExpr)),
     ...(nested.orderBy ? [nested.orderBy.value] : []),
     ...collectFilterColumns(nested.filter),
   ].filter((column) => !linkPropertyName(column));
@@ -5186,6 +5438,10 @@ const resolveLinks = (
       `t.${quoteIdent("__source_type")} AS ${quoteIdent("__source_type")}`,
       ...nested.columns
         .filter((column) => !linkPropertyName(column))
+        .map((column) => `t.${quoteIdent(column)} AS ${quoteIdent(column)}`),
+      ...requestedComputedLinkProperties
+        .flatMap((property) => collectComputedExprTargetColumns(property.computedExpr))
+        .filter((column) => !nested.columns.includes(column))
         .map((column) => `t.${quoteIdent(column)} AS ${quoteIdent(column)}`),
       ...linkPropertySelectColumns.flatMap((column) => {
         const aliases = [`l.${quoteIdent(column)} AS ${quoteIdent(`@${column}`)}`];
@@ -5219,9 +5475,15 @@ const resolveLinks = (
     params.push(nested.offset);
   }
 
-  const rows = db.prepare(sql).all(...params);
+  const rows = db.prepare(sql).all(...params) as Record<string, unknown>[];
   sqlTrail.push({ sql, params: [...params], loweringMode: "fallback_multi_query" });
-  return rows.map((item) => materializeSelectRow(db, schema, context, nested.shape, item, rowSourceType(item, relation.targetType), sqlTrail));
+  return rows.map((item) => {
+    const computedProperties = Object.fromEntries(requestedComputedLinkProperties.map((property) => [
+      `@${property.name}`,
+      evaluateComputedLinkPropertyExpr(property.computedExpr, item, item),
+    ]));
+    return materializeSelectRow(db, schema, context, nested.shape, { ...item, ...computedProperties }, rowSourceType(item, relation.targetType), sqlTrail);
+  });
 };
 
 const resolveBacklinks = (
@@ -5462,7 +5724,7 @@ const resolveBacklinkObjects = (
 
 const quoteIdent = (ident: string): string => `"${ident.replaceAll('"', '""')}"`;
 
-const compileFilterPredicate = (lhsSql: string, op: "=" | "!=" | "like" | "ilike"): string => {
+const compileFilterPredicate = (lhsSql: string, op: "=" | "!=" | "<" | "<=" | ">" | ">=" | "?=" | "?!=" | "like" | "ilike"): string => {
   if (op === "=") {
     return `${lhsSql} = ?`;
   }
@@ -5473,6 +5735,18 @@ const compileFilterPredicate = (lhsSql: string, op: "=" | "!=" | "like" | "ilike
 
   if (op === "like") {
     return `${lhsSql} LIKE ?`;
+  }
+
+  if (op === "<" || op === "<=" || op === ">" || op === ">=") {
+    return `${lhsSql} ${op} ?`;
+  }
+
+  if (op === "?=") {
+    return `(${lhsSql} IS NULL OR ${lhsSql} = ?)`;
+  }
+
+  if (op === "?!=" ) {
+    return `(${lhsSql} IS NULL OR ${lhsSql} != ?)`;
   }
 
   return `LOWER(${lhsSql}) LIKE LOWER(?)`;
@@ -5530,7 +5804,7 @@ const compileNestedFilterExprSQL = (filter: FilterExprIR, params: ScalarValue[],
     throw new AppError("E_SQL", "Backlink membership filters are not supported for nested runtime link resolution");
   }
 
-  if (filter.kind === "link_property_exists" || filter.kind === "link_property_compare_exists" || filter.kind === "backlink_property_compare" || filter.kind === "backlink_property_in") {
+  if (filter.kind === "link_property_exists" || filter.kind === "link_property_compare_exists" || filter.kind === "backlink_property_compare" || filter.kind === "backlink_property_in" || filter.kind === "backlink_property_value_compare") {
     throw new AppError("E_SQL", "Link property filters are not supported for nested runtime link resolution");
   }
 

@@ -918,7 +918,7 @@ class Parser {
       this.consume();
       return {
         kind: "distinct",
-        expr: this.parseFreeObjectPrimaryExpr(),
+        expr: this.parsePostfixChain(this.parseFreeObjectPrimaryExpr()),
       };
     }
 
@@ -1805,6 +1805,8 @@ class Parser {
         ? { kind: "field_access", expr: { kind: "current_item" }, field: expr.field }
         : expr.kind === "binding_ref"
           ? { kind: "binding_ref", name: expr.name }
+          : expr.kind === "select_expr"
+            ? expr.expr
           : { kind: "literal", value: null };
       return {
         kind: "computed",

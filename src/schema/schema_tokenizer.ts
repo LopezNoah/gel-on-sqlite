@@ -527,6 +527,34 @@ export interface QualifiedNameNode {
   parts: string[];
 }
 
+const opaqueTypeReferenceToQualifiedName = (node: OpaqueNode): QualifiedNameNode | null => {
+  const text = node.text.trim();
+  if (text.length === 0 || text.includes("|") || text.includes("<") || text.includes(">")) {
+    return null;
+  }
+
+  const parts: string[] = [];
+  let start = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    if (text[i] === ":" && text[i + 1] === ":") {
+      const part = text.slice(start, i).trim();
+      if (part.length === 0) {
+        return null;
+      }
+      parts.push(part);
+      i += 1;
+      start = i + 1;
+    }
+  }
+
+  const last = text.slice(start).trim();
+  if (last.length === 0) {
+    return null;
+  }
+  parts.push(last);
+  return { kind: "QualifiedName", parts };
+};
+
 export interface AbstractAnnotationNode {
   kind: "AbstractAnnotation";
   abstract: true;
@@ -555,6 +583,7 @@ export interface PropertyDeclarationNode {
   cardinality: "single" | "multi" | null;
   name: QualifiedNameNode;
   declaredType: QualifiedNameNode | null;
+  typeExpr: OpaqueNode | null;
   computed: boolean;
   expr: OpaqueNode | null;
   body: PropertyBodyNode | null;
@@ -579,6 +608,7 @@ export interface LinkDeclarationNode {
   cardinality: "single" | "multi" | null;
   name: QualifiedNameNode;
   declaredType: QualifiedNameNode | null;
+  targetType: OpaqueNode | null;
   computed: boolean;
   expr: OpaqueNode | null;
   body: LinkBodyNode | null;
@@ -1113,8 +1143,10 @@ export class Parser {
     this.expectKeyword("annotation");
     const name = this.parseQualifiedName();
     this.expect("assign", "Expected ':=' in annotation assignment");
-    const value = this.parseOpaqueUntilSemicolon();
-    this.expect("semicolon", "Expected ';' after annotation assignment");
+    const value = this.parseOpaqueUntilSemicolonOrBrace();
+    if (!this.match("semicolon") && !this.check("rbrace")) {
+      this.expect("semicolon", "Expected ';' after annotation assignment");
+    }
 
     return {
       kind: "AnnotationAssignment",
@@ -1146,6 +1178,7 @@ export class Parser {
         cardinality,
         name,
         declaredType: null,
+        typeExpr: null,
         computed: true,
         expr,
         body: null,
@@ -1153,9 +1186,10 @@ export class Parser {
     }
 
     let declaredType: QualifiedNameNode | null = null;
+    let typeExpr: OpaqueNode | null = null;
     if (this.matchPointerTypeSeparator()) {
-      declaredType = this.parseQualifiedName();
-      this.consumeTypeExpressionRemainder();
+      typeExpr = this.parseTypeReferenceUntilBoundary("Expected property target type");
+      declaredType = opaqueTypeReferenceToQualifiedName(typeExpr);
     } else if (abstract) {
       declaredType = null;
     } else {
@@ -1180,6 +1214,7 @@ export class Parser {
       cardinality,
       name,
       declaredType,
+      typeExpr,
       computed: false,
       expr: null,
       body,
@@ -1274,6 +1309,7 @@ export class Parser {
         cardinality,
         name,
         declaredType: null,
+        targetType: null,
         computed: true,
         expr,
         body: null,
@@ -1281,9 +1317,10 @@ export class Parser {
     }
 
     let declaredType: QualifiedNameNode | null = null;
+    let targetType: OpaqueNode | null = null;
     if (this.matchPointerTypeSeparator()) {
-      declaredType = this.parseQualifiedName();
-      this.consumeTypeExpressionRemainder();
+      targetType = this.parseTypeReferenceUntilBoundary("Expected link target type");
+      declaredType = opaqueTypeReferenceToQualifiedName(targetType);
     } else if (abstract) {
       declaredType = null;
     } else {
@@ -1308,6 +1345,7 @@ export class Parser {
       cardinality,
       name,
       declaredType,
+      targetType,
       computed: false,
       expr: null,
       body,

@@ -377,6 +377,19 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
                 filter: member.expr.filter ? { ...member.expr.filter } : undefined,
               },
             });
+          } else if (member.expr.kind === "select_type") {
+            computeds.push({
+              kind: "link",
+              name: member.name,
+              required: member.required,
+              multi: member.multi,
+              annotations: member.annotations.length ? [...member.annotations] : undefined,
+              expr: {
+                kind: "select_type",
+                typeName: normalizeTypeName(member.expr.typeName, typeDecl.module),
+                exprText: member.expr.exprText,
+              },
+            });
           } else {
             throw new Error(`Computed '${member.name}' has invalid link expression kind '${member.expr.kind}'`);
           }
@@ -385,6 +398,7 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
       }
 
       const storedProperties = member.properties.filter(isStoredLinkProperty);
+      const computedProperties = member.properties.filter((property) => property.computed === true);
       links.push({
         name: member.name,
         targetType: normalizeTypeName(member.target, typeDecl.module),
@@ -399,6 +413,14 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
               required: property.required,
               hasDefault: property.hasDefault,
               readonly: property.readonly,
+              annotations: property.annotations.length ? [...property.annotations] : undefined,
+            }))
+          : undefined,
+        computedProperties: computedProperties.length
+          ? computedProperties.map((property) => ({
+              name: property.name,
+              exprText: property.exprText,
+              computedExpr: property.computedExpr,
               annotations: property.annotations.length ? [...property.annotations] : undefined,
             }))
           : undefined,
@@ -506,14 +528,23 @@ export const declarativeSchemaFromTypeDefs = (types: TypeDef[], functions: Funct
                 multi: Boolean(link.multi),
                 overloaded: Boolean(link.overloaded),
                 annotations: [...(link.annotations ?? [])],
-                properties: (link.properties ?? []).map((property) => ({
-                  name: property.name,
-                  scalar: property.type,
-                  required: Boolean(property.required),
-                  collection: property.collection,
-                  readonly: Boolean(property.readonly),
-                  annotations: [...(property.annotations ?? [])],
-                })),
+                properties: [
+                  ...(link.properties ?? []).map((property) => ({
+                    name: property.name,
+                    scalar: property.type,
+                    required: Boolean(property.required),
+                    collection: property.collection,
+                    readonly: Boolean(property.readonly),
+                    annotations: [...(property.annotations ?? [])],
+                  })),
+                  ...(link.computedProperties ?? []).map((property) => ({
+                    name: property.name,
+                    computed: true as const,
+                    exprText: property.exprText,
+                    computedExpr: property.computedExpr,
+                    annotations: [...(property.annotations ?? [])],
+                  })),
+                ],
               };
 
               members.push(linkMember);
@@ -578,7 +609,9 @@ export const declarativeSchemaFromTypeDefs = (types: TypeDef[], functions: Funct
                           link: computed.expr.link,
                           sourceType: computed.expr.sourceType,
                         }
-                      : {
+                      : computed.expr.kind === "select_type"
+                        ? { ...computed.expr }
+                        : {
                           kind: "link_ref",
                           link: computed.expr.link,
                           filter: computed.expr.filter ? { ...computed.expr.filter } : undefined,
@@ -1013,6 +1046,10 @@ const renderComputedExpr = (expr: Extract<TypeMember, { kind: "computed" }>['exp
   if (expr.kind === "backlink") {
     const source = expr.sourceType ? `[is ${shortTypeName(expr.sourceType, moduleName)}]` : "";
     return `.<${expr.link}${source}`;
+  }
+
+  if (expr.kind === "select_type") {
+    return expr.exprText;
   }
 
   if (!expr.filter) {
