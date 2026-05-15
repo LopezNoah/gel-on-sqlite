@@ -1034,6 +1034,7 @@ const tryRuntimeSelectExprEvaluation = (
         return Boolean(alias?.values);
       }
       case "select_expr_subquery":
+        if (expr.expr.kind === "shape_projection") return false;
         return Boolean(expr.orderBy) || needsRuntimeEval(expr.expr);
       case "subquery_expr":
         return needsRuntimeEval(expr.expr);
@@ -5138,7 +5139,13 @@ const evaluateSelectExprEntry = (
         });
       }
 
-      const value = evaluateSelectExprEntry(schema, db, context, entry.value, sqlTrail, evalContext);
+      const shapeProjectionForFilter = entry.value.kind === "shape_projection" && (entry.filter || entry.orderBy)
+        ? entry.value
+        : undefined;
+      const sourceForEval: SelectExprIREntry = shapeProjectionForFilter
+        ? shapeProjectionForFilter.value as SelectExprIREntry
+        : entry.value;
+      const value = evaluateSelectExprEntry(schema, db, context, sourceForEval, sqlTrail, evalContext);
       let rows = Array.isArray(value) ? [...value] : [value];
       if (entry.filter) {
         const currentBinding = entry.alias ?? evalContext?.currentBinding ?? "__current__";
@@ -5206,7 +5213,24 @@ const evaluateSelectExprEntry = (
         });
       }
       const offset = entry.offset ?? 0;
-      return entry.limit === undefined ? rows.slice(offset) : rows.slice(offset, offset + entry.limit);
+      const sliced = entry.limit === undefined ? rows.slice(offset) : rows.slice(offset, offset + entry.limit);
+      if (shapeProjectionForFilter) {
+        const projection = shapeProjectionForFilter;
+        return sliced.map((row) => {
+          if (!row || typeof row !== "object" || Array.isArray(row)) {
+            return null;
+          }
+          return evaluateSelectExprEntry(schema, db, context, {
+            ...projection,
+            value: { kind: "current_item", bindingName: "__projection__" },
+          } as SelectExprIREntry, sqlTrail, {
+            currentBinding: "__projection__",
+            currentValue: row,
+            bindings: evalContext?.bindings,
+          });
+        }).filter((item) => item !== null);
+      }
+      return sliced;
     }
     case "function_call": {
       return executeFunctionCall(
