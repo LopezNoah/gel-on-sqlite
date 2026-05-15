@@ -3347,9 +3347,10 @@ export const executeQueryWithTrace = (
           || firstEntry.kind === "field_access"
           || firstEntry.kind === "select_expr_subquery"
           || firstEntry.kind === "array_literal_expr");
+      const sqlIsRunnable = compiled.usesGelIrSql && sqlArtifact.loweringMode === "single_statement";
       result = {
         kind: "select",
-        rows: compiled.usesGelIrSql && !isShapeOrObject
+        rows: sqlIsRunnable && !isShapeOrObject
           ? runGelSelectExprSQL(db, sqlArtifact)
           : materializeSelectExprRows(db, schema, ir, context, sqlTrail),
       };
@@ -3435,9 +3436,10 @@ export const executeQueryUnitWithTrace = (
             : [materializeFreeObjectRow(db, schema, ir.entries, context, sqlTrail)],
         };
       } else if (ir.kind === "select_expr") {
+        const sqlIsRunnable = compiled.usesGelIrSql && sqlArtifact.loweringMode === "single_statement";
         result = {
           kind: "select",
-          rows: compiled.usesGelIrSql
+          rows: sqlIsRunnable
             ? runGelSelectExprSQL(db, sqlArtifact)
             : materializeSelectExprRows(db, schema, ir, context, sqlTrail),
         };
@@ -4875,11 +4877,22 @@ const evaluateSelectExprEntry = (
       if (Array.isArray(value)) {
         const out: unknown[] = [];
         const seenObjectIds = new Set<string>();
+        const carriesLinkProperty = (candidate: unknown): boolean => {
+          if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+            return false;
+          }
+          for (const key of Object.keys(candidate as Record<string, unknown>)) {
+            if (key.startsWith("@")) {
+              return true;
+            }
+          }
+          return false;
+        };
         const pushValue = (candidate: unknown): void => {
           if (candidate === null || candidate === undefined) {
             return;
           }
-          if (candidate && typeof candidate === "object" && !Array.isArray(candidate)) {
+          if (candidate && typeof candidate === "object" && !Array.isArray(candidate) && !carriesLinkProperty(candidate)) {
             const rowId = (candidate as Record<string, unknown>).id;
             if (typeof rowId === "string") {
               if (seenObjectIds.has(rowId)) {

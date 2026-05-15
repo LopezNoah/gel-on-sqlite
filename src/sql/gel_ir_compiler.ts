@@ -129,7 +129,7 @@ export const compileGelIRToSQL = (
     return {
       sql: `SELECT NULL AS ${quoteIdent("id")}, NULL AS ${quoteIdent("__source_type")}`,
       params,
-      loweringMode: "single_statement",
+      loweringMode: "fallback_multi_query",
     };
   }
 
