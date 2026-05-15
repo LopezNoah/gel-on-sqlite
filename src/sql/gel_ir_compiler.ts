@@ -552,7 +552,9 @@ const compileSelectSource = (
     return null;
   }
   const sourceAlias = "s0";
-  const sourceCols = ["id", `${pointer.ptrref.shortName}_id`];
+  const sourceCols = shouldUseLinkTable(pointer)
+    ? ["id"]
+    : ["id", `${pointer.ptrref.shortName}_id`];
   const sourceSql = compilePolymorphicSource(pointer.source.typeref, true, sourceAlias, sourceCols, options);
   const targetAlias = "t0";
   const targetSql = compilePolymorphicSource(pointer.ptrref.outTarget, false, targetAlias, projectedColumns, options);
@@ -705,6 +707,39 @@ const collectForExprProjectedColumns = (sourceSet: Set, where?: Set, orderBy?: S
     if (expr.kind === "operator_call") {
       for (const arg of orderedCallArgs((expr as OperatorCall).args)) {
         visit(arg.expr);
+      }
+      return;
+    }
+    if (expr.kind === "function_call") {
+      for (const arg of orderedCallArgs((expr as FunctionCall).args)) {
+        visit(arg.expr);
+      }
+      return;
+    }
+    if (expr.kind === "if_else_expr") {
+      const ifElse = expr as IfElseExpr;
+      visit(ifElse.condition);
+      visit(ifElse.ifExpr);
+      visit(ifElse.elseExpr);
+      return;
+    }
+    if (expr.kind === "coalesce_expr") {
+      const coalesce = expr as CoalesceExpr;
+      visit(coalesce.left);
+      visit(coalesce.right);
+      return;
+    }
+    if (expr.kind === "type_cast") {
+      visit((expr as TypeCast).expr);
+      return;
+    }
+    if (expr.kind === "exists_expr") {
+      visit((expr as ExistsExpr).expr);
+      return;
+    }
+    if (expr.kind === "array") {
+      for (const element of expr.elements) {
+        visit(element);
       }
       return;
     }

@@ -2291,6 +2291,12 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           values: expr.values.map((value) => asNestedExprEntry(compileExprToIREntry(value, currentItemBinding))),
         };
       }
+      if (expr.kind === "array_literal_expr") {
+        return {
+          kind: "array_literal_expr",
+          values: expr.values.map((value) => asNestedExprEntry(compileExprToIREntry(value, currentItemBinding))),
+        };
+      }
       if (expr.kind === "exists") {
         return {
           kind: "exists",
@@ -2830,6 +2836,18 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         const aliasSourceType = schemaAlias?.sourceType
           ? schema.getType(normalizeTypeName(schemaAlias.sourceType, schemaAlias.module ?? activeModule))
           : undefined;
+
+        if (schemaAlias && !aliasSourceType && schemaAlias.exprText) {
+          const aliasBody = schemaAlias.exprText.replace(/;\s*$/, "");
+          try {
+            const parsedAlias = parseEdgeQL(`select ${aliasBody}`);
+            if (parsedAlias.kind === "select_expr") {
+              return compileExprToIREntry(parsedAlias.expr, currentItemBinding);
+            }
+          } catch {
+            // fall through to default error
+          }
+        }
 
         const nestedType = requireValue(
           aliasSourceType ?? schema.getType(normalizeTypeName(expr.typeName, activeModule)),

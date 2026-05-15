@@ -1023,7 +1023,7 @@ const tryRuntimeSelectExprEvaluation = (
       case "for_expr":
         return needsRuntimeEval(expr.iterator) || needsRuntimeEval(expr.body);
       case "field_access":
-        return expr.expr.kind === "select" || needsRuntimeEval(expr.expr);
+        return needsRuntimeEval(expr.expr);
       case "distinct":
       case "exists":
         return needsRuntimeEval(expr.expr);
@@ -1076,6 +1076,7 @@ const tryRuntimeSelectExprEvaluation = (
     if (value.kind === "path") return !isEnumScalarTypeDef(value.head);
     if (value.kind === "path_chain") return !isEnumScalarTypeDef(value.parts?.[0]);
     if (value.kind === "binding_ref") return !isEnumScalarTypeDef(value.name);
+    if (value.kind === "subquery") return false;
     return true;
   };
 
@@ -3202,33 +3203,40 @@ export const executeQuery = (
   query: string,
   securityContext: SecurityContext = DEFAULT_SECURITY_CONTEXT,
 ): QueryResult => {
+  const dbg = process.env.GEL_DEBUG_RUNTIME === "1";
   const runtimeTypedAliasResult = tryRuntimeTypedAliasSelect(db, schema, query);
   if (runtimeTypedAliasResult) {
+    if (dbg) console.error("HACK: tryRuntimeTypedAliasSelect");
     return runtimeTypedAliasResult;
   }
 
   const runtimeFreeObjectAliasSubqueryResult = tryRuntimeFreeObjectAliasSubquery(db, schema, query);
   if (runtimeFreeObjectAliasSubqueryResult) {
+    if (dbg) console.error("HACK: tryRuntimeFreeObjectAliasSubquery");
     return runtimeFreeObjectAliasSubqueryResult;
   }
 
   const runtimeSchemaAliasPropertyResult = tryRuntimeSchemaAliasComputedPropertySelect(db, schema, query);
   if (runtimeSchemaAliasPropertyResult) {
+    if (dbg) console.error("HACK: tryRuntimeSchemaAliasComputedPropertySelect");
     return runtimeSchemaAliasPropertyResult;
   }
 
   const runtimeInlineComputedPropertyResult = tryRuntimeInlineComputedPropertySelect(db, schema, query);
   if (runtimeInlineComputedPropertyResult) {
+    if (dbg) console.error("HACK: tryRuntimeInlineComputedPropertySelect");
     return runtimeInlineComputedPropertyResult;
   }
 
   const runtimeCountTupleResult = tryRuntimeCountTupleSelect(db, schema, query);
   if (runtimeCountTupleResult) {
+    if (dbg) console.error("HACK: tryRuntimeCountTupleSelect");
     return runtimeCountTupleResult;
   }
 
   const runtimeSelectExprEvaluationResult = tryRuntimeSelectExprEvaluation(db, schema, query, securityContext);
   if (runtimeSelectExprEvaluationResult) {
+    if (dbg) console.error("HACK: tryRuntimeSelectExprEvaluation");
     return runtimeSelectExprEvaluationResult;
   }
 
@@ -3331,9 +3339,16 @@ export const executeQueryWithTrace = (
           : [materializeFreeObjectRow(db, schema, ir.entries, context, sqlTrail)],
       };
     } else if (ir.kind === "select_expr") {
+      const firstEntry = ir.entries[0];
+      const isShapeOrObject = firstEntry
+        && (firstEntry.kind === "shape_projection"
+          || firstEntry.kind === "select"
+          || firstEntry.kind === "field_access"
+          || firstEntry.kind === "select_expr_subquery"
+          || firstEntry.kind === "array_literal_expr");
       result = {
         kind: "select",
-        rows: compiled.usesGelIrSql
+        rows: compiled.usesGelIrSql && !isShapeOrObject
           ? runGelSelectExprSQL(db, sqlArtifact)
           : materializeSelectExprRows(db, schema, ir, context, sqlTrail),
       };
@@ -4644,6 +4659,12 @@ const evaluateSelectExprEntry = (
         [[]],
       );
     }
+    case "array_literal_expr": {
+      return (entry.values as unknown[]).map((value) => {
+        const typedValue = value as SelectExprIREntry;
+        return evaluateSelectExprEntry(schema, db, context, typedValue, sqlTrail, evalContext);
+      });
+    }
     case "index_access": {
       const value = evaluateSelectExprEntry(schema, db, context, entry.value, sqlTrail, evalContext);
       const valueIsTuple = Array.isArray(value)
@@ -4852,9 +4873,19 @@ const evaluateSelectExprEntry = (
 
       if (Array.isArray(value)) {
         const out: unknown[] = [];
+        const seenObjectIds = new Set<string>();
         const pushValue = (candidate: unknown): void => {
           if (candidate === null || candidate === undefined) {
             return;
+          }
+          if (candidate && typeof candidate === "object" && !Array.isArray(candidate)) {
+            const rowId = (candidate as Record<string, unknown>).id;
+            if (typeof rowId === "string") {
+              if (seenObjectIds.has(rowId)) {
+                return;
+              }
+              seenObjectIds.add(rowId);
+            }
           }
           out.push(candidate);
         };
@@ -5235,7 +5266,8 @@ const materializeSelectExprRows = (
     return [];
   }
   const value = evaluateSelectExprEntry(schema, db, context, ir.entries[0], sqlTrail);
-  const rows = Array.isArray(value) ? [...value] : [value];
+  const entryProducesSingleValue = ir.entries[0].kind === "array_literal_expr";
+  const rows = !entryProducesSingleValue && Array.isArray(value) ? [...value] : [value];
 
   if (ir.orderBy) {
     const enumOrder = ir.orderBy.value.kind === "cast"

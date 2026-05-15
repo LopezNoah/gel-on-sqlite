@@ -568,6 +568,12 @@ export type SelectExprIREntry<D extends Depth = 4> =
   | (D extends 0
       ? never
       : {
+          kind: "array_literal_expr";
+          values: SelectExprIREntry<Dec<D>>[];
+        })
+  | (D extends 0
+      ? never
+      : {
           kind: "index_access";
           value: SelectExprIREntry<Dec<D>>;
           index: number;
