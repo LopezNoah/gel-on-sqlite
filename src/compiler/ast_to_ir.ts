@@ -1011,6 +1011,36 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr, ctx: IRCompileContext): Set
 
     case "field_access": {
       const source = compileFreeObjectExpr(expr.expr, ctx);
+
+      if (expr.field.startsWith("@") && source.expr.kind === "pointer") {
+        const linkPointer = source.expr as Pointer;
+        if (!linkPointer.ptrref.isLinkProperty) {
+          const linkOwnerTypeRef = linkPointer.direction === "inbound"
+            ? linkPointer.ptrref.outSource
+            : linkPointer.source.typeref;
+          const linkOwnerResolved = getResolvedSchemaType(ctx, linkOwnerTypeRef.id);
+          const linkDef = linkOwnerResolved?.resolvedLinks.find((candidate) => candidate.name === linkPointer.ptrref.shortName);
+          const propName = expr.field.slice(1);
+          const propDef = linkDef?.properties?.find((property) => property.name === propName);
+          if (propDef) {
+            const propertyPtrRef: PointerRef = {
+              kind: "pointer_ref",
+              id: `${linkPointer.ptrref.id}.${expr.field}`,
+              name: expr.field,
+              shortName: expr.field,
+              outSource: source.typeref,
+              outTarget: scalarTypeRef(propDef.type),
+              outCardinality: propDef.required ? "one" : "at_most_one",
+              inCardinality: "many",
+              isComputed: false,
+              isLinkProperty: true,
+              hasProperties: false,
+            };
+            return extendPathSet(source, propertyPtrRef);
+          }
+        }
+      }
+
       const ptrref = resolvePointerRef(ctx, source.typeref, expr.field);
       return ptrref ? (
         ptrref.computedLinkAliasIsBackward ? extendPathSetDirectional(source, ptrref, "inbound") : extendPathSet(source, ptrref)
