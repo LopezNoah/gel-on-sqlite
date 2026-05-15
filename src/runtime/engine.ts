@@ -1059,7 +1059,28 @@ const tryRuntimeSelectExprEvaluation = (
     }
   };
 
-  if (!ast.with?.length && !needsRuntimeEval(ast.expr)) {
+  const isEnumScalarTypeDef = (typeName: string | undefined): boolean => {
+    if (!typeName) return false;
+    const qualified = typeName.includes("::") ? typeName : qualifiedRuntimeAliasName(typeName);
+    const typeDef = schema.getType(qualified) ?? schema.getType(typeName);
+    if (!typeDef) return false;
+    const first = typeDef.fields[0];
+    return typeDef.fields.length === 1
+      && first?.name === "__enum__"
+      && Boolean(first?.enumValues?.length);
+  };
+
+  const bindingNeedsRuntime = (binding: { value: { kind: string; head?: string; parts?: string[]; name?: string } }): boolean => {
+    const value = binding.value;
+    if (value.kind === "enum_path") return false;
+    if (value.kind === "path") return !isEnumScalarTypeDef(value.head);
+    if (value.kind === "path_chain") return !isEnumScalarTypeDef(value.parts?.[0]);
+    if (value.kind === "binding_ref") return !isEnumScalarTypeDef(value.name);
+    return true;
+  };
+
+  const withRequiresRuntime = (ast.with ?? []).some(bindingNeedsRuntime);
+  if (!withRequiresRuntime && !needsRuntimeEval(ast.expr)) {
     return undefined;
   }
 

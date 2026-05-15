@@ -484,6 +484,21 @@ const compilePathSteps = (steps: EdgeQLPathStep[], ctx: IRCompileContext): Set =
   if (!first || first.kind !== "object_ref") {
     return literalToSet(null);
   }
+  if (!resolveBinding(ctx, first.name)) {
+    const enumType = lookupEnumScalar(ctx, first.name);
+    if (enumType) {
+      const rest = steps.slice(1);
+      const memberStep = rest.find((step) => step.kind === "ptr");
+      if (!memberStep || memberStep.kind !== "ptr") {
+        failSemantic(`enum path expression lacks an enum member name, as in '${first.name}.${enumType.members[0]}'`);
+      }
+      const ptrSteps = rest.filter((step) => step.kind === "ptr");
+      if (ptrSteps.length > 1) {
+        failSemantic(`invalid property reference on an expression of primitive type`);
+      }
+      return resolvePathToEnumLiteral(ctx, first.name, (memberStep as { kind: "ptr"; name: string }).name) ?? literalToSet(null);
+    }
+  }
   let out = resolveBinding(ctx, first.name) ?? setFromTypeRoot(resolveTypeRef(ctx, first.name));
   for (const step of steps.slice(1)) {
     if (step.kind === "ptr") {
@@ -640,6 +655,183 @@ const compileSetConstructor = (values: Set[], label: string): Set => {
   };
 };
 
+const failSemantic = (message: string): never => {
+  throw new AppError("E_SEMANTIC", message, 1, 1);
+};
+
+const enumValuesOfTypeDef = (typeDef: TypeDef | undefined): string[] | undefined => {
+  if (!typeDef) return undefined;
+  const first = typeDef.fields[0];
+  if (typeDef.fields.length === 1 && first?.name === "__enum__" && first.enumValues && first.enumValues.length > 0) {
+    return first.enumValues;
+  }
+  return undefined;
+};
+
+const lookupEnumScalar = (ctx: IRCompileContext, name: string): { qualifiedName: string; members: string[] } | undefined => {
+  const typeDef = getSchemaType(ctx, name);
+  const members = enumValuesOfTypeDef(typeDef);
+  if (!typeDef || !members) return undefined;
+  return { qualifiedName: qualifiedTypeName(typeDef), members };
+};
+
+const enumLiteralSet = (member: string): Set => literalToSet(member);
+
+const resolvePathToEnumLiteral = (ctx: IRCompileContext, head: string, tail: string | undefined): Set | undefined => {
+  const enumType = lookupEnumScalar(ctx, head);
+  if (!enumType) return undefined;
+  if (tail === undefined) {
+    failSemantic(`enum path expression lacks an enum member name, as in '${head}.${enumType.members[0]}'`);
+  }
+  if (!enumType.members.includes(tail!)) {
+    failSemantic(`enum '${enumType.qualifiedName}' has no member called '${tail}'`);
+  }
+  return enumLiteralSet(tail!);
+};
+
+const jsonEncodeString = (value: string): string => JSON.stringify(JSON.stringify(value));
+
+const tryExtractStringConstant = (set: Set): string | undefined => {
+  const expr = set.expr as { kind: string; value?: unknown };
+  if (expr.kind === "string_constant" && typeof expr.value === "string") {
+    return expr.value;
+  }
+  return undefined;
+};
+
+const tryExtractAnyConstant = (set: Set): { value: unknown; kind: string } | undefined => {
+  const expr = set.expr as { kind: string; value?: unknown };
+  if (expr.kind.endsWith("_constant")) {
+    return { value: expr.value, kind: expr.kind };
+  }
+  return undefined;
+};
+
+const jsonTypeNameForLiteral = (value: unknown): string => {
+  if (value === null) return "null";
+  if (typeof value === "boolean") return "boolean";
+  if (typeof value === "number") return "number";
+  if (typeof value === "string") return "string";
+  if (Array.isArray(value)) return "array";
+  return "object";
+};
+
+const tryExtractSetOfStringConstants = (set: Set): string[] | undefined => {
+  const direct = tryExtractStringConstant(set);
+  if (direct !== undefined) return [direct];
+  const expr = set.expr as { kind: string; operator?: string; args?: Record<string, { expr: Set }> };
+  if (expr.kind === "operator_call" && expr.operator === "union" && expr.args) {
+    const values: string[] = [];
+    for (const key of Object.keys(expr.args).sort((a, b) => Number(a) - Number(b))) {
+      const inner = tryExtractStringConstant(expr.args[key]!.expr);
+      if (inner === undefined) return undefined;
+      values.push(inner);
+    }
+    return values;
+  }
+  return undefined;
+};
+
+const compileEnumCast = (
+  ctx: IRCompileContext,
+  enumQualifiedName: string,
+  enumMembers: string[],
+  inner: Set,
+): Set => {
+  const stringValues = tryExtractSetOfStringConstants(inner);
+  if (stringValues !== undefined) {
+    const validated = stringValues.map((value) => {
+      if (!enumMembers.includes(value)) {
+        failSemantic(`invalid input value for enum '${enumQualifiedName}': "${value}"`);
+      }
+      return enumLiteralSet(value);
+    });
+    return compileSetConstructor(validated, "enum_cast");
+  }
+  return inner;
+};
+
+const BUILTIN_SCALAR_NAMES: Record<string, string> = {
+  str: "std::str",
+  int: "std::int64",
+  int16: "std::int16",
+  int32: "std::int32",
+  int64: "std::int64",
+  float: "std::float64",
+  float32: "std::float32",
+  float64: "std::float64",
+  bool: "std::bool",
+  json: "std::json",
+  datetime: "std::datetime",
+  duration: "std::duration",
+  uuid: "std::uuid",
+  decimal: "std::decimal",
+  bigint: "std::bigint",
+  bytes: "std::bytes",
+};
+
+const normalizeScalarCastName = (ctx: IRCompileContext, name: string): string => {
+  if (name.includes("::")) return name;
+  if (BUILTIN_SCALAR_NAMES[name]) return BUILTIN_SCALAR_NAMES[name];
+  const typeDef = getSchemaType(ctx, name);
+  if (typeDef) return qualifiedTypeName(typeDef);
+  return `${ctx.module}::${name}`;
+};
+
+const inferPropertyTypeName = (ctx: IRCompileContext, typeName: string, fieldName: string): string | undefined => {
+  const typeDef = getSchemaType(ctx, typeName);
+  if (!typeDef) return undefined;
+  const field = typeDef.fields.find((f) => f.name === fieldName);
+  if (!field) return undefined;
+  if (field.enumTypeName) return field.enumTypeName;
+  return BUILTIN_SCALAR_NAMES[field.type] ?? `std::${field.type}`;
+};
+
+const inferAstExprTypeName = (expr: FreeObjectExpr, ctx: IRCompileContext): string | undefined => {
+  switch (expr.kind) {
+    case "literal":
+      if (typeof expr.value === "string") return "std::str";
+      if (typeof expr.value === "boolean") return "std::bool";
+      if (typeof expr.value === "number") return Number.isInteger(expr.value) ? "std::int64" : "std::float64";
+      return undefined;
+    case "cast":
+      return normalizeScalarCastName(ctx, expr.castType);
+    case "enum_path":
+      return normalizeScalarCastName(ctx, expr.enumType);
+    case "path": {
+      const enumType = lookupEnumScalar(ctx, expr.head);
+      if (enumType) return enumType.qualifiedName;
+      return inferPropertyTypeName(ctx, expr.head, expr.tail);
+    }
+    case "path_chain": {
+      const parts = expr.parts;
+      if (parts.length < 1) return undefined;
+      const enumType = lookupEnumScalar(ctx, parts[0]!);
+      if (enumType) return enumType.qualifiedName;
+      if (parts.length === 2) return inferPropertyTypeName(ctx, parts[0]!, parts[1]!);
+      return undefined;
+    }
+    case "path_steps": {
+      const first = expr.steps[0];
+      if (!first || first.kind !== "object_ref") return undefined;
+      const enumType = lookupEnumScalar(ctx, first.name);
+      if (enumType) return enumType.qualifiedName;
+      const ptrSteps = expr.steps.slice(1).filter((step) => step.kind === "ptr");
+      if (ptrSteps.length === 1) {
+        return inferPropertyTypeName(ctx, first.name, (ptrSteps[0] as { kind: "ptr"; name: string }).name);
+      }
+      return undefined;
+    }
+    case "binding_ref": {
+      const enumType = lookupEnumScalar(ctx, expr.name);
+      if (enumType) return enumType.qualifiedName;
+      return undefined;
+    }
+    default:
+      return undefined;
+  }
+};
+
 const compileFreeObjectExpr = (expr: FreeObjectExpr, ctx: IRCompileContext): Set => {
   const resolveHeadSet = (name: string): Set => resolveBinding(ctx, name) ?? setFromTypeRoot(resolveTypeRef(ctx, name));
 
@@ -681,6 +873,10 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr, ctx: IRCompileContext): Set
       if (bound) {
         return bound;
       }
+      const enumType = lookupEnumScalar(ctx, expr.name);
+      if (enumType) {
+        failSemantic(`enum path expression lacks an enum member name, as in '${expr.name}.${enumType.members[0]}'`);
+      }
       const typeref = resolveTypeRef(ctx, expr.name);
       return setFromTypeRoot(typeref);
     }
@@ -715,6 +911,10 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr, ctx: IRCompileContext): Set
     }
 
     case "path": {
+      if (!resolveBinding(ctx, expr.head)) {
+        const enumLiteral = resolvePathToEnumLiteral(ctx, expr.head, expr.tail);
+        if (enumLiteral) return enumLiteral;
+      }
       if (expr.steps?.length) {
         return compilePathSteps(expr.steps, ctx);
       }
@@ -727,6 +927,21 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr, ctx: IRCompileContext): Set
     }
 
     case "path_chain": {
+      if (!resolveBinding(ctx, expr.parts[0] ?? "")) {
+        const headName = expr.parts[0];
+        if (headName) {
+          const enumType = lookupEnumScalar(ctx, headName);
+          if (enumType) {
+            if (expr.parts.length < 2) {
+              failSemantic(`enum path expression lacks an enum member name, as in '${headName}.${enumType.members[0]}'`);
+            }
+            if (expr.parts.length > 2) {
+              failSemantic(`invalid property reference on an expression of primitive type`);
+            }
+            return resolvePathToEnumLiteral(ctx, headName, expr.parts[1]) ?? literalToSet(null);
+          }
+        }
+      }
       if (expr.steps?.length) {
         return compilePathSteps(expr.steps, ctx);
       }
@@ -755,6 +970,20 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr, ctx: IRCompileContext): Set
       const [first, ...rest] = expr.steps;
       if (!first || first.kind !== "object_ref") {
         return literalToSet(null);
+      }
+      if (!resolveBinding(ctx, first.name)) {
+        const enumType = lookupEnumScalar(ctx, first.name);
+        if (enumType) {
+          const memberStep = rest.find((step) => step.kind === "ptr");
+          if (!memberStep || memberStep.kind !== "ptr") {
+            failSemantic(`enum path expression lacks an enum member name, as in '${first.name}.${enumType.members[0]}'`);
+          }
+          const ptrSteps = rest.filter((step) => step.kind === "ptr");
+          if (ptrSteps.length > 1) {
+            failSemantic(`invalid property reference on an expression of primitive type`);
+          }
+          return resolvePathToEnumLiteral(ctx, first.name, (memberStep as { kind: "ptr"; name: string }).name) ?? literalToSet(null);
+        }
       }
       let out = resolveHeadSet(first.name);
       for (const step of rest) {
@@ -916,6 +1145,14 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr, ctx: IRCompileContext): Set
     }
 
     case "concat": {
+      const partTypes = expr.parts.map((part) => inferAstExprTypeName(part, ctx));
+      const nonStrIndex = partTypes.findIndex((typeName) => typeName !== undefined && typeName !== "std::str");
+      if (nonStrIndex >= 0) {
+        const offenderType = partTypes[nonStrIndex]!;
+        const otherType = partTypes.find((typeName, index) => index !== nonStrIndex && typeName !== undefined) ?? "std::str";
+        const [leftType, rightType] = nonStrIndex === 0 ? [offenderType, otherType] : [otherType, offenderType];
+        failSemantic(`operator '++' cannot be applied to operands of type '${leftType}' and '${rightType}'`);
+      }
       const parts = expr.parts.map((part) => compileFreeObjectExpr(part, ctx));
       return {
         kind: "set",
@@ -1278,7 +1515,39 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr, ctx: IRCompileContext): Set
     }
 
     case "cast": {
-      const inner = compileFreeObjectExpr(expr.expr, ctx);
+      const innerExpr = expr.expr;
+      const innerIsJsonCast = innerExpr.kind === "cast" && innerExpr.castType === "json";
+      const enumTarget = lookupEnumScalar(ctx, expr.castType);
+
+      if (enumTarget) {
+        const sourceExpr = innerIsJsonCast ? (innerExpr as { kind: "cast"; castType: string; expr: FreeObjectExpr }).expr : innerExpr;
+        const innerSet = compileFreeObjectExpr(sourceExpr, ctx);
+        if (innerIsJsonCast) {
+          const innerLiteral = tryExtractAnyConstant(innerSet);
+          if (innerLiteral !== undefined && typeof innerLiteral.value !== "string") {
+            failSemantic(`expected JSON string or null; got JSON ${jsonTypeNameForLiteral(innerLiteral.value)}`);
+          }
+        }
+        return compileEnumCast(ctx, enumTarget.qualifiedName, enumTarget.members, innerSet);
+      }
+
+      if (expr.castType === "json") {
+        const innerSet = compileFreeObjectExpr(innerExpr, ctx);
+        const values = tryExtractSetOfStringConstants(innerSet);
+        if (values !== undefined) {
+          const encoded = values.map((value) => enumLiteralSet(jsonEncodeString(value)));
+          return compileSetConstructor(encoded, "json_string_cast");
+        }
+      }
+
+      if (expr.castType === "str") {
+        const innerSet = compileFreeObjectExpr(innerExpr, ctx);
+        const literal = tryExtractStringConstant(innerSet);
+        if (literal !== undefined) return enumLiteralSet(literal);
+        return innerSet;
+      }
+
+      const inner = compileFreeObjectExpr(innerExpr, ctx);
       const toType = resolveTypeRef(ctx, expr.castType);
       return {
         kind: "set",

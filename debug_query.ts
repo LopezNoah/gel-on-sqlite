@@ -1,10 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { openSQLite, materializeSchema } from './src/runtime/database.js';
-import { parseDeclarativeSchema } from './src/schema/declarative.js';
+// import { parseDeclarativeSchema } from './src/schema/declarative.js';
 import { schemaSnapshotFromDeclarative } from './src/schema/uiSchema.js';
-import { executeScript, executeQueryWithTrace } from './src/runtime/engine.js';
+import { executeScript, executeQueryWithTrace, executeQuery } from './src/runtime/engine.js';
 import { ensureGelSchemaTables, serializeSchemaToGelTables, serializeSchemaToInstdata } from './src/schema/gel_persistence.js';
+import { parseDeclarativeSchema } from './src/schema/sdl_adapter.js';
 
 const stripHashComments = (source: string): string => source.replace(/^\s*#.*$/gm, '');
 
@@ -24,18 +25,35 @@ const qualifyUnqualifiedTypes = (source: string, moduleName: string): string =>
 
 (async () => {
   const cwd = process.cwd();
-  const schemaPath = path.join(cwd, 'tests/schemas/cards.esdl');
-  const setupPath = path.join(cwd, 'tests/schemas/cards_setup.edgeql');
+  // const schemaPath = path.join(cwd, 'tests/schemas/dump01_default.esdl');
+  // const setupPath = path.join(cwd, 'tests/schemas/dump01_setup.edgeql');
 
-  if (!fs.existsSync(schemaPath)) throw new Error(`Schema not found at ${schemaPath}`);
+  // if (!fs.existsSync(schemaPath)) throw new Error(`Schema not found at ${schemaPath}`);
 
-  const schemaBody = stripHashComments(fs.readFileSync(schemaPath, 'utf8'));
-  const schemaSource = schemaBody.trimStart().startsWith('module ')
-    ? schemaBody
-    : 'module default {\n' + schemaBody + '\n}';
+  // const schemaBody = stripHashComments(fs.readFileSync(schemaPath, 'utf8'));
+  // const schemaSource = schemaBody.trimStart().startsWith('module ')
+    // ? schemaBody
+    // : 'module default {\n' + schemaBody + '\n}';
 
-  const decl = parseDeclarativeSchema(schemaSource);
-  const snapshot = schemaSnapshotFromDeclarative(decl);
+  const trueSchema = `module default {
+        type User {
+          required name: str;
+        }
+
+        type Organization {
+          required name: str;
+        }
+
+        type Issue {
+          required title: str;
+          owner: User | Organization;
+        }
+      }`;
+
+  const decl = parseDeclarativeSchema(trueSchema, {legacySyntaxCompat: true });
+  //console.dir(decl.types.filter(x => x.name === "User")[0].members.filter(x => x.name === "deck")[0]["properties"])
+  const snapshot = schemaSnapshotFromDeclarative(decl); //not using the new computed properties/links in SDL
+  console.dir(snapshot.getType("default::User")?.links?.filter(x => x.name === "deck")[0].properties);
   const { db } = openSQLite(':memory:');
 
   materializeSchema(db, snapshot);
@@ -43,55 +61,35 @@ const qualifyUnqualifiedTypes = (source: string, moduleName: string): string =>
   serializeSchemaToGelTables(db, snapshot);
   serializeSchemaToInstdata(db, snapshot);
 
-  const rawSetup = stripHashComments(fs.readFileSync(setupPath, 'utf8'));
-  const setModuleMatch = rawSetup.match(/^\s*SET\s+MODULE\s+([A-Za-z_][\w:]*)\s*;/im);
-  const currentModule = setModuleMatch ? setModuleMatch[1] : 'default';
-  const setupNoSetModule = rawSetup.replace(/^\s*SET\s+MODULE\s+[^;]+;\s*$/gim, '');
+  // const rawSetup = stripHashComments(fs.readFileSync(setupPath, 'utf8'));
+  // const setModuleMatch = rawSetup.match(/^\s*SET\s+MODULE\s+([A-Za-z_][\w:]*)\s*;/im);
+  // const currentModule = setModuleMatch ? setModuleMatch[1] : 'default';
+  // const setupNoSetModule = rawSetup.replace(/^\s*SET\s+MODULE\s+[^;]+;\s*$/gim, '');
 
-  const setupQueries = setupNoSetModule.split(/;\s*$/m).map((s) => s.trim()).filter(Boolean);
-  for (const q of setupQueries) {
-    const stmt = /^\s*WITH\b/i.test(q) ? q : qualifyUnqualifiedTypes(q, currentModule);
-    executeScript(db, snapshot, stmt + ';');
-  }
+  // const setupQueries = setupNoSetModule.split(/;\s*$/m).map((s) => s.trim()).filter(Boolean);
+  // for (const q of setupQueries) {
+    // const stmt = /^\s*WITH\b/i.test(q) ? q : qualifyUnqualifiedTypes(q, currentModule);
+    // executeScript(db, snapshot, stmt + ';');
+  // }
 
-  const query1 = 'SELECT User { name, deck_cost } ORDER BY .name;';
-  const query = `SELECT User {
-                    name,
-                    deck_cost
-                }
-                ORDER BY User.name;`;
-  const trace = executeQueryWithTrace(db, snapshot, query);
+  const query = 'SELECT User { name, deck_cost } ORDER BY .name;';
+  executeQuery(db, snapshot, "insert default::User { name := 'Ada' };");
+    executeQuery(db, snapshot, "insert default::Organization { name := 'Gel' };");
+    executeQuery(db, snapshot, "insert default::Issue { title := 'user-owned', owner := (select default::User filter .name = 'Ada') };");
+    executeQuery(db, snapshot, "insert default::Issue { title := 'org-owned', owner := (select default::Organization filter .name = 'Gel') };");
+
+    const trace = executeQueryWithTrace(
+      db,
+      snapshot,
+      "select default::Issue { title, owner: { name, type_name := .__type__.name } } order by .title;",
+    );
+
+
+  // const trace = executeQueryWithTrace(db, snapshot, query);
   const last = trace;
   const sqlText = last?.sql?.sql ?? '';
   const loweringMode = last?.sql?.loweringMode ?? '<none>';
   const rows = last?.result && last.result.kind === 'select' ? last.result.rows : [];
-  const rowsWithDeckCount = rows.map((row) => {
-    const item = row as { name?: unknown; deck_cost?: unknown };
-    return {
-      name: item.name,
-      deck_cost: item.deck_cost,
-      deck_count: item.deck_cost,
-    };
-  });
-
-  const sqlAggregateRows = db
-    .prepare(
-      `
-      SELECT
-        owner.name AS name,
-        COALESCE(SUM(c.cost), 0) AS deck_cost_sql
-      FROM (
-        SELECT id, name FROM default__user
-        UNION ALL
-        SELECT id, name FROM default__bot
-      ) owner
-      LEFT JOIN default__user__deck d ON d.source = owner.id
-      LEFT JOIN default__card c ON c.id = d.target
-      GROUP BY owner.id, owner.name
-      ORDER BY owner.name ASC
-      `,
-    )
-    .all();
 
   console.log('--- Query ---');
   console.log(query);
@@ -99,14 +97,9 @@ const qualifyUnqualifiedTypes = (source: string, moduleName: string): string =>
   console.log(loweringMode);
   console.log('--- Generated SQL ---');
   console.log(sqlText);
-  console.log('--- Uses SQL SUM(...) ? ---');
-  console.log(/\bsum\s*\(/i.test(sqlText));
-  console.log('--- Query result rows ---');
-  console.dir(rows, { depth: null });
-  console.log('--- Query rows with deck_count alias ---');
-  console.dir(rowsWithDeckCount, { depth: null });
-  console.log('--- Direct SQL aggregate check (COALESCE(SUM(c.cost), 0)) ---');
-  console.dir(sqlAggregateRows, { depth: null });
+  console.log('--- AST ---');
+  console.log(JSON.stringify(trace, null, 2))
+
 })().catch((err) => {
   console.error(err);
   process.exit(1);
