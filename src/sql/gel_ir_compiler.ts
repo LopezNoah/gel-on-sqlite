@@ -8,6 +8,7 @@ import type {
   ConfigStmt,
   ExistsExpr,
   DeleteStmt,
+  Expr,
   ForExpr,
   FunctionCall,
   GroupStmt,
@@ -23,6 +24,7 @@ import type {
   ShapeElement,
   SliceExpr,
   SortExpr,
+  TypeRoot,
   TypeCheckOpExpr,
   TypeCast,
   TypeRef,
@@ -66,7 +68,42 @@ export const compileGelIRToSQL = (
   }
   const target = options.target ?? "sqlite";
   const params: ScalarValue[] = [];
-  const sourceSet = unwrapSelectResultSet(statement.expr);
+  const topSelect = unwrapSelectExprSet(statement.expr);
+  const selectWhere = statement.where ?? topSelect.selectExpr?.where;
+  const selectOrderBy = statement.orderBy ?? topSelect.selectExpr?.orderBy;
+  const sourceSet = topSelect.selectExpr ? topSelect.result : unwrapSelectResultSet(statement.expr);
+  if (sourceSet?.expr.kind === "for_expr") {
+    const projectedColumns = collectForExprProjectedColumns(sourceSet, selectWhere, selectOrderBy);
+    const forSource = compileForExprSource(sourceSet, projectedColumns, options);
+    const bodySet = innermostForExprBody(sourceSet);
+    const bodySql = forSource
+      ? compileValueSetSQLWithAliases(bodySet, forSource.bindingAliases, forSource.baseAlias, params, target, options, forSource.linkPropertyAliases)
+      : null;
+
+    if (forSource && bodySql) {
+      let sql = `SELECT ${bodySql} AS ${quoteIdent("value")} FROM ${forSource.fromSql}`;
+      const whereSets = [...forSource.whereSets, ...(selectWhere ? [selectWhere] : [])];
+      if (whereSets.length > 0) {
+        const whereSql = whereSets
+          .map((where) => compilePredicateWithAliases(where, forSource.bindingAliases, params, target, options, forSource.linkPropertyAliases))
+          .filter((entry): entry is string => Boolean(entry))
+          .join(" AND ");
+        if (whereSql) {
+          sql += ` WHERE ${whereSql}`;
+        }
+      }
+      const orderBy = selectOrderBy ?? forSource.orderBy;
+      if (orderBy && orderBy.length > 0) {
+        const orders = orderBy
+          .map((order) => compileForExprSort(order, "value"))
+          .filter((entry): entry is string => entry.length > 0);
+        if (orders.length > 0) {
+          sql += ` ORDER BY ${orders.join(", ")}`;
+        }
+      }
+      return { sql, params, loweringMode: "single_statement" };
+    }
+  }
   const compiledSource = sourceSet ? compileSelectSource(sourceSet, statement.where, statement.orderBy, options) : null;
   if (!compiledSource) {
     return {
@@ -413,6 +450,247 @@ const compileSelectSource = (
     alias,
   };
 };
+
+const compileForExprSource = (
+  sourceSet: Set,
+  projectedColumns: string[],
+  options: GelIRCompileOptions,
+): { fromSql: string; baseAlias: string; bindingAliases: Map<string, string>; linkPropertyAliases: Map<string, string>; whereSets: Set[]; orderBy?: SortExpr[] } | null => {
+  const levels: Array<{
+    iteratorPathId: string;
+    alias: string;
+    pointer?: Pointer;
+    typeRef?: TypeRef;
+    linkAlias?: string;
+  }> = [];
+  const whereSets: Set[] = [];
+  let orderBy: SortExpr[] | undefined;
+  let currentExpr: Expr = sourceSet.expr;
+
+  while (currentExpr.kind === "for_expr") {
+    const forExpr = currentExpr as ForExpr;
+    const iterator = forExpr.iterator;
+    const alias = `g${levels.length}`;
+    const iteratorPathId = pathIdKey(iterator);
+
+    if (iterator.expr.kind === "type_root") {
+      levels.push({ iteratorPathId, alias, typeRef: (iterator.expr as TypeRoot).typeref });
+    } else if (iterator.expr.kind === "pointer") {
+      levels.push({ iteratorPathId, alias, pointer: iterator.expr as Pointer });
+    } else {
+      return null;
+    }
+
+    if (forExpr.where) {
+      whereSets.push(forExpr.where);
+    }
+    orderBy = orderBy ?? forExpr.orderBy;
+    currentExpr = forExpr.body.expr;
+  }
+
+  if (levels.length === 0 || !levels[0].typeRef) {
+    return null;
+  }
+
+  const bindingAliases = new Map<string, string>();
+  const linkPropertyAliases = new Map<string, string>();
+  for (const level of levels) {
+    bindingAliases.set(level.iteratorPathId, level.alias);
+  }
+
+  const firstAlias = levels[0].alias;
+  let fromSql = compilePolymorphicSource(levels[0].typeRef, false, firstAlias, projectedColumns, options);
+
+  for (let i = 1; i < levels.length; i++) {
+    const level = levels[i];
+    const previousAlias = levels[i - 1].alias;
+    const pointer = level.pointer;
+    if (!pointer) {
+      return null;
+    }
+
+    if (shouldUseLinkTable(pointer)) {
+      const sourceType = qualifyTypeName(pointer.direction === "inbound" ? pointer.ptrref.outSource : pointer.source.typeref);
+      const linkTable = `${tableNameForType(sourceType)}__${pointer.ptrref.shortName.toLowerCase()}`;
+      const linkAlias = `j${i}`;
+      const targetType = pointer.direction === "inbound" ? pointer.ptrref.outSource : pointer.ptrref.outTarget;
+      const targetSource = compilePolymorphicSource(targetType, false, level.alias, projectedColumns, options);
+      if (pointer.direction === "inbound") {
+        fromSql += ` JOIN ${quoteIdent(linkTable)} ${linkAlias}`
+          + ` ON ${linkAlias}.${quoteIdent("target")} = ${previousAlias}.${quoteIdent("id")}`
+          + ` JOIN ${targetSource}`
+          + ` ON ${level.alias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("source")}`;
+      } else {
+        fromSql += ` JOIN ${quoteIdent(linkTable)} ${linkAlias}`
+          + ` ON ${linkAlias}.${quoteIdent("source")} = ${previousAlias}.${quoteIdent("id")}`
+          + ` JOIN ${targetSource}`
+          + ` ON ${level.alias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("target")}`;
+      }
+      level.linkAlias = linkAlias;
+      linkPropertyAliases.set(level.iteratorPathId, linkAlias);
+      continue;
+    }
+
+    const inlineColumn = `${pointer.ptrref.shortName}_id`;
+    const targetType = pointer.direction === "inbound" ? pointer.ptrref.outSource : pointer.ptrref.outTarget;
+    const targetSource = compilePolymorphicSource(targetType, false, level.alias, projectedColumns, options);
+    if (pointer.direction === "inbound") {
+      fromSql += ` JOIN ${targetSource}`
+        + ` ON ${level.alias}.${quoteIdent(inlineColumn)} = ${previousAlias}.${quoteIdent("id")}`;
+    } else {
+      fromSql += ` JOIN ${targetSource}`
+        + ` ON ${level.alias}.${quoteIdent("id")} = ${previousAlias}.${quoteIdent(inlineColumn)}`;
+    }
+  }
+
+  return { fromSql, baseAlias: firstAlias, bindingAliases, linkPropertyAliases, whereSets, orderBy };
+};
+
+const innermostForExprBody = (sourceSet: Set): Set => {
+  let current = sourceSet;
+  while (current.expr.kind === "for_expr") {
+    current = (current.expr as ForExpr).body;
+  }
+  return current;
+};
+
+const collectForExprProjectedColumns = (sourceSet: Set, where?: Set, orderBy?: SortExpr[]): string[] => {
+  const columns = new Set<string>(["id"]);
+  const visit = (set: Set): void => {
+    const expr = set.expr;
+    if (expr.kind === "pointer") {
+      const pointer = expr as Pointer;
+      if (!pointer.ptrref.isLinkProperty && pointer.ptrref.outTarget.isScalar) {
+        columns.add(columnForPointer(pointer));
+      }
+      return;
+    }
+    if (expr.kind === "for_expr") {
+      const forExpr = expr as ForExpr;
+      visit(forExpr.iterator);
+      visit(forExpr.body);
+      if (forExpr.where) {
+        visit(forExpr.where);
+      }
+      for (const order of forExpr.orderBy ?? []) {
+        visit(order.path);
+      }
+      return;
+    }
+    if (expr.kind === "tuple") {
+      for (const element of (expr as Tuple).elements) {
+        visit(element.val);
+      }
+      return;
+    }
+    if (expr.kind === "operator_call") {
+      for (const arg of orderedCallArgs((expr as OperatorCall).args)) {
+        visit(arg.expr);
+      }
+      return;
+    }
+    if (expr.kind === "index_expr") {
+      const indexExpr = expr as IndexExpr;
+      visit(indexExpr.expr);
+      visit(indexExpr.index);
+    }
+  };
+
+  visit(sourceSet);
+  if (where) {
+    visit(where);
+  }
+  for (const order of orderBy ?? []) {
+    visit(order.path);
+  }
+  return [...columns];
+};
+
+const compileValueSetSQLWithAliases = (
+  set: Set,
+  bindingAliases: Map<string, string>,
+  fallbackAlias: string,
+  params: ScalarValue[],
+  target: RuntimeTarget,
+  options: GelIRCompileOptions,
+  linkPropertyAliases?: Map<string, string>,
+): string | null => {
+  const checkpoint = params.length;
+  const unwrapped = unwrapSelectExprSet(set);
+  const expr = unwrapped.result.expr;
+
+  if (expr.kind === "pointer") {
+    const pointer = expr as Pointer;
+    const sourceKey = pathIdKey(pointer.source);
+    const alias = bindingAliases.get(sourceKey) ?? fallbackAlias;
+    if (pointer.ptrref.isLinkProperty) {
+      const linkAlias = linkPropertyAliases?.get(sourceKey) ?? alias;
+      return `${linkAlias}.${quoteIdent(columnForPointer(pointer).replace(/^@/, ""))}`;
+    }
+    return `${alias}.${quoteIdent(columnForPointer(pointer))}`;
+  }
+
+  const literal = extractScalarConstant(unwrapped.result);
+  if (literal !== undefined) {
+    params.push(typeof literal === "boolean" ? Number(literal) : literal);
+    return "?";
+  }
+
+  if (expr.kind === "tuple") {
+    const tuple = expr as Tuple;
+    const parts = tuple.elements.map((element) => compileValueSetSQLWithAliases(element.val, bindingAliases, fallbackAlias, params, target, options, linkPropertyAliases));
+    if (parts.some((part) => !part)) {
+      params.length = checkpoint;
+      return null;
+    }
+    return tuple.named
+      ? `json_object(${tuple.elements.map((element, idx) => `${quoteLiteral(element.name ?? String(idx))}, ${parts[idx]}`).join(", ")})`
+      : `json_array(${parts.join(", ")})`;
+  }
+
+  if (expr.kind === "operator_call") {
+    const call = expr as OperatorCall;
+    const op = normalizeOperator(call.operator);
+    const args = orderedCallArgs(call.args);
+    if (op && args.length >= 2) {
+      const left = compileValueSetSQLWithAliases(args[0].expr, bindingAliases, fallbackAlias, params, target, options, linkPropertyAliases);
+      const right = compileValueSetSQLWithAliases(args[1].expr, bindingAliases, fallbackAlias, params, target, options, linkPropertyAliases);
+      if (!left || !right) {
+        params.length = checkpoint;
+        return null;
+      }
+      return `(${left} ${op} ${right})`;
+    }
+  }
+
+  const value = compileValueSetSQL(set, fallbackAlias, params, target, options);
+  if (!value) {
+    params.length = checkpoint;
+  }
+  return value;
+};
+
+const compilePredicateWithAliases = (
+  set: Set,
+  bindingAliases: Map<string, string>,
+  params: ScalarValue[],
+  target: RuntimeTarget,
+  options: GelIRCompileOptions,
+  linkPropertyAliases?: Map<string, string>,
+): string | null => compileValueSetSQLWithAliases(set, bindingAliases, "g0", params, target, options, linkPropertyAliases);
+
+const compileForExprSort = (order: SortExpr, valueAlias: string): string => {
+  if (order.path.expr.kind !== "index_expr") {
+    return "";
+  }
+  const index = extractNumericLiteral((order.path.expr as IndexExpr).index);
+  if (index === undefined) {
+    return "";
+  }
+  return `json_extract(${quoteIdent(valueAlias)}, '$[${index}]') ${order.direction.toUpperCase()}`;
+};
+
+const pathIdKey = (set: Set): string => JSON.stringify(set.pathId);
 
 const collectProjectedColumns = (shape: ShapeElement[], where?: Set, orderBy?: SortExpr[]): string[] => {
   const columns = new Set<string>(["id"]);
