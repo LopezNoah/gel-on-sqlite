@@ -2152,6 +2152,8 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       withBindings.set(binding.name, binding.value);
     }
 
+    const forBindingStack: string[] = [];
+
     const compileExprToIREntry = (
       expr: FreeObjectExpr,
       currentItemBinding?: string,
@@ -2340,13 +2342,39 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           elseExpr: asNestedExprEntry(compileExprToIREntry(expr.elseExpr, currentItemBinding)),
         };
       }
+      
       if (expr.kind === "for_expr") {
-        return {
-          kind: "for_expr",
-          variable: expr.variable,
-          iterator: asNestedExprEntry(compileExprToIREntry(expr.iterator, currentItemBinding)),
-          body: asNestedExprEntry(compileExprToIREntry(expr.body, expr.variable)),
-        };
+        const iterator = compileExprToIREntry(expr.iterator, currentItemBinding);
+        forBindingStack.push(expr.variable);
+        // const body = asNestedExprEntry(compileExprToIREntry(expr.body, expr.variable));
+        // forBindingStack.pop();
+        // return {
+        //   kind: "for_expr",
+        //   variable: expr.variable,
+        //   iterator: asNestedExprEntry(compileExprToIREntry(expr.iterator, currentItemBinding)),
+        //   body,
+        // };
+        try {
+  return {
+    kind: "for_expr",
+    variable: expr.variable,
+    iterator,
+    body: compileExprToIREntry(expr.body, expr.variable),
+    filter: expr.filter
+      ? compileExprToIREntry(expr.filter, expr.variable)
+      : undefined,
+    orderBy: expr.orderBy
+      ? {
+          value: compileExprToIREntry(expr.orderBy.expr, expr.variable),
+          direction: expr.orderBy.direction,
+        }
+      : undefined,
+    limit: expr.limit,
+    offset: expr.offset,
+  };
+} finally {
+  forBindingStack.pop();
+}
       }
       if (expr.kind === "backlink_path") {
         return {
@@ -2357,6 +2385,9 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       }
       if (expr.kind === "binding_ref") {
         if (currentItemBinding && expr.name === currentItemBinding) {
+          return { kind: "current_item", bindingName: expr.name };
+        }
+        if (forBindingStack.includes(expr.name)) {
           return { kind: "current_item", bindingName: expr.name };
         }
         let bindingValue = withBindings.get(expr.name);
@@ -2476,7 +2507,8 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         return { kind: "enum_path", enumType: normalizedEnumType, member: expr.member };
       }
       if (expr.kind === "path") {
-        if (currentItemBinding && expr.head === currentItemBinding) {
+        if ((currentItemBinding && expr.head === currentItemBinding) ||
+        forBindingStack.includes(expr.head)) {
           return {
             kind: "current_item_field",
             bindingName: expr.head,
@@ -2861,38 +2893,72 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           typeName: normalizeTypeName(expr.typeName, activeModule),
         };
       }
+      // if (expr.kind === "select_expr_subquery") {
+      //   const innerBinding = expr.alias ?? currentItemBinding;
+      //   const addedBindingNames: string[] = [];
+      //   for (const binding of expr.clauses?._withBindings ?? []) {
+      //     if (!withBindings.has(binding.name)) {
+      //       withBindings.set(binding.name, binding.value);
+      //       addedBindingNames.push(binding.name);
+      //     }
+      //   }
+      //   try {
+      //     return {
+      //       kind: "select_expr_subquery",
+      //       alias: expr.alias,
+      //       value: asNestedExprEntry(compileExprToIREntry(expr.expr, innerBinding)),
+      //       filter: expr.filter
+      //         ? asNestedExprEntry(compileExprToIREntry(expr.filter, innerBinding))
+      //         : undefined,
+      //       orderBy: expr.orderBy
+      //         ? {
+      //             value: asNestedExprEntry(compileExprToIREntry(expr.orderBy.expr, innerBinding)),
+      //             direction: expr.orderBy.direction,
+      //           }
+      //         : undefined,
+      //       limit: expr.limit,
+      //       offset: expr.offset,
+      //     };
+      //   } finally {
+      //     for (const name of addedBindingNames) {
+      //       withBindings.delete(name);
+      //     }
+      //   }
+      // }
       if (expr.kind === "select_expr_subquery") {
-        const innerBinding = expr.alias ?? currentItemBinding;
-        const addedBindingNames: string[] = [];
-        for (const binding of expr.clauses?._withBindings ?? []) {
-          if (!withBindings.has(binding.name)) {
-            withBindings.set(binding.name, binding.value);
-            addedBindingNames.push(binding.name);
+  const innerBinding = expr.alias ?? currentItemBinding;
+
+  const pushedForBindings: string[] = [];
+  let wrapped = expr.expr;
+  while (wrapped.kind === "for_expr") {
+    forBindingStack.push(wrapped.variable);
+    pushedForBindings.push(wrapped.variable);
+    wrapped = wrapped.body;
+  }
+
+  try {
+    return {
+      kind: "select_expr_subquery",
+      alias: expr.alias,
+      value: asNestedExprEntry(compileExprToIREntry(expr.expr, innerBinding)),
+      filter: expr.filter
+        ? asNestedExprEntry(compileExprToIREntry(expr.filter, innerBinding))
+        : undefined,
+      orderBy: expr.orderBy
+        ? {
+            value: asNestedExprEntry(compileExprToIREntry(expr.orderBy.expr, innerBinding)),
+            direction: expr.orderBy.direction,
           }
-        }
-        try {
-          return {
-            kind: "select_expr_subquery",
-            alias: expr.alias,
-            value: asNestedExprEntry(compileExprToIREntry(expr.expr, innerBinding)),
-            filter: expr.filter
-              ? asNestedExprEntry(compileExprToIREntry(expr.filter, innerBinding))
-              : undefined,
-            orderBy: expr.orderBy
-              ? {
-                  value: asNestedExprEntry(compileExprToIREntry(expr.orderBy.expr, innerBinding)),
-                  direction: expr.orderBy.direction,
-                }
-              : undefined,
-            limit: expr.limit,
-            offset: expr.offset,
-          };
-        } finally {
-          for (const name of addedBindingNames) {
-            withBindings.delete(name);
-          }
-        }
-      }
+        : undefined,
+      limit: expr.limit,
+      offset: expr.offset,
+    };
+  } finally {
+    for (const _ of pushedForBindings) {
+      forBindingStack.pop();
+    }
+  }
+}
       fail(`Unsupported expression kind in select_expr: ${(expr as FreeObjectExpr).kind}`);
       throw new Error("unreachable");
     };
