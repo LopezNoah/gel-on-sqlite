@@ -793,9 +793,6 @@ const shapeRequiresFallbackLowering = (shape: SelectShapeElementIR[], target: Ru
     }
 
     if (element.kind === "link") {
-      if (element.relation.targetType.includes("|")) {
-        return true;
-      }
       if (shapeRequiresFallbackLowering(element.shape, target)) {
         return true;
       }
@@ -887,18 +884,27 @@ const compilePolymorphicTargetSource = (
     : [{ name: relation.targetType, table: relation.targetTable }];
 
   const columns = [...new Set(["id", ...requiredColumns.filter((column) => column !== "__source_type")])];
-  const projected = columns.map((column) => `${quoteIdent(column)} AS ${quoteIdent(column)}`).join(", ");
+  const allTargetsDeclareColumns = targets.every((target) => target.columns && target.columns.length > 0);
+  const projected = (target: (typeof targets)[number]): string => {
+    const available = target.columns ? new Set(target.columns) : undefined;
+    return columns
+      .map((column) =>
+        !allTargetsDeclareColumns || available?.has(column)
+          ? `${quoteIdent(column)} AS ${quoteIdent(column)}`
+          : `NULL AS ${quoteIdent(column)}`)
+      .join(", ");
+  };
 
   if (targets.length === 1) {
     const only = targets[0];
     return `(
-      SELECT ${quoteLiteral(only.name)} AS ${quoteIdent("__source_type")}, ${projected}
+      SELECT ${quoteLiteral(only.name)} AS ${quoteIdent("__source_type")}, ${projected(only)}
       FROM ${quoteIdent(only.table)}
     ) ${alias}`;
   }
 
   const selects = targets.map(
-    (target) => `SELECT ${quoteLiteral(target.name)} AS ${quoteIdent("__source_type")}, ${projected} FROM ${quoteIdent(target.table)}`,
+    (target) => `SELECT ${quoteLiteral(target.name)} AS ${quoteIdent("__source_type")}, ${projected(target)} FROM ${quoteIdent(target.table)}`,
   );
   return `(${selects.join(" UNION ALL ")}) ${alias}`;
 };
