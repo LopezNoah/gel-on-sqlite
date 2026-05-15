@@ -5,6 +5,7 @@ import type {
   AnnotationDef,
   ConstraintDef,
   ComputedDef,
+  ComputedLinkPropertyExpr,
   CollectionTypeDef,
   FieldDefaultExpr,
   FunctionParamDef,
@@ -18,6 +19,8 @@ import type {
 import { OperatorKind, ReturnTypeModifier } from "./operators.js";
 import type { ScalarTypeDeclaration } from "./scalar.js";
 import { parseDeclarativeSchema } from "./sdl_adapter.js";
+
+export type { ComputedLinkPropertyExpr } from "../types.js";
 
 export interface SchemaModule {
   name: string;
@@ -57,26 +60,6 @@ export interface LinkProperty {
   collection?: CollectionTypeDef;
   annotations: AnnotationDef[];
 }
-
-export type ComputedLinkPropertyExpr =
-  | {
-      kind: "binary_op";
-      op: "*" | "+" | "-" | "/" | "++" | "??";
-      left: ComputedLinkPropertyExpr;
-      right: ComputedLinkPropertyExpr;
-    }
-  | {
-      kind: "field_ref";
-      name: string;
-    }
-  | {
-      kind: "link_property_ref";
-      name: string;
-    }
-  | {
-      kind: "literal";
-      value: ScalarValue;
-    };
 
 export interface ComputedLinkProperty {
   name: string;

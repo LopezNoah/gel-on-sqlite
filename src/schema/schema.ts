@@ -235,6 +235,14 @@ const cloneComputedDef = (
     };
   }
 
+  if (computed.expr.kind === "select_type") {
+    return {
+      ...computed,
+      annotations: cloneAnnotations(computed.annotations),
+      expr: { ...computed.expr },
+    };
+  }
+
   return {
     ...computed,
     annotations: cloneAnnotations(computed.annotations),
