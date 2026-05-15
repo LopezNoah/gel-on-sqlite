@@ -1078,6 +1078,11 @@ const tryRuntimeSelectExprEvaluation = (
     if (value.kind === "path_chain") return !isEnumScalarTypeDef(value.parts?.[0]);
     if (value.kind === "binding_ref") return !isEnumScalarTypeDef(value.name);
     if (value.kind === "subquery") return false;
+    // Defer to the regular compile path for richer binding kinds; the runtime
+    // fallback evaluator below cannot follow link traversals or junction tables.
+    if (value.kind === "subquery_expr" || value.kind === "select_expr_subquery" || value.kind === "field_access") {
+      return false;
+    }
     return true;
   };
 
