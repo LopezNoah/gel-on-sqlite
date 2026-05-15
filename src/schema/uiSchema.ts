@@ -7,6 +7,8 @@ import type {
   ScalarValue,
   TypeDef,
 } from "../types.js";
+import type { FreeObjectExpr, SelectExprStatement, Statement } from "../edgeql/ast.js";
+import { parseEdgeQL } from "../edgeql/parser.js";
 import type { ComputedLinkPropertyExpr, DeclarativeSchema, FunctionDeclaration, LinkMember, LinkProperty, PropertyMember, TypeMember } from "./declarative.js";
 import { AnnotationRegistry, AnnotationResolver, AnnotationSet } from "./annos.js";
 import { SchemaSnapshot } from "./schema.js";
@@ -1185,8 +1187,16 @@ const renderPolicyCondition = (condition: { kind: string; [key: string]: unknown
 
 const parseFunctionBody = (fn: FunctionDeclaration): FunctionDef["body"] => {
   const trimmed = fn.body.text.trim();
-  const head = trimmed.toLowerCase();
-  if (head.startsWith("select ") || head.startsWith("insert ") || head.startsWith("update ") || head.startsWith("delete ") || head.startsWith("with ")) {
+  const paramNames = new Set(fn.params.map((param) => param.name));
+  const statement = parseFunctionStatement(trimmed);
+  if (statement?.kind === "select_expr" && !statement.with && statement.expr.kind === "concat") {
+    return {
+      kind: "expr",
+      expr: astToFunctionExpr(statement.expr, paramNames),
+    };
+  }
+
+  if (isQueryStatement(statement)) {
     return {
       kind: "query",
       language: fn.body.language,
@@ -1196,41 +1206,90 @@ const parseFunctionBody = (fn: FunctionDeclaration): FunctionDef["body"] => {
 
   return {
     kind: "expr",
-    expr: parseFunctionExpr(trimmed, new Set(fn.params.map((param) => param.name))),
+    expr: parseFunctionExpr(trimmed, paramNames),
   };
 };
 
 const parseFunctionExpr = (source: string, paramNames: Set<string>): FunctionExprDef => {
-  const parts = source.split("++").map((part) => part.trim()).filter((part) => part.length > 0);
-  if (parts.length === 0) {
-    return { kind: "literal", value: "" };
-  }
-
-  const parsedParts = parts.map((part) => parseFunctionExprPart(part, paramNames));
-  if (parsedParts.length === 1) {
-    return parsedParts[0];
-  }
-
-  return {
-    kind: "concat",
-    parts: parsedParts,
-  };
-};
-
-const parseFunctionExprPart = (
-  source: string,
-  paramNames: Set<string>,
-): Extract<FunctionExprDef, { kind: "param_ref" | "literal" }> => {
-  if (paramNames.has(source)) {
-    return {
-      kind: "param_ref",
-      name: source,
-    };
+  const statement = parseFunctionStatement(`select ${source}`);
+  if (statement?.kind === "select_expr") {
+    return astToFunctionExpr(statement.expr, paramNames);
   }
 
   return {
     kind: "literal",
     value: parseFunctionLiteral(source),
+  };
+};
+
+const parseFunctionStatement = (source: string): Statement | undefined => {
+  try {
+    return parseEdgeQL(source);
+  } catch {
+    return undefined;
+  }
+};
+
+const isQueryStatement = (statement: Statement | undefined): boolean => {
+  return statement?.kind === "select"
+    || statement?.kind === "select_expr"
+    || statement?.kind === "select_free"
+    || statement?.kind === "insert"
+    || statement?.kind === "update"
+    || statement?.kind === "delete"
+    || statement?.kind === "for";
+};
+
+const astToFunctionExpr = (
+  expr: SelectExprStatement["expr"],
+  paramNames: Set<string>,
+): FunctionExprDef => {
+  if (expr.kind === "concat") {
+    return {
+      kind: "concat",
+      parts: expr.parts.flatMap((part) => astToFunctionExprParts(part, paramNames)),
+    };
+  }
+
+  const part = astToFunctionExprPart(expr, paramNames);
+  return part;
+};
+
+const astToFunctionExprParts = (
+  expr: FreeObjectExpr,
+  paramNames: Set<string>,
+): Array<Extract<FunctionExprDef, { kind: "concat" }>["parts"][number]> => {
+  if (expr.kind === "concat") {
+    return expr.parts.flatMap((part) => astToFunctionExprParts(part, paramNames));
+  }
+  return [astToFunctionExprPart(expr, paramNames)];
+};
+
+const astToFunctionExprPart = (
+  expr: FreeObjectExpr,
+  paramNames: Set<string>,
+): Extract<FunctionExprDef, { kind: "param_ref" | "literal" }> => {
+  if (expr.kind === "cast") {
+    return astToFunctionExprPart(expr.expr, paramNames);
+  }
+
+  if (expr.kind === "binding_ref" && paramNames.has(expr.name)) {
+    return {
+      kind: "param_ref",
+      name: expr.name,
+    };
+  }
+
+  if (expr.kind === "literal") {
+    return {
+      kind: "literal",
+      value: expr.value,
+    };
+  }
+
+  return {
+    kind: "literal",
+    value: expr.kind === "binding_ref" ? expr.name : "",
   };
 };
 

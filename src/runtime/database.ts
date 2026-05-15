@@ -129,7 +129,7 @@ export const materializeSchema = (db: SQLiteDatabase, schema: SchemaSnapshot): v
       `${quoteIdent("id")} TEXT PRIMARY KEY NOT NULL DEFAULT (lower(hex(randomblob(16))))`,
       ...typeDef.fields
         .filter((f) => f.name !== "id")
-        .map((f) => `${quoteIdent(f.name)} ${f.multi ? "TEXT" : columnType(f.type)}${f.required ? " NOT NULL" : ""}`),
+        .map((f) => `${quoteIdent(f.name)} ${f.multi ? "TEXT" : columnType(f.type)}${f.required && !f.hasDefault ? " NOT NULL" : ""}`),
     ];
     const ddl = `CREATE TABLE IF NOT EXISTS ${quoteIdent(table)} (${fieldSQL.join(", ")})`;
     db.prepare(ddl).run();

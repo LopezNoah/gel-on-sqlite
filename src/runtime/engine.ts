@@ -1017,15 +1017,25 @@ const tryRuntimeSelectExprEvaluation = (
         return Boolean(alias?.exprText && !alias.values && !alias.sourceType);
       }
       case "function_call":
-        return ["array_unpack", "range_unpack", "range", "max", "assert_exists", "assert_single"].includes(expr.call.name.split("::").at(-1) ?? expr.call.name)
+        return Boolean(schema.findFunction(ast.withModule ?? "default", expr.call.name.split("::").at(-1) ?? expr.call.name, expr.call.args.length))
+          || ["array_unpack", "range_unpack", "range", "max", "assert_exists", "assert_single"].includes(expr.call.name.split("::").at(-1) ?? expr.call.name)
           || expr.call.args.some((arg) => arg.kind === "expr" ? needsRuntimeEval(arg.expr) : arg.kind === "function_call" ? needsRuntimeEval({ kind: "function_call", call: arg.call }) : arg.kind === "binding_ref" ? needsRuntimeEval({ kind: "binding_ref", name: arg.name }) : false);
       case "for_expr":
         return needsRuntimeEval(expr.iterator) || needsRuntimeEval(expr.body);
       case "field_access":
+        return expr.expr.kind === "select" || needsRuntimeEval(expr.expr);
       case "distinct":
       case "exists":
         return needsRuntimeEval(expr.expr);
+      case "cast":
+        return needsRuntimeEval(expr.expr);
+      case "select": {
+        const alias = schema.getAlias(qualifiedRuntimeAliasName(expr.typeName));
+        return Boolean(alias?.values);
+      }
       case "select_expr_subquery":
+        return Boolean(expr.orderBy) || needsRuntimeEval(expr.expr);
+      case "subquery_expr":
         return needsRuntimeEval(expr.expr);
       case "set_expr":
       case "tuple":
@@ -1049,7 +1059,7 @@ const tryRuntimeSelectExprEvaluation = (
     }
   };
 
-  if (!needsRuntimeEval(ast.expr)) {
+  if (!ast.with?.length && !needsRuntimeEval(ast.expr)) {
     return undefined;
   }
 
@@ -1137,12 +1147,27 @@ const tryRuntimeSelectExprEvaluation = (
           if (!item || typeof item !== "object" || Array.isArray(item)) {
             return null;
           }
-          return (item as Record<string, unknown>)[expr.field] ?? null;
+          const row = item as Record<string, unknown>;
+          if (Object.prototype.hasOwnProperty.call(row, expr.field)) {
+            return row[expr.field] ?? null;
+          }
+          const sourceTypeName = typeof row.__source_type === "string" ? row.__source_type : undefined;
+          const computed = sourceTypeName
+            ? schema.getType(sourceTypeName)?.computeds?.find((candidate) => candidate.kind === "property" && candidate.name === expr.field)
+            : undefined;
+          if (computed?.kind === "property" && computed.expr.kind === "literal") {
+            return computed.expr.value;
+          }
+          return null;
         };
         return Array.isArray(value) ? value.map(readOne).filter((item) => item !== null && item !== undefined) : readOne(value);
       }
       case "function_call": {
-        const qualifiedName = expr.call.name.includes("::") ? expr.call.name : `std::${expr.call.name}`;
+        const qualifiedName = expr.call.name.includes("::")
+          ? expr.call.name
+          : resolveStdlibFunction(`std::${expr.call.name}`, expr.call.args.length)
+            ? `std::${expr.call.name}`
+            : `${ast.withModule ?? "default"}::${expr.call.name}`;
         const args = expr.call.args.map((arg): RuntimeFunctionArg => {
           if (arg.kind === "expr") {
             const value = evalExpr(arg.expr, env);
@@ -1192,6 +1217,10 @@ const tryRuntimeSelectExprEvaluation = (
       case "not":
         return !(evalExpr(expr.expr, env));
       case "select": {
+        const alias = schema.getAlias(qualifiedRuntimeAliasName(expr.typeName));
+        if (alias?.values) {
+          return [...alias.values];
+        }
         const sourceType = qualifyRuntimeTypeName(expr.typeName);
         let rows = readRuntimeTypedAliasSourceRows(db, schema, {
           aliasName: "__expr__",
@@ -1209,8 +1238,47 @@ const tryRuntimeSelectExprEvaluation = (
         }
         return rows;
       }
+      case "cast": {
+        const value = evalExpr(expr.expr, env);
+        if (expr.castType === "str") {
+          return Array.isArray(value) ? value.map((item) => String(item ?? "")) : String(value ?? "");
+        }
+        return value;
+      }
+      case "is_type": {
+        const value = evalExpr(expr.expr, env);
+        const typeDef = schema.getType(qualifyRuntimeTypeName(expr.typeName));
+        const enumValues = typeDef?.fields.flatMap((field) => field.enumValues ?? []) ?? [];
+        const checkOne = (item: unknown) => enumValues.length > 0 && typeof item === "string" && enumValues.includes(item);
+        return Array.isArray(value) ? value.map(checkOne) : checkOne(value);
+      }
       case "select_expr_subquery":
-        return evalExpr(expr.expr, env);
+      case "subquery_expr": {
+        const value = evalExpr(expr.expr, env);
+        if (expr.kind !== "select_expr_subquery" || !expr.orderBy) {
+          return value;
+        }
+        const rows = Array.isArray(value) ? [...value] : [value];
+        const enumOrder = enumOrderForRows(rows);
+        const direction = expr.orderBy.direction === "desc" ? -1 : 1;
+        rows.sort((a, b) => {
+          const leftEnv = new Map(env);
+          const rightEnv = new Map(env);
+          if (expr.alias) {
+            leftEnv.set(expr.alias, a);
+            rightEnv.set(expr.alias, b);
+          }
+          const left = evalExpr(expr.orderBy!.expr, leftEnv);
+          const right = evalExpr(expr.orderBy!.expr, rightEnv);
+          const leftEnumIndex = typeof left === "string" ? enumOrder?.get(left) : undefined;
+          const rightEnumIndex = typeof right === "string" ? enumOrder?.get(right) : undefined;
+          if (leftEnumIndex !== undefined && rightEnumIndex !== undefined && leftEnumIndex !== rightEnumIndex) {
+            return (leftEnumIndex < rightEnumIndex ? -1 : 1) * direction;
+          }
+          return String(left ?? "").localeCompare(String(right ?? "")) * direction;
+        });
+        return rows;
+      }
       case "distinct": {
         const value = evalExpr(expr.expr, env);
         if (!Array.isArray(value)) return value;
@@ -1227,15 +1295,66 @@ const tryRuntimeSelectExprEvaluation = (
     }
   };
 
-  const value = evalExpr(ast.expr, new Map());
+  const enumOrderForRows = (rows: unknown[]): Map<string, number> | undefined => {
+    if (!rows.every((item) => typeof item === "string")) {
+      return undefined;
+    }
+    const values = rows as string[];
+    for (const typeDef of schema.listTypes()) {
+      const enumValues = typeDef.fields.flatMap((field) => field.enumValues ?? []);
+      if (enumValues.length > 0 && values.every((value) => enumValues.includes(value))) {
+        return new Map(enumValues.map((value, index) => [value, index] as const));
+      }
+    }
+    return undefined;
+  };
+
+  const enumOrderForCast = (castType: string): Map<string, number> | undefined => {
+    const typeDef = schema.getType(qualifyRuntimeTypeName(castType));
+    const values = typeDef?.fields.flatMap((field) => field.enumValues ?? []) ?? [];
+    return values.length > 0 ? new Map(values.map((value, index) => [value, index] as const)) : undefined;
+  };
+
+  const initialEnv = new Map<string, unknown>();
+  for (const binding of ast.with ?? []) {
+    initialEnv.set(binding.name, evalExpr(binding.value, initialEnv));
+  }
+
+  const value = evalExpr(ast.expr, initialEnv);
   if (value === undefined) {
     return undefined;
   }
+  const currentBinding = ast.expr.kind === "binding_ref" ? ast.expr.name : undefined;
   const topIsArrayAgg = ast.expr.kind === "function_call"
     && ((ast.expr.call.name.includes("::") ? ast.expr.call.name.split("::").at(-1) : ast.expr.call.name)?.toLowerCase() === "array_agg");
+  const rows = Array.isArray(value) ? (topIsArrayAgg ? [value] : value) : [value];
+  if (ast.orderBy) {
+    const direction = ast.orderBy.direction === "desc" ? -1 : 1;
+    const enumOrder = ast.orderBy.expr.kind === "cast"
+      ? enumOrderForCast(ast.orderBy.expr.castType)
+      : ast.orderBy.expr.kind === "binding_ref"
+        ? enumOrderForRows(rows)
+        : undefined;
+    rows.sort((a, b) => {
+      const leftEnv = new Map(initialEnv);
+      const rightEnv = new Map(initialEnv);
+      if (currentBinding) {
+        leftEnv.set(currentBinding, a);
+        rightEnv.set(currentBinding, b);
+      }
+      const left = evalExpr(ast.orderBy!.expr, leftEnv);
+      const right = evalExpr(ast.orderBy!.expr, rightEnv);
+      const leftEnumIndex = typeof left === "string" ? enumOrder?.get(left) : undefined;
+      const rightEnumIndex = typeof right === "string" ? enumOrder?.get(right) : undefined;
+      if (leftEnumIndex !== undefined && rightEnumIndex !== undefined && leftEnumIndex !== rightEnumIndex) {
+        return (leftEnumIndex < rightEnumIndex ? -1 : 1) * direction;
+      }
+      return String(left ?? "").localeCompare(String(right ?? "")) * direction;
+    });
+  }
   return {
     kind: "select",
-    rows: Array.isArray(value) ? (topIsArrayAgg ? [value] : value) : [value],
+    rows,
   };
 };
 
