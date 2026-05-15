@@ -1,5 +1,5 @@
 import { AppError } from "../errors.js";
-import type { FilterExprIR, IRStatement, LinkRelationIR, PathIdIR, SelectIR, SelectShapeElementIR } from "../ir/model.js";
+import type { FilterExprIR, IRStatement, LinkRelationIR, PathIdIR, SelectFreeIR, SelectIR, SelectShapeElementIR } from "../ir/model.js";
 import type { RuntimeTarget } from "../runtime/target.js";
 import { canLowerStdlibFunctionSql, lowerStdlibFunctionSql } from "./stdlib_lowering.js";
 import type { ComputedLinkPropertyDef, ComputedLinkPropertyExpr, ScalarValue } from "../types.js";
@@ -12,6 +12,8 @@ export interface SQLArtifact {
 
 export interface SQLCompileOptions {
   target?: RuntimeTarget;
+  parameterValues?: Record<string, ScalarValue>;
+  globalValues?: Record<string, ScalarValue>;
 }
 
 export const compileToSQL = (ir: IRStatement, options: SQLCompileOptions = {}): SQLArtifact => {
@@ -21,11 +23,7 @@ export const compileToSQL = (ir: IRStatement, options: SQLCompileOptions = {}): 
   }
 
   if (ir.kind === "select_free") {
-    return {
-      sql: "SELECT 1",
-      params: [],
-      loweringMode: "fallback_multi_query",
-    };
+    return compileSelectFreeToSQL(ir, target);
   }
 
   if (ir.kind === "select_expr") {
@@ -84,6 +82,38 @@ export const compileToSQL = (ir: IRStatement, options: SQLCompileOptions = {}): 
   }
 
   return { sql, params, loweringMode: "single_statement" };
+};
+
+const compileSelectFreeToSQL = (ir: SelectFreeIR, target: RuntimeTarget): SQLArtifact => {
+  const params: ScalarValue[] = [];
+  const projections: string[] = [];
+
+  for (const entry of ir.entries) {
+    const lowered = compileSelectFreeEntrySQL(entry, params, target);
+    if (!lowered) {
+      return {
+        sql: "SELECT 1",
+        params: [],
+        loweringMode: "fallback_multi_query",
+      };
+    }
+
+    projections.push(`${lowered} AS ${quoteIdent(entry.name)}`);
+  }
+
+  if (projections.length === 0) {
+    return {
+      sql: "SELECT 1",
+      params: [],
+      loweringMode: "fallback_multi_query",
+    };
+  }
+
+  return {
+    sql: `SELECT ${projections.join(", ")}`,
+    params,
+    loweringMode: "single_statement",
+  };
 };
 
 const compileSelectToSQL = (ir: SelectIR, target: RuntimeTarget): SQLArtifact => {
@@ -804,6 +834,128 @@ const shapeRequiresFallbackLowering = (shape: SelectShapeElementIR[], target: Ru
 
 type FunctionCallExprIR = Extract<Extract<SelectShapeElementIR, { kind: "computed" }>["expr"], { kind: "function_call" }>;
 type FunctionCallArgIR = FunctionCallExprIR["args"][number];
+type SelectFreeEntryIR = SelectFreeIR["entries"][number];
+type SelectFreeFunctionCallEntryIR = Extract<SelectFreeEntryIR, { kind: "function_call" }>;
+type SelectFreeFunctionArgIR = SelectFreeFunctionCallEntryIR["args"][number];
+
+const compileSelectFreeEntrySQL = (
+  entry: SelectFreeEntryIR,
+  params: ScalarValue[],
+  target: RuntimeTarget,
+): string | null => {
+  if (entry.kind === "literal") {
+    if (typeof entry.value === "boolean") {
+      return null;
+    }
+
+    params.push(encodeParam(entry.value));
+    return "?";
+  }
+
+  if (entry.kind === "enum_path") {
+    params.push(entry.member);
+    return "?";
+  }
+
+  if (entry.kind === "cast") {
+    const valueSql = compileSelectFreeEntrySQL(entry.value, params, target);
+    if (!valueSql) {
+      return null;
+    }
+
+    const sqlType = sqlCastType(entry.castType);
+    return sqlType ? `CAST(${valueSql} AS ${sqlType})` : null;
+  }
+
+  if (entry.kind === "concat") {
+    const parts = entry.parts.map((part) => compileSelectFreeEntrySQL(part, params, target));
+    if (parts.some((part) => part === null)) {
+      return null;
+    }
+
+    return parts.length === 0 ? "''" : `(${(parts as string[]).map((part) => `COALESCE(CAST(${part} AS TEXT), '')`).join(" || ")})`;
+  }
+
+  if (entry.kind === "function_call") {
+    return compileSelectFreeFunctionCallSQL(entry, params, target);
+  }
+
+  return null;
+};
+
+const compileSelectFreeFunctionCallSQL = (
+  expr: SelectFreeFunctionCallEntryIR,
+  params: ScalarValue[],
+  target: RuntimeTarget,
+): string | null => {
+  if (!canLowerSelectFreeFunctionCall(expr, target)) {
+    return null;
+  }
+
+  const args = expr.args.map((arg) => compileSelectFreeFunctionArgSQL(arg, params, target));
+  if (args.some((arg) => arg === null)) {
+    return null;
+  }
+
+  return lowerStdlibFunctionSql(target, expr.functionName, args as string[]);
+};
+
+const canLowerSelectFreeFunctionCall = (expr: SelectFreeFunctionCallEntryIR, target: RuntimeTarget): boolean => {
+  if (!isLowerableStdlibFunctionName(expr.functionName, target)) {
+    return false;
+  }
+
+  return expr.args.every((arg) => canLowerSelectFreeFunctionArg(arg, target));
+};
+
+const canLowerSelectFreeFunctionArg = (arg: SelectFreeFunctionArgIR, target: RuntimeTarget): boolean => {
+  if (arg.kind === "literal") {
+    return typeof arg.value !== "boolean";
+  }
+
+  if (arg.kind === "function_call") {
+    return canLowerSelectFreeFunctionCall(arg as SelectFreeFunctionCallEntryIR, target);
+  }
+
+  return false;
+};
+
+const compileSelectFreeFunctionArgSQL = (
+  arg: SelectFreeFunctionArgIR,
+  params: ScalarValue[],
+  target: RuntimeTarget,
+): string | null => {
+  if (arg.kind === "literal") {
+    if (typeof arg.value === "boolean") {
+      return null;
+    }
+
+    params.push(encodeParam(arg.value));
+    return "?";
+  }
+
+  if (arg.kind === "function_call") {
+    return compileSelectFreeFunctionCallSQL(arg as SelectFreeFunctionCallEntryIR, params, target);
+  }
+
+  return null;
+};
+
+const sqlCastType = (castType: string): string | null => {
+  if (castType === "std::str" || castType === "str") {
+    return "TEXT";
+  }
+
+  if (castType === "std::int" || castType === "int" || castType === "std::int64" || castType === "int64") {
+    return "INTEGER";
+  }
+
+  if (castType === "std::float" || castType === "float" || castType === "std::float64" || castType === "float64") {
+    return "REAL";
+  }
+
+  return null;
+};
 
 const canLowerStdlibFunctionCall = (expr: FunctionCallExprIR, target: RuntimeTarget): boolean => {
   if (!isLowerableStdlibFunctionName(expr.functionName, target)) {

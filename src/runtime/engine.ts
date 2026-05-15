@@ -3305,7 +3305,9 @@ export const executeQueryWithTrace = (
     } else if (ir.kind === "select_free") {
       result = {
         kind: "select",
-        rows: [materializeFreeObjectRow(db, schema, ir.entries, context, sqlTrail)],
+        rows: sqlArtifact.loweringMode === "single_statement"
+          ? runSelectFreeSQL(db, sqlArtifact)
+          : [materializeFreeObjectRow(db, schema, ir.entries, context, sqlTrail)],
       };
     } else if (ir.kind === "select_expr") {
       result = {
@@ -3389,7 +3391,12 @@ export const executeQueryUnitWithTrace = (
       if (ir.kind === "select") {
         result = { kind: "select", rows: runSelectIR(db, schema, ir, context, sqlArtifact, sqlTrail) };
       } else if (ir.kind === "select_free") {
-        result = { kind: "select", rows: [materializeFreeObjectRow(db, schema, ir.entries, context, sqlTrail)] };
+        result = {
+          kind: "select",
+          rows: sqlArtifact.loweringMode === "single_statement"
+            ? runSelectFreeSQL(db, sqlArtifact)
+            : [materializeFreeObjectRow(db, schema, ir.entries, context, sqlTrail)],
+        };
       } else if (ir.kind === "select_expr") {
         result = {
           kind: "select",
@@ -4205,6 +4212,11 @@ const runSelectIR = (
   const visibleRows = rows.filter((row) => evaluateSelectPolicies(schema, db, subjectType, row, context));
   return visibleRows.map((row) => materializeSelectRow(db, schema, context, ir.shape, row, rowSourceType(row, ir.sourceType), sqlTrail));
 };
+
+const runSelectFreeSQL = (
+  db: SQLiteDatabase,
+  sqlArtifact: SQLArtifact,
+): Record<string, unknown>[] => db.prepare(sqlArtifact.sql).all(...sqlArtifact.params) as Record<string, unknown>[];
 
 const materializeFreeObjectRow = (
   db: SQLiteDatabase,
