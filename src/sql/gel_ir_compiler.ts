@@ -106,6 +106,12 @@ export const compileGelIRToSQL = (
   }
   const compiledSource = sourceSet ? compileSelectSource(sourceSet, statement.where, statement.orderBy, options) : null;
   if (!compiledSource) {
+    if (sourceSet) {
+      const scalarSql = compileScalarSelectSQL(sourceSet, params, target, options);
+      if (scalarSql) {
+        return { sql: scalarSql, params, loweringMode: "single_statement" };
+      }
+    }
     return {
       sql: `SELECT NULL AS ${quoteIdent("id")}, NULL AS ${quoteIdent("__source_type")}`,
       params,
@@ -411,6 +417,62 @@ const compileConfigStmtToSQL = (statement: ConfigStmt, options: GelIRCompileOpti
     params,
     loweringMode: "single_statement",
   };
+};
+
+const collectScalarPointerSources = (set: Set, sources: Map<string, TypeRef>): void => {
+  const expr = set.expr;
+  if (!expr) return;
+  if (expr.kind === "pointer") {
+    const pointer = expr as Pointer;
+    if (pointer.source.expr.kind === "type_root") {
+      const id = qualifyTypeName(pointer.source.typeref);
+      if (!sources.has(id)) {
+        sources.set(id, pointer.source.typeref);
+      }
+    }
+    return;
+  }
+  if (expr.kind === "type_cast") {
+    collectScalarPointerSources((expr as { expr: Set }).expr, sources);
+    return;
+  }
+  if (expr.kind === "operator_call" || expr.kind === "function_call") {
+    const call = expr as { args: Record<string, CallArg> };
+    for (const arg of orderedCallArgs(call.args)) {
+      collectScalarPointerSources(arg.expr, sources);
+    }
+  }
+};
+
+const compileScalarSelectSQL = (
+  sourceSet: Set,
+  params: ScalarValue[],
+  target: RuntimeTarget,
+  options: GelIRCompileOptions,
+): string | null => {
+  const expr = sourceSet.expr;
+  if (expr.kind === "operator_call" && (expr as OperatorCall).operator === "union") {
+    const args = orderedCallArgs((expr as OperatorCall).args);
+    const parts: string[] = [];
+    for (const arg of args) {
+      const partSql = compileScalarSelectSQL(arg.expr, params, target, options);
+      if (!partSql) return null;
+      parts.push(partSql);
+    }
+    if (parts.length === 0) return null;
+    return parts.join(" UNION ALL ");
+  }
+  const sources = new Map<string, TypeRef>();
+  collectScalarPointerSources(sourceSet, sources);
+  const valueSql = compileValueSetSQL(sourceSet, "g0", params, target, options);
+  if (!valueSql) return null;
+  if (sources.size === 0) {
+    return `SELECT ${valueSql} AS ${quoteIdent("value")}`;
+  }
+  if (sources.size > 1) return null;
+  const [typeRef] = sources.values();
+  const sourceTable = resolveTypeTableName(typeRef!, options);
+  return `SELECT ${valueSql} AS ${quoteIdent("value")} FROM ${quoteIdent(sourceTable)} g0`;
 };
 
 const compileSelectSource = (
