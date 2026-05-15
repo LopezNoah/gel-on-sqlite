@@ -109,7 +109,21 @@ export const compileGelIRToSQL = (
     if (sourceSet) {
       const scalarSql = compileScalarSelectSQL(sourceSet, params, target, options);
       if (scalarSql) {
-        return { sql: scalarSql, params, loweringMode: "single_statement" };
+        let sql = scalarSql;
+        if (selectOrderBy && selectOrderBy.length > 0) {
+          const orders = selectOrderBy
+            .map((order) => {
+              const direction = order.direction.toUpperCase();
+              // ORDER BY a reference to the result value column, or any expression
+              // referencing the synthesized "value", routes to that column.
+              return `${quoteIdent("value")} ${direction}`;
+            })
+            .filter((entry): entry is string => entry.length > 0);
+          if (orders.length > 0) {
+            sql += ` ORDER BY ${orders.join(", ")}`;
+          }
+        }
+        return { sql, params, loweringMode: "single_statement" };
       }
     }
     return {
@@ -441,6 +455,48 @@ const collectScalarPointerSources = (set: Set, sources: Map<string, TypeRef>): v
     for (const arg of orderedCallArgs(call.args)) {
       collectScalarPointerSources(arg.expr, sources);
     }
+    return;
+  }
+  if (expr.kind === "if_else_expr") {
+    const ifElse = expr as IfElseExpr;
+    collectScalarPointerSources(ifElse.condition, sources);
+    collectScalarPointerSources(ifElse.ifExpr, sources);
+    collectScalarPointerSources(ifElse.elseExpr, sources);
+    return;
+  }
+  if (expr.kind === "coalesce_expr") {
+    const coalesce = expr as CoalesceExpr;
+    collectScalarPointerSources(coalesce.left, sources);
+    collectScalarPointerSources(coalesce.right, sources);
+    return;
+  }
+  if (expr.kind === "exists_expr") {
+    collectScalarPointerSources((expr as ExistsExpr).expr, sources);
+    return;
+  }
+  if (expr.kind === "array") {
+    for (const element of expr.elements) {
+      collectScalarPointerSources(element, sources);
+    }
+    return;
+  }
+  if (expr.kind === "tuple") {
+    for (const element of (expr as Tuple).elements) {
+      collectScalarPointerSources(element.val, sources);
+    }
+    return;
+  }
+  if (expr.kind === "index_expr") {
+    const indexExpr = expr as IndexExpr;
+    collectScalarPointerSources(indexExpr.expr, sources);
+    collectScalarPointerSources(indexExpr.index, sources);
+    return;
+  }
+  if (expr.kind === "slice_expr") {
+    const slice = expr as SliceExpr;
+    collectScalarPointerSources(slice.expr, sources);
+    if (slice.start) collectScalarPointerSources(slice.start, sources);
+    if (slice.end) collectScalarPointerSources(slice.end, sources);
   }
 };
 
@@ -471,8 +527,9 @@ const compileScalarSelectSQL = (
   }
   if (sources.size > 1) return null;
   const [typeRef] = sources.values();
-  const sourceTable = resolveTypeTableName(typeRef!, options);
-  return `SELECT ${valueSql} AS ${quoteIdent("value")} FROM ${quoteIdent(sourceTable)} g0`;
+  const projectedColumns = collectReferencedColumns(sourceSet);
+  const sourceSql = compilePolymorphicSource(typeRef!, false, "g0", projectedColumns, options);
+  return `SELECT ${valueSql} AS ${quoteIdent("value")} FROM ${sourceSql}`;
 };
 
 const compileSelectSource = (
