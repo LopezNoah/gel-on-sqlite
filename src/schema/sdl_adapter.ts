@@ -762,6 +762,283 @@ const parseAliasProjections = (exprText: string): AliasDeclaration["projections"
   return projections.length > 0 ? projections : undefined;
 };
 
+// Strip an optional balanced pair of outer parens from a tokenized alias body.
+// Returns the (possibly-trimmed) token slice. Skips trailing semicolons / EOF.
+const stripAliasOuterParenTokens = (tokens: Token[]): Token[] => {
+  const trimmed = tokens.filter((token) => token.kind !== "eof");
+  while (trimmed.length > 0 && trimmed[trimmed.length - 1].kind === "semi") {
+    trimmed.pop();
+  }
+  if (trimmed.length >= 2 && trimmed[0].kind === "lparen" && trimmed[trimmed.length - 1].kind === "rparen") {
+    let depth = 0;
+    let balanced = true;
+    for (let i = 0; i < trimmed.length; i++) {
+      if (trimmed[i].kind === "lparen") depth++;
+      else if (trimmed[i].kind === "rparen") {
+        depth--;
+        if (depth === 0 && i !== trimmed.length - 1) {
+          balanced = false;
+          break;
+        }
+      }
+    }
+    if (balanced) {
+      return stripAliasOuterParenTokens(trimmed.slice(1, -1));
+    }
+  }
+  return trimmed;
+};
+
+// Walk tokens from `start`, skipping a balanced `{ ... }` block when present.
+// Returns the index immediately after the closing brace, or `start` if there is no block.
+const skipBalancedBraceBlock = (tokens: Token[], start: number): number => {
+  if (tokens[start]?.kind !== "lbrace") {
+    return start;
+  }
+  let depth = 0;
+  for (let i = start; i < tokens.length; i++) {
+    if (tokens[i].kind === "lbrace") depth++;
+    else if (tokens[i].kind === "rbrace") {
+      depth--;
+      if (depth === 0) return i + 1;
+    }
+  }
+  return tokens.length;
+};
+
+// Locate the top-level `FILTER` keyword's token index inside an alias body
+// (post-paren-strip). Returns -1 if not found at the top level.
+const findTopLevelFilterTokenIndex = (tokens: Token[]): number => {
+  let cursor = 0;
+  if (tokens[cursor]?.kind === "kw_select") cursor++;
+  // Skip an identifier (the source type / scalar expression)
+  if (tokens[cursor] && (tokens[cursor].kind === "identifier" || tokens[cursor].kind.startsWith("kw_"))) {
+    cursor++;
+    while (tokens[cursor]?.kind === "coloncolon") {
+      cursor += 2; // :: <ident>
+    }
+  }
+  cursor = skipBalancedBraceBlock(tokens, cursor);
+  let depth = 0;
+  for (let i = cursor; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (token.kind === "lparen" || token.kind === "lbrace" || token.kind === "lbracket") depth++;
+    else if (token.kind === "rparen" || token.kind === "rbrace" || token.kind === "rbracket") depth--;
+    else if (depth === 0 && token.kind === "kw_filter") return i;
+  }
+  return -1;
+};
+
+// Collect tokens that belong to the FILTER clause body — i.e. everything between
+// `FILTER` and the next top-level `ORDER BY`, `LIMIT`, or `OFFSET`.
+const collectFilterClauseTokens = (tokens: Token[], filterIndex: number): Token[] => {
+  const out: Token[] = [];
+  let depth = 0;
+  for (let i = filterIndex + 1; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (token.kind === "lparen" || token.kind === "lbrace" || token.kind === "lbracket") {
+      depth++;
+    } else if (token.kind === "rparen" || token.kind === "rbrace" || token.kind === "rbracket") {
+      depth--;
+      if (depth < 0) break;
+    } else if (depth === 0 && (token.kind === "kw_order" || token.kind === "kw_limit" || token.kind === "kw_offset")) {
+      break;
+    }
+    out.push(token);
+  }
+  return out;
+};
+
+// Match a backlink-membership filter of the shape
+//   <literal> IN [TypeName].<link [IS SourceType].field
+// purely from a token stream (no regex). Returns undefined when the tokens
+// don't match the pattern exactly.
+const matchBacklinkMembershipFilter = (filterTokens: Token[]): AliasDeclaration["filter"] => {
+  let i = 0;
+  if (filterTokens[i]?.kind !== "string") return undefined;
+  const value = filterTokens[i].lexeme;
+  i++;
+
+  let op: "in" | "not_in";
+  if (filterTokens[i]?.kind === "kw_in") {
+    op = "in";
+    i++;
+  } else if (filterTokens[i]?.kind === "kw_not" && filterTokens[i + 1]?.kind === "kw_in") {
+    op = "not_in";
+    i += 2;
+  } else {
+    return undefined;
+  }
+
+  // Optional leading type name preceding the backlink (e.g. `Card`)
+  if (filterTokens[i]?.kind === "identifier") {
+    i++;
+  }
+
+  // The backlink: either the combined `.<` token or `.` followed by `<`.
+  if (filterTokens[i]?.kind === "backward_link") {
+    i++;
+  } else if (filterTokens[i]?.kind === "dot" && filterTokens[i + 1]?.kind === "lt") {
+    i += 2;
+  } else {
+    return undefined;
+  }
+
+  const linkToken = filterTokens[i];
+  if (linkToken?.kind !== "identifier") return undefined;
+  const link = linkToken.lexeme;
+  i++;
+
+  // Optional type intersection: [ IS SourceType ]
+  let sourceType: string | undefined;
+  if (filterTokens[i]?.kind === "lbracket") {
+    i++;
+    if (filterTokens[i]?.kind !== "kw_is") return undefined;
+    i++;
+    const sourceTypeToken = filterTokens[i];
+    if (sourceTypeToken?.kind !== "identifier") return undefined;
+    sourceType = sourceTypeToken.lexeme;
+    i++;
+    while (filterTokens[i]?.kind === "coloncolon") {
+      i++;
+      if (filterTokens[i]?.kind !== "identifier") return undefined;
+      sourceType += `::${filterTokens[i].lexeme}`;
+      i++;
+    }
+    if (filterTokens[i]?.kind !== "rbracket") return undefined;
+    i++;
+  }
+
+  // .field
+  if (filterTokens[i]?.kind !== "dot") return undefined;
+  i++;
+  const fieldToken = filterTokens[i];
+  if (fieldToken?.kind !== "identifier") return undefined;
+  const field = fieldToken.lexeme;
+  i++;
+
+  if (i !== filterTokens.length) return undefined;
+
+  return {
+    kind: "backlink_membership",
+    op,
+    value,
+    link,
+    sourceType,
+    field,
+  };
+};
+
+// Map a parser-level FilterExpr (predicate against a plain field with a scalar
+// value) into the AliasDeclaration field_predicate shape. Returns undefined if
+// the filter is not in that simple form.
+const aliasFilterFromParserFilter = (filter: unknown): AliasDeclaration["filter"] => {
+  if (!filter || typeof filter !== "object") return undefined;
+  const f = filter as { kind: string };
+  if (f.kind !== "predicate") return undefined;
+  const predicate = filter as {
+    kind: "predicate";
+    target: { kind: string; field?: string };
+    op: "=" | "!=" | "<" | "<=" | ">" | ">=" | "?=" | "?!=" | "like" | "ilike";
+    value: unknown;
+  };
+  if (predicate.target.kind !== "field" || !predicate.target.field) return undefined;
+  if (
+    predicate.op !== "=" &&
+    predicate.op !== "!=" &&
+    predicate.op !== "like" &&
+    predicate.op !== "ilike"
+  ) {
+    return undefined;
+  }
+  if (typeof predicate.value === "object" && predicate.value !== null) return undefined;
+  return {
+    kind: "field_predicate",
+    field: predicate.target.field,
+    op: predicate.op,
+    value: predicate.value as ScalarValue,
+  };
+};
+
+// Use the tokenizer to determine whether `source` has balanced outer parens
+// and, if so, return the inner substring with those parens removed.
+const stripBalancedOuterParens = (source: string): string => {
+  const trimmed = source.trim();
+  if (!trimmed.startsWith("(") || !trimmed.endsWith(")")) return trimmed;
+  let tokens: Token[];
+  try {
+    tokens = tokenize(trimmed);
+  } catch {
+    return trimmed;
+  }
+  let depth = 0;
+  for (let i = 0; i < tokens.length; i++) {
+    if (tokens[i].kind === "lparen") {
+      depth++;
+    } else if (tokens[i].kind === "rparen") {
+      depth--;
+      if (depth === 0) {
+        // If the matching `)` for the leading `(` is also the very last paren
+        // (the `eof`/`semi` may follow), the outer parens are balanced.
+        const rest = tokens.slice(i + 1).filter((token) => token.kind !== "eof" && token.kind !== "semi");
+        if (rest.length === 0) {
+          const openIndex = trimmed.indexOf("(");
+          const closeIndex = trimmed.lastIndexOf(")");
+          return stripBalancedOuterParens(trimmed.slice(openIndex + 1, closeIndex));
+        }
+        return trimmed;
+      }
+    }
+  }
+  return trimmed;
+};
+
+const parseAliasFilter = (exprText: string): AliasDeclaration["filter"] => {
+  let tokens: Token[];
+  try {
+    tokens = tokenize(exprText);
+  } catch {
+    return undefined;
+  }
+  const stripped = stripAliasOuterParenTokens(tokens);
+  const filterIndex = findTopLevelFilterTokenIndex(stripped);
+  if (filterIndex < 0) return undefined;
+  const filterTokens = collectFilterClauseTokens(stripped, filterIndex);
+  if (filterTokens.length === 0) return undefined;
+
+  // Reject compound filters (AND/OR/NOT) at the top level — those will be
+  // handled by other runtime/compiler paths, not by simple alias filter lowering.
+  let depth = 0;
+  for (let i = 0; i < filterTokens.length; i++) {
+    const token = filterTokens[i];
+    if (token.kind === "lparen" || token.kind === "lbrace" || token.kind === "lbracket") depth++;
+    else if (token.kind === "rparen" || token.kind === "rbrace" || token.kind === "rbracket") depth--;
+    else if (depth === 0 && (token.kind === "kw_and" || token.kind === "kw_or" || token.kind === "kw_not")) {
+      // `NOT IN` is a single operator we do want to recognize.
+      if (token.kind === "kw_not" && filterTokens[i + 1]?.kind === "kw_in") continue;
+      return undefined;
+    }
+  }
+
+  // Backlink membership: matched directly off the tokens, since EdgeQL's
+  // parser doesn't currently accept `<literal> IN <backlink-path>` in the
+  // FILTER position.
+  const backlinkFilter = matchBacklinkMembershipFilter(filterTokens);
+  if (backlinkFilter) return backlinkFilter;
+
+  // Otherwise, run the alias body through the full EdgeQL parser to obtain
+  // a FilterExpr AST and translate it into the AliasDeclaration filter shape.
+  const strippedSource = stripBalancedOuterParens(exprText);
+  let parsed;
+  try {
+    parsed = parseEdgeQL(strippedSource);
+  } catch {
+    return undefined;
+  }
+  if (parsed.kind !== "select") return undefined;
+  return aliasFilterFromParserFilter(parsed.filter);
+};
+
 const parseAliasDeclaration = (
   moduleName: string,
   node: AliasDeclarationNode,
@@ -783,6 +1060,7 @@ const parseAliasDeclaration = (
     values,
     sourceType,
     projections: parseAliasProjections(exprText),
+    filter: sourceType ? parseAliasFilter(exprText) : undefined,
   };
 };
 
