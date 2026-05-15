@@ -3191,7 +3191,9 @@ export const executeQueryWithTrace = (
     } else if (ir.kind === "select_expr") {
       result = {
         kind: "select",
-        rows: materializeSelectExprRows(db, schema, ir, context, sqlTrail),
+        rows: compiled.usesGelIrSql
+          ? runGelSelectExprSQL(db, sqlArtifact)
+          : materializeSelectExprRows(db, schema, ir, context, sqlTrail),
       };
     } else {
       const writeResult = runWriteWithAccessPolicies(db, schema, ast, ir, sqlArtifact, subjectType!, context, compiled.usesGelIrSql);
@@ -3270,7 +3272,12 @@ export const executeQueryUnitWithTrace = (
       } else if (ir.kind === "select_free") {
         result = { kind: "select", rows: [materializeFreeObjectRow(db, schema, ir.entries, context, sqlTrail)] };
       } else if (ir.kind === "select_expr") {
-        result = { kind: "select", rows: materializeSelectExprRows(db, schema, ir, context, sqlTrail) };
+        result = {
+          kind: "select",
+          rows: compiled.usesGelIrSql
+            ? runGelSelectExprSQL(db, sqlArtifact)
+            : materializeSelectExprRows(db, schema, ir, context, sqlTrail),
+        };
       } else {
         const writeResult = runWriteWithAccessPolicies(db, schema, ast, ir, sqlArtifact, subjectType!, context, compiled.usesGelIrSql);
         result = { kind: ir.kind, changes: writeResult.changes };
@@ -5128,6 +5135,21 @@ const materializeSelectExprRows = (
   }
 
   return rows;
+};
+
+const runGelSelectExprSQL = (db: SQLiteDatabase, sqlArtifact: SQLArtifact): unknown[] => {
+  const rows = db.prepare(sqlArtifact.sql).all(...sqlArtifact.params) as Record<string, unknown>[];
+  return rows.map((row) => {
+    const value = row.value;
+    if (typeof value !== "string") {
+      return value ?? null;
+    }
+    try {
+      return JSON.parse(value);
+    } catch {
+      return value;
+    }
+  });
 };
 
 const executeFunctionCall = (

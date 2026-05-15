@@ -391,6 +391,11 @@ const resolvePointerRef = (ctx: IRCompileContext, source: TypeRef, field: string
       const target = resolveTypeRef(ctx, schemaLink.targetType);
       return pointerRefFromLink(source, target, schemaLink);
     }
+    const schemaComputed = ctx.schema?.getType(source.id)?.computeds?.find((candidate) => candidate.kind === "link" && candidate.name === field);
+    if (schemaComputed?.kind === "link" && schemaComputed.expr.kind === "backlink") {
+      const backlink = resolveBacklinkPointerRef(ctx, source, schemaComputed.expr.link, schemaComputed.expr.sourceType);
+      return backlink ? { ...backlink, computedLinkAliasIsBackward: true } : undefined;
+    }
     return undefined;
   }
 
@@ -435,6 +440,11 @@ const resolvePointerRef = (ctx: IRCompileContext, source: TypeRef, field: string
     const target = resolveTypeRef(ctx, resolved.link.targetType);
     return pointerRefFromLink(source, target, resolved.link);
   }
+  const computed = sourceTypeDef.computeds?.find((candidate) => candidate.kind === "link" && candidate.name === field);
+  if (computed?.kind === "link" && computed.expr.kind === "backlink") {
+    const backlink = resolveBacklinkPointerRef(ctx, source, computed.expr.link, computed.expr.sourceType);
+    return backlink ? { ...backlink, computedLinkAliasIsBackward: true } : undefined;
+  }
   return undefined;
 };
 
@@ -474,7 +484,7 @@ const compilePathSteps = (steps: EdgeQLPathStep[], ctx: IRCompileContext): Set =
   if (!first || first.kind !== "object_ref") {
     return literalToSet(null);
   }
-  let out = setFromTypeRoot(resolveTypeRef(ctx, first.name));
+  let out = resolveBinding(ctx, first.name) ?? setFromTypeRoot(resolveTypeRef(ctx, first.name));
   for (const step of steps.slice(1)) {
     if (step.kind === "ptr") {
       const ptrref = resolvePointerRef(ctx, out.typeref, step.name);
@@ -773,7 +783,9 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr, ctx: IRCompileContext): Set
     case "field_access": {
       const source = compileFreeObjectExpr(expr.expr, ctx);
       const ptrref = resolvePointerRef(ctx, source.typeref, expr.field);
-      return ptrref ? extendPathSet(source, ptrref) : {
+      return ptrref ? (
+        ptrref.computedLinkAliasIsBackward ? extendPathSetDirectional(source, ptrref, "inbound") : extendPathSet(source, ptrref)
+      ) : {
         kind: "set",
         expr: {
           kind: "pointer",
@@ -788,6 +800,7 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr, ctx: IRCompileContext): Set
             outCardinality: "unknown",
             inCardinality: "unknown",
             isComputed: false,
+            isLinkProperty: expr.field.startsWith("@"),
             hasProperties: false,
           },
           direction: "outbound",
@@ -1238,7 +1251,9 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr, ctx: IRCompileContext): Set
 
     case "for_expr": {
       const iterator = compileFreeObjectExpr(expr.iterator, ctx);
-      const body = compileFreeObjectExpr(expr.body, ctx);
+      const loopCtx = childScope(ctx);
+      bindValue(loopCtx, expr.variable, iterator);
+      const body = compileFreeObjectExpr(expr.body, loopCtx);
       return {
         kind: "set",
         expr: {
@@ -1246,6 +1261,12 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr, ctx: IRCompileContext): Set
           iterator,
           body,
           bindingKind: "with",
+          where: expr.filter ? compileFreeObjectExpr(expr.filter, loopCtx) : undefined,
+          orderBy: expr.orderBy
+            ? [{ kind: "sort_expr", path: compileFreeObjectExpr(expr.orderBy.expr, loopCtx), direction: expr.orderBy.direction, nonesOrder: "last" }]
+            : undefined,
+          offset: expr.offset === undefined ? undefined : literalToSet(expr.offset),
+          limit: expr.limit === undefined ? undefined : literalToSet(expr.limit),
         } as ForExpr,
         pathId: defaultPathId(`for:${expr.variable}`),
         typeref: body.typeref,
@@ -1289,14 +1310,14 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr, ctx: IRCompileContext): Set
   }
 };
 
-const compileOrderBy = (statement: Extract<EdgeQLStatement, { kind: "select_expr" }>): SortExpr[] | undefined => {
+const compileOrderBy = (statement: Extract<EdgeQLStatement, { kind: "select_expr" }>, ctx: IRCompileContext): SortExpr[] | undefined => {
   if (!statement.orderBy) {
     return undefined;
   }
   return [
     {
       kind: "sort_expr",
-      path: literalToSet(1),
+      path: compileFreeObjectExpr(statement.orderBy.expr, ctx),
       direction: statement.orderBy.direction,
       nonesOrder: "last",
     },
@@ -1962,7 +1983,7 @@ const compileSelectExprStatement = (statement: Extract<EdgeQLStatement, { kind: 
     kind: "select_stmt",
     expr: result,
     ...statementBase(scoped),
-    orderBy: compileOrderBy(statement),
+    orderBy: compileOrderBy(statement, scoped),
     implicitWrapper: false,
     span: statement.pos,
   };
