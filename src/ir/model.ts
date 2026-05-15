@@ -40,6 +40,7 @@ export interface PathIdIR {
 export interface SchemaTypeRefIR {
   name: string;
   table: string;
+  columns?: string[];
   module?: string;
   isAbstract?: boolean;
   isScalar?: boolean;

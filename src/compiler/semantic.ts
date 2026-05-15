@@ -485,15 +485,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       );
       const targetTypeNames = linkTargetNames(link.targetType, ownerScopeModule);
       const targetType = targetTypeNames[0] ?? normalizeTypeName(link.targetType, ownerScopeModule);
-      const targetTableEntries = targetTypeNames.flatMap((targetTypeName) => {
-        const assignable = schema.listConcreteTypesAssignableTo(targetTypeName);
-        return assignable.length > 0
-          ? assignable.map((candidate) => {
-              const name = qualifiedTypeName(candidate);
-              return { name, table: tableNameForType(name) };
-            })
-          : [{ name: targetTypeName, table: tableNameForType(targetTypeName) }];
-      });
+      const targetTableEntries = targetTypeNames.flatMap((targetTypeName) => targetTableRefsForType(targetTypeName));
       const targetTables = [...new Map(targetTableEntries.map((entry) => [entry.name, entry] as const)).values()];
       const usesLinkTable = Boolean(link.multi) || (link.properties?.length ?? 0) > 0;
       return {
@@ -731,15 +723,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         );
         const targetTypeNames = linkTargetNames(link.targetType, ownerScopeModule);
         const targetType = targetTypeNames[0] ?? normalizeTypeName(link.targetType, ownerScopeModule);
-        const targetTableEntries = targetTypeNames.flatMap((targetTypeName) => {
-          const assignable = schema.listConcreteTypesAssignableTo(targetTypeName);
-          return assignable.length > 0
-            ? assignable.map((candidate) => {
-                const name = qualifiedTypeName(candidate);
-                return { name, table: tableNameForType(name) };
-              })
-            : [{ name: targetTypeName, table: tableNameForType(targetTypeName) }];
-        });
+        const targetTableEntries = targetTypeNames.flatMap((targetTypeName) => targetTableRefsForType(targetTypeName));
         const targetTables = [...new Map(targetTableEntries.map((entry) => [entry.name, entry] as const)).values()];
         const usesLinkTable = Boolean(link.multi) || (link.properties?.length ?? 0) > 0;
         return {
@@ -916,6 +900,27 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       : [];
 
     return dedupeByName([...typeDef.fields, ...inherited]);
+  };
+
+  const schemaTypeRefForType = (typeDef: TypeDef) => {
+    const name = qualifiedTypeName(typeDef);
+    return {
+      name,
+      table: tableNameForType(name),
+      columns: ["id", ...collectFields(typeDef, true).map((field) => field.name)],
+    };
+  };
+
+  const targetTableRefsForType = (typeName: string) => {
+    const assignable = schema.listConcreteTypesAssignableTo(typeName);
+    if (assignable.length > 0) {
+      return assignable.map((candidate) => schemaTypeRefForType(candidate));
+    }
+
+    const typeDef = schema.getType(typeName);
+    return typeDef
+      ? [schemaTypeRefForType(typeDef)]
+      : [{ name: typeName, table: tableNameForType(typeName) }];
   };
 
   const collectLinks = (typeDef: TypeDef, includeInherited: boolean, seen = new Set<string>()): NonNullable<TypeDef["links"]> => {
@@ -1134,20 +1139,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
 
       const targetTypeNames = linkTargetNames(link.targetType, ownerScopeModule);
       const targetType = targetTypeNames[0] ?? normalizeTypeName(link.targetType, ownerScopeModule);
-      const targetTableEntries = targetTypeNames.flatMap((targetTypeName) => {
-        const assignable = schema.listConcreteTypesAssignableTo(targetTypeName);
-        if (assignable.length > 0) {
-          return assignable.map((candidate) => {
-            const name = qualifiedTypeName(candidate);
-            return {
-              name,
-              table: tableNameForType(name),
-            };
-          });
-        }
-
-        return [{ name: targetTypeName, table: tableNameForType(targetTypeName) }];
-      });
+      const targetTableEntries = targetTypeNames.flatMap((targetTypeName) => targetTableRefsForType(targetTypeName));
       const targetTables = [...new Map(targetTableEntries.map((entry) => [entry.name, entry] as const)).values()]
         .sort((a, b) => a.name.localeCompare(b.name));
 
