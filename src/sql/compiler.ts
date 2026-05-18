@@ -159,7 +159,7 @@ const compileSelectToSQL = (ir: SelectIR, target: RuntimeTarget): SQLArtifact =>
       const expr =
         element.kind === "link"
           ? compileLinkArrayExpr(element, rootAlias, params, target)
-          : compileBacklinkArrayExpr(element, rootAlias);
+          : compileBacklinkArrayExpr(element, rootAlias, params, target);
       projections.push(`${expr} AS ${quoteIdent(alias)}`);
     }
   }
@@ -285,27 +285,74 @@ const compileLinkArrayExpr = (
 const compileBacklinkArrayExpr = (
   element: Extract<SelectShapeElementIR, { kind: "backlink" }>,
   sourceAlias: string,
+  params: ScalarValue[] = [],
+  target: RuntimeTarget = "sqlite",
 ): string => {
+  const shape = element.shape;
+  const hasShape = Array.isArray(shape) && shape.length > 0;
+  const projectedColumns = hasShape
+    ? Array.from(new Set(shape!.flatMap((shapeElement) => {
+        if (shapeElement.kind === "field") return [shapeElement.column];
+        if (shapeElement.kind === "computed" && shapeElement.expr.kind === "field_ref" && !shapeElement.expr.column.startsWith("@")) {
+          return [shapeElement.expr.column];
+        }
+        return [];
+      })))
+    : [];
+  const projectedColumnsSql = projectedColumns.length > 0
+    ? projectedColumns.map((column) => `, ${quoteIdent(column)} AS ${quoteIdent(column)}`).join("")
+    : "";
+
+  const linkPropertyColumns = hasShape
+    ? Array.from(new Set(shape!.flatMap((shapeElement) => {
+        if (shapeElement.kind === "computed") {
+          if (shapeElement.expr.kind === "field_ref" && shapeElement.expr.column.startsWith("@")) {
+            return [shapeElement.expr.column.slice(1)];
+          }
+          if (shapeElement.expr.kind === "literal" && shapeElement.name.startsWith("@")) {
+            return [shapeElement.name.slice(1)];
+          }
+        }
+        return [];
+      })))
+    : [];
+
   const sourceUnions = element.sources.map((source) => {
     const sourceTables = source.sourceTables && source.sourceTables.length > 0
       ? source.sourceTables
       : [{ name: source.sourceType, table: source.table }];
     const junctionAlias = `bj_${source.table}_${Math.abs(hashString(source.sourceType)).toString(16)}`;
+    const innerSelections = projectedColumns.length > 0
+      ? projectedColumns.map((column) => `, s.${quoteIdent(column)} AS ${quoteIdent(column)}`).join("")
+      : "";
+    const linkPropertySelections = linkPropertyColumns.length > 0
+      ? linkPropertyColumns.map((column) => `, ${junctionAlias}.${quoteIdent(column)} AS ${quoteIdent(`@${column}`)}`).join("")
+      : "";
+
     if (source.storage === "inline") {
       const inlineUnion = sourceTables
         .map((tableRef) => {
           const stAlias = `b_${tableRef.table}_${Math.abs(hashString(source.sourceType)).toString(16)}`;
-          return `SELECT ${stAlias}.${quoteIdent("id")} AS ${quoteIdent("id")}, ${quoteLiteral(tableRef.name)} AS ${quoteIdent("type_name")} FROM ${quoteIdent(tableRef.table)} ${stAlias} WHERE ${stAlias}.${quoteIdent(requiredInlineColumn(source.inlineColumn))} = ${sourceAlias}.${quoteIdent("id")}`;
+          const tableProjections = projectedColumns.length > 0
+            ? projectedColumns.map((column) => `, ${stAlias}.${quoteIdent(column)} AS ${quoteIdent(column)}`).join("")
+            : "";
+          const linkPropProjections = linkPropertyColumns.length > 0
+            ? linkPropertyColumns.map((column) => `, NULL AS ${quoteIdent(`@${column}`)}`).join("")
+            : "";
+          return `SELECT ${stAlias}.${quoteIdent("id")} AS ${quoteIdent("id")}, ${quoteLiteral(tableRef.name)} AS ${quoteIdent("type_name")}${tableProjections}${linkPropProjections} FROM ${quoteIdent(tableRef.table)} ${stAlias} WHERE ${stAlias}.${quoteIdent(requiredInlineColumn(source.inlineColumn))} = ${sourceAlias}.${quoteIdent("id")}`;
         })
         .join(" UNION ALL ");
       return inlineUnion;
     }
 
     const linkTable = requiredLinkTable(source.linkTable);
+    const sourceTableSelect = sourceTables.length === 1
+      ? `SELECT ${quoteLiteral(sourceTables[0].name)} AS ${quoteIdent("__source_type")}, ${quoteIdent("id")} AS ${quoteIdent("id")}${projectedColumnsSql} FROM ${quoteIdent(sourceTables[0].table)}`
+      : sourceTables.map((entry) => `SELECT ${quoteLiteral(entry.name)} AS ${quoteIdent("__source_type")}, ${quoteIdent("id")} AS ${quoteIdent("id")}${projectedColumnsSql} FROM ${quoteIdent(entry.table)}`).join(" UNION ALL ");
     const fromClause = sourceTables.length === 1
-      ? `(SELECT ${quoteLiteral(sourceTables[0].name)} AS ${quoteIdent("__source_type")}, * FROM ${quoteIdent(sourceTables[0].table)}) s`
-      : `(${sourceTables.map((entry) => `SELECT ${quoteLiteral(entry.name)} AS ${quoteIdent("__source_type")}, * FROM ${quoteIdent(entry.table)}`).join(" UNION ALL ")}) s`;
-    return `SELECT s.${quoteIdent("id")} AS ${quoteIdent("id")}, s.${quoteIdent("__source_type")} AS ${quoteIdent("type_name")} FROM ${fromClause} JOIN ${quoteIdent(linkTable)} ${junctionAlias} ON ${junctionAlias}.${quoteIdent("source")} = s.${quoteIdent("id")} WHERE ${junctionAlias}.${quoteIdent("target")} = ${sourceAlias}.${quoteIdent("id")}`;
+      ? `(${sourceTableSelect}) s`
+      : `(${sourceTableSelect}) s`;
+    return `SELECT s.${quoteIdent("id")} AS ${quoteIdent("id")}, s.${quoteIdent("__source_type")} AS ${quoteIdent("type_name")}${innerSelections}${linkPropertySelections} FROM ${fromClause} JOIN ${quoteIdent(linkTable)} ${junctionAlias} ON ${junctionAlias}.${quoteIdent("source")} = s.${quoteIdent("id")} WHERE ${junctionAlias}.${quoteIdent("target")} = ${sourceAlias}.${quoteIdent("id")}`;
   });
 
   if (sourceUnions.length === 0) {
@@ -313,8 +360,53 @@ const compileBacklinkArrayExpr = (
   }
 
   const unionSql = sourceUnions.join(" UNION ALL ");
-  const ordered = `SELECT ${quoteIdent("id")}, ${quoteIdent("type_name")} FROM (${unionSql}) ORDER BY ${quoteIdent("type_name")} ASC, ${quoteIdent("id")} ASC`;
-  return `COALESCE((SELECT json_group_array(json_object('id', ${quoteIdent("id")}, '__type__', ${quoteIdent("type_name")})) FROM (${ordered})), '[]')`;
+  const allProjectedCols = [
+    quoteIdent("id"),
+    quoteIdent("type_name"),
+    ...projectedColumns.map((column) => quoteIdent(column)),
+    ...linkPropertyColumns.map((column) => quoteIdent(`@${column}`)),
+  ];
+  const ordered = `SELECT ${allProjectedCols.join(", ")} FROM (${unionSql}) ORDER BY ${quoteIdent("type_name")} ASC, ${quoteIdent("id")} ASC`;
+
+  if (!hasShape) {
+    return `COALESCE((SELECT json_group_array(json_object('id', ${quoteIdent("id")}, '__type__', ${quoteIdent("type_name")})) FROM (${ordered})), '[]')`;
+  }
+
+  const itemPairs: string[] = [];
+  for (const shapeElement of shape!) {
+    itemPairs.push(quoteLiteral(shapeElement.name));
+    if (shapeElement.kind === "field") {
+      itemPairs.push(quoteIdent(shapeElement.column));
+      continue;
+    }
+    if (shapeElement.kind === "computed") {
+      if (shapeElement.expr.kind === "field_ref") {
+        const colName = shapeElement.expr.column.startsWith("@")
+          ? quoteIdent(shapeElement.expr.column)
+          : quoteIdent(shapeElement.expr.column);
+        itemPairs.push(colName);
+        continue;
+      }
+      if (shapeElement.expr.kind === "literal") {
+        if (shapeElement.name.startsWith("@")) {
+          itemPairs.push(quoteIdent(shapeElement.name));
+          continue;
+        }
+        params.push(encodeParam(shapeElement.expr.value));
+        itemPairs.push("?");
+        continue;
+      }
+      if (shapeElement.expr.kind === "type_name") {
+        itemPairs.push(quoteIdent("type_name"));
+        continue;
+      }
+      itemPairs.push("json('[]')");
+      continue;
+    }
+    itemPairs.push("json('[]')");
+  }
+  void target;
+  return `COALESCE((SELECT json_group_array(json_object(${itemPairs.join(", ")})) FROM (${ordered})), '[]')`;
 };
 
 const compileShapeObjectExpr = (
@@ -392,7 +484,7 @@ const compileShapeObjectExpr = (
       continue;
     }
 
-    pairs.push(`json(${compileBacklinkArrayExpr(element, sourceAlias)})`);
+    pairs.push(`json(${compileBacklinkArrayExpr(element, sourceAlias, params, target)})`);
   }
 
   return `json_object(${pairs.join(", ")})`;

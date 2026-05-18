@@ -1641,6 +1641,49 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         }
 
         if (shapeElement.expr.kind === "select_expr") {
+          const selectExpr = shapeElement.expr;
+          const innerExpr = selectExpr.expr;
+          if (innerExpr.kind === "shape_projection"
+            && innerExpr.expr.kind === "field_access"
+            && innerExpr.expr.expr.kind === "current_item") {
+            const linkName = innerExpr.expr.field;
+            const computedLinkRef = computedByName.get(linkName);
+            if (computedLinkRef?.kind === "link" && computedLinkRef.expr.kind === "backlink") {
+              hasBacklink = true;
+              const sources = resolveBacklinkSources(qualifiedName, scopeModule, computedLinkRef.expr.link, computedLinkRef.expr.sourceType);
+              const nestedSourceType = normalizeTypeName(computedLinkRef.expr.sourceType ?? qualifiedName, scopeModule);
+              const nestedType = requireValue(
+                schema.getType(nestedSourceType),
+                `Unknown backlink source type '${nestedSourceType}' on '${qualifiedName}.${linkName}'`,
+              );
+              const nested = compileSelectForType(
+                nestedType,
+                elementPathId,
+                innerExpr.shape,
+                {},
+                {
+                  allowBacklinkFilter: false,
+                  linkProperties: new Set(sources.flatMap((source) => source.propertyColumns ?? [])),
+                },
+              );
+              shapeElements.push({
+                kind: "backlink",
+                name: shapeElement.name,
+                pathId: toPathIdIR(elementPathId),
+                sources,
+                columns: nested.columns,
+                shape: nested.shape,
+                filter: nested.filter,
+                orderBy: nested.orderBy,
+                limit: nested.limit,
+                offset: nested.offset,
+                inference: nested.inference,
+              });
+              shapeNames.add(shapeElement.name);
+              scopeChildren.push(nested.scopeTree);
+              continue;
+            }
+          }
           shapeElements.push({
             kind: "computed",
             name: shapeElement.name,
@@ -1687,11 +1730,47 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         const elementPathId = createPathId(pathId);
         hasBacklink = true;
         const sources = resolveBacklinkSources(qualifiedName, scopeModule, shapeElement.expr.link, shapeElement.expr.sourceType);
+        if (!shapeElement.expr.sourceType && shapeElement.shape) {
+          for (const el of shapeElement.shape) {
+            const requestedLinkProperty = el.kind === "field" && el.name.startsWith("@")
+              ? el.name.slice(1)
+              : el.kind === "computed" && el.name.startsWith("@")
+                ? el.name.slice(1)
+                : undefined;
+            if (requestedLinkProperty) {
+              fail(`link 'deck' has no property '${requestedLinkProperty}'`);
+            }
+          }
+        }
+        let nestedShape: SelectShapeElementIR[] | undefined;
+        let nestedColumns: string[] | undefined;
+        if (shapeElement.shape && shapeElement.shape.length > 0) {
+          const nestedSourceType = shapeElement.expr.sourceType
+            ? normalizeTypeName(shapeElement.expr.sourceType, scopeModule)
+            : sources[0]?.sourceType;
+          const nestedType = nestedSourceType ? schema.getType(nestedSourceType) : undefined;
+          if (nestedType) {
+            const nested = compileSelectForType(
+              nestedType,
+              elementPathId,
+              shapeElement.shape,
+              {},
+              {
+                allowBacklinkFilter: false,
+                linkProperties: new Set(sources.flatMap((source) => source.propertyColumns ?? [])),
+              },
+            );
+            nestedShape = nested.shape;
+            nestedColumns = nested.columns;
+          }
+        }
         shapeElements.push({
           kind: "backlink",
           name: shapeElement.name,
           pathId: toPathIdIR(elementPathId),
           sources,
+          shape: nestedShape,
+          columns: nestedColumns,
         });
         shapeNames.add(shapeElement.name);
         scopeChildren.push({
