@@ -1,4 +1,5 @@
 import { AppError } from "../errors.js";
+import type { FreeObjectExpr } from "../edgeql/ast.js";
 import type { FilterExprIR, IRStatement, LinkRelationIR, PathIdIR, SelectFreeIR, SelectIR, SelectShapeElementIR } from "../ir/model.js";
 import type { RuntimeTarget } from "../runtime/target.js";
 import { canLowerStdlibFunctionSql, lowerStdlibFunctionSql } from "./stdlib_lowering.js";
@@ -267,6 +268,8 @@ const compileLinkArrayExpr = (
     if (element.orderBy.value !== "name" && element.columns.includes("name")) {
       inner += `, ${targetAlias}.${quoteIdent("name")} ASC`;
     }
+  } else if (element.relation.storage === "table" && junctionAlias) {
+    inner += ` ORDER BY ${junctionAlias}.rowid ASC`;
   }
 
   if (element.limit !== undefined) {
@@ -409,6 +412,123 @@ const compileBacklinkArrayExpr = (
   return `COALESCE((SELECT json_group_array(json_object(${itemPairs.join(", ")})) FROM (${ordered})), '[]')`;
 };
 
+type FreePathTail = { fields: string[]; linkProperty?: string };
+
+const extractFreePathTail = (expr: FreeObjectExpr): FreePathTail | null => {
+  const fields: string[] = [];
+  let linkProperty: string | undefined;
+  let cursor: FreeObjectExpr = expr;
+  while (cursor.kind === "field_access") {
+    const field = cursor.field;
+    if (field.startsWith("@")) {
+      if (linkProperty !== undefined || fields.length > 0) return null;
+      linkProperty = field.slice(1);
+    } else {
+      fields.unshift(field);
+    }
+    cursor = cursor.expr;
+  }
+  if (cursor.kind === "select_expr_subquery") {
+    cursor = cursor.expr;
+  }
+  if (cursor.kind !== "select") return null;
+  return { fields, linkProperty };
+};
+
+const operatorToSqlInfix = (op: string): string | null => {
+  if (op === "=" || op === "!=" || op === ">" || op === "<" || op === ">=" || op === "<=") {
+    return op === "!=" ? "<>" : op;
+  }
+  return null;
+};
+
+const compileShapeComputedFreeExprSQL = (
+  expr: FreeObjectExpr,
+  sourceAlias: string,
+  linkPropertyAlias: string | undefined,
+  params: ScalarValue[],
+): string | null => {
+  const compile = (node: FreeObjectExpr): string | null => {
+    if (node.kind === "literal") {
+      params.push(encodeParam(node.value));
+      return "?";
+    }
+    if (node.kind === "field_access") {
+      const tail = extractFreePathTail(node);
+      if (!tail) return null;
+      if (tail.linkProperty !== undefined) {
+        if (!linkPropertyAlias) return null;
+        return `${linkPropertyAlias}.${quoteIdent(tail.linkProperty)}`;
+      }
+      if (tail.fields.length === 0) return null;
+      const last = tail.fields[tail.fields.length - 1];
+      return `${sourceAlias}.${quoteIdent(last)}`;
+    }
+    if (node.kind === "compare") {
+      const left = compile(node.left);
+      const right = compile(node.right);
+      const op = operatorToSqlInfix(node.op);
+      if (!left || !right || !op) return null;
+      return `(${left} ${op} ${right})`;
+    }
+    if (node.kind === "logical") {
+      const left = compile(node.left);
+      const right = compile(node.right);
+      if (!left || !right) return null;
+      return `(${left} ${node.op === "and" ? "AND" : "OR"} ${right})`;
+    }
+    if (node.kind === "and") {
+      const left = compile(node.left);
+      const right = compile(node.right);
+      if (!left || !right) return null;
+      return `(${left} AND ${right})`;
+    }
+    if (node.kind === "or") {
+      const left = compile(node.left);
+      const right = compile(node.right);
+      if (!left || !right) return null;
+      return `(${left} OR ${right})`;
+    }
+    if (node.kind === "not") {
+      const inner = compile(node.expr);
+      if (!inner) return null;
+      return `(NOT ${inner})`;
+    }
+    if (node.kind === "unary") {
+      const inner = compile(node.expr);
+      if (!inner) return null;
+      if (node.op === "not") return `(NOT ${inner})`;
+      if (node.op === "neg") return `(-${inner})`;
+      return null;
+    }
+    if (node.kind === "math") {
+      const left = compile(node.left);
+      const right = compile(node.right);
+      if (!left || !right) return null;
+      return `(${left} ${node.op} ${right})`;
+    }
+    if (node.kind === "if_else") {
+      const cond = compile(node.condition);
+      const then = compile(node.thenExpr);
+      const other = compile(node.elseExpr);
+      if (!cond || !then || !other) return null;
+      return `(CASE WHEN ${cond} THEN ${then} ELSE ${other} END)`;
+    }
+    if (node.kind === "cast") {
+      return compile(node.expr);
+    }
+    return null;
+  };
+
+  const checkpoint = params.length;
+  const result = compile(expr);
+  if (!result) {
+    params.length = checkpoint;
+    return null;
+  }
+  return `json(CASE WHEN ${result} THEN 'true' ELSE 'false' END)`;
+};
+
 const compileShapeObjectExpr = (
   shape: SelectShapeElementIR[],
   sourceAlias: string,
@@ -467,6 +587,16 @@ const compileShapeObjectExpr = (
         pairs.push(lowered ?? "json('[]')");
       } else if (element.expr.kind === "link_aggregate") {
         pairs.push(compileLinkAggregateExpr(element.expr, sourceAlias));
+      } else if (element.expr.kind === "select_expr") {
+        process.stderr.write(`compileShapeObjectExpr select_expr hit for ${element.name}\n`);
+        const lowered = compileShapeComputedFreeExprSQL(
+          element.expr.expr,
+          sourceAlias,
+          linkPropertyAlias,
+          params,
+        );
+        process.stderr.write(`lowered = ${lowered ?? "null"}\n`);
+        pairs.push(lowered ?? "json('[]')");
       } else {
         pairs.push("json('[]')");
       }

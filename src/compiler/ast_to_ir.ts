@@ -379,6 +379,39 @@ const extendPathSetDirectional = (source: Set, ptrref: PointerRef, direction: "o
   };
 };
 
+const containsSubSelect = (expr: FreeObjectExpr): boolean => {
+  if (!expr || typeof expr !== "object") return false;
+  if (expr.kind === "select_expr_subquery" || expr.kind === "subquery_expr") return true;
+  if (expr.kind === "field_access") return containsSubSelect(expr.expr);
+  if (expr.kind === "cast") return containsSubSelect(expr.expr);
+  if (expr.kind === "exists" || expr.kind === "not") return containsSubSelect((expr as { expr: FreeObjectExpr }).expr);
+  if (expr.kind === "index_access") return containsSubSelect(expr.expr);
+  return false;
+};
+
+const shapeRequestsLinkProperty = (shape: EdgeQLShapeElement[]): boolean => {
+  for (const el of shape) {
+    if (el.kind === "field" && el.name.startsWith("@")) return true;
+    if (el.kind === "computed") {
+      if (el.name.startsWith("@")) return true;
+      if (el.expr.kind === "field_ref" && el.expr.field.startsWith("@")) return true;
+    }
+  }
+  return false;
+};
+
+const validateShapeProjectionLinkPropContext = (expr: Extract<FreeObjectExpr, { kind: "shape_projection" }>): void => {
+  if (!shapeRequestsLinkProperty(expr.shape)) return;
+  if (containsSubSelect(expr.expr)) {
+    throw new AppError(
+      "E_SEMANTIC",
+      "implicit reference to an object changes the interpretation of it elsewhere in the query",
+      1,
+      1,
+    );
+  }
+};
+
 const resolvePointerRef = (ctx: IRCompileContext, source: TypeRef, field: string): PointerRef | undefined => {
   const sourceType = getResolvedSchemaType(ctx, source.id);
   if (sourceType) {
@@ -1232,6 +1265,7 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr, ctx: IRCompileContext): Set
     }
 
     case "shape_projection": {
+      validateShapeProjectionLinkPropContext(expr);
       const base = compileFreeObjectExpr(expr.expr, ctx);
       const projectedShape = compileShape(base, expr.shape, ctx);
       return {
