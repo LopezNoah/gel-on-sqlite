@@ -308,6 +308,18 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
                 value: member.expr.value,
               },
             });
+          } else if (member.expr.kind === "set_literal") {
+            computeds.push({
+              kind: "property",
+              name: member.name,
+              required: member.required,
+              multi: member.multi,
+              annotations: member.annotations.length ? [...member.annotations] : undefined,
+              expr: {
+                kind: "set_literal",
+                values: [...member.expr.values],
+              },
+            });
           } else if (member.expr.kind === "concat") {
             computeds.push({
               kind: "property",
@@ -1028,6 +1040,10 @@ const renderComputedExpr = (expr: Extract<TypeMember, { kind: "computed" }>['exp
 
   if (expr.kind === "literal") {
     return renderScalarLiteral(expr.value);
+  }
+
+  if (expr.kind === "set_literal") {
+    return `{${expr.values.map((value) => renderScalarLiteral(value)).join(", ")}}`;
   }
 
   if (expr.kind === "concat") {

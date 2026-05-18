@@ -22,6 +22,7 @@ import type {
   ShapeElement,
   Statement,
   TransactionStatement,
+  TypeExpr,
   UpdateStatement,
   WithBinding,
   WithBindingValue,
@@ -29,6 +30,7 @@ import type {
   PathStep,
   ShapeElementModifiers,
 } from "./ast.js";
+import { simpleTypeName } from "./ast.js";
 import type { Token } from "./tokenizer.js";
 import { tokenize } from "./tokenizer.js";
 
@@ -124,6 +126,7 @@ class Parser {
   private isNameToken(token: Token): boolean {
     return token.kind === "identifier"
       || token.kind === "backtick_name"
+      || token.kind === "kw_object"
       || token.kind === "kw_named"
       || token.kind === "kw_unreserved"
       || token.kind === "kw_partial_reserved"
@@ -132,13 +135,17 @@ class Parser {
       || token.kind.startsWith("kw_current_reserved_");
   }
 
+  private nameTokenLexeme(token: Token): string {
+    return token.kind === "kw_object" ? "Object" : token.lexeme;
+  }
+
   private expectName(message: string): Token {
     const token = this.peek();
     if (!this.isNameToken(token)) {
       throw new AppError("E_SYNTAX", message, token.line, token.column);
     }
     this.index += 1;
-    return token;
+    return { ...token, lexeme: this.nameTokenLexeme(token) };
   }
 
   private atParenthesizedSelect(): boolean {
@@ -633,19 +640,7 @@ class Parser {
     }
 
     if (this.isNameToken(this.peek()) && this.peekNext().kind === "lbracket") {
-      const lbracketToken = this.peekNext();
-      this.consume();
-      this.consume();
-      if (this.peek().kind === "kw_is") {
-        this.consume();
-        this.parseQualifiedName("Expected type name in type filter");
-        this.expect("rbracket", "Expected ']' after type filter");
-        if (this.peek().kind === "dot") {
-          const dotToken = this.peek();
-          throw new AppError("E_SYNTAX", "an enum member name must follow enum type name in the path", dotToken.line, dotToken.column);
-        }
-      }
-      throw new AppError("E_SYNTAX", "Unexpected tokens after statement", lbracketToken.line, lbracketToken.column);
+      return this.parseSelectExprTail(start, ctx, this.parseFreeObjectExpr(), expectEof);
     }
 
     if (this.atQualifiedIdentifier()) {
@@ -1055,6 +1050,15 @@ class Parser {
       return { kind: "set_expr", values };
     }
 
+    if (this.peek().kind === "lbracket" && this.peekNth(1).kind === "kw_is") {
+      const typeExpr = this.parseTypeFilter("polymorphic type intersection");
+      return {
+        kind: "path_steps",
+        steps: [{ kind: "type_intersection", typeName: simpleTypeName(typeExpr) ?? "", typeExpr }],
+        partial: true,
+      };
+    }
+
     if (this.peek().kind === "lbracket") {
       this.consume();
       const values = this.parseDelimited("rbracket", () => this.parseFreeObjectExpr(), "Expected ',' in array literal");
@@ -1070,14 +1074,15 @@ class Parser {
           this.consume();
         }
         const link = this.expectName("Expected backlink name after '.<'").lexeme;
-        let sourceType: string | undefined;
+        let sourceTypeExpr: TypeExpr | undefined;
         if (this.peek().kind === "lbracket") {
-          sourceType = this.parseTypeFilter("backlink type filter");
+          sourceTypeExpr = this.parseTypeFilter("backlink type filter");
         }
         return {
           kind: "backlink_path",
           link,
-          sourceType,
+          sourceType: simpleTypeName(sourceTypeExpr),
+          sourceTypeExpr,
           optional: op === "optional_link",
         };
       }
@@ -1156,11 +1161,12 @@ class Parser {
     }
 
     if (this.isNameToken(this.peek())) {
-      const identifier = this.peek().lexeme;
+      const identifier = this.nameTokenLexeme(this.peek());
       if (this.localBindings.includes(identifier)) {
+        this.consume();
         return {
           kind: "binding_ref",
-          name: this.consume().lexeme,
+          name: identifier,
         };
       }
       if (this.atInlineTypedSelect()) {
@@ -1175,9 +1181,10 @@ class Parser {
           clauses: {},
         };
       }
+      this.consume();
       return {
         kind: "binding_ref",
-        name: this.consume().lexeme,
+        name: identifier,
       };
     }
 
@@ -1251,9 +1258,9 @@ class Parser {
             this.consume();
           }
           const link = this.expectName("Expected backlink name after '.<'").lexeme;
-          let sourceType: string | undefined;
+          let sourceTypeExpr: TypeExpr | undefined;
           if (this.peek().kind === "lbracket") {
-            sourceType = this.parseTypeFilter("backlink type filter");
+            sourceTypeExpr = this.parseTypeFilter("backlink type filter");
           }
           expr = {
             kind: "for_expr",
@@ -1262,7 +1269,8 @@ class Parser {
             body: {
               kind: "backlink_path",
               link,
-              sourceType,
+              sourceType: simpleTypeName(sourceTypeExpr),
+              sourceTypeExpr,
               optional: op === "optional_link",
             },
           };
@@ -1275,12 +1283,19 @@ class Parser {
           };
         } else {
           const field = this.expectName("Expected field name after '.'").lexeme;
-          expr = {
-            kind: "field_access",
-            expr,
-            field,
-            optional: op === "optional_link",
-          };
+          if (expr.kind === "path_steps") {
+            expr = {
+              kind: "path_steps",
+              steps: [...expr.steps, { kind: "ptr", name: field, direction: "outbound", optional: op === "optional_link" }],
+            };
+          } else {
+            expr = {
+              kind: "field_access",
+              expr,
+              field,
+              optional: op === "optional_link",
+            };
+          }
         }
         continue;
       }
@@ -1300,19 +1315,26 @@ class Parser {
         this.consume();
         if (this.peek().kind === "kw_is") {
           this.consume();
-          const typeName = this.parseQualifiedName("Expected type name after '[is'");
+          const typeExpr = this.parseTypeExpr("type intersection");
           this.expect("rbracket", "Expected ']' after type intersection");
+          const typeName = simpleTypeName(typeExpr) ?? "";
+          const baseHeadName = this.headNameOfExpr(expr);
+          if (baseHeadName && this.isEnumLikeName(baseHeadName) && this.peek().kind === "dot") {
+            const dotToken = this.peek();
+            throw new AppError("E_SYNTAX", "an enum member name must follow enum type name in the path", dotToken.line, dotToken.column);
+          }
           const steps = this.exprToPathSteps(expr);
           if (steps) {
             expr = {
               kind: "path_steps",
-              steps: [...steps, { kind: "type_intersection", typeName }],
+              steps: [...steps, { kind: "type_intersection", typeName, typeExpr }],
             };
           } else {
             expr = {
               kind: "is_type",
               expr,
               typeName,
+              typeExpr,
             };
           }
           continue;
@@ -1398,9 +1420,9 @@ class Parser {
             this.consume();
           }
           const link = this.expectName("Expected backlink name after '.<'").lexeme;
-          let sourceType: string | undefined;
+          let sourceTypeExpr: TypeExpr | undefined;
           if (this.peek().kind === "lbracket") {
-            sourceType = this.parseTypeFilter("backlink type filter");
+            sourceTypeExpr = this.parseTypeFilter("backlink type filter");
           }
           expr = {
             kind: "for_expr",
@@ -1409,7 +1431,8 @@ class Parser {
             body: {
               kind: "backlink_path",
               link,
-              sourceType,
+              sourceType: simpleTypeName(sourceTypeExpr),
+              sourceTypeExpr,
               optional: op === "optional_link",
             },
           };
@@ -1524,11 +1547,12 @@ class Parser {
         }
 
         this.consume();
-        const typeName = this.parseQualifiedName("Expected type name after 'is'");
+        const typeExpr = this.parseTypeExpr("type expression after 'is'");
         left = {
           kind: "is_type",
           expr: left,
-          typeName,
+          typeName: simpleTypeName(typeExpr) ?? "",
+          typeExpr,
         };
         continue;
       }
@@ -1703,7 +1727,7 @@ class Parser {
 
     if (this.peek().kind === "lbracket") {
       const splat = this.attempt(() => {
-        const sourceType = this.parseTypeFilter("splat type intersection");
+        const sourceTypeExpr = this.parseTypeFilter("splat type intersection");
         this.expect("dot", "Expected '.' after type intersection in splat expression");
         if (this.peek().kind !== "star") {
           return undefined;
@@ -1713,7 +1737,8 @@ class Parser {
         return {
           kind: "splat" as const,
           depth,
-          sourceType,
+          sourceType: simpleTypeName(sourceTypeExpr),
+          sourceTypeExpr,
           intersection: true,
           operation: "assign" as const,
           origin: "explicit" as const,
@@ -1732,7 +1757,7 @@ class Parser {
       this.consume();
     }
 
-    let leadingTypeFilter: string | undefined;
+    let leadingTypeFilter: TypeExpr | undefined;
     if (this.peek().kind === "lbracket" && this.peekNth(1).kind === "kw_is") {
       leadingTypeFilter = this.parseTypeFilter("shape type filter");
       this.expect("dot", "Expected '.' after shape type filter");
@@ -1755,7 +1780,7 @@ class Parser {
       };
     }
 
-    let typeFilter: string | undefined;
+    let typeFilter: TypeExpr | undefined;
     if (this.peek().kind === "lbracket") {
       typeFilter = this.parseTypeFilter("shape type filter");
     }
@@ -1782,7 +1807,8 @@ class Parser {
       return {
         kind: "link",
         name,
-        typeFilter,
+        typeFilter: simpleTypeName(typeFilter),
+        typeFilterExpr: typeFilter,
         shape,
         clauses,
         operation: "assign",
@@ -1794,6 +1820,30 @@ class Parser {
     }
 
     if (typeFilter) {
+      if (leadingTypeFilter && !hasLinkShapeColon) {
+        const opTokenPoly = this.peek();
+        const hasAssignmentPoly = opTokenPoly.kind === "assign"
+          || opTokenPoly.kind === "add_assign"
+          || opTokenPoly.kind === "sub_assign";
+        if (!hasAssignmentPoly) {
+          const modifiers = this.clauseChainToShapeModifiers(this.parseClauseChain());
+          return {
+            kind: "computed",
+            name,
+            expr: {
+              kind: "polymorphic_field_ref",
+              sourceType: simpleTypeName(typeFilter) ?? "",
+              sourceTypeExpr: typeFilter,
+              field: name,
+            },
+            operation: "assign",
+            origin: "explicit",
+            required,
+            cardinality,
+            ...modifiers,
+          };
+        }
+      }
       const token = this.peek();
       throw new AppError(
         "E_SYNTAX",
@@ -1997,13 +2047,22 @@ class Parser {
       };
     }
 
-    const sourceType = this.parseTypeFilter("polymorphic field reference");
-    this.expect("dot", "Expected '.' after polymorphic type filter");
-    return {
-      kind: "polymorphic_field_ref",
-      sourceType,
-      field: this.expectName("Expected field name after polymorphic type filter").lexeme,
-    };
+    return this.attempt(() => {
+      const sourceTypeExpr = this.parseTypeFilter("polymorphic field reference");
+      this.expect("dot", "Expected '.' after polymorphic type filter");
+      const field = this.expectName("Expected field name after polymorphic type filter").lexeme;
+      // Defer chained access (e.g. `[is T].link.name`) to the general expression
+      // path so postfix chaining can build a full path_steps.
+      if (this.peek().kind === "dot") {
+        return undefined;
+      }
+      return {
+        kind: "polymorphic_field_ref" as const,
+        sourceType: simpleTypeName(sourceTypeExpr) ?? "",
+        sourceTypeExpr,
+        field,
+      };
+    });
   }
 
   private parseComputedDotRefExpr(): ComputedExpr | BacklinkExpr | undefined {
@@ -2019,14 +2078,15 @@ class Parser {
       }
       const link = this.expectName("Expected backlink name after '.<'").lexeme;
 
-      let sourceType: string | undefined;
+      let sourceTypeExpr: TypeExpr | undefined;
       if (this.peek().kind === "lbracket") {
-        sourceType = this.parseTypeFilter("backlink type filter");
+        sourceTypeExpr = this.parseTypeFilter("backlink type filter");
       }
 
       return {
         link,
-        sourceType,
+        sourceType: simpleTypeName(sourceTypeExpr),
+        sourceTypeExpr,
       };
     }
 
@@ -2920,7 +2980,14 @@ class Parser {
 
   private parseDelete(ctx: ParseContext = {}): DeleteStatement {
     const start = this.expect("kw_delete", "Expected 'delete'");
-    const typeName = this.parseQualifiedName("Expected type name");
+    let target: FreeObjectExpr | undefined;
+    let typeName: string;
+    if (this.isNameToken(this.peek()) && this.peekNext().kind === "lbracket") {
+      target = this.parseFreeObjectExpr();
+      typeName = this.deleteTargetRootTypeName(target);
+    } else {
+      typeName = this.parseQualifiedName("Expected type name");
+    }
 
     let filter: DeleteStatement["filter"];
     if (this.peek().kind === "kw_filter") {
@@ -2937,12 +3004,28 @@ class Parser {
       ...this.withContext(ctx),
       kind: "delete",
       typeName,
+      target,
       filter,
       pos: {
         line: start.line,
         column: start.column,
       },
     };
+  }
+
+  private deleteTargetRootTypeName(target: FreeObjectExpr): string {
+    if (target.kind === "path_steps") {
+      const first = target.steps[0];
+      if (first?.kind === "object_ref") {
+        return first.name;
+      }
+    }
+    if (target.kind === "select") {
+      return target.typeName;
+    }
+
+    const token = this.peek();
+    throw new AppError("E_SYNTAX", "Expected type name in delete target", token.line, token.column);
   }
 
   private parseFilter(): FilterExpr {
@@ -3199,7 +3282,7 @@ class Parser {
     };
   }
 
-  private parseBacklinkReference(context: string): { link: string; sourceType?: string } {
+  private parseBacklinkReference(context: string): { link: string; sourceType?: string; sourceTypeExpr?: TypeExpr } {
     if (this.peek().kind === "backward_link") {
       this.consume();
     } else {
@@ -3207,11 +3290,11 @@ class Parser {
       this.consume();
     }
     const link = this.expectName(`Expected backlink name after '.<' in ${context}`).lexeme;
-    let sourceType: string | undefined;
+    let sourceTypeExpr: TypeExpr | undefined;
     if (this.peek().kind === "lbracket") {
-      sourceType = this.parseTypeFilter("backlink type filter");
+      sourceTypeExpr = this.parseTypeFilter("backlink type filter");
     }
-    return { link, sourceType };
+    return { link, sourceType: simpleTypeName(sourceTypeExpr), sourceTypeExpr };
   }
 
   private parseBacklinkPropertyReference(context: string): { kind: "backlink_property_ref"; link: string; sourceType?: string; property: string } {
@@ -3506,11 +3589,11 @@ class Parser {
           this.consume();
         }
         const link = this.expectName("Expected backlink name after '.<' in with binding").lexeme;
-        let sourceType: string | undefined;
+        let sourceTypeExpr: TypeExpr | undefined;
         if (this.peek().kind === "lbracket") {
-          sourceType = this.parseTypeFilter("backlink type filter");
+          sourceTypeExpr = this.parseTypeFilter("backlink type filter");
         }
-        return { kind: "backlink_path", head: name, link, sourceType };
+        return { kind: "backlink_path", head: name, link, sourceType: simpleTypeName(sourceTypeExpr), sourceTypeExpr };
       }
 
       if (this.peekNext().kind === "dot") {
@@ -3636,12 +3719,46 @@ class Parser {
     }
   }
 
-  private parseTypeFilter(context: string): string {
+  private parseTypeFilter(context: string): TypeExpr {
     this.expect("lbracket", `Expected '[' for ${context}`);
     this.expect("kw_is", `Expected 'is' in ${context}`);
-    const sourceType = this.parseQualifiedName(`Expected type name in ${context}`);
+    const expr = this.parseTypeExpr(context);
     this.expect("rbracket", `Expected ']' after ${context}`);
-    return sourceType;
+    return expr;
+  }
+
+  // type_expr := type_intersect_expr ('|' type_intersect_expr)*
+  // type_intersect_expr := type_atom ('&' type_atom)*
+  // type_atom := qualified_name | '(' type_expr ')'
+  private parseTypeExpr(context: string): TypeExpr {
+    let left = this.parseTypeIntersectExpr(context);
+    while (this.peek().kind === "pipe") {
+      this.consume();
+      const right = this.parseTypeIntersectExpr(context);
+      left = { kind: "type_union", left, right };
+    }
+    return left;
+  }
+
+  private parseTypeIntersectExpr(context: string): TypeExpr {
+    let left = this.parseTypeAtom(context);
+    while (this.peek().kind === "ampersand") {
+      this.consume();
+      const right = this.parseTypeAtom(context);
+      left = { kind: "type_intersection", left, right };
+    }
+    return left;
+  }
+
+  private parseTypeAtom(context: string): TypeExpr {
+    if (this.peek().kind === "lparen") {
+      this.consume();
+      const expr = this.parseTypeExpr(context);
+      this.expect("rparen", `Expected ')' in ${context}`);
+      return expr;
+    }
+    const name = this.parseQualifiedName(`Expected type name in ${context}`);
+    return { kind: "type_name", name };
   }
 
   private parseSplatDepth(): 1 | 2 {
@@ -3716,6 +3833,23 @@ class Parser {
     return steps;
   }
 
+  private headNameOfExpr(expr: FreeObjectExpr): string | undefined {
+    if (expr.kind === "binding_ref") {
+      return expr.name;
+    }
+    if (expr.kind === "path") {
+      return expr.head;
+    }
+    if (expr.kind === "path_chain") {
+      return expr.parts[0];
+    }
+    if (expr.kind === "path_steps") {
+      const first = expr.steps[0];
+      return first && first.kind === "object_ref" ? first.name : undefined;
+    }
+    return undefined;
+  }
+
   private exprToPathSteps(expr: FreeObjectExpr): PathStep[] | undefined {
     if (expr.kind === "path_steps") {
       return [...expr.steps];
@@ -3728,6 +3862,9 @@ class Parser {
     }
     if (expr.kind === "binding_ref") {
       return [{ kind: "object_ref", name: expr.name }];
+    }
+    if (expr.kind === "select") {
+      return [{ kind: "object_ref", name: expr.typeName }];
     }
     if (expr.kind === "field_access") {
       const base = this.exprToPathSteps(expr.expr);

@@ -33,6 +33,7 @@ import type {
 import { validateMetadata } from "./gel_metadata_schemas.js";
 import { buildAnnotationsBySubject, insertAnnotationRecord, resolveAnnotations } from "./annos.js";
 import type { AnnotationRow } from "./annos.js";
+import { parseComputedSetLiteralExpr } from "./computed_expr.js";
 
 export const ensureGelSchemaTables = (db: SQLiteDatabase): void => {
   for (const ddl of GEL_SCHEMA_DDL) {
@@ -1097,10 +1098,17 @@ const deserializeFunctionDef = (serialized: SerializedFunctionDef): FunctionDef 
 const serializeComputedExpr = (expr: ComputedDef["expr"]): string => {
   if (expr.kind === "field_ref") return `.${expr.field}`;
   if (expr.kind === "literal") return String(expr.value);
+  if (expr.kind === "set_literal") return `{${expr.values.map(serializeScalarSetValue).join(", ")}}`;
   if (expr.kind === "concat") return expr.parts.map(serializeComputedExprPart).join(" ++ ");
   if (expr.kind === "function_call") return `${expr.name}(${expr.args.map((a) => JSON.stringify(a)).join(", ")})`;
   if (expr.kind === "link_aggregate") return `${expr.functionName}(.${expr.link}.${expr.field})`;
   return "";
+};
+
+const serializeScalarSetValue = (value: ScalarValue): string => {
+  if (typeof value === "string") return JSON.stringify(value);
+  if (value === null) return "null";
+  return String(value);
 };
 
 const serializeComputedExprPart = (part: { kind: string; field?: string; value?: unknown }): string => {
@@ -1118,7 +1126,7 @@ const serializeRewriteExpr = (expr: NonNullable<MutationRewriteDef["onInsert"]>)
   return "";
 };
 
-const parseComputedPropertyExpr = (exprStr: string): { kind: "field_ref"; field: string } | { kind: "literal"; value: ScalarValue } | { kind: "concat"; parts: ComputedValuePart[] } | { kind: "function_call"; name: string; args: ScalarValue[] } | { kind: "link_aggregate"; functionName: "sum"; link: string; field: string } => {
+const parseComputedPropertyExpr = (exprStr: string): Extract<ComputedDef, { kind: "property" }>["expr"] => {
   const aggregateMatch = exprStr.match(/^\s*sum\(\.([A-Za-z_][\w]*)\.([A-Za-z_][\w]*)\)\s*$/i);
   if (aggregateMatch) {
     return {
@@ -1127,6 +1135,11 @@ const parseComputedPropertyExpr = (exprStr: string): { kind: "field_ref"; field:
       link: aggregateMatch[1],
       field: aggregateMatch[2],
     };
+  }
+
+  const setLiteral = parseComputedSetLiteralExpr(exprStr);
+  if (setLiteral) {
+    return setLiteral;
   }
 
   if (exprStr.startsWith(".")) {

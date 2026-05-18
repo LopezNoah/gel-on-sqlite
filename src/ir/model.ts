@@ -1,4 +1,4 @@
-import type { FreeObjectExpr, WithBinding } from "../edgeql/ast.js";
+import type { FreeObjectExpr, PathStep, WithBinding } from "../edgeql/ast.js";
 import type { ComputedLinkPropertyDef, ScalarValue } from "../types.js";
 
 /* ---------------------------------- */
@@ -283,9 +283,11 @@ export type SelectShapeExprIR =
   | FieldRefIR
   | BindingRefIR
   | LiteralIR
+  | SetLiteralIR
   | {
       kind: "polymorphic_field_ref";
       sourceType: string;
+      concreteSourceTypes?: string[];
       column: string;
     }
   | {
@@ -533,6 +535,10 @@ export type SelectExprIREntry<D extends Depth = 4> =
       kind: "backlink_path";
       link: string;
       sourceType?: string;
+    }
+  | {
+      kind: "path_steps";
+      steps: PathStep[];
     }
   | (D extends 0
       ? never

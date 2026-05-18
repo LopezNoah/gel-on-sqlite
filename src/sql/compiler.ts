@@ -169,10 +169,17 @@ const compileSelectToSQL = (ir: SelectIR, target: RuntimeTarget): SQLArtifact =>
   const filterColumns = collectFieldFilterColumns(ir.filter);
   const unionColumns = [...new Set(["id", ...ir.columns, ...filterColumns, ...(ir.orderBy ? [ir.orderBy.value] : [])])]
     .filter((column) => column !== "__source_type");
-  const sourceSelects = sources.map(
-    (source) =>
-      `SELECT ${quoteLiteral(source.name)} AS ${quoteIdent("__source_type")}, ${unionColumns.map((column) => `${quoteIdent(column)} AS ${quoteIdent(column)}`).join(", ")} FROM ${quoteIdent(source.table)}`,
-  );
+  const sourceSelects = sources.map((source) => {
+    const available = source.columns && source.columns.length > 0 ? new Set(source.columns) : undefined;
+    const projection = unionColumns
+      .map((column) => (
+        !available || available.has(column)
+          ? `${quoteIdent(column)} AS ${quoteIdent(column)}`
+          : `NULL AS ${quoteIdent(column)}`
+      ))
+      .join(", ");
+    return `SELECT ${quoteLiteral(source.name)} AS ${quoteIdent("__source_type")}, ${projection} FROM ${quoteIdent(source.table)}`;
+  });
 
   let sql = `SELECT ${projections.join(", ")} FROM (${sourceSelects.join(" UNION ALL ")}) ${rootAlias}`;
 
@@ -566,9 +573,19 @@ const compileShapeObjectExpr = (
 
         pairs.push("?");
         params.push(encodeParam(element.expr.value));
+      } else if (element.expr.kind === "set_literal") {
+        const placeholders = element.expr.values.map(() => "?");
+        params.push(...element.expr.values.map(encodeParam));
+        pairs.push(`json_array(${placeholders.join(", ")})`);
       } else if (element.expr.kind === "polymorphic_field_ref") {
+        const concretes = element.expr.concreteSourceTypes && element.expr.concreteSourceTypes.length > 0
+          ? element.expr.concreteSourceTypes
+          : [element.expr.sourceType];
+        const matchCondition = concretes.length === 1
+          ? `${sourceTypeExpr} = ${quoteLiteral(concretes[0])}`
+          : `${sourceTypeExpr} IN (${concretes.map(quoteLiteral).join(", ")})`;
         pairs.push(
-          `CASE WHEN ${sourceTypeExpr} = ${quoteLiteral(element.expr.sourceType)} THEN ${sourceAlias}.${quoteIdent(element.expr.column)} ELSE json('[]') END`,
+          `CASE WHEN ${matchCondition} THEN ${sourceAlias}.${quoteIdent(element.expr.column)} ELSE NULL END`,
         );
       } else if (element.expr.kind === "type_name") {
         pairs.push(sourceTypeExpr);
