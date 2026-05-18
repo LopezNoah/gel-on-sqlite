@@ -67,6 +67,7 @@ export interface OverlayIR {
 export interface OrderByIR<TValue = string> {
   value: TValue;
   direction: "asc" | "desc";
+  nullsPosition?: "first" | "last";
   then?: OrderByIR<TValue>;
 }
 
@@ -289,6 +290,10 @@ export type SelectShapeExprIR =
       sourceType: string;
       concreteSourceTypes?: string[];
       column: string;
+    }
+  | {
+      kind: "is_type";
+      concreteSourceTypes: string[];
     }
   | {
       kind: "type_name";
