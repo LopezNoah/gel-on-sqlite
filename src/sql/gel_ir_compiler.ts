@@ -1235,6 +1235,9 @@ const compileValueSetSQL = (
       const alias = linkPropertyAlias ?? sourceAlias;
       return `${alias}.${quoteIdent(col)}`;
     }
+    if (!pointer.ptrref.outTarget.isScalar) {
+      return null;
+    }
     return `${sourceAlias}.${quoteIdent(col)}`;
   }
 
@@ -1304,11 +1307,9 @@ const compileValueSetSQL = (
     const rightType = qualifyTypeName(typeCheck.right);
     const rightChildren = (typeCheck.right.children ?? []).map((child) => qualifyTypeName(child));
     const matches = leftType === rightType || rightChildren.includes(leftType);
-    if (typeCheck.op === "is") {
-      return matches ? "1" : "0";
-    }
-    if (typeCheck.op === "is not") {
-      return matches ? "0" : "1";
+    if (matches) {
+      if (typeCheck.op === "is") return "1";
+      if (typeCheck.op === "is not") return "0";
     }
     params.length = checkpoint;
     return null;

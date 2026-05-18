@@ -5425,6 +5425,7 @@ const evaluateSelectExprEntry = (
     case "field_access": {
       const value = evaluateSelectExprEntry(schema, db, context, entry.value, sqlTrail, evalContext);
       const readOne = (item: unknown): unknown => resolveFieldAccessValue(item, entry.field);
+      const isLinkPropertyField = entry.field.startsWith("@");
 
       if (Array.isArray(value)) {
         const out: unknown[] = [];
@@ -5456,7 +5457,25 @@ const evaluateSelectExprEntry = (
           out.push(candidate);
         };
 
-        for (const item of value) {
+        const sourceItems: unknown[] = isLinkPropertyField ? value : (() => {
+          const seenSourceIds = new Set<string>();
+          const filtered: unknown[] = [];
+          for (const item of value) {
+            if (item && typeof item === "object" && !Array.isArray(item)) {
+              const itemId = (item as Record<string, unknown>).id;
+              if (typeof itemId === "string") {
+                if (seenSourceIds.has(itemId)) {
+                  continue;
+                }
+                seenSourceIds.add(itemId);
+              }
+            }
+            filtered.push(item);
+          }
+          return filtered;
+        })();
+
+        for (const item of sourceItems) {
           const fieldValue = readOne(item);
           if (Array.isArray(fieldValue)) {
             for (const nested of fieldValue) {
