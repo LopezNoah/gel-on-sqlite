@@ -1016,10 +1016,20 @@ const tryRuntimeSelectExprEvaluation = (
         const alias = schema.getAlias(qualifiedRuntimeAliasName(expr.name));
         return Boolean(alias?.exprText && !alias.values && !alias.sourceType);
       }
-      case "function_call":
-        return Boolean(schema.findFunction(ast.withModule ?? "default", expr.call.name.split("::").at(-1) ?? expr.call.name, expr.call.args.length))
-          || ["array_unpack", "range_unpack", "range", "max", "assert_exists", "assert_single"].includes(expr.call.name.split("::").at(-1) ?? expr.call.name)
+      case "function_call": {
+        const shortName = expr.call.name.split("::").at(-1) ?? expr.call.name;
+        const argWrapsShapedSelect = expr.call.args.some((arg) => arg.kind === "expr"
+          && arg.expr.kind === "select_expr_subquery"
+          && arg.expr.expr.kind === "select"
+          && Array.isArray(arg.expr.expr.shape)
+          && arg.expr.expr.shape.length > 1);
+        if (argWrapsShapedSelect && (shortName === "assert_exists" || shortName === "assert_single" || shortName === "assert_distinct")) {
+          return false;
+        }
+        return Boolean(schema.findFunction(ast.withModule ?? "default", shortName, expr.call.args.length))
+          || ["array_unpack", "range_unpack", "range", "max", "assert_exists", "assert_single"].includes(shortName)
           || expr.call.args.some((arg) => arg.kind === "expr" ? needsRuntimeEval(arg.expr) : arg.kind === "function_call" ? needsRuntimeEval({ kind: "function_call", call: arg.call }) : arg.kind === "binding_ref" ? needsRuntimeEval({ kind: "binding_ref", name: arg.name }) : false);
+      }
       case "for_expr":
         return needsRuntimeEval(expr.iterator) || needsRuntimeEval(expr.body);
       case "field_access":
@@ -1835,6 +1845,31 @@ const tryEvaluateParsedRuntimeSelect = (
   if (!selectedAliasNeedsParsedRuntime && !shapeNeedsParsedRuntime(statement.shape) && !statement.with?.some((binding) => bindingNeedsParsedRuntime(binding.value))) {
     return undefined;
   }
+
+  const validateBacklinkLinkProperties = (shape: ShapeElement[]): void => {
+    for (const element of shape) {
+      if (element.kind === "backlink") {
+        if (!element.expr.sourceType && element.shape) {
+          for (const inner of element.shape) {
+            const requestedLinkProperty = inner.kind === "field" && inner.name.startsWith("@")
+              ? inner.name.slice(1)
+              : inner.kind === "computed" && inner.name.startsWith("@")
+                ? inner.name.slice(1)
+                : undefined;
+            if (requestedLinkProperty) {
+              throw new AppError("E_SEMANTIC", `link '${element.expr.link}' has no property '${requestedLinkProperty}'`, 1, 1);
+            }
+          }
+        }
+        if (element.shape) {
+          validateBacklinkLinkProperties(element.shape);
+        }
+      } else if (element.kind === "link") {
+        validateBacklinkLinkProperties(element.shape);
+      }
+    }
+  };
+  validateBacklinkLinkProperties(statement.shape);
 
   const concreteRowsForType = (typeName: string): ParsedRuntimeRow[] => {
     const qualified = qualifyType(typeName);

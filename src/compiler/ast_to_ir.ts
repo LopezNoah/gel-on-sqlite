@@ -1038,6 +1038,14 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr, ctx: IRCompileContext): Set
             };
             return extendPathSet(source, propertyPtrRef);
           }
+          if (linkDef) {
+            throw new AppError(
+              "E_SEMANTIC",
+              `link '${linkPointer.ptrref.shortName}' has no property '${propName}'`,
+              1,
+              1,
+            );
+          }
         }
       }
 
@@ -1602,6 +1610,10 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr, ctx: IRCompileContext): Set
         return resolved;
       }
       return literalToSet(null);
+    }
+
+    case "select_expr": {
+      return compileFreeObjectExpr(expr.expr, ctx);
     }
 
     default:
