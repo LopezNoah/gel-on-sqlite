@@ -5,6 +5,14 @@ export interface SourcePos {
   column: number;
 }
 
+export type TypeExpr =
+  | { kind: "type_name"; name: string }
+  | { kind: "type_union"; left: TypeExpr; right: TypeExpr }
+  | { kind: "type_intersection"; left: TypeExpr; right: TypeExpr };
+
+export const simpleTypeName = (expr: TypeExpr | undefined): string | undefined =>
+  expr && expr.kind === "type_name" ? expr.name : undefined;
+
 export type PathStep =
   | {
       kind: "object_ref";
@@ -15,17 +23,21 @@ export type PathStep =
       name: string;
       direction?: "outbound" | "inbound";
       typeFilter?: string;
+      typeFilterExpr?: TypeExpr;
       optional?: boolean;
     }
   | {
       kind: "type_intersection";
       typeName: string;
+      typeExpr?: TypeExpr;
     }
   | {
       kind: "splat";
       depth: 1 | 2;
       typeName?: string;
       intersectionTypeName?: string;
+      typeExpr?: TypeExpr;
+      intersectionTypeExpr?: TypeExpr;
     };
 
 export interface ShapeElementModifiers {
@@ -194,6 +206,7 @@ export type WithBindingValue =
       head: string;
       link: string;
       sourceType?: string;
+      sourceTypeExpr?: TypeExpr;
     };
 
 export interface WithModuleAlias {
@@ -235,6 +248,7 @@ export type ComputedExpr =
   | {
       kind: "polymorphic_field_ref";
       sourceType: string;
+      sourceTypeExpr?: TypeExpr;
       field: string;
     }
   | {
@@ -278,12 +292,14 @@ export type ComputedExpr =
   | {
       kind: "type_intersection";
       sourceType: string;
+      sourceTypeExpr?: TypeExpr;
       expr: FreeObjectExpr;
     };
 
 export interface BacklinkExpr {
   link: string;
   sourceType?: string;
+  sourceTypeExpr?: TypeExpr;
 }
 
 export type FunctionCallArgExpr =
@@ -329,6 +345,7 @@ export type ShapeElement =
       kind: "splat";
       depth: 1 | 2;
       sourceType?: string;
+      sourceTypeExpr?: TypeExpr;
       intersection?: boolean;
     } & ShapeElementModifiers)
   | ({
@@ -347,6 +364,7 @@ export type ShapeElement =
       kind: "link";
       name: string;
       typeFilter?: string;
+      typeFilterExpr?: TypeExpr;
       shape: ShapeElement[];
       clauses: ClauseChain;
     } & ShapeElementModifiers);
@@ -427,6 +445,7 @@ export type FreeObjectExpr =
       kind: "backlink_path";
       link: string;
       sourceType?: string;
+      sourceTypeExpr?: TypeExpr;
       optional?: boolean;
     }
   | {
@@ -527,6 +546,7 @@ export type FreeObjectExpr =
       kind: "is_type";
       expr: FreeObjectExpr;
       typeName: string;
+      typeExpr?: TypeExpr;
     }
   | {
       kind: "coalesce";
@@ -660,6 +680,7 @@ export interface DeleteStatement {
   withModule?: string;
   withModuleAliases?: WithModuleAlias[];
   typeName: string;
+  target?: FreeObjectExpr;
   filter?: FilterExpr;
   pos: SourcePos;
 }

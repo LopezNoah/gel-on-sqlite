@@ -11,6 +11,7 @@ import type {
   ScalarValue,
 } from "../types.js";
 import { normalizeAnnotationName } from "./annos.js";
+import { parseComputedSetLiteralExpr } from "./computed_expr.js";
 import type {
   AliasDeclaration,
   AbstractAnnotationDeclaration,
@@ -1228,6 +1229,11 @@ const parseComputedPropertyExpr = (text: string): Extract<ComputedDef, { kind: "
   const scalar = parseScalarLiteral(trimmed) ?? parseCastScalarLiteral(trimmed);
   if (scalar !== undefined) {
     return { kind: "literal", value: scalar };
+  }
+
+  const setLiteral = parseComputedSetLiteralExpr(trimmed);
+  if (setLiteral) {
+    return setLiteral;
   }
 
   const fieldMatch = /^\.([A-Za-z_][A-Za-z0-9_]*)$/.exec(trimmed);

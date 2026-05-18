@@ -2,7 +2,7 @@ import { getCompilerService, type CompilerCacheMeta } from "../compiler/service.
 import { AppError, asAppError } from "../errors.js";
 import { parseEdgeQL, parseEdgeQLScript, type ParseEdgeQLOptions } from "../edgeql/parser.js";
 import { tokenize, type Token } from "../edgeql/tokenizer.js";
-import type { ComputedExpr, FilterValue, ForStatement, FreeObjectExpr, FunctionCallArgExpr, InsertStatement, InsertValue, OrderExpr, SelectExprStatement, SelectStatement, ShapeElement, Statement, UpdateStatement, WithBinding, WithBindingValue } from "../edgeql/ast.js";
+import type { ComputedExpr, FilterValue, ForStatement, FreeObjectExpr, FunctionCallArgExpr, InsertStatement, InsertValue, OrderExpr, PathStep, SelectExprStatement, SelectStatement, ShapeElement, Statement, TypeExpr, UpdateStatement, WithBinding, WithBindingValue } from "../edgeql/ast.js";
 import type { RuntimeDatabaseAdapter } from "./adapter.js";
 import type { SchemaSnapshot } from "../schema/schema.js";
 import { compileToSQL, computedValueAlias, shapePayloadAlias, type SQLArtifact } from "../sql/compiler.js";
@@ -1384,6 +1384,9 @@ const tryRuntimeSelectExprEvaluation = (
             : undefined;
           if (computed?.kind === "property" && computed.expr.kind === "literal") {
             return computed.expr.value;
+          }
+          if (computed?.kind === "property" && computed.expr.kind === "set_literal") {
+            return [...computed.expr.values];
           }
           return null;
         };
@@ -3896,6 +3899,7 @@ export const executeQueryWithTrace = (
       const isShapeOrObject = firstEntry
         && (firstEntry.kind === "shape_projection"
           || firstEntry.kind === "select"
+          || firstEntry.kind === "path_steps"
           || firstEntry.kind === "field_access"
           || firstEntry.kind === "select_expr_subquery"
           || firstEntry.kind === "array_literal_expr");
@@ -4412,10 +4416,15 @@ const materializeSelectRow = (
         output[element.name] = materializeFieldValue(schema, sourceType, element.expr.column, row[element.expr.column]);
       } else if (element.expr.kind === "literal") {
         output[element.name] = element.expr.value;
+      } else if (element.expr.kind === "set_literal") {
+        output[element.name] = [...element.expr.values];
       } else if (element.expr.kind === "polymorphic_field_ref") {
-        output[element.name] = element.expr.sourceType === sourceType
+        const concretes = element.expr.concreteSourceTypes && element.expr.concreteSourceTypes.length > 0
+          ? element.expr.concreteSourceTypes
+          : [element.expr.sourceType];
+        output[element.name] = concretes.includes(sourceType)
           ? materializeFieldValue(schema, sourceType, element.expr.column, row[element.expr.column])
-          : [];
+          : null;
       } else if (element.expr.kind === "type_name") {
         output[element.name] = sourceType;
       } else if (element.expr.kind === "subquery") {
@@ -4931,6 +4940,9 @@ const evaluateSelectExprEntry = (
       if (computed.expr.kind === "literal") {
         return computed.expr.value;
       }
+      if (computed.expr.kind === "set_literal") {
+        return [...computed.expr.values];
+      }
       if (computed.expr.kind === "field_ref") {
         return sourceRow?.[computed.expr.field] ?? null;
       }
@@ -5092,6 +5104,109 @@ const evaluateSelectExprEntry = (
       }
     }
     return out;
+  };
+
+  const resolvePathStepTypeName = (name: string): string => {
+    const qualified = qualifyRuntimeTypeName(name);
+    if (schema.getType(qualified) || schema.listConcreteTypesAssignableTo(qualified).length > 0) {
+      return qualified;
+    }
+
+    const stdQualified = qualifyRuntimeTypeName(name, "std");
+    if (schema.getType(stdQualified) || schema.listConcreteTypesAssignableTo(stdQualified).length > 0) {
+      return stdQualified;
+    }
+
+    return qualified;
+  };
+
+  const rowMatchesTypeName = (sourceTypeName: string, targetName: string): boolean => {
+    const qualifiedTarget = resolvePathStepTypeName(targetName);
+    return sourceTypeName === qualifiedTarget
+      || schema.listConcreteTypesAssignableTo(qualifiedTarget).some((candidate) => qualifiedTypeName(candidate) === sourceTypeName);
+  };
+
+  const rowMatchesTypeExpr = (sourceTypeName: string, expr: TypeExpr): boolean => {
+    if (expr.kind === "type_name") {
+      return rowMatchesTypeName(sourceTypeName, expr.name);
+    }
+    if (expr.kind === "type_union") {
+      return rowMatchesTypeExpr(sourceTypeName, expr.left) || rowMatchesTypeExpr(sourceTypeName, expr.right);
+    }
+    return rowMatchesTypeExpr(sourceTypeName, expr.left) && rowMatchesTypeExpr(sourceTypeName, expr.right);
+  };
+
+  const readPathRootRows = (name: string): Array<Record<string, unknown> & { __source_type: string }> => {
+    const rootTypeName = resolvePathStepTypeName(name);
+    const rootType = schema.getType(rootTypeName);
+    const concreteTypes = schema.listConcreteTypesAssignableTo(rootTypeName);
+    const sourceTypes = concreteTypes.length > 0 ? concreteTypes : rootType ? [rootType] : [];
+    const rows: Array<Record<string, unknown> & { __source_type: string }> = [];
+
+    for (const sourceType of sourceTypes) {
+      const sourceTypeName = qualifiedTypeName(sourceType);
+      const table = tableNameForType(sourceTypeName);
+      const selected = db.prepare(`SELECT * FROM ${quoteIdent(table)}`).all() as Record<string, unknown>[];
+      rows.push(...selected.map((row) => ({ ...row, __source_type: sourceTypeName })));
+    }
+
+    return rows;
+  };
+
+  const evaluatePathSteps = (steps: PathStep[]): unknown => {
+    const first = steps[0];
+    if (!first || first.kind !== "object_ref") {
+      return [];
+    }
+
+    let value: unknown = readPathRootRows(first.name);
+    const rest = steps.slice(1);
+    for (let i = 0; i < rest.length; i += 1) {
+      const step = rest[i]!;
+      if (step.kind === "type_intersection") {
+        const expr = step.typeExpr ?? (step.typeName ? { kind: "type_name" as const, name: step.typeName } : undefined);
+        if (expr) {
+          const items = Array.isArray(value) ? value : [value];
+          value = items.filter((item) => item && typeof item === "object" && !Array.isArray(item)
+            && typeof (item as Record<string, unknown>).__source_type === "string"
+            && rowMatchesTypeExpr((item as Record<string, unknown>).__source_type as string, expr));
+        }
+        continue;
+      }
+
+      if (step.kind !== "ptr") {
+        continue;
+      }
+
+      const nextStep = rest[i + 1];
+      if (step.name === "__type__" && nextStep?.kind === "ptr" && nextStep.name === "name") {
+        const items = Array.isArray(value) ? value : [value];
+        value = items
+          .map((item) => item && typeof item === "object" && !Array.isArray(item)
+            ? (item as Record<string, unknown>).__source_type ?? null
+            : null)
+          .filter((item) => item !== null && item !== undefined);
+        i += 1;
+        continue;
+      }
+
+      if (Array.isArray(value)) {
+        const out: unknown[] = [];
+        for (const item of value) {
+          const fieldValue = resolveFieldAccessValue(item, step.name);
+          if (Array.isArray(fieldValue)) {
+            out.push(...fieldValue.filter((entry) => entry !== null && entry !== undefined));
+          } else if (fieldValue !== null && fieldValue !== undefined) {
+            out.push(fieldValue);
+          }
+        }
+        value = out;
+      } else {
+        value = resolveFieldAccessValue(value, step.name);
+      }
+    }
+
+    return value;
   };
 
   const isTupleLikeSelectExprEntry = (value: SelectExprIREntry): boolean => {
@@ -5422,6 +5537,9 @@ const evaluateSelectExprEntry = (
       }
       return out;
     }
+    case "path_steps": {
+      return evaluatePathSteps(entry.steps);
+    }
     case "field_access": {
       const value = evaluateSelectExprEntry(schema, db, context, entry.value, sqlTrail, evalContext);
       const readOne = (item: unknown): unknown => resolveFieldAccessValue(item, entry.field);
@@ -5495,6 +5613,7 @@ const evaluateSelectExprEntry = (
     }
     case "shape_projection": {
       const value = evaluateSelectExprEntry(schema, db, context, entry.value, sqlTrail, evalContext);
+      const childBinding = evalContext?.currentBinding ?? "__current__";
       const projectOne = (item: unknown): Record<string, unknown> | null => {
         if (!item || typeof item !== "object" || Array.isArray(item)) {
           return null;
@@ -5504,7 +5623,7 @@ const evaluateSelectExprEntry = (
         for (const field of entry.fields) {
           if (field.expr) {
             projected[field.name] = evaluateSelectExprEntry(schema, db, context, field.expr, sqlTrail, {
-              currentBinding: evalContext?.currentBinding,
+              currentBinding: childBinding,
               currentValue: row,
             });
             continue;
@@ -5522,7 +5641,7 @@ const evaluateSelectExprEntry = (
                 for (const itemField of field.itemFields ?? []) {
                   if (itemField.expr) {
                     const itemValue = evaluateSelectExprEntry(schema, db, context, itemField.expr, sqlTrail, {
-                      currentBinding: evalContext?.currentBinding,
+                      currentBinding: childBinding,
                       currentValue: childRow,
                     });
                     const childTypeName = typeof childRow.__source_type === "string"
@@ -5587,6 +5706,9 @@ const evaluateSelectExprEntry = (
 
         if (computed.expr.kind === "literal") {
           return computed.expr.value;
+        }
+        if (computed.expr.kind === "set_literal") {
+          return [...computed.expr.values];
         }
         if (computed.expr.kind === "field_ref") {
           const field = computed.expr.field;

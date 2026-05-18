@@ -183,6 +183,10 @@ export type ComputedDef = {
             value: ScalarValue;
           }
         | {
+            kind: "set_literal";
+            values: ScalarValue[];
+          }
+        | {
             kind: "concat";
             parts: ComputedValuePart[];
           }

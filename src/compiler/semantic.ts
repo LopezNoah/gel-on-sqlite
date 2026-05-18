@@ -969,6 +969,24 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     return schema.listConcreteTypesAssignableTo(targetTypeName).some((candidate) => qualifiedTypeName(candidate) === candidateTypeName);
   };
 
+  const concreteTypeNamesForTypeExpr = (
+    expr: import("../edgeql/ast.js").TypeExpr,
+    moduleName: string,
+  ): string[] => {
+    if (expr.kind === "type_name") {
+      const normalized = normalizeTypeName(expr.name, moduleName);
+      return schema
+        .listConcreteTypesAssignableTo(normalized)
+        .map((candidate) => qualifiedTypeName(candidate));
+    }
+    const left = new Set(concreteTypeNamesForTypeExpr(expr.left, moduleName));
+    const right = new Set(concreteTypeNamesForTypeExpr(expr.right, moduleName));
+    if (expr.kind === "type_union") {
+      return [...new Set([...left, ...right])];
+    }
+    return [...left].filter((name) => right.has(name));
+  };
+
   const linkTargetNames = (targetType: string, moduleName: string): string[] =>
     targetType
       .split("|")
@@ -1110,6 +1128,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         return {
           name,
           table: tableNameForType(name),
+          columns: ["id", ...collectFields(candidate, true).map((field) => field.name)],
         };
       })
       .sort((a, b) => a.name.localeCompare(b.name));
@@ -1291,6 +1310,16 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
                 expr: {
                   kind: "literal",
                   value: computed.expr.value,
+                },
+              });
+            } else if (computed.expr.kind === "set_literal") {
+              shapeElements.push({
+                kind: "computed",
+                name: shapeElement.name,
+                pathId: toPathIdIR(elementPathId),
+                expr: {
+                  kind: "set_literal",
+                  values: [...computed.expr.values],
                 },
               });
             } else if (computed.expr.kind === "function_call") {
@@ -1486,7 +1515,23 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         }
 
         if (shapeElement.expr.kind === "polymorphic_field_ref") {
-          ensureField(shapeElement.expr.field);
+          const polymorphicSourceTypeName = normalizeTypeName(shapeElement.expr.sourceType, scopeModule);
+          const polymorphicConcretes = shapeElement.expr.sourceTypeExpr
+            ? concreteTypeNamesForTypeExpr(shapeElement.expr.sourceTypeExpr, scopeModule)
+            : schema
+                .listConcreteTypesAssignableTo(polymorphicSourceTypeName)
+                .map((candidate) => qualifiedTypeName(candidate));
+          if (!knownFields.has(shapeElement.expr.field)) {
+            const fieldOnAnyConcrete = polymorphicConcretes.some((concreteName) => {
+              const concreteType = schema.getType(concreteName);
+              return concreteType
+                ? collectFields(concreteType, true).some((field) => field.name === shapeElement.expr.field)
+                : false;
+            });
+            if (!fieldOnAnyConcrete) {
+              fail(`Unknown field '${shapeElement.expr.field}' on '${polymorphicSourceTypeName}'`);
+            }
+          }
           selectedColumns.add(shapeElement.expr.field);
           shapeElements.push({
             kind: "computed",
@@ -1494,7 +1539,8 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
             pathId: toPathIdIR(elementPathId),
             expr: {
               kind: "polymorphic_field_ref",
-              sourceType: normalizeTypeName(shapeElement.expr.sourceType, scopeModule),
+              sourceType: polymorphicSourceTypeName,
+              concreteSourceTypes: polymorphicConcretes,
               column: shapeElement.expr.field,
             },
           });
@@ -2296,7 +2342,12 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
                 name: element.name,
                 sourceField: element.expr.field,
               });
+              continue;
             }
+            fields.push({
+              name: element.name,
+              expr: asNestedExprEntry(compileExprToIREntry(element.expr, currentItemBinding)),
+            });
             continue;
           }
 
@@ -2458,6 +2509,12 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           kind: "backlink_path",
           link: expr.link,
           sourceType: expr.sourceType,
+        };
+      }
+      if (expr.kind === "path_steps") {
+        return {
+          kind: "path_steps",
+          steps: expr.steps,
         };
       }
       if (expr.kind === "binding_ref") {
@@ -3096,6 +3153,10 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
 
   if (statement.kind === "for") {
     throw new Error("FOR statements should be handled at the execution layer");
+  }
+
+  if (statement.kind === "delete" && statement.target) {
+    fail("Delete expression targets are not supported yet");
   }
 
   const resolvedRootType = statement.kind === "select"

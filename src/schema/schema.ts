@@ -216,6 +216,17 @@ const cloneComputedDef = (
       };
     }
 
+    if (computed.expr.kind === "set_literal") {
+      return {
+        ...computed,
+        annotations: cloneAnnotations(computed.annotations),
+        expr: {
+          kind: "set_literal",
+          values: [...computed.expr.values],
+        },
+      };
+    }
+
     return {
       ...computed,
       annotations: cloneAnnotations(computed.annotations),
