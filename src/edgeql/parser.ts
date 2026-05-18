@@ -16,6 +16,7 @@ import type {
   InsertValue,
   InsertStatement,
   OrderExpr,
+  OrderExprChain,
   SelectExprStatement,
   SelectFreeStatement,
   SelectStatement,
@@ -1356,6 +1357,7 @@ class Parser {
             expr = {
               kind: "path_steps",
               steps: [...expr.steps, { kind: "ptr", name: field, direction: "outbound", optional: op === "optional_link" }],
+              partial: expr.partial,
             };
           } else {
             expr = {
@@ -1397,6 +1399,7 @@ class Parser {
             expr = {
               kind: "path_steps",
               steps: [...steps, { kind: "type_intersection", typeName, typeExpr }],
+              partial: expr.kind === "path_steps" ? expr.partial : undefined,
             };
           } else {
             expr = {
@@ -1682,12 +1685,16 @@ class Parser {
     return { limit, offset };
   }
 
-  private parseExprOrderBy(): { expr: FreeObjectExpr; direction: "asc" | "desc" } | undefined {
+  private parseExprOrderBy(): OrderExprChain | undefined {
     if (this.peek().kind !== "kw_order") {
       return undefined;
     }
     this.consume();
     this.expect("kw_by", "Expected 'by' after 'order'");
+    return this.parseExprOrderByTerm();
+  }
+
+  private parseExprOrderByTerm(): OrderExprChain {
     const expr = this.parseFreeObjectExpr();
     let direction: "asc" | "desc" = "asc";
     if (this.peek().kind === "kw_asc") {
@@ -1697,16 +1704,24 @@ class Parser {
       this.consume();
       direction = "desc";
     }
+    let nullsPosition: "first" | "last" | undefined;
     if (this.peek().kind === "kw_empty") {
       this.consume();
       const nullsPositionToken = this.peek();
-      if (this.isNameToken(nullsPositionToken)
-        && (nullsPositionToken.lexeme.toLowerCase() === "first"
-          || nullsPositionToken.lexeme.toLowerCase() === "last")) {
-        this.consume();
+      if (this.isNameToken(nullsPositionToken)) {
+        const lowered = nullsPositionToken.lexeme.toLowerCase();
+        if (lowered === "first" || lowered === "last") {
+          this.consume();
+          nullsPosition = lowered;
+        }
       }
     }
-    return { expr, direction };
+    let then: OrderExprChain | undefined;
+    if (this.peek().kind === "kw_then") {
+      this.consume();
+      then = this.parseExprOrderByTerm();
+    }
+    return { expr, direction, nullsPosition, then };
   }
 
   private looksLikeFreeObjectSelect(): boolean {

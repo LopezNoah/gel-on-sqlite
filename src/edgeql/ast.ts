@@ -574,10 +574,7 @@ export type FreeObjectExpr =
       expr: FreeObjectExpr;
       clauses?: ClauseChain;
       filter?: FreeObjectExpr;
-      orderBy?: {
-        expr: FreeObjectExpr;
-        direction: "asc" | "desc";
-      };
+      orderBy?: OrderExprChain;
       limit?: number;
       offset?: number;
     };
@@ -594,16 +591,20 @@ export interface SelectFreeStatement {
   pos: SourcePos;
 }
 
+export interface OrderExprChain {
+  expr: FreeObjectExpr;
+  direction: "asc" | "desc";
+  nullsPosition?: "first" | "last";
+  then?: OrderExprChain;
+}
+
 export interface SelectExprStatement {
   kind: "select_expr";
   with?: WithBinding[];
   withModule?: string;
   withModuleAliases?: WithModuleAlias[];
   expr: FreeObjectExpr;
-  orderBy?: {
-    expr: FreeObjectExpr;
-    direction: "asc" | "desc";
-  };
+  orderBy?: OrderExprChain;
   pos: SourcePos;
 }
 

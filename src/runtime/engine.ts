@@ -4394,6 +4394,74 @@ const coerceUnknownToScalar = (value: unknown): ScalarValue | undefined => {
   return undefined;
 };
 
+// Evaluates a select_expr shape-entry value (a FreeObjectExpr in the AST)
+// against the current row. Only handles the polymorphic path pattern
+// `[is T].field[.subfield…]` rooted at the implicit subject — used by
+// computed shape entries like `x := [is OtherType].dest.name`. Anything
+// outside that pattern returns null so the caller can supply its own
+// fallback.
+const evaluateSelectExprShapeEntry = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  expr: FreeObjectExpr,
+  row: Record<string, unknown>,
+  sourceType: string,
+): unknown => {
+  if (expr.kind !== "path_steps" || !expr.partial) return null;
+  const steps = expr.steps;
+  const head = steps[0];
+  if (!head || head.kind !== "type_intersection") return null;
+
+  const typeExpr = head.typeExpr ?? (head.typeName ? { kind: "type_name" as const, name: head.typeName } : undefined);
+  if (!typeExpr) return null;
+
+  const concreteMatches = (typeName: string, t: TypeExpr): boolean => {
+    if (t.kind === "type_name") {
+      const qualified = t.name.includes("::") ? t.name : `default::${t.name}`;
+      if (qualified === "default::Object" || qualified === "std::Object") return true;
+      return schema
+        .listConcreteTypesAssignableTo(qualified)
+        .some((candidate) => qualifiedTypeName(candidate) === typeName);
+    }
+    if (t.kind === "type_union") {
+      return concreteMatches(typeName, t.left) || concreteMatches(typeName, t.right);
+    }
+    return concreteMatches(typeName, t.left) && concreteMatches(typeName, t.right);
+  };
+
+  if (!concreteMatches(sourceType, typeExpr)) return null;
+
+  let current: unknown = row;
+  let currentTypeName: string | undefined = sourceType;
+  for (let i = 1; i < steps.length; i += 1) {
+    const step = steps[i]!;
+    if (step.kind !== "ptr") return null;
+    if (!current || typeof current !== "object" || Array.isArray(current)) return null;
+    const currentRow = current as Record<string, unknown>;
+    // Inline single links are stored as `<name>_id` columns; properties keep
+    // their bare name. Try both so this works for either.
+    const raw = currentRow[step.name] ?? currentRow[`${step.name}_id`];
+    if (raw === undefined || raw === null) return null;
+
+    if (i === steps.length - 1) {
+      return raw;
+    }
+
+    if (typeof raw !== "string") return null;
+    const globalType = db
+      .prepare(`SELECT ${quoteIdent("type_name")} AS ${quoteIdent("type_name")} FROM ${quoteIdent("__gel_global_ids")} WHERE ${quoteIdent("id")} = ?`)
+      .all(raw)[0] as { type_name?: unknown } | undefined;
+    if (!globalType || typeof globalType.type_name !== "string") return null;
+    currentTypeName = resolveRuntimeStoredTypeName(schema, globalType.type_name);
+    const table = currentTypeName.replaceAll("::", "__").toLowerCase();
+    const next = db.prepare(`SELECT * FROM ${quoteIdent(table)} WHERE ${quoteIdent("id")} = ?`).all(raw)[0] as Record<string, unknown> | undefined;
+    if (!next) return null;
+    current = next;
+  }
+
+  return current;
+};
+
 const materializeSelectRow = (
   db: SQLiteDatabase,
   schema: SchemaSnapshot,
@@ -4516,6 +4584,8 @@ const materializeSelectRow = (
         } else {
           output[element.name] = (element.expr.constant ?? 0) - digit;
         }
+      } else if (element.expr.kind === "select_expr") {
+        output[element.name] = evaluateSelectExprShapeEntry(db, schema, element.expr.expr, row, sourceType);
       } else {
         output[element.name] = { name: sourceType };
       }
@@ -7574,6 +7644,28 @@ const resolveInsertTargets = (
           return { id: row.id, properties };
         })
         .filter((entry): entry is LinkTargetAssignment => !!entry);
+    }
+
+    // Bare type name as a link target (`l_a := A`) — resolve to all rows of
+    // that type (and its concrete subtypes).
+    const qualifiedName = value.name.includes("::") ? value.name : `default::${value.name}`;
+    const typeDefByName = schema.getType(qualifiedName);
+    if (typeDefByName) {
+      const concretes = schema.listConcreteTypesAssignableTo(qualifiedName);
+      const tables = concretes.length > 0
+        ? concretes.map((concrete) => qualifiedTypeName(concrete))
+        : [qualifiedName];
+      const collected: LinkTargetAssignment[] = [];
+      for (const typeName of tables) {
+        const table = typeName.replaceAll("::", "__").toLowerCase();
+        const rows = db.prepare(`SELECT ${quoteIdent("id")} AS ${quoteIdent("id")} FROM ${quoteIdent(table)}`).all() as { id?: unknown }[];
+        for (const row of rows) {
+          if (typeof row.id === "string") {
+            collected.push({ id: row.id, properties: {} });
+          }
+        }
+      }
+      return collected;
     }
 
     const scalar = resolveBinding(value.name);

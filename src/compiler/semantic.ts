@@ -1,6 +1,6 @@
 import { AppError } from "../errors.js";
 import { parseEdgeQL } from "../edgeql/parser.js";
-import type { ComputedExpr, FilterExpr, FreeObjectExpr, InsertValue, SelectStatement, ShapeElement, Statement, WithBindingValue } from "../edgeql/ast.js";
+import type { ComputedExpr, FilterExpr, FreeObjectExpr, InsertValue, OrderExpr, SelectStatement, ShapeElement, Statement, WithBindingValue } from "../edgeql/ast.js";
 import type {
   BacklinkSourceIR,
   FilterExprIR,
@@ -969,12 +969,20 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     return schema.listConcreteTypesAssignableTo(targetTypeName).some((candidate) => qualifiedTypeName(candidate) === candidateTypeName);
   };
 
+  const allConcreteTypeNames = (): string[] =>
+    schema.listTypes()
+      .filter((typeDef) => !typeDef.abstract)
+      .map((typeDef) => qualifiedTypeName(typeDef));
+
   const concreteTypeNamesForTypeExpr = (
     expr: import("../edgeql/ast.js").TypeExpr,
     moduleName: string,
   ): string[] => {
     if (expr.kind === "type_name") {
       const normalized = normalizeTypeName(expr.name, moduleName);
+      if (normalized === "default::Object" || normalized === "std::Object") {
+        return allConcreteTypeNames();
+      }
       return schema
         .listConcreteTypesAssignableTo(normalized)
         .map((candidate) => qualifiedTypeName(candidate));
@@ -1791,6 +1799,19 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
               continue;
             }
           }
+          // For polymorphic chained reads `[is T].link.field`, the runtime
+          // needs the link column on every source row, so make sure it gets
+          // projected through.
+          if (
+            innerExpr.kind === "path_steps"
+            && innerExpr.partial
+            && innerExpr.steps[0]?.kind === "type_intersection"
+            && innerExpr.steps[1]?.kind === "ptr"
+          ) {
+            const linkOrField = innerExpr.steps[1].name;
+            selectedColumns.add(linkOrField);
+            selectedColumns.add(`${linkOrField}_id`);
+          }
           shapeElements.push({
             kind: "computed",
             name: shapeElement.name,
@@ -2026,7 +2047,12 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         if (computedTypeNameAlias) {
           value = "__source_type";
         } else {
-          ensureField(value);
+          const computedShapeAlias = shapeElements.find(
+            (element) => element.name === value && element.kind === "computed",
+          );
+          if (!computedShapeAlias) {
+            ensureField(value);
+          }
         }
       }
       const built: OrderByIR<string> = { value, direction: term.direction };
@@ -2107,6 +2133,11 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     if (expr.kind === "distinct") {
       return tryExtractTypedRootExpr(expr.expr);
     }
+    if (expr.kind === "is_type" && expr.typeExpr) {
+      const inner = tryExtractTypedRootExpr(expr.expr);
+      if (!inner) return undefined;
+      return { kind: "type_intersection", left: inner, right: expr.typeExpr };
+    }
     if (expr.kind === "set_expr") {
       if (expr.values.length === 0) return undefined;
       const exprs: TypeExpr[] = [];
@@ -2120,8 +2151,13 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     if (expr.kind === "binding_ref") {
       return { kind: "type_name", name: expr.name };
     }
-    if (expr.kind === "select" && (!expr.shape || expr.shape.length === 0)) {
-      return { kind: "type_name", name: expr.typeName };
+    if (expr.kind === "select") {
+      const hasOnlyDefaultId = !expr.shape
+        || expr.shape.length === 0
+        || expr.shape.every((el) => el.kind === "field" && el.name === "id" && el.origin === "default");
+      if (hasOnlyDefaultId) {
+        return { kind: "type_name", name: expr.typeName };
+      }
     }
     if (expr.kind === "path_steps") {
       const head = expr.steps[0];
@@ -2143,6 +2179,19 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     return undefined;
   };
 
+  const orderByChainToOrderExpr = (
+    chain: import("../edgeql/ast.js").OrderExprChain | undefined,
+  ): OrderExpr | undefined => {
+    if (!chain) return undefined;
+    const field = fieldAccessOrderByField(chain.expr);
+    if (field === undefined) return undefined;
+    const built: OrderExpr = { field, direction: chain.direction };
+    if (chain.nullsPosition) built.nullsPosition = chain.nullsPosition;
+    const next = orderByChainToOrderExpr(chain.then);
+    if (next) built.then = next;
+    return built;
+  };
+
   const tryRewriteSelectExprAsTypedSelect = (
     selectExpr: Extract<Statement, { kind: "select_expr" }>,
   ): SelectStatement | undefined => {
@@ -2153,11 +2202,11 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     const typedRoot = tryExtractTypedRootExpr(root.expr);
     if (!typedRoot) return undefined;
 
-    let orderBy: SelectStatement["orderBy"] | undefined;
+    let orderBy: OrderExpr | undefined;
     if (selectExpr.orderBy) {
-      const field = fieldAccessOrderByField(selectExpr.orderBy.expr);
-      if (field === undefined) return undefined;
-      orderBy = { field, direction: selectExpr.orderBy.direction };
+      const converted = orderByChainToOrderExpr(selectExpr.orderBy);
+      if (!converted) return undefined;
+      orderBy = converted;
     }
 
     return {
@@ -2267,6 +2316,24 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
 
     const withBinding = withBindings.get(selectStatement.typeName);
     if (withBinding) {
+      // `WITH x := SomeType` — the binding aliases a type directly; treat
+      // the SELECT as if rooted on that type so type narrowing applies.
+      if (withBinding.kind === "binding_ref") {
+        const referencedTypeName = normalizeTypeName(withBinding.name, activeModule);
+        const referencedType = schema.getType(referencedTypeName);
+        if (referencedType) {
+          return {
+            typeDef: referencedType,
+            aliasProjections: undefined,
+            clauses: {
+              filter: selectStatement.filter,
+              orderBy: selectStatement.orderBy,
+              limit: selectStatement.limit,
+              offset: selectStatement.offset,
+            },
+          };
+        }
+      }
       if (withBinding.kind === "subquery") {
         const withQuery = (withBinding as Extract<NonNullable<SelectStatement["with"]>[number]["value"], { kind: "subquery" }>).query;
         const sourceType = requireValue(
