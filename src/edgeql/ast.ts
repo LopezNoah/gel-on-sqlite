@@ -217,6 +217,7 @@ export interface WithModuleAlias {
 export interface OrderExpr {
   field: string;
   direction: "asc" | "desc";
+  nullsPosition?: "first" | "last";
   then?: OrderExpr;
 }
 
@@ -375,6 +376,7 @@ export interface SelectStatement {
   withModule?: string;
   withModuleAliases?: WithModuleAlias[];
   typeName: string;
+  typeFilterExprs?: TypeExpr[];
   shape: ShapeElement[];
   fields: string[];
   filter?: ClauseChain["filter"];

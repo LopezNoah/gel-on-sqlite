@@ -167,7 +167,11 @@ const compileSelectToSQL = (ir: SelectIR, target: RuntimeTarget): SQLArtifact =>
 
   const sources = ir.sourceTables.length > 0 ? ir.sourceTables : [ir.typeRef];
   const filterColumns = collectFieldFilterColumns(ir.filter);
-  const unionColumns = [...new Set(["id", ...ir.columns, ...filterColumns, ...(ir.orderBy ? [ir.orderBy.value] : [])])]
+  const orderByValues: string[] = [];
+  for (let term: typeof ir.orderBy | undefined = ir.orderBy; term; term = term.then) {
+    orderByValues.push(term.value);
+  }
+  const unionColumns = [...new Set(["id", ...ir.columns, ...filterColumns, ...orderByValues])]
     .filter((column) => column !== "__source_type");
   const sourceSelects = sources.map((source) => {
     const available = source.columns && source.columns.length > 0 ? new Set(source.columns) : undefined;
@@ -188,7 +192,18 @@ const compileSelectToSQL = (ir: SelectIR, target: RuntimeTarget): SQLArtifact =>
   }
 
   if (ir.orderBy) {
-    sql += ` ORDER BY ${rootAlias}.${quoteIdent(ir.orderBy.value)} ${ir.orderBy.direction.toUpperCase()}`;
+    const terms: string[] = [];
+    let term: typeof ir.orderBy | undefined = ir.orderBy;
+    while (term) {
+      const nullsClause = term.nullsPosition === "first"
+        ? " NULLS FIRST"
+        : term.nullsPosition === "last"
+          ? " NULLS LAST"
+          : "";
+      terms.push(`${rootAlias}.${quoteIdent(term.value)} ${term.direction.toUpperCase()}${nullsClause}`);
+      term = term.then;
+    }
+    sql += ` ORDER BY ${terms.join(", ")}`;
   }
 
   if (ir.limit !== undefined) {
@@ -589,6 +604,13 @@ const compileShapeObjectExpr = (
         );
       } else if (element.expr.kind === "type_name") {
         pairs.push(sourceTypeExpr);
+      } else if (element.expr.kind === "is_type") {
+        if (element.expr.concreteSourceTypes.length === 0) {
+          pairs.push("0");
+        } else {
+          const list = element.expr.concreteSourceTypes.map(quoteLiteral).join(", ");
+          pairs.push(`CASE WHEN ${sourceTypeExpr} IN (${list}) THEN 1 ELSE 0 END`);
+        }
       } else if (element.expr.kind === "concat") {
         const sqlParts = element.expr.parts.map((part) => {
           if (part.kind === "field_ref") {

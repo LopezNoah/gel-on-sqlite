@@ -1098,6 +1098,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       allowBacklinkFilter: boolean;
       aliasProjections?: Map<string, string>;
       linkProperties?: Set<string>;
+      typeFilterExprs?: import("../edgeql/ast.js").TypeExpr[];
     },
     ): {
       pathId: PathIdIR;
@@ -1121,26 +1122,61 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     const qualifiedName = qualifiedTypeName(typeDef);
     const scopeModule = typeDef.module ?? "default";
     const table = tableNameForType(qualifiedName);
-    const sourceTables = schema
-      .listConcreteTypesAssignableTo(qualifiedName)
-      .map((candidate) => {
-        const name = qualifiedTypeName(candidate);
+    const narrowedTypeNames = (options.typeFilterExprs ?? []).reduce<Set<string> | undefined>(
+      (acc, expr) => {
+        const matched = new Set(concreteTypeNamesForTypeExpr(expr, scopeModule));
+        if (!acc) return matched;
+        return new Set([...acc].filter((name) => matched.has(name)));
+      },
+      undefined,
+    );
+    const concreteAssignable = schema.listConcreteTypesAssignableTo(qualifiedName);
+    const candidateNames = concreteAssignable.length > 0
+      ? concreteAssignable.map((candidate) => qualifiedTypeName(candidate))
+      : narrowedTypeNames
+        ? [...narrowedTypeNames]
+        : [];
+    const sourceTables = candidateNames
+      .map((name) => {
+        const candidate = schema.getType(name);
         return {
           name,
           table: tableNameForType(name),
-          columns: ["id", ...collectFields(candidate, true).map((field) => field.name)],
+          columns: ["id", ...(candidate ? collectFields(candidate, true).map((field) => field.name) : [])],
         };
       })
+      .filter((entry) => !narrowedTypeNames || narrowedTypeNames.has(entry.name))
       .sort((a, b) => a.name.localeCompare(b.name));
     const allFields = collectFields(typeDef, true);
     const allComputeds = collectComputeds(typeDef, true);
     const userFields = allFields.filter((field) => field.name !== "id");
     const knownFields = new Set(["id", ...userFields.map((f) => f.name)]);
+    if (narrowedTypeNames) {
+      for (const narrowedTypeName of narrowedTypeNames) {
+        const narrowedTypeDef = schema.getType(narrowedTypeName);
+        if (narrowedTypeDef) {
+          for (const field of collectFields(narrowedTypeDef, true)) {
+            knownFields.add(field.name);
+          }
+        }
+      }
+    }
     const computedByName = new Map(allComputeds.map((computed) => [computed.name, computed] as const));
     const fieldByName = new Map([
       ["id", { name: "id", type: "uuid" as const, required: true }],
       ...userFields.map((field) => [field.name, field] as const),
     ]);
+    if (narrowedTypeNames) {
+      for (const narrowedTypeName of narrowedTypeNames) {
+        const narrowedTypeDef = schema.getType(narrowedTypeName);
+        if (!narrowedTypeDef) continue;
+        for (const field of collectFields(narrowedTypeDef, true)) {
+          if (!fieldByName.has(field.name) && field.name !== "id") {
+            fieldByName.set(field.name, field);
+          }
+        }
+      }
+    }
 
     const ensureField = (fieldName: string): void => {
       if (!knownFields.has(fieldName)) {
@@ -1689,6 +1725,31 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         if (shapeElement.expr.kind === "select_expr") {
           const selectExpr = shapeElement.expr;
           const innerExpr = selectExpr.expr;
+          // `Object IS T` (and `Object IS (T | U)` etc.) in a shape entry is
+          // a per-row type check: row's actual type matches the type expr.
+          if (
+            innerExpr.kind === "is_type"
+            && innerExpr.expr.kind === "select"
+            && (innerExpr.expr.typeName === "Object" || innerExpr.expr.typeName === "std::Object")
+          ) {
+            const typeExpr = innerExpr.typeExpr ?? { kind: "type_name" as const, name: innerExpr.typeName };
+            shapeElements.push({
+              kind: "computed",
+              name: shapeElement.name,
+              pathId: toPathIdIR(elementPathId),
+              expr: {
+                kind: "is_type",
+                concreteSourceTypes: concreteTypeNamesForTypeExpr(typeExpr, scopeModule),
+              },
+            });
+            shapeNames.add(shapeElement.name);
+            scopeChildren.push({
+              pathId: toPathIdIR(elementPathId),
+              typeName: qualifiedName,
+              children: [],
+            });
+            continue;
+          }
           if (innerExpr.kind === "shape_projection"
             && innerExpr.expr.kind === "field_access"
             && innerExpr.expr.expr.kind === "current_item") {
@@ -1949,37 +2010,32 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         ? sourceTables.filter((source) => source.name === resolvedFilter.value)
         : sourceTables;
 
-    let resolvedOrderBy = clauses.orderBy
-      ? {
-          value: clauses.orderBy.field.startsWith("@")
-            ? clauses.orderBy.field.slice(1)
-            : clauses.orderBy.field,
-          direction: clauses.orderBy.direction,
-        }
-      : undefined;
-
-    if (resolvedOrderBy && !clauses.orderBy!.field.startsWith("@")) {
-      if (resolvedOrderBy.value.includes(".")) {
-        resolvedOrderBy = undefined;
+    const resolveOrderByTerm = (term: import("../edgeql/ast.js").OrderExpr | undefined): OrderByIR<string> | undefined => {
+      if (!term) return undefined;
+      let value = term.field.startsWith("@") ? term.field.slice(1) : term.field;
+      if (!term.field.startsWith("@") && value.includes(".")) {
+        return undefined;
       }
-
-      if (resolvedOrderBy) {
+      if (!term.field.startsWith("@")) {
         const computedTypeNameAlias = shapeElements.find(
           (element) =>
-            element.name === resolvedOrderBy!.value
+            element.name === value
             && element.kind === "computed"
             && element.expr.kind === "type_name",
         );
         if (computedTypeNameAlias) {
-          resolvedOrderBy = {
-            ...resolvedOrderBy,
-            value: "__source_type",
-          };
+          value = "__source_type";
         } else {
-          ensureField(resolvedOrderBy.value);
+          ensureField(value);
         }
       }
-    }
+      const built: OrderByIR<string> = { value, direction: term.direction };
+      if (term.nullsPosition) built.nullsPosition = term.nullsPosition;
+      const nextTerm = resolveOrderByTerm(term.then);
+      if (nextTerm) built.then = nextTerm;
+      return built;
+    };
+    let resolvedOrderBy = resolveOrderByTerm(clauses.orderBy);
 
     if (clauses.limit !== undefined && clauses.limit < 0) {
       fail("Limit must be zero or greater");
@@ -2037,6 +2093,84 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         condition: p.condition.kind === "always" ? undefined : JSON.stringify(p.condition),
         errmessage: p.errmessage,
       })),
+    };
+  };
+
+  type TypeExpr = import("../edgeql/ast.js").TypeExpr;
+
+  // Convert a `FreeObjectExpr` whose value set is determined entirely by
+  // type expressions (a bare type name, type intersections, set unions of
+  // those, or `DISTINCT` of those) into a single `TypeExpr` describing the
+  // matching concrete types. Returns undefined if the expression depends on
+  // anything beyond schema types.
+  const tryExtractTypedRootExpr = (expr: FreeObjectExpr): TypeExpr | undefined => {
+    if (expr.kind === "distinct") {
+      return tryExtractTypedRootExpr(expr.expr);
+    }
+    if (expr.kind === "set_expr") {
+      if (expr.values.length === 0) return undefined;
+      const exprs: TypeExpr[] = [];
+      for (const value of expr.values) {
+        const inner = tryExtractTypedRootExpr(value);
+        if (!inner) return undefined;
+        exprs.push(inner);
+      }
+      return exprs.reduce((acc, next) => ({ kind: "type_union", left: acc, right: next }));
+    }
+    if (expr.kind === "binding_ref") {
+      return { kind: "type_name", name: expr.name };
+    }
+    if (expr.kind === "select" && (!expr.shape || expr.shape.length === 0)) {
+      return { kind: "type_name", name: expr.typeName };
+    }
+    if (expr.kind === "path_steps") {
+      const head = expr.steps[0];
+      if (!head || head.kind !== "object_ref") return undefined;
+      let current: TypeExpr = { kind: "type_name", name: head.name };
+      for (const step of expr.steps.slice(1)) {
+        if (step.kind !== "type_intersection" || !step.typeExpr) return undefined;
+        current = { kind: "type_intersection", left: current, right: step.typeExpr };
+      }
+      return current;
+    }
+    return undefined;
+  };
+
+  const fieldAccessOrderByField = (expr: FreeObjectExpr): string | undefined => {
+    if (expr.kind === "field_access" && expr.expr.kind === "current_item") {
+      return expr.field;
+    }
+    return undefined;
+  };
+
+  const tryRewriteSelectExprAsTypedSelect = (
+    selectExpr: Extract<Statement, { kind: "select_expr" }>,
+  ): SelectStatement | undefined => {
+    const root = selectExpr.expr.kind === "shape_projection"
+      ? selectExpr.expr
+      : undefined;
+    if (!root) return undefined;
+    const typedRoot = tryExtractTypedRootExpr(root.expr);
+    if (!typedRoot) return undefined;
+
+    let orderBy: SelectStatement["orderBy"] | undefined;
+    if (selectExpr.orderBy) {
+      const field = fieldAccessOrderByField(selectExpr.orderBy.expr);
+      if (field === undefined) return undefined;
+      orderBy = { field, direction: selectExpr.orderBy.direction };
+    }
+
+    return {
+      kind: "select",
+      typeName: typedRoot.kind === "type_name" ? typedRoot.name : "Object",
+      typeFilterExprs: typedRoot.kind === "type_name" ? undefined : [typedRoot],
+      shape: root.shape,
+      fields: [],
+      orderBy,
+      with: selectExpr.with,
+      withModule: selectExpr.withModule,
+      withModuleAliases: selectExpr.withModuleAliases,
+      pos: selectExpr.pos,
     };
   };
 
@@ -2105,6 +2239,22 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       }
       return {
         typeDef: directType,
+        aliasProjections: undefined,
+        clauses: {
+          filter: selectStatement.filter,
+          orderBy: selectStatement.orderBy,
+          limit: selectStatement.limit,
+          offset: selectStatement.offset,
+        },
+      };
+    }
+
+    // `Object` (and `std::Object`) is the universal object root. The schema
+    // doesn't carry a TypeDef for it, so synthesise one — the narrowing in
+    // typeFilterExprs (if any) determines the actual sources downstream.
+    if (resolvedTypeName === "default::Object" || resolvedTypeName === "std::Object") {
+      return {
+        typeDef: { name: "Object", module: activeModule, fields: [], abstract: true } as TypeDef,
         aliasProjections: undefined,
         clauses: {
           filter: selectStatement.filter,
@@ -2259,6 +2409,13 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
   }
 
   if (statement.kind === "select_expr") {
+    // Rewrite `SELECT <typed-root> { shape }` (where typed-root is a typed
+    // expression like `Ba[IS Bb | Bc]` or `{CBaBb, CBbBc}`) as a narrowed
+    // typed select so it flows through the typed-select IR pipeline.
+    const rewritten = tryRewriteSelectExprAsTypedSelect(statement);
+    if (rewritten) {
+      return compileToIR(schema, rewritten, context);
+    }
     const pathId = createPathId();
     const asNestedExprEntry = (
       entry: import("../ir/model.js").SelectExprIREntry,
@@ -2341,6 +2498,31 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
               fields.push({
                 name: element.name,
                 sourceField: element.expr.field,
+              });
+              continue;
+            }
+            if (element.expr.kind === "type_name") {
+              fields.push({
+                name: element.name,
+                expr: { kind: "type_name", sourceType: "" } as import("../ir/model.js").SelectExprIREntry<3>,
+              });
+              continue;
+            }
+            if (element.expr.kind === "polymorphic_field_ref") {
+              const polymorphicSourceTypeName = normalizeTypeName(element.expr.sourceType, "default");
+              const polymorphicConcretes = element.expr.sourceTypeExpr
+                ? concreteTypeNamesForTypeExpr(element.expr.sourceTypeExpr, "default")
+                : schema
+                    .listConcreteTypesAssignableTo(polymorphicSourceTypeName)
+                    .map((candidate) => qualifiedTypeName(candidate));
+              fields.push({
+                name: element.name,
+                expr: {
+                  kind: "polymorphic_field_ref",
+                  sourceType: polymorphicSourceTypeName,
+                  concreteSourceTypes: polymorphicConcretes,
+                  column: element.expr.field,
+                } as import("../ir/model.js").SelectExprIREntry<3>,
               });
               continue;
             }
@@ -3246,6 +3428,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     }, {
       allowBacklinkFilter: true,
       aliasProjections: resolvedRootType.aliasProjections,
+      typeFilterExprs: statement.typeFilterExprs,
     });
 
     return {

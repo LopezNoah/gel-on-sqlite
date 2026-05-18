@@ -4427,6 +4427,8 @@ const materializeSelectRow = (
           : null;
       } else if (element.expr.kind === "type_name") {
         output[element.name] = sourceType;
+      } else if (element.expr.kind === "is_type") {
+        output[element.name] = element.expr.concreteSourceTypes.includes(sourceType);
       } else if (element.expr.kind === "subquery") {
         const nestedSql = compileToSQL(element.expr.query, { target: resolvedRuntimeTarget(context, db) });
         assertTargetSqlCompatibility(nestedSql.sql, resolvedRuntimeTarget(context, db));
@@ -4803,13 +4805,16 @@ const runSelectIR = (
   sqlTrail: SQLArtifact[],
 ): Record<string, unknown>[] => {
   const subjectType = schema.getType(ir.sourceType);
-  if (!subjectType) {
+  const isUniversalRoot = ir.sourceType === "std::Object" || ir.sourceType === "default::Object";
+  if (!subjectType && !isUniversalRoot) {
     throw new AppError("E_SEMANTIC", `Unknown type '${ir.sourceType}'`, 1, 1);
   }
 
   const stmt = db.prepare(sqlArtifact.sql);
   const rows = stmt.all(...sqlArtifact.params);
-  const visibleRows = rows.filter((row) => evaluateSelectPolicies(schema, db, subjectType, row, context));
+  const visibleRows = subjectType
+    ? rows.filter((row) => evaluateSelectPolicies(schema, db, subjectType, row, context))
+    : rows;
   return visibleRows.map((row) => materializeSelectRow(db, schema, context, ir.shape, row, rowSourceType(row, ir.sourceType), sqlTrail));
 };
 
@@ -5153,14 +5158,27 @@ const evaluateSelectExprEntry = (
     return rows;
   };
 
-  const evaluatePathSteps = (steps: PathStep[]): unknown => {
+  const evaluatePathSteps = (
+    steps: PathStep[],
+    evalContext?: { currentValue?: unknown },
+  ): unknown => {
     const first = steps[0];
-    if (!first || first.kind !== "object_ref") {
+    if (!first) {
       return [];
     }
 
-    let value: unknown = readPathRootRows(first.name);
-    const rest = steps.slice(1);
+    let value: unknown;
+    let rest: PathStep[];
+    if (first.kind === "object_ref") {
+      value = readPathRootRows(first.name);
+      rest = steps.slice(1);
+    } else if (first.kind === "type_intersection" || first.kind === "ptr") {
+      // Implicit-subject path (e.g. `[is T].field` rooted at the current row).
+      value = evalContext?.currentValue ?? null;
+      rest = steps;
+    } else {
+      return [];
+    }
     for (let i = 0; i < rest.length; i += 1) {
       const step = rest[i]!;
       if (step.kind === "type_intersection") {
@@ -5538,7 +5556,32 @@ const evaluateSelectExprEntry = (
       return out;
     }
     case "path_steps": {
-      return evaluatePathSteps(entry.steps);
+      return evaluatePathSteps(entry.steps, evalContext);
+    }
+    case "type_name": {
+      const current = evalContext?.currentValue;
+      if (current && typeof current === "object" && !Array.isArray(current)) {
+        const sourceTypeName = (current as Record<string, unknown>).__source_type;
+        if (typeof sourceTypeName === "string") {
+          return sourceTypeName;
+        }
+      }
+      return entry.sourceType || null;
+    }
+    case "polymorphic_field_ref": {
+      const current = evalContext?.currentValue;
+      if (!current || typeof current !== "object" || Array.isArray(current)) {
+        return null;
+      }
+      const row = current as Record<string, unknown>;
+      const rowTypeName = typeof row.__source_type === "string" ? row.__source_type : undefined;
+      const concretes = entry.concreteSourceTypes && entry.concreteSourceTypes.length > 0
+        ? entry.concreteSourceTypes
+        : [entry.sourceType];
+      if (!rowTypeName || !concretes.includes(rowTypeName)) {
+        return null;
+      }
+      return materializeFieldValue(schema, rowTypeName, entry.column, row[entry.column]);
     }
     case "field_access": {
       const value = evaluateSelectExprEntry(schema, db, context, entry.value, sqlTrail, evalContext);

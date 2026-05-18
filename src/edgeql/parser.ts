@@ -567,6 +567,10 @@ class Parser {
 
   private parseSelect(ctx: ParseContext = {}): SelectStatement | SelectFreeStatement | SelectExprStatement {
     const start = this.expect("kw_select", "Expected 'select'");
+    const narrowedTyped = this.attempt(() => this.tryParseNarrowedTypedSelect(start, ctx, true));
+    if (narrowedTyped) {
+      return narrowedTyped;
+    }
     const freeOrExpr = this.parseSelectFreeOrExpr(start, ctx, true);
     if (freeOrExpr) {
       return freeOrExpr;
@@ -706,6 +710,71 @@ class Parser {
         column: start.column,
       },
     };
+  }
+
+  // Matches `Name[IS T1]...[IS Tn] { shape }` as a typed select with type
+  // narrowing, so the typed-select IR path applies. Returns undefined when
+  // the lookahead doesn't fit (e.g. no `{` follows the bracket chain) so the
+  // caller can fall back to the select-expression path.
+  private tryParseNarrowedTypedSelect(
+    start: Token,
+    ctx: ParseContext,
+    expectEof: boolean,
+  ): SelectStatement | undefined {
+    if (!this.atQualifiedIdentifierForTypedSelect()) {
+      return undefined;
+    }
+    const typeName = this.parseQualifiedName("Expected type name");
+    const typeFilterExprs: TypeExpr[] = [];
+    while (this.peek().kind === "lbracket" && this.peekNth(1).kind === "kw_is") {
+      typeFilterExprs.push(this.parseTypeFilter("typed select narrowing"));
+    }
+    if (typeFilterExprs.length === 0 || this.peek().kind !== "lbrace") {
+      return undefined;
+    }
+
+    this.consume();
+    const shape: ShapeElement[] = [];
+    const fields: string[] = [];
+    for (const entry of this.parseDelimited("rbrace", () => this.parseShapeEntry(), "Expected ',' between shape entries")) {
+      shape.push(entry);
+      if (entry.kind === "field") {
+        fields.push(entry.name);
+      }
+    }
+    this.expect("rbrace", "Expected '}' after selected fields");
+
+    const clauses = this.parseClauseChain();
+
+    if (expectEof && this.peek().kind === "semi") {
+      this.consume();
+    }
+    if (expectEof) {
+      this.expect("eof", "Unexpected tokens after statement");
+    }
+
+    return {
+      ...this.withContext(ctx),
+      kind: "select",
+      typeName,
+      typeFilterExprs,
+      shape,
+      fields,
+      filter: clauses.filter,
+      orderBy: clauses.orderBy,
+      limit: clauses.limit,
+      offset: clauses.offset,
+      pos: { line: start.line, column: start.column },
+    };
+  }
+
+  private atQualifiedIdentifierForTypedSelect(): boolean {
+    if (!this.isNameToken(this.peek())) return false;
+    let offset = 1;
+    while (this.peekNth(offset).kind === "coloncolon" && this.isNameToken(this.peekNth(offset + 1))) {
+      offset += 2;
+    }
+    return this.peekNth(offset).kind === "lbracket" && this.peekNth(offset + 1).kind === "kw_is";
   }
 
   private parseSelectExprTail(start: Token, ctx: ParseContext, expr: FreeObjectExpr, expectEof = true): SelectExprStatement {
@@ -1627,6 +1696,15 @@ class Parser {
     } else if (this.peek().kind === "kw_desc") {
       this.consume();
       direction = "desc";
+    }
+    if (this.peek().kind === "kw_empty") {
+      this.consume();
+      const nullsPositionToken = this.peek();
+      if (this.isNameToken(nullsPositionToken)
+        && (nullsPositionToken.lexeme.toLowerCase() === "first"
+          || nullsPositionToken.lexeme.toLowerCase() === "last")) {
+        this.consume();
+      }
     }
     return { expr, direction };
   }
@@ -3665,13 +3743,26 @@ class Parser {
       direction = "desc";
     }
 
+    let nullsPosition: "first" | "last" | undefined;
+    if (this.peek().kind === "kw_empty") {
+      this.consume();
+      const nullsPositionToken = this.peek();
+      if (this.isNameToken(nullsPositionToken)) {
+        const lowered = nullsPositionToken.lexeme.toLowerCase();
+        if (lowered === "first" || lowered === "last") {
+          this.consume();
+          nullsPosition = lowered;
+        }
+      }
+    }
+
     let then: OrderExpr | undefined;
     if (this.peek().kind === "kw_then") {
       this.consume();
       then = this.parseOrderTerm(context);
     }
 
-    return { field, direction, then };
+    return { field, direction, nullsPosition, then };
   }
 
   private parseClauseChain(): ClauseChain {
