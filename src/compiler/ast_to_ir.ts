@@ -2427,7 +2427,7 @@ const compileUpdateStatement = (statement: UpdateStatement, ctx: IRCompileContex
       source: subjectSet,
       expr: compileInsertValue(value, scoped),
       targetPtr: ptrref,
-      shapeOp: "assign",
+      shapeOp: statement.operations?.[name] ?? "assign",
       shapeOrigin: "explicit",
       required: ptrref?.outCardinality === "one",
       cardinality: ptrref?.outCardinality ?? "unknown",

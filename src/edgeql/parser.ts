@@ -523,13 +523,14 @@ class Parser {
     if (this.peek().kind === "kw_union") {
       this.consume();
     }
-    const hasParen = this.peek().kind === "lparen";
-    if (hasParen) {
+    const hasWrappedStatement = this.peek().kind === "lparen"
+      && (this.peekNext().kind === "kw_select" || this.peekNext().kind === "kw_insert");
+    if (hasWrappedStatement) {
       this.consume();
     }
-    const next = this.peek();
     const body: InsertStatement | SelectStatement | SelectExprStatement | SelectFreeStatement
       = this.withLocalBinding(variable, () => {
+      const next = this.peek();
       if (next.kind === "kw_select") {
         const selectStart = this.consume();
         const freeOrExpr = this.parseSelectFreeOrExpr(selectStart, ctx, false);
@@ -538,9 +539,13 @@ class Parser {
         }
         return this.parseTypedSelect(selectStart, ctx, false);
       }
-      return this.parseInsert(ctx, false);
+      if (next.kind === "kw_insert") {
+        return this.parseInsert(ctx, false);
+      }
+
+      return this.parseSelectExprTail(start, ctx, this.parseFreeObjectExpr(), false);
     });
-    if (hasParen) {
+    if (hasWrappedStatement) {
       this.expect("rparen", "Expected ')' after for body");
     }
     return {
@@ -1947,8 +1952,21 @@ class Parser {
 
   private tryParseComputedFreeObjectExpr(): ComputedExpr | undefined {
     const token = this.peek();
+    const nextKind = this.peekNext().kind;
+    const boundaryKinds: Token["kind"][] = ["comma", "rbrace", "rparen", "eof"];
+    const nameStartsGeneralExpr = this.isNameToken(token) && !boundaryKinds.includes(nextKind);
+    const literalStartsGeneralExpr = ["number", "string", "bytes_string", "kw_true", "kw_false", "kw_null"].includes(token.kind)
+      && !boundaryKinds.includes(nextKind);
     const startsGeneralExpr = token.kind === "kw_not" || token.kind === "kw_for" || token.kind === "kw_select" || token.kind === "kw_exists"
-      || (token.kind === "lparen" && this.peekNext().kind === "kw_for");
+      || token.kind === "kw_distinct"
+      || token.kind === "kw_detached"
+      || token.kind === "lparen"
+      || token.kind === "lbrace"
+      || token.kind === "lbracket"
+      || token.kind === "lt"
+      || token.kind === "str_interp_start"
+      || nameStartsGeneralExpr
+      || literalStartsGeneralExpr;
     if (!startsGeneralExpr) {
       return undefined;
     }
@@ -2433,21 +2451,49 @@ class Parser {
     }
     const startsExpression =
       token.kind === "lparen"
+      || token.kind === "lbrace"
+      || token.kind === "lbracket"
+      || token.kind === "lt"
       || token.kind === "dot"
       || token.kind === "backward_link"
       || token.kind === "optional_link"
       || this.isNameToken(token)
+      || token.kind === "number"
+      || token.kind === "string"
+      || token.kind === "bytes_string"
+      || token.kind === "kw_true"
+      || token.kind === "kw_false"
+      || token.kind === "kw_null"
+      || token.kind === "kw_not"
       || token.kind === "kw_for"
       || token.kind === "kw_select"
       || token.kind === "kw_distinct"
       || token.kind === "kw_detached"
+      || token.kind === "str_interp_start"
       || this.isExistsToken(token);
     if (!startsExpression) {
       return undefined;
     }
 
     const parsed = this.attempt(() => {
-      const expr = this.parseFreeObjectExpr();
+      let expr = this.parseFreeObjectExpr();
+      let filter: FreeObjectExpr | undefined;
+      if (this.peek().kind === "kw_filter") {
+        this.consume();
+        filter = this.parseFreeObjectExpr();
+      }
+      const orderBy = this.parseExprOrderBy();
+      const { limit, offset } = this.parseExprPagination();
+      if (filter || orderBy || limit !== undefined || offset !== undefined) {
+        expr = {
+          kind: "select_expr_subquery",
+          expr,
+          filter,
+          orderBy,
+          limit,
+          offset,
+        };
+      }
       if (this.peek().kind === "comma" || this.peek().kind === "rparen") {
         return {
           kind: "expr" as const,
@@ -2572,6 +2618,20 @@ class Parser {
     this.expect("assign", "Expected ':=' after field name");
     return {
       field,
+      value: this.parseInsertValue(),
+    };
+  }
+
+  private parseUpdateAssignment(): { field: string; operation: "assign" | "append" | "subtract"; value: InsertValue } {
+    const field = this.expectName("Expected field name").lexeme;
+    const opToken = this.peek();
+    if (opToken.kind !== "assign" && opToken.kind !== "add_assign" && opToken.kind !== "sub_assign") {
+      throw new AppError("E_SYNTAX", "Expected assignment operator after field name", opToken.line, opToken.column);
+    }
+    this.consume();
+    return {
+      field,
+      operation: opToken.kind === "add_assign" ? "append" : opToken.kind === "sub_assign" ? "subtract" : "assign",
       value: this.parseInsertValue(),
     };
   }
@@ -2830,8 +2890,10 @@ class Parser {
     this.expect("lbrace", "Expected '{' after 'set'");
 
     const values: Record<string, InsertValue> = {};
-    for (const assignment of this.parseDelimited("rbrace", () => this.parseInsertAssignment(), "Expected ',' between assignments")) {
+    const operations: NonNullable<UpdateStatement["operations"]> = {};
+    for (const assignment of this.parseDelimited("rbrace", () => this.parseUpdateAssignment(), "Expected ',' between assignments")) {
       values[assignment.field] = assignment.value;
+      operations[assignment.field] = assignment.operation;
     }
 
     this.expect("rbrace", "Expected '}' after assignments");
@@ -2848,6 +2910,7 @@ class Parser {
       typeName,
       filter,
       values,
+      operations: Object.keys(operations).length > 0 ? operations : undefined,
       pos: {
         line: start.line,
         column: start.column,

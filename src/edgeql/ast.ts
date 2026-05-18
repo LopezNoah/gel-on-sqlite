@@ -650,6 +650,7 @@ export interface UpdateStatement {
   typeName: string;
   filter?: FilterExpr;
   values: Record<string, InsertValue>;
+  operations?: Record<string, "assign" | "append" | "subtract">;
   pos: SourcePos;
 }
 
