@@ -52,6 +52,7 @@ const DEFINITIONS: StdlibFunctionDef[] = [
   { name: "std::sum", minArgs: 1, maxArgs: 1 },
   { name: "std::assert_exists", minArgs: 1, maxArgs: 1 },
   { name: "std::assert_single", minArgs: 1, maxArgs: 1 },
+  { name: "std::assert_distinct", minArgs: 1, maxArgs: 1 },
   { name: "std::range", minArgs: 2, maxArgs: 2 },
   { name: "std::range_unpack", minArgs: 1, maxArgs: 1 },
   { name: "std::array_agg", minArgs: 1, maxArgs: 1 },
@@ -180,6 +181,7 @@ export const executeStdlibFunction = (name: string, args: RuntimeFunctionArg[]):
     }
     case "std::assert_exists":
     case "std::assert_single":
+    case "std::assert_distinct":
       return typeof args[0] === "object" && args[0] !== null && "kind" in args[0] && args[0].kind === "set"
         ? args[0].values
         : args[0];
