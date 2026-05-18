@@ -786,6 +786,13 @@ export const tokenize = (input: string): Token[] => {
       continue;
     }
 
+    if (c === "?" && peekNext() === "?") {
+      advance();
+      advance();
+      push("coalesce", "??", tokenLine, tokenColumn);
+      continue;
+    }
+
     if (c === "?" && peekNext() === "=") {
       advance();
       advance();
@@ -882,13 +889,6 @@ export const tokenize = (input: string): Token[] => {
       }
       value += advance();
       push("substitution", value, tokenLine, tokenColumn);
-      continue;
-    }
-
-    if (c === "?" && peekNext() === "?") {
-      advance();
-      advance();
-      push("coalesce", "??", tokenLine, tokenColumn);
       continue;
     }
 

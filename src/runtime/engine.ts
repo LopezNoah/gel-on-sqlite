@@ -7721,10 +7721,20 @@ const applyUpdateLinkAssignments = (
       const propertyColumns = (link.properties ?? []).map((property) => property.name);
       const columns = ["source", "target", ...propertyColumns];
       const placeholders = columns.map(() => "?").join(", ");
-      const insertSql = `INSERT INTO ${quoteIdent(linkTable)} (${columns.map(quoteIdent).join(", ")}) VALUES (${placeholders})`;
+      const operation = ast.operations?.[field] ?? "assign";
+      const insertVerb = operation === "append" ? "INSERT OR IGNORE" : "INSERT";
+      const insertSql = `${insertVerb} INTO ${quoteIdent(linkTable)} (${columns.map(quoteIdent).join(", ")}) VALUES (${placeholders})`;
 
       for (const sourceId of sourceIds) {
-        db.prepare(`DELETE FROM ${quoteIdent(linkTable)} WHERE ${quoteIdent("source")} = ?`).run(sourceId);
+        if (operation === "assign") {
+          db.prepare(`DELETE FROM ${quoteIdent(linkTable)} WHERE ${quoteIdent("source")} = ?`).run(sourceId);
+        }
+        if (operation === "subtract") {
+          for (const targetId of targetIds) {
+            db.prepare(`DELETE FROM ${quoteIdent(linkTable)} WHERE ${quoteIdent("source")} = ? AND ${quoteIdent("target")} = ?`).run(sourceId, targetId);
+          }
+          continue;
+        }
         for (const assignment of targetAssignments) {
           const params = [
             sourceId,
@@ -7740,6 +7750,11 @@ const applyUpdateLinkAssignments = (
     const inlineColumn = `${link.name}_id`;
     const targetId = targetIds[0] ?? null;
     for (const sourceId of sourceIds) {
+      if ((ast.operations?.[field] ?? "assign") === "subtract") {
+        db.prepare(`UPDATE ${quoteIdent(tableNameForType(qualifiedTypeName(typeDef)))} SET ${quoteIdent(inlineColumn)} = NULL WHERE ${quoteIdent("id")} = ? AND ${quoteIdent(inlineColumn)} = ?`)
+          .run(sourceId, targetId);
+        continue;
+      }
       db.prepare(`UPDATE ${quoteIdent(tableNameForType(qualifiedTypeName(typeDef)))} SET ${quoteIdent(inlineColumn)} = ? WHERE ${quoteIdent("id")} = ?`)
         .run(targetId, sourceId);
     }
