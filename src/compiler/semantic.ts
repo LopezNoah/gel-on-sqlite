@@ -233,6 +233,11 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         selectedColumns.add(arg.expr.field);
         return { kind: "field_ref", column: arg.expr.field };
       }
+      if (arg.expr.kind === "field_access" && arg.expr.expr.kind === "current_item") {
+        ensureFieldRef(arg.expr.field);
+        selectedColumns.add(arg.expr.field);
+        return { kind: "field_ref", column: arg.expr.field };
+      }
       if (arg.expr.kind === "path") {
         ensureFieldRef(arg.expr.tail);
         selectedColumns.add(arg.expr.tail);
@@ -500,7 +505,53 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         storage: usesLinkTable ? "table" : "inline",
         inlineColumn: usesLinkTable ? undefined : `${link.name}_id`,
         linkTable: usesLinkTable ? `${tableNameForType(ownerQualifiedName)}__${link.name.toLowerCase()}` : undefined,
+        linkTables: usesLinkTable ? collectLinkTableSources(subjectType, link.name) : undefined,
       };
+    };
+
+    // Recursive lowering of a FreeObjectExpr to a ScalarExprIR. Returns
+    // undefined when the expression contains constructs that aren't
+    // scalar-expressible (paths through links, function calls, etc.).
+    const tryCompileScalarExpr = (
+      expr: FreeObjectExpr,
+    ): import("../ir/model.js").ScalarExprIR | undefined => {
+      if (expr.kind === "literal") {
+        return { kind: "literal", value: expr.value };
+      }
+      if (
+        expr.kind === "field_access"
+        && expr.expr.kind === "current_item"
+        && !expr.field.startsWith("@")
+      ) {
+        if (!knownFields.has(expr.field)) {
+          return undefined;
+        }
+        return { kind: "column", column: expr.field };
+      }
+      if (expr.kind === "math") {
+        const left = tryCompileScalarExpr(expr.left);
+        const right = tryCompileScalarExpr(expr.right);
+        if (!left || !right) return undefined;
+        if (expr.op !== "+" && expr.op !== "-" && expr.op !== "*" && expr.op !== "/" && expr.op !== "//" && expr.op !== "%") {
+          return undefined;
+        }
+        return { kind: "binop", op: expr.op, left, right };
+      }
+      if (expr.kind === "concat") {
+        const parts = expr.parts.map((part) => tryCompileScalarExpr(part));
+        if (parts.some((p) => !p)) return undefined;
+        let acc = parts[0]!;
+        for (let i = 1; i < parts.length; i++) {
+          acc = { kind: "binop", op: "++", left: acc, right: parts[i]! };
+        }
+        return acc;
+      }
+      if (expr.kind === "unary" && expr.op === "neg") {
+        const inner = tryCompileScalarExpr(expr.expr);
+        if (!inner) return undefined;
+        return { kind: "neg", expr: inner };
+      }
+      return undefined;
     };
 
     const compileFreeExprFilter = (expr: FreeObjectExpr): FilterExprIR => {
@@ -534,6 +585,19 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
             property,
             op: expr.body.op,
           };
+        }
+      }
+      // Generic comparison with arithmetic / concat on either side, lowered
+      // to an `expr_compare` IR node that the SQL compiler can emit
+      // directly. Example: `.bb % 2 = 0`.
+      if (
+        expr.kind === "compare"
+        && (expr.op === "=" || expr.op === "!=" || expr.op === "<" || expr.op === "<=" || expr.op === ">" || expr.op === ">=")
+      ) {
+        const left = tryCompileScalarExpr(expr.left);
+        const right = tryCompileScalarExpr(expr.right);
+        if (left && right) {
+          return { kind: "expr_compare", left, right, op: expr.op };
         }
       }
       fail("Unsupported free expression in filter");
@@ -740,6 +804,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
             storage: usesLinkTable ? "table" : "inline",
             inlineColumn: usesLinkTable ? undefined : `${link.name}_id`,
             linkTable: usesLinkTable ? `${tableNameForType(ownerQualifiedName)}__${link.name.toLowerCase()}` : undefined,
+            linkTables: usesLinkTable ? collectLinkTableSources(options.subjectType!, link.name) : undefined,
           },
           property: linkPropertyMatch[2],
         };
@@ -939,6 +1004,36 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       : [];
 
     return dedupeByName([...(typeDef.links ?? []), ...(inherited as NonNullable<TypeDef["links"]>)]);
+  };
+
+  // For a multi link (or single link with link properties) declared on
+  // `ownerTypeDef`, returns every concrete subtype's link table that may
+  // hold rows for this relation. Used to UNION ALL link sources for
+  // polymorphic shape queries (e.g. `SELECT S { l_a }` when only `V`
+  // instances exist materialised in V's link table).
+  const collectLinkTableSources = (
+    ownerTypeDef: TypeDef,
+    linkName: string,
+  ): Array<{ name: string; table: string }> => {
+    const ownerName = qualifiedTypeName(ownerTypeDef);
+    const collected = new Map<string, { name: string; table: string }>();
+    const addTable = (typeName: string): void => {
+      const table = `${tableNameForType(typeName)}__${linkName.toLowerCase()}`;
+      if (!collected.has(table)) {
+        collected.set(table, { name: typeName, table });
+      }
+    };
+    if (!ownerTypeDef.abstract) {
+      addTable(ownerName);
+    }
+    for (const candidate of schema.listConcreteTypesAssignableTo(ownerName)) {
+      const candidateName = qualifiedTypeName(candidate);
+      const hasLink = collectLinks(candidate, true).some((l) => l.name === linkName);
+      if (hasLink) {
+        addTable(candidateName);
+      }
+    }
+    return [...collected.values()].sort((a, b) => a.name.localeCompare(b.name));
   };
 
   const collectComputeds = (
@@ -1183,6 +1278,12 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           for (const field of collectFields(narrowedTypeDef, true)) {
             knownFields.add(field.name);
           }
+          for (const link of collectLinks(narrowedTypeDef, true)) {
+            knownFields.add(link.name);
+          }
+          for (const computed of collectComputeds(narrowedTypeDef, true)) {
+            knownFields.add(computed.name);
+          }
         }
       }
     }
@@ -1243,6 +1344,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         storage: usesLinkTable ? "table" : "inline",
         inlineColumn: usesLinkTable ? undefined : `${link.name}_id`,
         linkTable: usesLinkTable ? `${tableNameForType(ownerQualifiedName)}__${link.name.toLowerCase()}` : undefined,
+        linkTables: usesLinkTable ? collectLinkTableSources(ownerTypeDef, link.name) : undefined,
       };
     };
 
@@ -2254,6 +2356,9 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       }
       return current;
     }
+    if (expr.kind === "select_expr_subquery") {
+      return tryExtractTypedRootExpr(expr.expr);
+    }
     return undefined;
   };
 
@@ -2317,6 +2422,21 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     return branches;
   };
 
+  // Shape elements that compile cleanly through the typed-select IR path —
+  // anything else (e.g. aggregate function calls over links) needs the
+  // select_expr runtime so it can resolve link-table polymorphism per row.
+  const shapeIsTypedSelectFriendly = (shape: ShapeElement[]): boolean =>
+    shape.every((el) => (
+      el.kind === "field"
+      || el.kind === "splat"
+      || (el.kind === "computed"
+        && (el.expr.kind === "field_ref"
+          || el.expr.kind === "polymorphic_field_ref"
+          || el.expr.kind === "type_name"))
+      || el.kind === "link"
+      || el.kind === "backlink"
+    ));
+
   const tryRewriteSelectExprAsTypedSelect = (
     selectExpr: Extract<Statement, { kind: "select_expr" }>,
   ): SelectStatement | undefined => {
@@ -2331,6 +2451,12 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     }
     const typedRoot = tryExtractTypedRootExpr(root.expr);
     if (!typedRoot) return undefined;
+    // Bail out when the shape uses anything richer than direct field/link
+    // references — the select_expr runtime resolves those per row whereas
+    // the typed-select path would need them lowered into SQL up front.
+    if (hasSetExpr(selectExpr.expr) && !shapeIsTypedSelectFriendly(root.shape)) {
+      return undefined;
+    }
 
     let orderBy: OrderExpr | undefined;
     if (selectExpr.orderBy) {
@@ -2558,11 +2684,25 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
             ? ({ name: "Object", module: activeModule, fields: [], abstract: true } as TypeDef)
             : schema.getType(normalizedSourceName);
           if (sourceType) {
+            // If the binding's value contains a SELECT with a FILTER, fold
+            // that filter into the outer SELECT so the binding's predicate
+            // is preserved (e.g. `with x := (select Bb filter .bb > 0)`).
+            let nestedFilter: SelectStatement["filter"] | undefined;
+            const peelToSelect = (e: FreeObjectExpr): FreeObjectExpr | undefined => {
+              if (e.kind === "select_expr_subquery") return peelToSelect(e.expr) ?? e.expr;
+              if (e.kind === "distinct") return peelToSelect(e.expr);
+              if (e.kind === "select") return e;
+              return undefined;
+            };
+            const innerSelect = peelToSelect(withBinding.expr);
+            if (innerSelect && innerSelect.kind === "select") {
+              nestedFilter = innerSelect.clauses?.filter;
+            }
             return {
               typeDef: sourceType,
               aliasProjections: undefined,
               clauses: {
-                filter: selectStatement.filter,
+                filter: mergeFilters(nestedFilter, selectStatement.filter),
                 orderBy: selectStatement.orderBy,
                 limit: selectStatement.limit,
                 offset: selectStatement.offset,

@@ -4895,7 +4895,7 @@ const materializeSelectRow = (
             continue;
           }
           const aggregateColumn = aggregateUsesLinkProperty ? `l.${quoteIdent(element.expr.column)}` : `t.${quoteIdent(element.expr.column)}`;
-          sql = `SELECT COALESCE(SUM(${aggregateColumn}), 0) AS ${quoteIdent("value")} FROM ${targetSource} JOIN ${quoteIdent(relation.linkTable!)} l ON l.${quoteIdent("target")} = t.${quoteIdent("id")} WHERE l.${quoteIdent("source")} = ?`;
+          sql = `SELECT COALESCE(SUM(${aggregateColumn}), 0) AS ${quoteIdent("value")} FROM ${targetSource} JOIN ${linkJunctionFromSql(relation, "l")} ON l.${quoteIdent("target")} = t.${quoteIdent("id")} WHERE l.${quoteIdent("source")} = ?`;
           params = [sourceId];
         }
         sqlTrail.push({ sql, params: [...params], loweringMode: "fallback_multi_query" });
@@ -5865,7 +5865,38 @@ const evaluateSelectExprEntry = (
         : (out[0] ?? null);
     }
     case "for_expr": {
-  const iteratorValue = evaluateSelectExprEntry(schema, db, context, entry.iterator, sqlTrail, evalContext);
+  // FOR-loop body expressions like `x[IS T]` need each iterator item to
+  // carry its `__source_type` so type-intersections can filter rows by
+  // their concrete type. `evaluateSelectExprEntry(... select)` strips
+  // `__source_type` via `materializeSelectRow`, so for "select" iterators
+  // we run the SQL directly and pair the raw rows with their projected
+  // form so projectOne keeps reading shape fields the usual way.
+  // FOR-loop body expressions like `x[IS T] { ba, bb }` need each iterator
+  // item to carry its full row, including every column the body may
+  // reference and `__source_type` for type-intersection filtering. The
+  // SelectIR's compiled SQL projects only the columns listed in its shape
+  // (typically just `id`), so we build a wider polymorphic SELECT here
+  // that yields every concrete column across the source tables.
+  let iteratorValue: unknown;
+  if (entry.iterator.kind === "select") {
+    const query = entry.iterator.query;
+    const sources = query.sourceTables.length > 0 ? query.sourceTables : [{ name: query.sourceType, table: query.table, columns: undefined }];
+    const allColumns = Array.from(new Set(sources.flatMap((s) => s.columns ?? ["id"])));
+    const sourceSelects = sources.map((source) => {
+      const available = source.columns && source.columns.length > 0 ? new Set(source.columns) : undefined;
+      const projection = allColumns
+        .map((column) => (!available || available.has(column)
+          ? `${quoteIdent(column)} AS ${quoteIdent(column)}`
+          : `NULL AS ${quoteIdent(column)}`))
+        .join(", ");
+      return `SELECT '${source.name}' AS ${quoteIdent("__source_type")}, ${projection} FROM ${quoteIdent(source.table)}`;
+    });
+    const sql = sourceSelects.length === 1 ? sourceSelects[0]! : sourceSelects.join(" UNION ALL ");
+    sqlTrail.push({ sql, params: [], loweringMode: "single_statement" });
+    iteratorValue = db.prepare(sql).all() as Record<string, unknown>[];
+  } else {
+    iteratorValue = evaluateSelectExprEntry(schema, db, context, entry.iterator, sqlTrail, evalContext);
+  }
   const iteratorItems = Array.isArray(iteratorValue) ? iteratorValue : [iteratorValue];
   const out: unknown[] = [];
   const bodyProducesTupleValue = isTupleLikeSelectExprEntry(entry.body);
@@ -6746,6 +6777,14 @@ const resolveLinks = (
   },
   sqlTrail: SQLArtifact[],
 ): Record<string, unknown>[] => {
+  const collectScalarExprColumnsLocal = (
+    expr: import("../ir/model.js").ScalarExprIR,
+  ): string[] => {
+    if (expr.kind === "column") return expr.column.startsWith("@") ? [] : [expr.column];
+    if (expr.kind === "literal") return [];
+    if (expr.kind === "neg") return collectScalarExprColumnsLocal(expr.expr);
+    return [...collectScalarExprColumnsLocal(expr.left), ...collectScalarExprColumnsLocal(expr.right)];
+  };
   const collectFilterColumns = (filter: FilterExprIR | undefined): string[] => {
     if (!filter) {
       return [];
@@ -6758,6 +6797,9 @@ const resolveLinks = (
     }
     if (filter.kind === "field_compare") {
       return [filter.leftColumn, filter.rightColumn].filter((column) => !column.startsWith("@"));
+    }
+    if (filter.kind === "expr_compare") {
+      return [...collectScalarExprColumnsLocal(filter.left), ...collectScalarExprColumnsLocal(filter.right)];
     }
     if (filter.kind === "not") {
       return collectFilterColumns(filter.expr);
@@ -6904,7 +6946,7 @@ const resolveLinks = (
         return aliases;
       }),
     ];
-    sql = `SELECT ${selected.join(", ")} FROM ${targetSource} JOIN ${quoteIdent(relation.linkTable!)} l ON l.${quoteIdent("target")} = t.${quoteIdent("id")} WHERE l.${quoteIdent("source")} = ?`;
+    sql = `SELECT ${selected.join(", ")} FROM ${targetSource} JOIN ${linkJunctionFromSql(relation, "l")} ON l.${quoteIdent("target")} = t.${quoteIdent("id")} WHERE l.${quoteIdent("source")} = ?`;
     params.push(sourceId);
   }
 
@@ -7176,6 +7218,28 @@ const resolveBacklinkObjects = (
 };
 
 const quoteIdent = (ident: string): string => `"${ident.replaceAll('"', '""')}"`;
+
+const linkJunctionFromSql = (
+  relation: { linkTable?: string; linkTables?: Array<{ table: string }>; propertyColumns?: string[] },
+  alias: string,
+): string => {
+  const tables = relation.linkTables && relation.linkTables.length > 0
+    ? relation.linkTables.map((entry) => entry.table)
+    : relation.linkTable
+      ? [relation.linkTable]
+      : [];
+  if (tables.length === 0) {
+    throw new AppError("E_SQL", "Missing link table metadata");
+  }
+  if (tables.length === 1) {
+    return `${quoteIdent(tables[0]!)} ${alias}`;
+  }
+  const projection = ["source", "target", ...(relation.propertyColumns ?? [])]
+    .map((column) => quoteIdent(column))
+    .join(", ");
+  const parts = tables.map((table) => `SELECT ${projection}, rowid AS ${quoteIdent("rowid")} FROM ${quoteIdent(table)}`);
+  return `(${parts.join(" UNION ALL ")}) ${alias}`;
+};
 
 const compileFilterPredicate = (lhsSql: string, op: "=" | "!=" | "<" | "<=" | ">" | ">=" | "?=" | "?!=" | "like" | "ilike"): string => {
   if (op === "=") {

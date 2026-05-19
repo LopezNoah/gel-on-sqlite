@@ -177,6 +177,11 @@ export interface LinkRelationIR {
   storage: "inline" | "table";
   inlineColumn?: string;
   linkTable?: string;
+  /** All concrete-subtype link tables that may carry data for this
+   * relation. Used to UNION ALL across them when a query's row set spans
+   * multiple subtypes (polymorphic link materialization). When undefined
+   * or empty, the SQL compiler falls back to `linkTable`. */
+  linkTables?: Array<{ name: string; table: string }>;
 }
 
 /* ---------------------------------- */
@@ -267,7 +272,21 @@ export type FilterExprIR =
   | {
       kind: "not";
       expr: FilterExprIR;
+    }
+  | {
+      kind: "expr_compare";
+      left: ScalarExprIR;
+      right: ScalarExprIR;
+      op: "=" | "!=" | "<" | "<=" | ">" | ">=";
     };
+
+/** Scalar expression compiled from filter LHS/RHS — column refs, literals,
+ * and arithmetic/string-concat operators that lower directly to SQL. */
+export type ScalarExprIR =
+  | { kind: "column"; column: string }
+  | { kind: "literal"; value: ScalarValue }
+  | { kind: "binop"; op: "+" | "-" | "*" | "/" | "//" | "%" | "++"; left: ScalarExprIR; right: ScalarExprIR }
+  | { kind: "neg"; expr: ScalarExprIR };
 
 /* ---------------------------------- */
 /* Select-shape expressions           */
