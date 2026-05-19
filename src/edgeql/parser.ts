@@ -3265,6 +3265,7 @@ class Parser {
         .reduce((left, right): FilterExpr => ({ kind: "or", left, right }));
     }
 
+    const beforeTarget = this.index;
     const target = this.parseFilterTarget();
     const token = this.peek();
     if (["kw_and", "kw_or", "kw_order", "kw_limit", "kw_offset", "rparen", "semi", "eof"].includes(token.kind)) {
@@ -3325,6 +3326,22 @@ class Parser {
         op: "not_in",
         values,
       };
+    } else if (
+      token.kind === "plus"
+      || token.kind === "minus"
+      || token.kind === "star"
+      || token.kind === "slash"
+      || token.kind === "floor_div"
+      || token.kind === "modulo"
+      || token.kind === "pow"
+      || token.kind === "concat"
+    ) {
+      // Arithmetic / string-concat continues the LHS expression. Rewind
+      // and parse the whole predicate as a FreeObjectExpr so we can
+      // capture `.field op operand cmp value`.
+      this.index = beforeTarget;
+      const expr = this.parseFreeObjectExpr();
+      return { kind: "free_expr", expr };
     } else {
       throw new AppError("E_SYNTAX", "Expected filter operator (=, !=, like, ilike, IN, NOT IN)", token.line, token.column);
     }

@@ -269,7 +269,7 @@ const compileLinkArrayExpr = (
       `${targetAlias}.${quoteIdent("id")} = ${sourceAlias}.${quoteIdent(requiredInlineColumn(element.relation.inlineColumn))}`,
     );
   } else {
-    fromClause = `${compilePolymorphicTargetSource(element.relation, targetAlias, requiredTargetColumns)} JOIN ${quoteIdent(requiredLinkTable(element.relation.linkTable))} ${junctionAlias} ON ${junctionAlias}.${quoteIdent("target")} = ${targetAlias}.${quoteIdent("id")}`;
+    fromClause = `${compilePolymorphicTargetSource(element.relation, targetAlias, requiredTargetColumns)} JOIN ${linkJunctionFrom(element.relation, junctionAlias!)} ON ${junctionAlias}.${quoteIdent("target")} = ${targetAlias}.${quoteIdent("id")}`;
     whereClauses.push(`${junctionAlias}.${quoteIdent("source")} = ${sourceAlias}.${quoteIdent("id")}`);
   }
 
@@ -730,6 +730,41 @@ const requiredLinkTable = (value: string | undefined): string => {
   return value;
 };
 
+/**
+ * Returns a FROM-source fragment for the junction table of a multi-link.
+ *
+ * Polymorphic ownership means a link declared on an abstract or base type
+ * lives in different per-subtype tables (e.g. `default__v__l_a` carries
+ * data for `S.l_a` when only V instances exist). When the relation's
+ * `linkTables` list has more than one entry, this UNION ALLs them so the
+ * query sees the combined junction across every subtype. The result is
+ * aliased so callers can JOIN ... ON `alias.source` / `alias.target` /
+ * link-property columns as if they had a single table.
+ *
+ * `rowid` is projected so callers can preserve insertion order via
+ * `ORDER BY junction.rowid` like they would for a single physical table.
+ */
+const linkJunctionFrom = (
+  relation: LinkRelationIR,
+  alias: string,
+): string => {
+  const tables = relation.linkTables && relation.linkTables.length > 0
+    ? relation.linkTables.map((entry) => entry.table)
+    : relation.linkTable
+      ? [relation.linkTable]
+      : (() => {
+          throw new AppError("E_SQL", "Missing link table metadata");
+        })();
+  if (tables.length === 1) {
+    return `${quoteIdent(tables[0]!)} ${alias}`;
+  }
+  const projection = ["source", "target", ...(relation.propertyColumns ?? [])]
+    .map((column) => quoteIdent(column))
+    .join(", ");
+  const parts = tables.map((table) => `SELECT ${projection}, rowid AS ${quoteIdent("rowid")} FROM ${quoteIdent(table)}`);
+  return `(${parts.join(" UNION ALL ")}) ${alias}`;
+};
+
 const requiredAlias = (value: string | undefined): string => {
   if (!value) {
     throw new AppError("E_SQL", "Missing SQL alias metadata");
@@ -754,7 +789,7 @@ const compileLinkAggregateExpr = (
     whereClause = `${targetAlias}.${quoteIdent("id")} = ${sourceAlias}.${quoteIdent(requiredInlineColumn(relation.inlineColumn))}`;
   } else {
     const junctionAlias = linkAggregateJunctionAlias(relation, sourceAlias);
-    fromClause = `${fromClause} JOIN ${quoteIdent(requiredLinkTable(relation.linkTable))} ${junctionAlias} ON ${junctionAlias}.${quoteIdent("target")} = ${targetAlias}.${quoteIdent("id")}`;
+    fromClause = `${fromClause} JOIN ${linkJunctionFrom(relation, junctionAlias)} ON ${junctionAlias}.${quoteIdent("target")} = ${targetAlias}.${quoteIdent("id")}`;
     whereClause = `${junctionAlias}.${quoteIdent("source")} = ${sourceAlias}.${quoteIdent("id")}`;
     if (aggregateUsesLinkProperty) {
       aggregateColumn = `${junctionAlias}.${quoteIdent(expr.column)}`;
@@ -945,7 +980,7 @@ const compileFilterExprSQL = (
       return "0";
     }
     const alias = `lp_${Math.abs(hashString(`${filter.relation.sourceType}:${filter.relation.linkTable}:${filter.property}`)).toString(16)}`;
-    return `EXISTS (SELECT 1 FROM ${quoteIdent(filter.relation.linkTable)} ${alias} WHERE ${alias}.${quoteIdent("source")} = ${sourceAlias}.${quoteIdent("id")} AND ${alias}.${quoteIdent(filter.property)} IS NOT NULL)`;
+    return `EXISTS (SELECT 1 FROM ${linkJunctionFrom(filter.relation, alias)} WHERE ${alias}.${quoteIdent("source")} = ${sourceAlias}.${quoteIdent("id")} AND ${alias}.${quoteIdent(filter.property)} IS NOT NULL)`;
   }
 
   if (filter.kind === "link_property_compare_exists") {
@@ -964,7 +999,7 @@ const compileFilterExprSQL = (
           : filter.op === "like"
             ? `${left} LIKE ${right}`
             : `LOWER(${left}) LIKE LOWER(${right})`;
-      return `EXISTS (SELECT 1 FROM ${quoteIdent(filter.relation.linkTable!)} ${relationAlias} JOIN ${quoteIdent(target.table)} ${targetAlias} ON ${targetAlias}.${quoteIdent("id")} = ${relationAlias}.${quoteIdent("target")} WHERE ${relationAlias}.${quoteIdent("source")} = ${sourceAlias}.${quoteIdent("id")} AND ${comparison})`;
+      return `EXISTS (SELECT 1 FROM ${linkJunctionFrom(filter.relation, relationAlias)} JOIN ${quoteIdent(target.table)} ${targetAlias} ON ${targetAlias}.${quoteIdent("id")} = ${relationAlias}.${quoteIdent("target")} WHERE ${relationAlias}.${quoteIdent("source")} = ${sourceAlias}.${quoteIdent("id")} AND ${comparison})`;
     });
     return clauses.length === 1 ? clauses[0]! : `(${clauses.join(" OR ")})`;
   }
@@ -1014,9 +1049,42 @@ const compileFilterExprSQL = (
     return `(NOT ${compileFilterExprSQL(filter.expr, sourceAlias, params, linkPropertyAlias)})`;
   }
 
+  if (filter.kind === "expr_compare") {
+    const left = compileScalarExprSQL(filter.left, sourceAlias, params);
+    const right = compileScalarExprSQL(filter.right, sourceAlias, params);
+    return `(${left} ${filter.op} ${right})`;
+  }
+
   const left = compileFilterExprSQL(filter.left, sourceAlias, params, linkPropertyAlias);
   const right = compileFilterExprSQL(filter.right, sourceAlias, params, linkPropertyAlias);
   return filter.kind === "and" ? `(${left} AND ${right})` : `(${left} OR ${right})`;
+};
+
+const compileScalarExprSQL = (
+  expr: import("../ir/model.js").ScalarExprIR,
+  sourceAlias: string,
+  params: ScalarValue[],
+): string => {
+  if (expr.kind === "column") {
+    return `${sourceAlias}.${quoteIdent(expr.column)}`;
+  }
+  if (expr.kind === "literal") {
+    params.push(encodeParam(expr.value));
+    return "?";
+  }
+  if (expr.kind === "neg") {
+    return `(-${compileScalarExprSQL(expr.expr, sourceAlias, params)})`;
+  }
+  const leftSql = compileScalarExprSQL(expr.left, sourceAlias, params);
+  const rightSql = compileScalarExprSQL(expr.right, sourceAlias, params);
+  if (expr.op === "//") {
+    // SQLite has no integer-division operator; emit CAST(left / right AS INTEGER).
+    return `(CAST(${leftSql} / ${rightSql} AS INTEGER))`;
+  }
+  if (expr.op === "++") {
+    return `(${leftSql} || ${rightSql})`;
+  }
+  return `(${leftSql} ${expr.op} ${rightSql})`;
 };
 
 const collectFieldFilterColumns = (filter: FilterExprIR | undefined): string[] => {
@@ -1068,7 +1136,18 @@ const collectFieldFilterColumns = (filter: FilterExprIR | undefined): string[] =
     return collectFieldFilterColumns(filter.expr);
   }
 
+  if (filter.kind === "expr_compare") {
+    return [...collectScalarExprColumns(filter.left), ...collectScalarExprColumns(filter.right)];
+  }
+
   return [...collectFieldFilterColumns(filter.left), ...collectFieldFilterColumns(filter.right)];
+};
+
+const collectScalarExprColumns = (expr: import("../ir/model.js").ScalarExprIR): string[] => {
+  if (expr.kind === "column") return [expr.column];
+  if (expr.kind === "literal") return [];
+  if (expr.kind === "neg") return collectScalarExprColumns(expr.expr);
+  return [...collectScalarExprColumns(expr.left), ...collectScalarExprColumns(expr.right)];
 };
 
 const shapeRequiresFallbackLowering = (shape: SelectShapeElementIR[], target: RuntimeTarget): boolean => {
