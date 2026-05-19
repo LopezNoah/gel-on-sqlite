@@ -519,6 +519,16 @@ export type SelectExprIREntry<D extends Depth = 4> =
       fieldType: string;
     }
   | {
+      kind: "type_name";
+      sourceType: string;
+    }
+  | {
+      kind: "polymorphic_field_ref";
+      sourceType: string;
+      concreteSourceTypes?: string[];
+      column: string;
+    }
+  | {
       kind: "current_item_field";
       bindingName: string;
       field: string;

@@ -1047,8 +1047,6 @@ const tryRuntimeSelectExprEvaluation = (
       case "select_expr_subquery":
         if (expr.expr.kind === "shape_projection") return false;
         return Boolean(expr.orderBy) || needsRuntimeEval(expr.expr);
-      case "subquery_expr":
-        return needsRuntimeEval(expr.expr);
       case "set_expr":
       case "tuple":
         return expr.values.some((value) => needsRuntimeEval(value));
@@ -1082,7 +1080,7 @@ const tryRuntimeSelectExprEvaluation = (
       && Boolean(first?.enumValues?.length);
   };
 
-  const bindingNeedsRuntime = (binding: { value: { kind: string; head?: string; parts?: string[]; name?: string } }): boolean => {
+  const bindingNeedsRuntime = (binding: WithBinding): boolean => {
     const value = binding.value;
     if (value.kind === "enum_path") return false;
     if (value.kind === "path") return !isEnumScalarTypeDef(value.head);
@@ -1091,7 +1089,7 @@ const tryRuntimeSelectExprEvaluation = (
     if (value.kind === "subquery") {
       // Defer only when the subquery has no link-property shape, AND the outer
       // query doesn't access link properties on a shape-redefined link.
-      const computedHasForExpr = (expr: ComputedExpr | FreeObjectExpr | undefined): boolean => {
+      const computedHasForExpr = (expr: ComputedExpr | FreeObjectExpr | WithBindingValue | undefined): boolean => {
         if (!expr || typeof expr !== "object") return false;
         if (expr.kind === "for_expr") return true;
         if (expr.kind === "select_expr" || expr.kind === "subquery_expr" || expr.kind === "select_expr_subquery") {
@@ -1131,12 +1129,11 @@ const tryRuntimeSelectExprEvaluation = (
     }
     // Defer to the regular compile path for raw path-based subqueries; the
     // runtime fallback below cannot traverse link junctions on plain paths.
-    if (value.kind === "field_access") return false;
-    if (value.kind === "subquery_expr" || value.kind === "select_expr_subquery") {
+    if (value.kind === "subquery_expr") {
       // Only defer when the inner is a pure field_access chain (no shape).
-      let inner: { kind: string; expr?: unknown; shape?: unknown[] } = value;
-      while (inner.kind === "subquery_expr" || inner.kind === "select_expr_subquery") {
-        inner = inner.expr as typeof inner;
+      let inner: FreeObjectExpr = value.expr;
+      while (inner.kind === "select_expr_subquery") {
+        inner = inner.expr;
       }
       if (inner.kind === "field_access") return false;
     }
@@ -1236,6 +1233,16 @@ const tryRuntimeSelectExprEvaluation = (
           const evaluated = evalExpr(value, env);
           return Array.isArray(evaluated) ? evaluated : [evaluated];
         });
+      case "array_literal_expr":
+        return expr.values.map((value) => evalExpr(value, env) as ScalarValue);
+      case "unary": {
+        const value = evalExpr(expr.expr, env);
+        const apply = (item: unknown): ScalarValue => {
+          if (expr.op === "not") return !(item);
+          return -Number(item);
+        };
+        return Array.isArray(value) ? value.map(apply) : apply(value);
+      }
       case "binding_ref": {
         if (env.has(expr.name)) {
           return env.get(expr.name);
@@ -1499,14 +1506,12 @@ const tryRuntimeSelectExprEvaluation = (
         const checkOne = (item: unknown) => enumValues.length > 0 && typeof item === "string" && enumValues.includes(item);
         return Array.isArray(value) ? value.map(checkOne) : checkOne(value);
       }
-      case "select_expr_subquery":
-      case "subquery_expr": {
+      case "select_expr_subquery": {
         const value = evalExpr(expr.expr, env);
         if (value === undefined) {
           return undefined;
         }
-        if (expr.kind !== "select_expr_subquery"
-          || (!expr.orderBy && !expr.filter && expr.limit === undefined && expr.offset === undefined)) {
+        if (!expr.orderBy && !expr.filter && expr.limit === undefined && expr.offset === undefined) {
           return value;
         }
         let rows = Array.isArray(value) ? [...value] : [value];
@@ -1557,17 +1562,6 @@ const tryRuntimeSelectExprEvaluation = (
           seen.add(key);
           return true;
         });
-      }
-      case "select_expr":
-        return evalExpr(expr.expr, env);
-      case "subquery": {
-        const raw = expr as unknown as { typeName?: string; query?: { typeName: string; shape: ShapeElement[]; clauses: SelectStatement["filter"] extends never ? never : { filter?: SelectStatement["filter"]; orderBy?: SelectStatement["orderBy"]; limit?: SelectStatement["limit"]; offset?: SelectStatement["offset"] }}; shape?: ShapeElement[]; clauses?: any };
-        const typeName = raw.query ? raw.query.typeName : raw.typeName;
-        const shape = raw.query ? raw.query.shape : raw.shape;
-        const clauses = raw.query ? raw.query.clauses : raw.clauses;
-        if (!typeName || !shape) return undefined;
-        const syntheticSelect = { kind: "select" as const, typeName, shape, clauses: clauses ?? {} };
-        return evalExpr(syntheticSelect as unknown as FreeObjectExpr, env);
       }
       case "shape_projection": {
         const exprAsPath = (e: FreeObjectExpr | undefined): string | undefined => {
@@ -1716,8 +1710,33 @@ const tryRuntimeSelectExprEvaluation = (
   };
 
   const initialEnv = new Map<string, unknown>();
+  const evalWithBindingValue = (value: WithBindingValue, env: EvalEnv): unknown => {
+    switch (value.kind) {
+      case "literal":
+        return value.value;
+      case "set_literal":
+      case "array_literal":
+        return [...value.values];
+      case "binding_ref":
+        return evalExpr({ kind: "binding_ref", name: value.name }, env);
+      case "parameter":
+        return context.globals?.[value.name] ?? null;
+      case "subquery":
+        return evalExpr({ kind: "select", typeName: value.query.typeName, shape: value.query.shape, clauses: value.query.clauses }, env);
+      case "subquery_expr":
+        return evalExpr(value.expr, env);
+      case "enum_path":
+        return value.member;
+      case "path":
+        return evalExpr({ kind: "path", head: value.head, tail: value.tail, steps: value.steps }, env);
+      case "path_chain":
+        return evalExpr({ kind: "path_chain", parts: value.parts, steps: value.steps }, env);
+      case "backlink_path":
+        return evalExpr({ kind: "backlink_path", link: value.link, sourceType: value.sourceType, sourceTypeExpr: value.sourceTypeExpr }, env);
+    }
+  };
   for (const binding of ast.with ?? []) {
-    initialEnv.set(binding.name, evalExpr(binding.value, initialEnv));
+    initialEnv.set(binding.name, evalWithBindingValue(binding.value, initialEnv));
   }
 
   const value = evalExpr(ast.expr, initialEnv);
@@ -1729,7 +1748,9 @@ const tryRuntimeSelectExprEvaluation = (
     const row = item as Record<string, unknown>;
     const out: Record<string, unknown> = {};
     for (const element of shape) {
-      out[element.name] = row[element.name] ?? null;
+      if ("name" in element) {
+        out[element.name] = row[element.name] ?? null;
+      }
     }
     return out;
   };
@@ -2206,7 +2227,7 @@ const tryEvaluateParsedRuntimeSelect = (
     if (expr.clauses?.orderBy || expr.clauses?.limit !== undefined || expr.clauses?.offset !== undefined) return true;
     const inner = expr.expr;
     if (inner.kind === "shape_projection") return true;
-    if (inner.kind === "select_expr_subquery" || inner.kind === "subquery") return true;
+    if (inner.kind === "select_expr_subquery" || inner.kind === "select") return true;
     if (inner.kind === "for_expr") return true;
     if (inner.kind === "exists") return true;
     if (inner.kind === "distinct") return true;
@@ -2444,15 +2465,15 @@ const tryEvaluateParsedRuntimeSelect = (
     if (value.kind === "subquery") {
       return evalSelect(value.query.typeName, value.query.shape, value.query.clauses, env);
     }
-    if (value.kind === "subquery_expr" || value.kind === "select_expr_subquery") {
-      let inner: any = value;
-      while (inner.kind === "subquery_expr" || inner.kind === "select_expr_subquery") {
+    if (value.kind === "subquery_expr") {
+      let inner: FreeObjectExpr = value.expr;
+      while (inner.kind === "select_expr_subquery") {
         inner = inner.expr;
       }
       if (inner.kind === "select") {
         return evalSelect(inner.typeName, inner.shape, inner.clauses, env);
       }
-      const evaluated = evalFreeExpr(value as FreeObjectExpr, env);
+      const evaluated = evalFreeExpr(value.expr, env);
       if (Array.isArray(evaluated)) {
         return evaluated.filter(isRecordRow) as ParsedRuntimeRow[];
       }
@@ -2479,7 +2500,6 @@ const tryEvaluateParsedRuntimeSelect = (
       if (expr.limit !== undefined) return false;
       return innerExprProducesMultiSet(expr.expr);
     }
-    if (expr.kind === "subquery_expr") return innerExprProducesMultiSet(expr.expr);
     if (expr.kind === "for_expr") return true;
     if (expr.kind === "backlink_path") return true;
     if (expr.kind === "set_expr") return true;
@@ -2893,6 +2913,9 @@ const tryEvaluateParsedRuntimeSelect = (
       return Array.isArray(value) ? value.some(Boolean) : Boolean(value);
     }
     if (filter.target.kind === "backlink_property") {
+      if (filter.kind === "in_predicate") {
+        return true;
+      }
       const rows = readBacklink(row, typeName, filter.target.link, filter.target.sourceType);
       const propertyKey = `@${filter.target.property}`;
       for (const candidate of rows) {
@@ -3911,7 +3934,7 @@ export const executeQueryWithTrace = (
           : materializeSelectExprRows(db, schema, ir, context, sqlTrail),
       };
     } else {
-      const writeResult = runWriteWithAccessPolicies(db, schema, ast, ir, sqlArtifact, subjectType!, context, compiled.usesGelIrSql);
+      const writeResult = runWriteWithAccessPolicies(db, schema, ast, ir, sqlArtifact, subjectType!, context);
 
       result = {
         kind: ir.kind,
@@ -4000,7 +4023,7 @@ export const executeQueryUnitWithTrace = (
             : materializeSelectExprRows(db, schema, ir, context, sqlTrail),
         };
       } else {
-        const writeResult = runWriteWithAccessPolicies(db, schema, ast, ir, sqlArtifact, subjectType!, context, compiled.usesGelIrSql);
+        const writeResult = runWriteWithAccessPolicies(db, schema, ast, ir, sqlArtifact, subjectType!, context);
         result = { kind: ir.kind, changes: writeResult.changes };
       }
 
@@ -4101,7 +4124,7 @@ const executeForLoop = (
       assertTargetSqlCompatibility(sqlArtifact.sql, runtimeTarget);
       const sqlTrail: SQLArtifact[] = [sqlArtifact];
 
-      const writeResult = runWriteWithAccessPolicies(db, schema, insertAst, ir, sqlArtifact, subjectType, context, compiled.usesGelIrSql);
+      const writeResult = runWriteWithAccessPolicies(db, schema, insertAst, ir, sqlArtifact, subjectType, context);
       const result = { kind: "insert" as const, changes: writeResult.changes };
 
       const currentOverlays = extractOverlays(ir);
@@ -7263,7 +7286,10 @@ const statementTypeOf = (statement: Statement): "select" | "insert" | "update" |
   if (statement.kind === "for") {
     return statement.body.kind === "insert" ? "insert" : "select";
   }
-  return statement.kind === "select_free" || statement.kind === "select_expr" ? "select" : statement.kind;
+  if (statement.kind === "select" || statement.kind === "insert" || statement.kind === "update" || statement.kind === "delete") {
+    return statement.kind;
+  }
+  return "select";
 };
 
 const normalizeSecurityContext = (context: SecurityContext): SecurityContext => {

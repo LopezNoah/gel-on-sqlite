@@ -1560,23 +1560,24 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
 
         if (shapeElement.expr.kind === "polymorphic_field_ref") {
           const polymorphicSourceTypeName = normalizeTypeName(shapeElement.expr.sourceType, scopeModule);
+          const polymorphicFieldName = shapeElement.expr.field;
           const polymorphicConcretes = shapeElement.expr.sourceTypeExpr
             ? concreteTypeNamesForTypeExpr(shapeElement.expr.sourceTypeExpr, scopeModule)
             : schema
                 .listConcreteTypesAssignableTo(polymorphicSourceTypeName)
                 .map((candidate) => qualifiedTypeName(candidate));
-          if (!knownFields.has(shapeElement.expr.field)) {
+          if (!knownFields.has(polymorphicFieldName)) {
             const fieldOnAnyConcrete = polymorphicConcretes.some((concreteName) => {
               const concreteType = schema.getType(concreteName);
               return concreteType
-                ? collectFields(concreteType, true).some((field) => field.name === shapeElement.expr.field)
+                ? collectFields(concreteType, true).some((field) => field.name === polymorphicFieldName)
                 : false;
             });
             if (!fieldOnAnyConcrete) {
-              fail(`Unknown field '${shapeElement.expr.field}' on '${polymorphicSourceTypeName}'`);
+              fail(`Unknown field '${polymorphicFieldName}' on '${polymorphicSourceTypeName}'`);
             }
           }
-          selectedColumns.add(shapeElement.expr.field);
+          selectedColumns.add(polymorphicFieldName);
           shapeElements.push({
             kind: "computed",
             name: shapeElement.name,
@@ -1585,7 +1586,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
               kind: "polymorphic_field_ref",
               sourceType: polymorphicSourceTypeName,
               concreteSourceTypes: polymorphicConcretes,
-              column: shapeElement.expr.field,
+              column: polymorphicFieldName,
             },
           });
           shapeNames.add(shapeElement.name);
@@ -2496,7 +2497,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     const forBindingStack: string[] = [];
 
     const compileExprToIREntry = (
-      expr: FreeObjectExpr,
+      expr: FreeObjectExpr | ComputedExpr,
       currentItemBinding?: string,
     ): import("../ir/model.js").SelectExprIREntry => {
       if (expr.kind === "literal") {
@@ -2510,6 +2511,42 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           kind: "set_expr",
           values: expr.values.map((value) => asNestedExprEntry(compileExprToIREntry(value, currentItemBinding))),
         };
+      }
+      if (expr.kind === "field_ref") {
+        return {
+          kind: "current_item_field",
+          bindingName: currentItemBinding ?? "__current__",
+          field: expr.field,
+        };
+      }
+      if (expr.kind === "polymorphic_field_ref") {
+        const polymorphicSourceTypeName = normalizeTypeName(expr.sourceType, "default");
+        const polymorphicConcretes = expr.sourceTypeExpr
+          ? concreteTypeNamesForTypeExpr(expr.sourceTypeExpr, "default")
+          : schema
+              .listConcreteTypesAssignableTo(polymorphicSourceTypeName)
+              .map((candidate) => qualifiedTypeName(candidate));
+        return {
+          kind: "polymorphic_field_ref",
+          sourceType: polymorphicSourceTypeName,
+          concreteSourceTypes: polymorphicConcretes,
+          column: expr.field,
+        };
+      }
+      if (expr.kind === "type_name") {
+        return { kind: "type_name", sourceType: "" };
+      }
+      if (expr.kind === "subquery") {
+        return compileExprToIREntry({ kind: "select", typeName: expr.typeName, shape: expr.shape, clauses: expr.clauses }, currentItemBinding);
+      }
+      if (expr.kind === "select_expr") {
+        return compileExprToIREntry({ kind: "select_expr_subquery", expr: expr.expr, clauses: expr.clauses }, currentItemBinding);
+      }
+      if (expr.kind === "field_suffix_math") {
+        fail("Unsupported field suffix math in select_expr");
+      }
+      if (expr.kind === "type_intersection") {
+        return compileExprToIREntry(expr.expr, currentItemBinding);
       }
       if (expr.kind === "distinct") {
         return {
@@ -2548,6 +2585,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
             expr?: import("../ir/model.js").SelectExprIREntry<3>;
             multi?: boolean;
           }>;
+          multi?: boolean;
         };
 
         const fields: ShapeProjectionField[] = [];
@@ -2571,7 +2609,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
             if (element.expr.kind === "type_name") {
               fields.push({
                 name: element.name,
-                expr: { kind: "type_name", sourceType: "" } as import("../ir/model.js").SelectExprIREntry<3>,
+                expr: { kind: "type_name", sourceType: "" },
               });
               continue;
             }
@@ -2589,7 +2627,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
                   sourceType: polymorphicSourceTypeName,
                   concreteSourceTypes: polymorphicConcretes,
                   column: element.expr.field,
-                } as import("../ir/model.js").SelectExprIREntry<3>,
+                },
               });
               continue;
             }
@@ -2721,7 +2759,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       }
       
       if (expr.kind === "for_expr") {
-        const iterator = compileExprToIREntry(expr.iterator, currentItemBinding);
+        const iterator = asNestedExprEntry(compileExprToIREntry(expr.iterator, currentItemBinding));
         forBindingStack.push(expr.variable);
         // const body = asNestedExprEntry(compileExprToIREntry(expr.body, expr.variable));
         // forBindingStack.pop();
@@ -2736,13 +2774,13 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     kind: "for_expr",
     variable: expr.variable,
     iterator,
-    body: compileExprToIREntry(expr.body, expr.variable),
+    body: asNestedExprEntry(compileExprToIREntry(expr.body, expr.variable)),
     filter: expr.filter
-      ? compileExprToIREntry(expr.filter, expr.variable)
+      ? asNestedExprEntry(compileExprToIREntry(expr.filter, expr.variable))
       : undefined,
     orderBy: expr.orderBy
       ? {
-          value: compileExprToIREntry(expr.orderBy.expr, expr.variable),
+          value: asNestedExprEntry(compileExprToIREntry(expr.orderBy.expr, expr.variable)),
           direction: expr.orderBy.direction,
         }
       : undefined,
