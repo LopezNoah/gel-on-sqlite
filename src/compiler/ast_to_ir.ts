@@ -1,6 +1,7 @@
 import { AppError } from "../errors.js";
 import type {
   Statement as EdgeQLStatement,
+  ComputedExpr,
   FreeObjectExpr,
   SelectStatement,
   SelectFreeStatement,
@@ -381,7 +382,7 @@ const extendPathSetDirectional = (source: Set, ptrref: PointerRef, direction: "o
 
 const containsSubSelect = (expr: FreeObjectExpr): boolean => {
   if (!expr || typeof expr !== "object") return false;
-  if (expr.kind === "select_expr_subquery" || expr.kind === "subquery_expr") return true;
+  if (expr.kind === "select_expr_subquery") return true;
   if (expr.kind === "field_access") return containsSubSelect(expr.expr);
   if (expr.kind === "cast") return containsSubSelect(expr.expr);
   if (expr.kind === "exists" || expr.kind === "not") return containsSubSelect((expr as { expr: FreeObjectExpr }).expr);
@@ -865,7 +866,7 @@ const inferAstExprTypeName = (expr: FreeObjectExpr, ctx: IRCompileContext): stri
   }
 };
 
-const compileFreeObjectExpr = (expr: FreeObjectExpr, ctx: IRCompileContext): Set => {
+const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompileContext): Set => {
   const resolveHeadSet = (name: string): Set => resolveBinding(ctx, name) ?? setFromTypeRoot(resolveTypeRef(ctx, name));
 
   switch (expr.kind) {
@@ -914,9 +915,37 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr, ctx: IRCompileContext): Set
       return setFromTypeRoot(typeref);
     }
 
+    case "field_ref": {
+      const bound = resolveBinding(ctx, expr.field);
+      if (bound) {
+        return bound;
+      }
+      const subject = resolveBinding(ctx, "__current__") ?? resolveBinding(ctx, "__subject__");
+      const ptrref = subject ? resolvePointerRef(ctx, subject.typeref, expr.field) : undefined;
+      return subject && ptrref ? extendPathSet(subject, ptrref) : literalToSet(null);
+    }
+
+    case "polymorphic_field_ref": {
+      const subject = resolveBinding(ctx, "__current__") ?? resolveBinding(ctx, "__subject__");
+      const narrowedSubject = subject
+        ? { ...subject, typeref: resolveTypeRef(ctx, expr.sourceType) }
+        : setFromTypeRoot(resolveTypeRef(ctx, expr.sourceType));
+      const ptrref = resolvePointerRef(ctx, narrowedSubject.typeref, expr.field);
+      return ptrref ? extendPathSet(narrowedSubject, ptrref) : literalToSet(null);
+    }
+
+    case "type_name": {
+      const subject = resolveBinding(ctx, "__current__") ?? resolveBinding(ctx, "__subject__");
+      return literalToSet(subject?.typeref.id ?? null);
+    }
+
     case "select": {
       const typeref = resolveTypeRef(ctx, expr.typeName);
       return setFromTypeRoot(typeref);
+    }
+
+    case "subquery": {
+      return compileFreeObjectExpr({ kind: "select", typeName: expr.typeName, shape: expr.shape, clauses: expr.clauses }, ctx);
     }
 
     case "select_expr_subquery": {
@@ -1638,6 +1667,14 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr, ctx: IRCompileContext): Set
       };
     }
 
+    case "type_intersection": {
+      const inner = compileFreeObjectExpr(expr.expr, ctx);
+      return {
+        ...inner,
+        typeref: resolveTypeRef(ctx, expr.sourceType),
+      };
+    }
+
     case "field_suffix_math": {
       const resolved = resolveBinding(ctx, expr.field);
       if (resolved) {
@@ -1953,7 +1990,9 @@ const compileShape = (
 
   const expandSplat = (el: Extract<EdgeQLShapeElement, { kind: "splat" }>): ShapeElement[] => {
     const targetType = el.sourceType ? resolveTypeRef(ctx, el.sourceType) : subject.typeref;
-    return expandSplatEntries(subject, targetType, el.depth, explicitNames, el, seenHere);
+    const nextSeen = new globalThis.Set(seenTypeIds);
+    nextSeen.add(targetType.id);
+    return expandSplatEntries(subject, targetType, el.depth, explicitNames, el, nextSeen);
   };
 
   const withShapeModifiers = (expr: Set, el: EdgeQLShapeElement): Set => {
@@ -2003,17 +2042,18 @@ const compileShape = (
     };
   };
 
-  const compileLinkPropertyExpr = (el: EdgeQLShapeElement): ShapeElement | undefined => {
+  const compileLinkPropertyExpr = (el: Extract<EdgeQLShapeElement, { kind: "field" | "computed" }>): ShapeElement | undefined => {
     const propertyName = el.name;
     const subjectExpr = subject.expr;
     let linkPtrRef: PointerRef | undefined;
     if (subjectExpr.kind === "pointer") {
       const linkPointer = subjectExpr as Pointer;
       if (!linkPointer.ptrref.isLinkProperty) {
-        linkPtrRef = linkPointer.ptrref;
+        const linkPtr = linkPointer.ptrref;
+        linkPtrRef = linkPtr;
         const linkSourceType = getResolvedSchemaType(ctx, linkPointer.source.typeref.id);
         if (linkSourceType) {
-          const linkDef = linkSourceType.resolvedLinks.find(l => l.name === linkPtrRef.shortName);
+          const linkDef = linkSourceType.resolvedLinks.find(l => l.name === linkPtr.shortName);
           if (linkDef?.properties) {
             const propName = propertyName.slice(1);
             const propDef = linkDef.properties.find(p => p.name === propName);
