@@ -356,7 +356,7 @@ export const renderSchemaSQL = (schema: SchemaSnapshot): string => {
  * Splits statements on semicolons and runs each non-empty statement.
  */
 export const applySchemaSQL = (
-  db: { prepare: (sql: string) => { run: (...params: any[]) => { changes: number } } },
+  db: { prepare: (sql: string) => { run: (...params: ScalarValue[]) => { changes: number } } },
   schema: SchemaSnapshot,
 ): void => {
   const sql = renderSchemaSQL(schema);

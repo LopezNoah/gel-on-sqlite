@@ -38,7 +38,7 @@ export interface ComparisonContext {
 }
 
 export interface CommandContext {
-  get<T>(ctx: new (...args: any[]) => T): T | undefined;
+  get<T>(ctx: new (...args: unknown[]) => T): T | undefined;
 }
 
 export interface AlterObjectProperty {
@@ -92,30 +92,37 @@ export class Property {
   constructor(public data: PropertyData) {}
 
   getShortname(_schema: PropertySchema): { name: string } {
+    void _schema;
     return { name: this.data.name };
   }
 
   getTarget(_schema: PropertySchema): PropertyTypeLike | undefined {
+    void _schema;
     return this.data.target;
   }
 
   getSource(_schema: PropertySchema): unknown {
+    void _schema;
     return this.data.source;
   }
 
   isSpecialPointer(_schema: PropertySchema): boolean {
+    void _schema;
     return Boolean(this.data.special);
   }
 
   isPureComputable(_schema: PropertySchema): boolean {
+    void _schema;
     return Boolean(this.data.pureComputable);
   }
 
   isNonConcrete(_schema: PropertySchema): boolean {
+    void _schema;
     return Boolean(this.data.nonConcrete);
   }
 
   isEndpointPointer(_schema: PropertySchema): boolean {
+    void _schema;
     return Boolean(this.data.endpointPointer);
   }
 
@@ -155,6 +162,7 @@ export class Property {
   }
 
   compare(other: unknown, schema: PropertySchema, _context: ComparisonContext): number {
+    void _context;
     if (!(other instanceof Property)) {
       if (typeof other === "object" && other !== null) {
         return 0;
@@ -193,6 +201,7 @@ export class Property {
   }
 
   hasUserDefinedProperties(_schema: PropertySchema): boolean {
+    void _schema;
     return false;
   }
 

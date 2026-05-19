@@ -103,15 +103,15 @@ export class AnnotationSet {
   getJson<T>(
     name: string, 
     context: string, 
-    validator: (val: any) => T
+    validator: (val: unknown) => T
   ): T | undefined {
     const anno = this.annotations.get(name);
     if (!anno) return undefined;
 
-    let parsed: any;
+    let parsed: unknown;
     try {
       parsed = JSON.parse(anno.value);
-    } catch (e) {
+    } catch {
       throw new errors.SchemaDefinitionError(
         `annotation ${name} on ${context} is not set to a valid JSON value`
       );
@@ -119,9 +119,9 @@ export class AnnotationSet {
 
     try {
       return validator(parsed);
-    } catch (e) {
+    } catch (error) {
       throw new errors.SchemaDefinitionError(
-        `annotation ${name} on ${context} is not set to JSON containing a valid value: ${e}`
+        `annotation ${name} on ${context} is not set to JSON containing a valid value: ${error}`
       );
     }
   }
@@ -130,7 +130,7 @@ export class AnnotationSet {
   mustGetJson<T>(
     name: string, 
     context: string, 
-    validator: (val: any) => T
+    validator: (val: unknown) => T
   ): T {
     const value = this.getJson(name, context, validator);
     if (value === undefined) {

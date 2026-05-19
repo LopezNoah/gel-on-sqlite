@@ -4,7 +4,6 @@ import type {
   AccessPolicyDef,
   AnnotationDef,
   ComputedDef,
-  ComputedValuePart,
   ConstraintDef,
   FieldDef,
   FunctionBodyDef,
@@ -169,12 +168,6 @@ export const deserializeSchemaFromGelTables = (db: SQLiteDatabase): SchemaSnapsh
     pointer_id: string;
   }>;
 
-  const pointerEndpoints = db.prepare(`SELECT * FROM gel_pointer_endpoints`).all() as Array<{
-    pointer_id: string;
-    source_id: string;
-    target_id: string;
-  }>;
-
   const linkProps = db.prepare(`SELECT * FROM gel_link_properties`).all() as Array<{
     link_id: string;
     property_id: string;
@@ -217,7 +210,6 @@ export const deserializeSchemaFromGelTables = (db: SQLiteDatabase): SchemaSnapsh
     rewrite_id: string;
   }>;
 
-  const endpointByPointer = new Map(pointerEndpoints.map((e) => [e.pointer_id, e]));
   const pointersBySource = new Map<string, Array<{ pointer_id: string }>>();
   for (const p of pointers) {
     if (!pointersBySource.has(p.source_id)) {

@@ -261,7 +261,7 @@ const compileLinkArrayExpr = (
   ];
 
   const whereClauses: string[] = [];
-  let fromClause = `${compilePolymorphicTargetSource(element.relation, targetAlias, requiredTargetColumns)}`;
+  let fromClause: string;
 
   if (element.relation.storage === "inline") {
     fromClause = `${compilePolymorphicTargetSource(element.relation, targetAlias, requiredTargetColumns)}`;

@@ -73,30 +73,37 @@ export class Operator {
   constructor(public data: OperatorData) {}
 
   getShortname(_schema: OperatorSchema): { name: string } {
+    void _schema;
     return { name: this.data.shortname };
   }
 
   getParams(_schema: OperatorSchema): OperatorParameter[] {
+    void _schema;
     return [...this.data.params];
   }
 
   getOperatorKind(_schema: OperatorSchema): OperatorKind {
+    void _schema;
     return this.data.operatorKind;
   }
 
   getReturnTypemod(_schema: OperatorSchema): ReturnTypeModifier {
+    void _schema;
     return this.data.returnTypemod;
   }
 
   getReturnType(_schema: OperatorSchema): TypeLike {
+    void _schema;
     return this.data.returnType;
   }
 
   getDerivativeOf(_schema: OperatorSchema): string | undefined {
+    void _schema;
     return this.data.derivativeOf;
   }
 
   getRecursive(_schema: OperatorSchema): boolean {
+    void _schema;
     return Boolean(this.data.recursive);
   }
 
@@ -176,6 +183,7 @@ export class CreateOperator extends OperatorCommand {
     const cmd = new CreateOperator();
     void schema;
     void astnode;
+    void _context;
     return cmd;
   }
 

@@ -394,7 +394,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
               return binding.tail;
             }
           }
-          fail(`Unknown type or enum '${normalizedHead}'`);
+          return fail(`Unknown type or enum '${normalizedHead}'`);
         }
         default:
           return fail(`Unsupported with binding kind in '${name}'`);
@@ -2062,7 +2062,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       if (nextTerm) built.then = nextTerm;
       return built;
     };
-    let resolvedOrderBy = resolveOrderByTerm(clauses.orderBy);
+    const resolvedOrderBy = resolveOrderByTerm(clauses.orderBy);
 
     if (clauses.limit !== undefined && clauses.limit < 0) {
       fail("Limit must be zero or greater");
@@ -3395,7 +3395,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       offset: expr.offset,
     };
   } finally {
-    for (const _ of pushedForBindings) {
+    for (let bindingIndex = 0; bindingIndex < pushedForBindings.length; bindingIndex += 1) {
       forBindingStack.pop();
     }
     for (const name of addedBindingNames) {

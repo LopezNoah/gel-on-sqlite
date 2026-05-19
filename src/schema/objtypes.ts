@@ -124,14 +124,17 @@ export class ObjectType extends ObjectTypeRefMixin {
   }
 
   getName(_schema: ObjectTypeSchema): string {
+    void _schema;
     return qual(this.data.module, this.data.name);
   }
 
   getShortname(_schema: ObjectTypeSchema): { name: string } {
+    void _schema;
     return { name: this.data.name };
   }
 
   getBases(_schema: ObjectTypeSchema): ReadonlyArray<string> {
+    void _schema;
     return this.data.extends ?? [];
   }
 
@@ -162,26 +165,32 @@ export class ObjectType extends ObjectTypeRefMixin {
   }
 
   getUnionOf(_schema: ObjectTypeSchema): ReadonlyArray<string> {
+    void _schema;
     return this.data.unionOf ?? [];
   }
 
   getIntersectionOf(_schema: ObjectTypeSchema): ReadonlyArray<string> {
+    void _schema;
     return this.data.intersectionOf ?? [];
   }
 
   getIsOpaqueUnion(_schema: ObjectTypeSchema): boolean {
+    void _schema;
     return Boolean(this.data.isOpaqueUnion);
   }
 
   getTriggers(_schema: ObjectTypeSchema): ReadonlyArray<TriggerLike> {
+    void _schema;
     return this.triggers;
   }
 
   isView(_schema: ObjectTypeSchema): boolean {
+    void _schema;
     return Boolean(this.data.isView);
   }
 
   getAliasIsPersistent(_schema: ObjectTypeSchema): boolean {
+    void _schema;
     return Boolean(this.data.aliasIsPersistent);
   }
 
@@ -251,6 +260,7 @@ export class ObjectType extends ObjectTypeRefMixin {
   }
 
   materialType(_schema: ObjectTypeSchema): ObjectType {
+    void _schema;
     return this;
   }
 
@@ -402,6 +412,7 @@ export class ObjectType extends ObjectTypeRefMixin {
   }
 
   private isDeletable(_schema: ObjectTypeSchema): boolean {
+    void _schema;
     return true;
   }
 }
