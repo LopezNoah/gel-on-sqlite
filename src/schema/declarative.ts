@@ -210,53 +210,6 @@ export interface DeclarativeParseOptions {
 
 export type DeclarativeParserEngine = "legacy" | "new_sdl" | "auto";
 
-const DEFAULT_DECLARATIVE_PARSE_OPTIONS: Readonly<Required<DeclarativeParseOptions>> = {
-  legacySyntaxCompat: true,
-  parserEngine: "new_sdl",
-};
-
-const normalizeDeclarativeParseOptions = (
-  options: DeclarativeParseOptions,
-): Required<DeclarativeParseOptions> => ({
-  ...DEFAULT_DECLARATIVE_PARSE_OPTIONS,
-  ...options,
-});
-
-type TokenKind =
-  | "word"
-  | "string"
-  | "number"
-  | "lbrace"
-  | "rbrace"
-  | "lparen"
-  | "rparen"
-  | "lbracket"
-  | "rbracket"
-  | "colon"
-  | "semi"
-  | "comma"
-  | "dot"
-  | "equals"
-  | "bang_eq"
-  | "qeq"
-  | "coalesce"
-  | "assign"
-  | "arrow"
-  | "concat"
-  | "lt"
-  | "gt"
-  | "minus"
-  | "plus"
-  | "star"
-  | "pipe"
-  | "eof";
-
-interface Token {
-  kind: TokenKind;
-  text: string;
-  index: number;
-}
-
 const asSchemaParseError = (err: unknown): AppError => {
   if (err instanceof AppError) {
     return err;

@@ -14,7 +14,7 @@
     "ui:dev": "npm --prefix ui run dev",
     "ui:build": "npm --prefix ui run build",
     "ui:preview": "npm --prefix ui run preview",
-    "lint": "eslint . --ignore-pattern \"tests/**\" --ignore-pattern \"dist/**\""
+    "lint": "eslint . --ignore-pattern \"tests/**\" --ignore-pattern \"dist/**\" --ignore-pattern \"debug*\""
   },
   "dependencies": {
     "better-sqlite3": "^11.8.1",

@@ -1093,7 +1093,7 @@ const tryRuntimeSelectExprEvaluation = (
         if (!expr || typeof expr !== "object") return false;
         if (expr.kind === "for_expr") return true;
         if (expr.kind === "select_expr" || expr.kind === "subquery_expr" || expr.kind === "select_expr_subquery") {
-          return computedHasForExpr((expr as any).expr);
+          return computedHasForExpr(expr.expr);
         }
         return false;
       };
@@ -1106,8 +1106,8 @@ const tryRuntimeSelectExprEvaluation = (
           || (el.kind === "link" && shapeHasLinkProperty(el.shape))
           || (el.kind === "computed" && el.expr.kind === "select_expr" && el.expr.expr.kind === "select_expr_subquery"
               && (() => {
-                let inner: any = el.expr.expr;
-                while (inner && (inner.kind === "select_expr_subquery" || inner.kind === "subquery_expr")) inner = inner.expr;
+                let inner: FreeObjectExpr = el.expr.expr;
+                while (inner && inner.kind === "select_expr_subquery") inner = inner.expr;
                 if (inner?.kind === "select") return shapeHasLinkProperty(inner.shape);
                 return false;
               })())
@@ -1121,7 +1121,20 @@ const tryRuntimeSelectExprEvaluation = (
           if (shapeHasLinkProperty(expr.shape)) return true;
           return outerNeedsLinkProps(expr.expr);
         }
-        if ((expr as any).expr) return outerNeedsLinkProps((expr as any).expr);
+        if (
+          expr.kind === "distinct"
+          || expr.kind === "cast"
+          || expr.kind === "field_access"
+          || expr.kind === "index_access"
+          || expr.kind === "slice_access"
+          || expr.kind === "exists"
+          || expr.kind === "not"
+          || expr.kind === "unary"
+          || expr.kind === "is_type"
+          || expr.kind === "select_expr_subquery"
+        ) {
+          return outerNeedsLinkProps(expr.expr);
+        }
         return false;
       };
       if (outerNeedsLinkProps(ast.expr)) return true;
@@ -1761,8 +1774,8 @@ const tryRuntimeSelectExprEvaluation = (
       : undefined;
   const currentBinding = ast.expr.kind === "binding_ref"
     ? ast.expr.name
-    : ast.expr.kind === "select_expr_subquery" && (ast.expr as any).alias
-      ? (ast.expr as any).alias as string
+    : ast.expr.kind === "select_expr_subquery" && ast.expr.alias
+      ? ast.expr.alias
       : undefined;
   const topIsArrayAgg = ast.expr.kind === "function_call"
     && ((ast.expr.call.name.includes("::") ? ast.expr.call.name.split("::").at(-1) : ast.expr.call.name)?.toLowerCase() === "array_agg");
@@ -1842,8 +1855,8 @@ const tryRuntimeInlineComputedPropertySelect = (
   query: string,
 ): QueryResult | undefined => {
   const trimmed = query.trim().replace(/;\s*$/, "");
-  const withMatch = /^with\s+([A-Za-z_][\w]*)\s*:=\s*([A-Za-z_][\w:]*)\s*\{\s*([A-Za-z_][\w]*)\s*:=\s*[\[(]([^\])]+)[\])]\s*\}\s*select\s+\1\.\3$/i.exec(trimmed.replace(/\s+/g, " "));
-  const inlineMatch = /^select\s*\(\s*([A-Za-z_][\w:]*)\s*\{\s*([A-Za-z_][\w]*)\s*:=\s*[\[(]([^\])]+)[\])]\s*\}\s*\)\.\2$/i.exec(trimmed.replace(/\s+/g, " "));
+  const withMatch = /^with\s+([A-Za-z_][\w]*)\s*:=\s*([A-Za-z_][\w:]*)\s*\{\s*([A-Za-z_][\w]*)\s*:=\s*(?:\[|\()([^\])]+)(?:\]|\))\s*\}\s*select\s+\1\.\3$/i.exec(trimmed.replace(/\s+/g, " "));
+  const inlineMatch = /^select\s*\(\s*([A-Za-z_][\w:]*)\s*\{\s*([A-Za-z_][\w]*)\s*:=\s*(?:\[|\()([^\])]+)(?:\]|\))\s*\}\s*\)\.\2$/i.exec(trimmed.replace(/\s+/g, " "));
   const match = withMatch
     ? { sourceType: withMatch[2], fieldsExpr: withMatch[4] }
     : inlineMatch
@@ -2672,7 +2685,7 @@ const tryEvaluateParsedRuntimeSelect = (
     if (expr.kind === "if_else") {
       const cond = evalFreeExpr(expr.condition, env);
       const scalarCond = Array.isArray(cond) && cond.length === 1 ? cond[0] : cond;
-      return Boolean(scalarCond) ? evalFreeExpr(expr.thenExpr, env) : evalFreeExpr(expr.elseExpr, env);
+      return scalarCond ? evalFreeExpr(expr.thenExpr, env) : evalFreeExpr(expr.elseExpr, env);
     }
     if (expr.kind === "shape_projection") {
       const base = evalFreeExpr(expr.expr, env);
@@ -4455,7 +4468,6 @@ const evaluateSelectExprShapeEntry = (
   if (!concreteMatches(sourceType, typeExpr)) return null;
 
   let current: unknown = row;
-  let currentTypeName: string | undefined = sourceType;
   for (let i = 1; i < steps.length; i += 1) {
     const step = steps[i]!;
     if (step.kind !== "ptr") return null;
@@ -4475,7 +4487,7 @@ const evaluateSelectExprShapeEntry = (
       .prepare(`SELECT ${quoteIdent("type_name")} AS ${quoteIdent("type_name")} FROM ${quoteIdent("__gel_global_ids")} WHERE ${quoteIdent("id")} = ?`)
       .all(raw)[0] as { type_name?: unknown } | undefined;
     if (!globalType || typeof globalType.type_name !== "string") return null;
-    currentTypeName = resolveRuntimeStoredTypeName(schema, globalType.type_name);
+    const currentTypeName = resolveRuntimeStoredTypeName(schema, globalType.type_name);
     const table = currentTypeName.replaceAll("::", "__").toLowerCase();
     const next = db.prepare(`SELECT * FROM ${quoteIdent(table)} WHERE ${quoteIdent("id")} = ?`).all(raw)[0] as Record<string, unknown> | undefined;
     if (!next) return null;
@@ -6617,7 +6629,7 @@ const resolveBacklinks = (
   const out: Array<{ id: unknown; __type__: string }> = [];
 
   for (const source of sources) {
-    let rows: Array<{ id: unknown }> = [];
+    let rows: Array<{ id: unknown }>;
     if (source.storage === "inline") {
       const sql = `SELECT ${quoteIdent("id")} AS ${quoteIdent("id")} FROM ${quoteIdent(source.table)} WHERE ${quoteIdent(source.inlineColumn!)} = ?`;
       sqlTrail.push({ sql, params: [targetId], loweringMode: "fallback_multi_query" });

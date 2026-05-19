@@ -335,6 +335,7 @@ class BaseLinkCommand {
   ) {}
 
   protected getAttributeSpan(_attribute: string): undefined {
+    void _attribute;
     return undefined;
   }
 
@@ -388,10 +389,13 @@ export class LinkCommand extends BaseLinkCommand {
   }
 
   validateObject(_schema: SchemaState, _context: CommandContext): void {
+    void _schema;
+    void _context;
     validateLink(this.scls.data);
   }
 
   getAst(_schema: SchemaState, context: CommandContext, parentNode?: DDLOperation): DDLOperation | undefined {
+    void _schema;
     const node = parentNode ?? {
       kind: "CreateLink",
       name: this.classname,

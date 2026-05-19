@@ -1053,7 +1053,7 @@ class Parser {
       }
       const orderBy = this.parseExprOrderBy();
       const { limit, offset } = this.parseExprPagination();
-      for (const binder of binders) {
+      for (let binderIndex = 0; binderIndex < binders.length; binderIndex += 1) {
         this.localBindings.pop();
       }
       if (filter || orderBy || limit !== undefined || offset !== undefined) {

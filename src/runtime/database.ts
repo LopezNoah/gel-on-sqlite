@@ -25,7 +25,7 @@ export interface SQLiteDatabase extends RuntimeDatabaseAdapter {
   target: "sqlite";
 }
 
-export interface SQLiteRuntime extends RuntimeInstance<SQLiteDatabase> {}
+export type SQLiteRuntime = RuntimeInstance<SQLiteDatabase>;
 
 const isRowRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
