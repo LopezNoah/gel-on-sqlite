@@ -1,5 +1,6 @@
 import { AppError } from "../errors.js";
 import { parseEdgeQL } from "../edgeql/parser.js";
+import { simpleTypeName } from "../edgeql/ast.js";
 import type { ComputedExpr, FilterExpr, FreeObjectExpr, InsertValue, OrderExpr, SelectStatement, ShapeElement, Statement, WithBindingValue } from "../edgeql/ast.js";
 import type {
   BacklinkSourceIR,
@@ -1107,6 +1108,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       aliasProjections?: Map<string, string>;
       linkProperties?: Set<string>;
       typeFilterExprs?: import("../edgeql/ast.js").TypeExpr[];
+      branchTypeFilterExprs?: import("../edgeql/ast.js").TypeExpr[];
     },
     ): {
       pathId: PathIdIR;
@@ -1138,23 +1140,38 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       },
       undefined,
     );
+    // Per-branch concrete types preserve duplicates so set-expression branches
+    // that share concrete types produce one row per branch (UNION ALL).
+    const branchConcreteSequence: string[] | undefined = options.branchTypeFilterExprs && options.branchTypeFilterExprs.length > 0
+      ? options.branchTypeFilterExprs.flatMap((expr) => {
+          const list = concreteTypeNamesForTypeExpr(expr, scopeModule);
+          return narrowedTypeNames
+            ? list.filter((name) => narrowedTypeNames.has(name))
+            : list;
+        })
+      : undefined;
     const concreteAssignable = schema.listConcreteTypesAssignableTo(qualifiedName);
-    const candidateNames = concreteAssignable.length > 0
-      ? concreteAssignable.map((candidate) => qualifiedTypeName(candidate))
-      : narrowedTypeNames
-        ? [...narrowedTypeNames]
-        : [];
-    const sourceTables = candidateNames
-      .map((name) => {
-        const candidate = schema.getType(name);
-        return {
-          name,
-          table: tableNameForType(name),
-          columns: ["id", ...(candidate ? collectFields(candidate, true).map((field) => field.name) : [])],
-        };
-      })
-      .filter((entry) => !narrowedTypeNames || narrowedTypeNames.has(entry.name))
-      .sort((a, b) => a.name.localeCompare(b.name));
+    const candidateNames = branchConcreteSequence
+      ? branchConcreteSequence
+      : concreteAssignable.length > 0
+        ? concreteAssignable.map((candidate) => qualifiedTypeName(candidate))
+        : narrowedTypeNames
+          ? [...narrowedTypeNames]
+          : [];
+    const buildSourceTableEntry = (name: string) => {
+      const candidate = schema.getType(name);
+      return {
+        name,
+        table: tableNameForType(name),
+        columns: ["id", ...(candidate ? collectFields(candidate, true).map((field) => field.name) : [])],
+      };
+    };
+    const sourceTables = branchConcreteSequence
+      ? branchConcreteSequence.map(buildSourceTableEntry)
+      : candidateNames
+        .map(buildSourceTableEntry)
+        .filter((entry) => !narrowedTypeNames || narrowedTypeNames.has(entry.name))
+        .sort((a, b) => a.name.localeCompare(b.name));
     const allFields = collectFields(typeDef, true);
     const allComputeds = collectComputeds(typeDef, true);
     const userFields = allFields.filter((field) => field.name !== "id");
@@ -1812,6 +1829,73 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
             const linkOrField = innerExpr.steps[1].name;
             selectedColumns.add(linkOrField);
             selectedColumns.add(`${linkOrField}_id`);
+            // Validate that `[is T].field` is compatible with the root
+            // type's view of `field` — same cardinality and same
+            // computed-ness. Mixed-cardinality and mixed-computed
+            // intersections are illegal.
+            const intersectionType = schema.getType(normalizeTypeName(
+              simpleTypeName(innerExpr.steps[0].typeExpr) ?? innerExpr.steps[0].typeName,
+              scopeModule,
+            ));
+            const rootField = collectFields(typeDef, true).find((f) => f.name === linkOrField);
+            const rootLink = collectLinks(typeDef, true).find((l) => l.name === linkOrField);
+            const rootComputedAll = collectComputeds(typeDef, true).find((c) => c.name === linkOrField);
+            const rootMulti = rootField?.multi ?? rootLink?.multi ?? rootComputedAll?.multi ?? false;
+            const rootIsComputed = Boolean(rootComputedAll) && !rootField && !rootLink;
+            if (intersectionType) {
+              const otherField = collectFields(intersectionType, true).find((f) => f.name === linkOrField);
+              const otherLink = collectLinks(intersectionType, true).find((l) => l.name === linkOrField);
+              const otherComputedAll = collectComputeds(intersectionType, true).find((c) => c.name === linkOrField);
+              const otherMulti = otherField?.multi ?? otherLink?.multi ?? otherComputedAll?.multi ?? false;
+              const otherIsComputed = Boolean(otherComputedAll) && !otherField && !otherLink;
+              const haveBoth = Boolean((rootField || rootLink || rootComputedAll) && (otherField || otherLink || otherComputedAll));
+              const isLink = Boolean(rootLink || otherLink);
+              // Walk the inheritance DAG to find topmost ancestors that
+              // declare the field/link/computed. Used to verify both sides
+              // of a type intersection share an origin for a computed.
+              const hasName = (t: TypeDef): boolean =>
+                (t.fields ?? []).some((f) => f.name === linkOrField)
+                || (t.links ?? []).some((l) => l.name === linkOrField)
+                || (t.computeds ?? []).some((c) => c.name === linkOrField);
+              const findOrigins = (t: TypeDef, visited = new Set<string>()): Set<string> => {
+                const key = qualifiedTypeName(t);
+                if (visited.has(key)) return new Set();
+                visited.add(key);
+                const baseTypes = (t.extends ?? [])
+                  .map((n) => schema.getType(n))
+                  .filter((b): b is TypeDef => Boolean(b) && hasName(b!));
+                if (baseTypes.length === 0) {
+                  return hasName(t) ? new Set([key]) : new Set();
+                }
+                const out = new Set<string>();
+                for (const base of baseTypes) {
+                  for (const origin of findOrigins(base, visited)) {
+                    out.add(origin);
+                  }
+                }
+                return out;
+              };
+              if (haveBoth) {
+                // Mixed computed vs non-computed is illegal.
+                if (otherIsComputed !== rootIsComputed) {
+                  fail(`it is illegal to create a type intersection that causes a computed ${isLink ? "link" : "property"} '${linkOrField}' to mix with other versions of the same ${isLink ? "link" : "property"}`);
+                }
+                // Two computeds defined independently (no shared origin in
+                // the inheritance DAG) are illegal — their expressions may
+                // be unrelated even if the names match.
+                if (rootIsComputed && otherIsComputed) {
+                  const rootOrigins = findOrigins(typeDef);
+                  const otherOrigins = findOrigins(intersectionType);
+                  const sharesOrigin = [...rootOrigins].some((o) => otherOrigins.has(o));
+                  if (!sharesOrigin) {
+                    fail(`it is illegal to create a type intersection that causes a computed ${isLink ? "link" : "property"} '${linkOrField}' to mix with other versions of the same ${isLink ? "link" : "property"}`);
+                  }
+                }
+                if (otherMulti !== rootMulti) {
+                  fail(`it is illegal to create a type intersection that causes a ${isLink ? "link" : "property"} '${linkOrField}' to mix with other versions of '${linkOrField}' which have a different cardinality`);
+                }
+              }
+            }
           }
           shapeElements.push({
             kind: "computed",
@@ -2193,13 +2277,58 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     return built;
   };
 
+  const hasSetExpr = (expr: FreeObjectExpr): boolean => {
+    if (expr.kind === "set_expr") return true;
+    if (
+      expr.kind === "distinct"
+      || expr.kind === "cast"
+      || expr.kind === "field_access"
+      || expr.kind === "shape_projection"
+      || expr.kind === "index_access"
+      || expr.kind === "slice_access"
+      || expr.kind === "is_type"
+    ) {
+      return hasSetExpr(expr.expr);
+    }
+    if (expr.kind === "tuple" || expr.kind === "array_literal_expr") {
+      return expr.values.some(hasSetExpr);
+    }
+    if (expr.kind === "select_expr_subquery") {
+      return hasSetExpr(expr.expr);
+    }
+    return false;
+  };
+
+  // Returns the per-branch TypeExpr list when `expr` is a set_expr whose
+  // values each resolve to a TypeExpr, else undefined. Each branch keeps its
+  // own concrete-type expansion so a type that occurs in more than one branch
+  // shows up once per branch (multiset / UNION ALL semantics). DISTINCT
+  // disables this — when wrapped in `distinct`, the caller wants set
+  // semantics (no duplicates) so the consolidated rewrite is correct.
+  const tryExtractSetExprBranches = (expr: FreeObjectExpr): TypeExpr[] | undefined => {
+    if (expr.kind !== "set_expr") return undefined;
+    if (expr.values.length === 0) return undefined;
+    const branches: TypeExpr[] = [];
+    for (const value of expr.values) {
+      const inner = tryExtractTypedRootExpr(value);
+      if (!inner) return undefined;
+      branches.push(inner);
+    }
+    return branches;
+  };
+
   const tryRewriteSelectExprAsTypedSelect = (
     selectExpr: Extract<Statement, { kind: "select_expr" }>,
   ): SelectStatement | undefined => {
     const root = selectExpr.expr.kind === "shape_projection"
       ? selectExpr.expr
       : undefined;
-    if (!root) return undefined;
+    if (!root) {
+      if (hasSetExpr(selectExpr.expr)) {
+        return undefined;
+      }
+      return undefined;
+    }
     const typedRoot = tryExtractTypedRootExpr(root.expr);
     if (!typedRoot) return undefined;
 
@@ -2208,6 +2337,41 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       const converted = orderByChainToOrderExpr(selectExpr.orderBy);
       if (!converted) return undefined;
       orderBy = converted;
+    }
+
+    // If the root is a set-expression (e.g. `{T1, T2}` or `{T[IS X], T[IS Y]}`)
+    // and there is overlap between the branches' concrete types, we need
+    // multiset (UNION ALL) semantics to preserve duplicates. Switch to the
+    // branch-aware rewrite in that case.
+    const branches = tryExtractSetExprBranches(root.expr);
+    if (branches && branches.length > 1) {
+      const branchConcretes = branches.map((branch) => concreteTypeNamesForTypeExpr(branch, "default"));
+      const seen = new Set<string>();
+      let hasOverlap = false;
+      for (const list of branchConcretes) {
+        for (const name of list) {
+          if (seen.has(name)) {
+            hasOverlap = true;
+            break;
+          }
+          seen.add(name);
+        }
+        if (hasOverlap) break;
+      }
+      if (hasOverlap) {
+        return {
+          kind: "select",
+          typeName: "Object",
+          branchTypeFilterExprs: branches,
+          shape: root.shape,
+          fields: [],
+          orderBy,
+          with: selectExpr.with,
+          withModule: selectExpr.withModule,
+          withModuleAliases: selectExpr.withModuleAliases,
+          pos: selectExpr.pos,
+        };
+      }
     }
 
     return {
@@ -2351,6 +2515,61 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
             offset: selectStatement.offset ?? withQuery.clauses.offset,
           },
         };
+      }
+      if (withBinding.kind === "subquery_expr") {
+        const typedRoot = tryExtractTypedRootExpr(withBinding.expr);
+        if (typedRoot) {
+          const sourceName = typedRoot.kind === "type_name" ? typedRoot.name : "Object";
+          if (typedRoot.kind !== "type_name") {
+            selectStatement.typeFilterExprs = [typedRoot, ...(selectStatement.typeFilterExprs ?? [])];
+          }
+          // When the WITH-binding value is a set-expression of typed roots,
+          // we need multiset semantics — each branch is unioned with
+          // duplicates preserved. The branches are stored separately from
+          // typeFilterExprs (which intersect to narrow further).
+          const branches = tryExtractSetExprBranches(withBinding.expr);
+          if (branches && branches.length > 1) {
+            const branchConcretes = branches.map((branch) => concreteTypeNamesForTypeExpr(branch, activeModule));
+            const seen = new Set<string>();
+            let hasOverlap = false;
+            for (const list of branchConcretes) {
+              for (const name of list) {
+                if (seen.has(name)) {
+                  hasOverlap = true;
+                  break;
+                }
+                seen.add(name);
+              }
+              if (hasOverlap) break;
+            }
+            if (hasOverlap) {
+              selectStatement.branchTypeFilterExprs = branches;
+              // Remove the now-redundant union we prepended above.
+              if (typedRoot.kind !== "type_name") {
+                selectStatement.typeFilterExprs = (selectStatement.typeFilterExprs ?? []).slice(1);
+                if (selectStatement.typeFilterExprs.length === 0) {
+                  selectStatement.typeFilterExprs = undefined;
+                }
+              }
+            }
+          }
+          const normalizedSourceName = normalizeTypeName(sourceName, activeModule);
+          const sourceType = normalizedSourceName === "default::Object" || normalizedSourceName === "std::Object"
+            ? ({ name: "Object", module: activeModule, fields: [], abstract: true } as TypeDef)
+            : schema.getType(normalizedSourceName);
+          if (sourceType) {
+            return {
+              typeDef: sourceType,
+              aliasProjections: undefined,
+              clauses: {
+                filter: selectStatement.filter,
+                orderBy: selectStatement.orderBy,
+                limit: selectStatement.limit,
+                offset: selectStatement.offset,
+              },
+            };
+          }
+        }
       }
       if (withBinding.kind === "enum_path" || withBinding.kind === "path") {
         resolveWithBindingScalar(selectStatement.typeName);
@@ -2796,9 +3015,40 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           kind: "backlink_path",
           link: expr.link,
           sourceType: expr.sourceType,
+          sourceTypeExpr: expr.sourceTypeExpr,
         };
       }
       if (expr.kind === "path_steps") {
+        const first = expr.steps[0];
+        if (first?.kind === "object_ref") {
+          const bindingValue = withBindings.get(first.name);
+          if (bindingValue) {
+            let value: import("../ir/model.js").SelectExprIREntry;
+            if (bindingValue.kind === "subquery_expr") {
+              value = compileExprToIREntry(bindingValue.expr, currentItemBinding);
+            } else if (bindingValue.kind === "subquery_statement") {
+              value = compileExprToIREntry({ kind: "select", typeName: bindingValue.statement.typeName, shape: [{ kind: "splat", depth: 1, operation: "assign", origin: "explicit" }], clauses: {} }, currentItemBinding);
+            } else if (bindingValue.kind === "subquery") {
+              value = compileExprToIREntry({ kind: "select", typeName: bindingValue.query.typeName, shape: bindingValue.query.shape, clauses: bindingValue.query.clauses }, currentItemBinding);
+            } else if (bindingValue.kind === "binding_ref") {
+              value = compileExprToIREntry({ kind: "select", typeName: bindingValue.name, shape: [{ kind: "splat", depth: 1, operation: "assign", origin: "explicit" }], clauses: {} }, currentItemBinding);
+            } else if (bindingValue.kind === "path") {
+              value = compileExprToIREntry({ kind: "path", head: bindingValue.head, tail: bindingValue.tail, steps: bindingValue.steps }, currentItemBinding);
+            } else if (bindingValue.kind === "path_chain") {
+              value = compileExprToIREntry({ kind: "path_chain", parts: bindingValue.parts, steps: bindingValue.steps }, currentItemBinding);
+            } else {
+              value = { kind: "path_steps", steps: expr.steps };
+            }
+            for (const step of expr.steps.slice(1)) {
+              if (step.kind === "ptr") {
+                value = { kind: "field_access", value: asNestedExprEntry(value), field: step.name };
+              } else if (step.kind === "type_intersection") {
+                value = { kind: "is_type", value: asNestedExprEntry(value), typeName: normalizeTypeName(simpleTypeName(step.typeExpr) ?? step.typeName, activeModule) };
+              }
+            }
+            return value;
+          }
+        }
         return {
           kind: "path_steps",
           steps: expr.steps,
@@ -2865,6 +3115,9 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
             return { kind: "literal", value: bindingValue.expr.value };
           }
           return compileExprToIREntry(bindingValue.expr, currentItemBinding);
+        }
+        if (bindingValue.kind === "subquery_statement") {
+          return compileExprToIREntry({ kind: "select", typeName: bindingValue.statement.typeName, shape: [{ kind: "splat", depth: 1, operation: "assign", origin: "explicit" }], clauses: {} }, currentItemBinding);
         }
         if (bindingValue.kind === "subquery") {
           const normalizedTypeName = normalizeTypeName(bindingValue.query.typeName, activeModule);
@@ -3203,6 +3456,9 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
             }
             return compileExprToIREntry(bindingValue.expr, currentItemBinding);
           }
+          if (bindingValue.kind === "subquery_statement") {
+            return compileExprToIREntry({ kind: "select", typeName: bindingValue.statement.typeName, shape: [{ kind: "splat", depth: 1, operation: "assign", origin: "explicit" }], clauses: {} }, currentItemBinding);
+          }
         if (bindingValue.kind === "subquery") {
           const normalizedTypeName = normalizeTypeName(bindingValue.query.typeName, activeModule);
           const typeDef = requireValue(
@@ -3442,18 +3698,20 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     throw new Error("FOR statements should be handled at the execution layer");
   }
 
-  if (statement.kind === "delete" && statement.target) {
-    fail("Delete expression targets are not supported yet");
-  }
-
   const resolvedRootType = statement.kind === "select"
     ? resolveSelectSource(statement)
     : {
         constTypeName: requireValue(statement.typeName, `Statement kind '${statement.kind}' requires typeName`),
-        typeDef: requireValue(
-          schema.getType(normalizeTypeName(requireValue(statement.typeName, `Statement kind '${statement.kind}' requires typeName`), activeModule)),
-          `Unknown type '${normalizeTypeName(requireValue(statement.typeName, `Statement kind '${statement.kind}' requires typeName`), activeModule)}'`,
-        ),
+        typeDef: (() => {
+          const norm = normalizeTypeName(requireValue(statement.typeName, `Statement kind '${statement.kind}' requires typeName`), activeModule);
+          if (norm === "default::Object" || norm === "std::Object") {
+            return { name: "Object", module: activeModule, fields: [], abstract: true, extends: [] } as TypeDef;
+          }
+          return requireValue(
+            schema.getType(norm),
+            `Unknown type '${norm}'`,
+          );
+        })(),
         clauses: {
           filter: undefined,
           orderBy: undefined,
@@ -3534,6 +3792,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       allowBacklinkFilter: true,
       aliasProjections: resolvedRootType.aliasProjections,
       typeFilterExprs: statement.typeFilterExprs,
+      branchTypeFilterExprs: statement.branchTypeFilterExprs,
     });
 
     return {

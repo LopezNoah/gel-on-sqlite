@@ -182,6 +182,10 @@ export type WithBindingValue =
       };
     }
   | {
+      kind: "subquery_statement";
+      statement: Statement;
+    }
+  | {
       kind: "subquery_expr";
       expr: FreeObjectExpr;
     }
@@ -377,6 +381,14 @@ export interface SelectStatement {
   withModuleAliases?: WithModuleAlias[];
   typeName: string;
   typeFilterExprs?: TypeExpr[];
+  /**
+   * Per-branch type filter expressions arising from a set-expression like
+   * `{T1, T2}` at the SELECT subject. Unlike `typeFilterExprs` (which
+   * intersect to narrow the subject), the branches are UNION ALL'd, so
+   * matching concrete types that occur in more than one branch appear
+   * once per branch in the result.
+   */
+  branchTypeFilterExprs?: TypeExpr[];
   shape: ShapeElement[];
   fields: string[];
   filter?: ClauseChain["filter"];
@@ -671,6 +683,7 @@ export interface UpdateStatement {
   withModule?: string;
   withModuleAliases?: WithModuleAlias[];
   typeName: string;
+  target?: FreeObjectExpr;
   filter?: FilterExpr;
   values: Record<string, InsertValue>;
   operations?: Record<string, "assign" | "append" | "subtract">;
