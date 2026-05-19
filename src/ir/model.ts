@@ -550,6 +550,7 @@ export type SelectExprIREntry<D extends Depth = 4> =
       kind: "backlink_path";
       link: string;
       sourceType?: string;
+      sourceTypeExpr?: import("../edgeql/ast.js").TypeExpr;
     }
   | {
       kind: "path_steps";

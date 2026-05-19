@@ -2487,15 +2487,17 @@ const compileUpdateStatement = (statement: UpdateStatement, ctx: IRCompileContex
 const compileDeleteStatement = (statement: DeleteStatement, ctx: IRCompileContext): DeleteStmt => {
   const scoped = withBindings(ctx, statement.with);
   const subject = resolveTypeRef(scoped, statement.typeName);
-  const subjectSet = setFromTypeRoot(subject);
-  bindValue(scoped, "__subject__", subjectSet);
-  bindValue(scoped, "__current__", subjectSet);
+  const expr = statement.target
+    ? compileFreeObjectExpr(statement.target, scoped)
+    : setFromTypeRoot(subject);
+  bindValue(scoped, "__subject__", expr);
+  bindValue(scoped, "__current__", expr);
   return {
     kind: "delete_stmt",
-    expr: subjectSet,
+    expr,
     ...statementBase(scoped),
     subject,
-    where: compileFilterToSet(statement.filter, subjectSet, scoped),
+    where: compileFilterToSet(statement.filter, expr, scoped),
     span: statement.pos,
   };
 };
