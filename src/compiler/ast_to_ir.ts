@@ -1588,6 +1588,16 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
     }
 
     case "for_expr": {
+      if (
+        expr.variable === "__gel_backlink_item__"
+        && expr.body.kind === "backlink_path"
+        && expr.iterator.kind === "binding_ref"
+      ) {
+        const enumType = lookupEnumScalar(ctx, expr.iterator.name);
+        if (enumType) {
+          failSemantic("enum types do not support backlink");
+        }
+      }
       const iterator = compileFreeObjectExpr(expr.iterator, ctx);
       const loopCtx = childScope(ctx);
       bindValue(loopCtx, expr.variable, iterator);
@@ -2299,6 +2309,9 @@ const compileInsertValue = (value: InsertValue, ctx: IRCompileContext, seenInser
       }
       if (value.kind === "function_call") {
         return compileFreeObjectExpr({ kind: "function_call", call: value.call }, ctx);
+      }
+      if (value.kind === "expr") {
+        return compileFreeObjectExpr(value.expr, ctx);
       }
       if (value.kind === "select") {
         const bound = resolveBinding(ctx, value.typeName);

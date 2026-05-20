@@ -658,6 +658,10 @@ export type InsertValue =
       kind: "function_call";
       call: FunctionCallExpr;
     }
+  | {
+      kind: "expr";
+      expr: FreeObjectExpr;
+    }
   | ForStatement;
 
 export interface InsertConflict {

@@ -129,6 +129,7 @@ const compileSelectToSQL = (ir: SelectIR, target: RuntimeTarget): SQLArtifact =>
     ),
   ];
 
+  const extraShapeColumns: string[] = [];
   for (const element of ir.shape) {
     if (element.kind !== "computed") {
       continue;
@@ -147,6 +148,21 @@ const compileSelectToSQL = (ir: SelectIR, target: RuntimeTarget): SQLArtifact =>
     if (element.expr.kind === "link_aggregate") {
       const lowered = compileLinkAggregateExpr(element.expr, rootAlias);
       projections.push(`${lowered} AS ${quoteIdent(computedValueAlias(element.pathId))}`);
+      continue;
+    }
+
+    if (element.expr.kind === "select_expr") {
+      const referenced = collectShapeScalarValueColumns(element.expr.expr);
+      extraShapeColumns.push(...referenced);
+      const lowered = compileShapeScalarValueSQL(
+        element.expr.expr,
+        rootAlias,
+        undefined,
+        params,
+      );
+      if (lowered) {
+        projections.push(`${lowered} AS ${quoteIdent(computedValueAlias(element.pathId))}`);
+      }
     }
   }
 
@@ -171,7 +187,7 @@ const compileSelectToSQL = (ir: SelectIR, target: RuntimeTarget): SQLArtifact =>
   for (let term: typeof ir.orderBy | undefined = ir.orderBy; term; term = term.then) {
     orderByValues.push(term.value);
   }
-  const unionColumns = [...new Set(["id", ...ir.columns, ...filterColumns, ...orderByValues])]
+  const unionColumns = [...new Set(["id", ...ir.columns, ...filterColumns, ...orderByValues, ...extraShapeColumns])]
     .filter((column) => column !== "__source_type");
   const sourceSelects = sources.map((source) => {
     const available = source.columns && source.columns.length > 0 ? new Set(source.columns) : undefined;
@@ -551,6 +567,164 @@ const compileShapeComputedFreeExprSQL = (
   return `json(CASE WHEN ${result} THEN 'true' ELSE 'false' END)`;
 };
 
+/**
+ * Compile a shape-level computed `FreeObjectExpr` to a *scalar* SQL value
+ * (not a JSON-wrapped boolean cast).
+ *
+ * Field accesses against the implicit subject (e.g. `.cost` via `current_item`
+ * or `Card.cost` via a self-`SELECT Card { id }`) resolve to the row's
+ * column. Field accesses starting with `@` resolve to a link-property column
+ * via `linkPropertyAlias`.
+ *
+ * Returns `null` if any sub-expression can't be lowered.
+ */
+const compileShapeScalarValueSQL = (
+  expr: FreeObjectExpr,
+  sourceAlias: string,
+  linkPropertyAlias: string | undefined,
+  params: ScalarValue[],
+): string | null => {
+  const isCurrentRow = (node: FreeObjectExpr): boolean => {
+    if (node.kind === "current_item") return true;
+    if (node.kind === "select" && node.shape.length <= 1) return true;
+    if (node.kind === "select_expr_subquery") return isCurrentRow(node.expr);
+    return false;
+  };
+
+  const compile = (node: FreeObjectExpr): string | null => {
+    if (node.kind === "literal") {
+      if (node.value === null) {
+        return "NULL";
+      }
+      params.push(encodeParam(node.value));
+      return "?";
+    }
+    if (node.kind === "field_access") {
+      if (node.field.startsWith("@")) {
+        const alias = linkPropertyAlias;
+        if (!alias) return null;
+        return `${alias}.${quoteIdent(node.field.slice(1))}`;
+      }
+      if (isCurrentRow(node.expr)) {
+        return `${sourceAlias}.${quoteIdent(node.field)}`;
+      }
+      return null;
+    }
+    if (node.kind === "math") {
+      const left = compile(node.left);
+      const right = compile(node.right);
+      if (!left || !right) return null;
+      const op = node.op === "//" ? "/" : node.op;
+      return `(${left} ${op} ${right})`;
+    }
+    if (node.kind === "unary") {
+      const inner = compile(node.expr);
+      if (!inner) return null;
+      if (node.op === "neg") return `(-${inner})`;
+      if (node.op === "not") return `(NOT ${inner})`;
+      return null;
+    }
+    if (node.kind === "compare") {
+      const left = compile(node.left);
+      const right = compile(node.right);
+      const op = operatorToSqlInfix(node.op);
+      if (!left || !right || !op) return null;
+      return `(${left} ${op} ${right})`;
+    }
+    if (node.kind === "logical" || node.kind === "and" || node.kind === "or") {
+      const opName = node.kind === "logical" ? node.op : node.kind;
+      const left = compile(node.left);
+      const right = compile(node.right);
+      if (!left || !right) return null;
+      return `(${left} ${opName === "and" ? "AND" : "OR"} ${right})`;
+    }
+    if (node.kind === "not") {
+      const inner = compile(node.expr);
+      if (!inner) return null;
+      return `(NOT ${inner})`;
+    }
+    if (node.kind === "if_else") {
+      const cond = compile(node.condition);
+      const thenSql = compile(node.thenExpr);
+      const elseSql = compile(node.elseExpr);
+      if (!cond || !thenSql || !elseSql) return null;
+      return `(CASE WHEN ${cond} THEN ${thenSql} ELSE ${elseSql} END)`;
+    }
+    if (node.kind === "coalesce") {
+      const left = compile(node.left);
+      const right = compile(node.right);
+      if (!left || !right) return null;
+      return `COALESCE(${left}, ${right})`;
+    }
+    if (node.kind === "concat") {
+      const parts = node.parts.map((p) => compile(p));
+      if (parts.some((p) => p === null)) return null;
+      return `(${(parts as string[]).map((p) => `COALESCE(CAST(${p} AS TEXT), '')`).join(" || ")})`;
+    }
+    if (node.kind === "cast") {
+      return compile(node.expr);
+    }
+    if (node.kind === "select_expr_subquery") {
+      return compile(node.expr);
+    }
+    return null;
+  };
+
+  const checkpoint = params.length;
+  const result = compile(expr);
+  if (!result) {
+    params.length = checkpoint;
+    return null;
+  }
+  return result;
+};
+
+/**
+ * Collect the names of columns on the implicit subject row that a shape-level
+ * scalar expression references (i.e. fields accessed through `current_item` or
+ * a self-`SELECT`). Link-property references (`@x`) are not included — those
+ * come from the junction alias, not the subject row.
+ */
+const collectShapeScalarValueColumns = (expr: FreeObjectExpr): string[] => {
+  const isCurrentRow = (node: FreeObjectExpr): boolean => {
+    if (node.kind === "current_item") return true;
+    if (node.kind === "select" && node.shape.length <= 1) return true;
+    if (node.kind === "select_expr_subquery") return isCurrentRow(node.expr);
+    return false;
+  };
+  const out: string[] = [];
+  const walk = (node: FreeObjectExpr): void => {
+    if (node.kind === "field_access") {
+      if (!node.field.startsWith("@") && isCurrentRow(node.expr)) {
+        out.push(node.field);
+      } else {
+        walk(node.expr);
+      }
+      return;
+    }
+    if (node.kind === "math" || node.kind === "compare" || node.kind === "and" || node.kind === "or" || node.kind === "logical" || node.kind === "coalesce") {
+      walk(node.left);
+      walk(node.right);
+      return;
+    }
+    if (node.kind === "unary" || node.kind === "not" || node.kind === "cast" || node.kind === "select_expr_subquery") {
+      walk(node.expr);
+      return;
+    }
+    if (node.kind === "if_else") {
+      walk(node.condition);
+      walk(node.thenExpr);
+      walk(node.elseExpr);
+      return;
+    }
+    if (node.kind === "concat") {
+      for (const part of node.parts) walk(part);
+    }
+  };
+  walk(expr);
+  return out;
+};
+
 const compileShapeObjectExpr = (
   shape: SelectShapeElementIR[],
   sourceAlias: string,
@@ -627,15 +801,23 @@ const compileShapeObjectExpr = (
       } else if (element.expr.kind === "link_aggregate") {
         pairs.push(compileLinkAggregateExpr(element.expr, sourceAlias));
       } else if (element.expr.kind === "select_expr") {
-        process.stderr.write(`compileShapeObjectExpr select_expr hit for ${element.name}\n`);
-        const lowered = compileShapeComputedFreeExprSQL(
+        const scalar = compileShapeScalarValueSQL(
           element.expr.expr,
           sourceAlias,
           linkPropertyAlias,
           params,
         );
-        process.stderr.write(`lowered = ${lowered ?? "null"}\n`);
-        pairs.push(lowered ?? "json('[]')");
+        if (scalar) {
+          pairs.push(scalar);
+        } else {
+          const lowered = compileShapeComputedFreeExprSQL(
+            element.expr.expr,
+            sourceAlias,
+            linkPropertyAlias,
+            params,
+          );
+          pairs.push(lowered ?? "json('[]')");
+        }
       } else {
         pairs.push("json('[]')");
       }

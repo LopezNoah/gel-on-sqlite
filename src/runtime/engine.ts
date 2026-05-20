@@ -1652,6 +1652,34 @@ const tryRuntimeSelectExprEvaluation = (
           return true;
         });
       }
+      case "type_name": {
+        const current = env.get("__current__");
+        if (current && typeof current === "object" && !Array.isArray(current)) {
+          const sourceType = (current as Record<string, unknown>).__source_type;
+          if (typeof sourceType === "string") {
+            return sourceType;
+          }
+        }
+        return null;
+      }
+      case "polymorphic_field_ref": {
+        const current = env.get("__current__");
+        if (!current || typeof current !== "object" || Array.isArray(current)) {
+          return null;
+        }
+        const row = current as Record<string, unknown>;
+        const rowSourceType = typeof row.__source_type === "string" ? row.__source_type : undefined;
+        if (!rowSourceType) {
+          return null;
+        }
+        const sourceTypeQualified = qualifyRuntimeTypeName(expr.sourceType);
+        const concretes = schema.listConcreteTypesAssignableTo(sourceTypeQualified).map((typeDef) => qualifiedTypeName(typeDef));
+        const matches = rowSourceType === sourceTypeQualified || concretes.includes(rowSourceType);
+        if (!matches) {
+          return null;
+        }
+        return row[expr.field] ?? null;
+      }
       case "shape_projection": {
         const exprAsPath = (e: FreeObjectExpr | undefined): string | undefined => {
           if (!e || typeof e !== "object") return undefined;
@@ -1859,12 +1887,22 @@ const tryRuntimeSelectExprEvaluation = (
     && ((ast.expr.call.name.includes("::") ? ast.expr.call.name.split("::").at(-1) : ast.expr.call.name)?.toLowerCase() === "array_agg");
   const rows = Array.isArray(value) ? (topIsArrayAgg ? [value] : value) : [value];
   if (ast.orderBy) {
-    const direction = ast.orderBy.direction === "desc" ? -1 : 1;
-    const enumOrder = ast.orderBy.expr.kind === "cast"
-      ? enumOrderForCast(ast.orderBy.expr.castType)
-      : ast.orderBy.expr.kind === "binding_ref"
-        ? enumOrderForRows(rows)
-        : undefined;
+    type OrderKey = { expr: FreeObjectExpr; direction: number; enumOrder?: Map<string, number> };
+    const orderKeys: OrderKey[] = [];
+    let cursor: typeof ast.orderBy | undefined = ast.orderBy;
+    while (cursor) {
+      orderKeys.push({
+        expr: cursor.expr,
+        direction: cursor.direction === "desc" ? -1 : 1,
+        enumOrder: cursor.expr.kind === "cast"
+          ? enumOrderForCast(cursor.expr.castType)
+          : cursor.expr.kind === "binding_ref"
+            ? enumOrderForRows(rows)
+            : undefined,
+      });
+      cursor = cursor.then;
+    }
+
     rows.sort((a, b) => {
       const leftEnv = new Map(initialEnv);
       const rightEnv = new Map(initialEnv);
@@ -1872,14 +1910,28 @@ const tryRuntimeSelectExprEvaluation = (
         leftEnv.set(currentBinding, a);
         rightEnv.set(currentBinding, b);
       }
-      const left = evalExpr(ast.orderBy!.expr, leftEnv);
-      const right = evalExpr(ast.orderBy!.expr, rightEnv);
-      const leftEnumIndex = typeof left === "string" ? enumOrder?.get(left) : undefined;
-      const rightEnumIndex = typeof right === "string" ? enumOrder?.get(right) : undefined;
-      if (leftEnumIndex !== undefined && rightEnumIndex !== undefined && leftEnumIndex !== rightEnumIndex) {
-        return (leftEnumIndex < rightEnumIndex ? -1 : 1) * direction;
+      leftEnv.set("__current__", a as Record<string, unknown>);
+      rightEnv.set("__current__", b as Record<string, unknown>);
+      for (const key of orderKeys) {
+        const left = evalExpr(key.expr, leftEnv);
+        const right = evalExpr(key.expr, rightEnv);
+        const leftEnumIndex = typeof left === "string" ? key.enumOrder?.get(left) : undefined;
+        const rightEnumIndex = typeof right === "string" ? key.enumOrder?.get(right) : undefined;
+        if (leftEnumIndex !== undefined && rightEnumIndex !== undefined && leftEnumIndex !== rightEnumIndex) {
+          return (leftEnumIndex < rightEnumIndex ? -1 : 1) * key.direction;
+        }
+        if (typeof left === "number" && typeof right === "number") {
+          if (left !== right) {
+            return (left < right ? -1 : 1) * key.direction;
+          }
+          continue;
+        }
+        const cmp = String(left ?? "").localeCompare(String(right ?? ""));
+        if (cmp !== 0) {
+          return cmp * key.direction;
+        }
       }
-      return String(left ?? "").localeCompare(String(right ?? "")) * direction;
+      return 0;
     });
   }
   const finalRows = finalShape ? rows.map((row) => projectToShape(row, finalShape)) : rows;
@@ -4914,6 +4966,11 @@ const materializeSelectRow = (
           output[element.name] = (element.expr.constant ?? 0) - digit;
         }
       } else if (element.expr.kind === "select_expr") {
+        const loweredAlias = computedValueAlias(element.pathId);
+        if (Object.prototype.hasOwnProperty.call(row, loweredAlias)) {
+          output[element.name] = row[loweredAlias];
+          continue;
+        }
         output[element.name] = evaluateSelectExprShapeEntry(db, schema, element.expr.expr, row, sourceType);
       } else {
         output[element.name] = { name: sourceType };
@@ -7982,6 +8039,71 @@ const runWriteWithAccessPolicies = (
     db.prepare("ROLLBACK").run();
     throw err;
   }
+};
+
+const executeMutationBinding = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  statement: Statement,
+  context: SecurityContext,
+): Record<string, unknown>[] => {
+  if (statement.kind !== "update" && statement.kind !== "insert" && statement.kind !== "delete") {
+    return [];
+  }
+
+  const compilerService = getCompilerService();
+  const runtimeTarget = resolvedRuntimeTarget(context, db);
+
+  const expanded: Statement[] = (statement.kind === "update" || statement.kind === "delete")
+    ? (expandPolymorphicMutation(schema, statement) ?? [statement])
+    : [statement];
+
+  const collected: Record<string, unknown>[] = [];
+
+  for (const ast of expanded) {
+    const compiled = compilerService.compile(schema, ast, { globals: context.globals, target: runtimeTarget });
+    const ir = compiled.ir;
+    if (ir.kind !== "update" && ir.kind !== "insert" && ir.kind !== "delete") {
+      continue;
+    }
+    const subjectType = typeDefForTable(schema, ir.table);
+    if (!subjectType) {
+      continue;
+    }
+    const sqlArtifact = compiled.sql;
+    assertTargetSqlCompatibility(sqlArtifact.sql, runtimeTarget);
+    const concreteName = qualifiedTypeName(subjectType);
+
+    if (ir.kind === "update") {
+      const preRows = readTargetRowsForFilter(db, ir.table, ir.filter);
+      const targetIds = preRows.map((row) => String(row.id));
+      runWriteWithAccessPolicies(db, schema, ast, ir, sqlArtifact, subjectType, context);
+      const postRows = readRowsByIds(db, ir.table, targetIds);
+      for (const row of postRows) {
+        collected.push({ ...row, __source_type: concreteName });
+      }
+      continue;
+    }
+
+    if (ir.kind === "delete") {
+      const preRows = readTargetRowsForFilter(db, ir.table, ir.filter);
+      runWriteWithAccessPolicies(db, schema, ast, ir, sqlArtifact, subjectType, context);
+      for (const row of preRows) {
+        collected.push({ ...row, __source_type: concreteName });
+      }
+      continue;
+    }
+
+    runWriteWithAccessPolicies(db, schema, ast, ir, sqlArtifact, subjectType, context);
+    const inserted = db
+      .prepare(`SELECT * FROM ${quoteIdent(ir.table)} ORDER BY rowid DESC LIMIT 1`)
+      .all()[0] as Record<string, unknown> | undefined;
+    if (inserted) {
+      collected.push({ ...inserted, __source_type: concreteName });
+    }
+  }
+
+  return collected;
 };
 
 const executeNestedInsert = (
