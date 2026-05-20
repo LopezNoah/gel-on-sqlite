@@ -113,7 +113,29 @@ class Parser {
   }
 
   private atQualifiedIdentifier(): boolean {
-    return this.isNameToken(this.peek()) && this.kindAfterQualifiedName() === "dot";
+    if (!this.isNameToken(this.peek()) || this.kindAfterQualifiedName() !== "dot") {
+      return false;
+    }
+    return this.isNameToken(this.tokenAfterQualifiedNameAndDot());
+  }
+
+  private tokenAfterQualifiedNameAndDot(): Token {
+    let i = this.index + 1;
+    while (true) {
+      if (this.tokens[i]?.kind === "coloncolon" && this.tokens[i + 1] && this.isNameToken(this.tokens[i + 1]!)) {
+        i += 2;
+        continue;
+      }
+      if (this.tokens[i]?.kind === "colon" && this.tokens[i + 1]?.kind === "colon" && this.tokens[i + 2] && this.isNameToken(this.tokens[i + 2]!)) {
+        i += 3;
+        continue;
+      }
+      break;
+    }
+    if (this.tokens[i]?.kind === "dot") {
+      return this.tokens[i + 1] ?? this.tokens[this.tokens.length - 1]!;
+    }
+    return this.tokens[i] ?? this.tokens[this.tokens.length - 1]!;
   }
 
   private atDotField(): boolean {
@@ -525,6 +547,11 @@ class Parser {
 
   private parseFor(ctx: ParseContext = {}): ForStatement {
     const start = this.expect("kw_for", "Expected 'for'");
+    let optional = false;
+    if (this.peek().kind === "kw_optional") {
+      this.consume();
+      optional = true;
+    }
     const variable = this.expectName("Expected variable name after 'for'").lexeme;
     this.expect("kw_in", "Expected 'in' after for variable");
     const iteratorExpr = this.parseFreeObjectIfElseExpr();
@@ -560,6 +587,7 @@ class Parser {
       ...this.withContext(ctx),
       kind: "for",
       variable,
+      optional,
       iteratorExpr,
       body,
       pos: { line: start.line, column: start.column },
@@ -958,6 +986,10 @@ class Parser {
   private parseFreeObjectPrimaryExpr(): FreeObjectExpr {
     if (this.peek().kind === "lparen") {
       this.consume();
+      if (this.peek().kind === "rparen") {
+        this.consume();
+        return { kind: "set_literal", values: [] };
+      }
       const expr = this.parseFreeObjectExpr();
       if (this.peek().kind === "comma") {
         const values: FreeObjectExpr[] = [expr];
@@ -1000,15 +1032,20 @@ class Parser {
     }
 
     if (this.peek().kind === "kw_for") {
-      const binders: Array<{ variable: string; iterator: FreeObjectExpr }> = [];
+      const binders: Array<{ variable: string; iterator: FreeObjectExpr; optional: boolean }> = [];
       while (this.peek().kind === "kw_for") {
         this.consume();
+        let optional = false;
+        if (this.peek().kind === "kw_optional") {
+          this.consume();
+          optional = true;
+        }
         const variable = this.expectName("Expected variable name after 'for'").lexeme;
         this.expect("kw_in", "Expected 'in' after for variable");
         const iterator = this.parseFreeObjectIfElseExpr();
-        binders.push({ variable, iterator });
+        binders.push({ variable, iterator, optional });
         this.localBindings.push(variable);
-        
+
       }
       if (this.peek().kind === "kw_union") {
         this.consume();
@@ -1025,8 +1062,9 @@ class Parser {
             kind: "for_expr",
             variable: binders[index + 1]!.variable,
             iterator: binders[index + 1]!.iterator,
+            optional: binders[index + 1]!.optional,
             body: parseBody(index + 1),
-            //filter: 
+            //filter:
           };
         });
       };
@@ -1035,6 +1073,7 @@ class Parser {
         kind: "for_expr",
         variable: first.variable,
         iterator: first.iterator,
+        optional: first.optional,
         body: parseBody(0),
       };
       for (const binder of binders) {
@@ -1105,6 +1144,17 @@ class Parser {
     }
 
     if (this.peek().kind === "lbrace") {
+      if (this.isNameToken(this.peekNth(1)) && this.peekNth(2).kind === "assign") {
+        this.consume();
+        const entries = this.parseDelimited("rbrace", () => {
+          const name = this.expectName("Expected free object field name").lexeme;
+          this.expect("assign", "Expected ':=' in free object field");
+          const fieldExpr = this.parseFreeObjectExpr();
+          return { name, expr: fieldExpr };
+        }, "Expected ',' between free object entries");
+        this.expect("rbrace", "Expected '}' after free object entries");
+        return { kind: "free_object_constructor", entries };
+      }
       this.consume();
       const values = this.parseDelimited("rbrace", () => this.parseFreeObjectExpr(), "Expected ',' in set literal");
       this.expect("rbrace", "Expected '}' after set literal");

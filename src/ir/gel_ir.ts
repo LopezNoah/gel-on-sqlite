@@ -504,6 +504,7 @@ export interface ForExpr extends Base {
   iterator: Set;
   body: Set;
   bindingKind: BindingKind;
+  optional?: boolean;
   where?: Set;
   orderBy?: SortExpr[];
   limit?: Set;

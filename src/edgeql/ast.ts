@@ -489,6 +489,10 @@ export type FreeObjectExpr =
       values: FreeObjectExpr[];
     }
   | {
+      kind: "free_object_constructor";
+      entries: Array<{ name: string; expr: FreeObjectExpr }>;
+    }
+  | {
       kind: "array_literal_expr";
       values: FreeObjectExpr[];
     }
@@ -544,6 +548,7 @@ export type FreeObjectExpr =
       variable: string;
       iterator: FreeObjectExpr;
       body: FreeObjectExpr;
+      optional?: boolean;
       filter?: FreeObjectExpr;
       orderBy?: {
         expr: FreeObjectExpr;
@@ -711,6 +716,7 @@ export interface ForStatement {
   withModule?: string;
   withModuleAliases?: WithModuleAlias[];
   variable: string;
+  optional?: boolean;
   iteratorExpr: FreeObjectExpr;
   body: InsertStatement | SelectStatement | SelectExprStatement | SelectFreeStatement;
   pos: SourcePos;

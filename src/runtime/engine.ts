@@ -2721,8 +2721,14 @@ const tryEvaluateParsedRuntimeSelect = (
     if (expr.kind === "path_steps") {
       const first = expr.steps[0];
       if (!first || first.kind !== "object_ref") return [];
-      let current = env.bindings.get(first.name) ?? concreteRowsForType(first.name);
-      let currentType = qualifyType(first.name);
+      const qualifiedFirst = qualifyType(first.name);
+      const rowTypeQualified = env.row ? rowTypeName(env.row, env.rowType) : undefined;
+      const rowMatchesFirst = env.row
+        && (rowTypeQualified === qualifiedFirst
+          || schema.listConcreteTypesAssignableTo(qualifiedFirst).some((t) => qualifiedTypeName(t) === rowTypeQualified));
+      let current = env.bindings.get(first.name)
+        ?? (rowMatchesFirst ? [env.row as ParsedRuntimeRow] : concreteRowsForType(first.name));
+      let currentType = qualifiedFirst;
       let followedInboundPointer = false;
       for (const step of expr.steps.slice(1)) {
         if (step.kind === "type_intersection" && step.typeExpr) {
@@ -2835,16 +2841,23 @@ const tryEvaluateParsedRuntimeSelect = (
     }
     if (expr.kind === "for_expr") {
       const iterator = evalFreeExpr(expr.iterator, env);
-      const items = Array.isArray(iterator) ? iterator : [iterator];
+      let items = Array.isArray(iterator) ? iterator : [iterator];
+      if (expr.optional && items.length === 0) {
+        items = [null];
+      }
       const mapped = items.flatMap((item) => {
-        if (!isRecordRow(item)) {
-          return [];
-        }
         const bindings = new Map(env.bindings);
-        bindings.set(expr.variable, [item]);
-        const itemType = rowTypeName(item, env.rowType);
-        const value = evalFreeExpr(expr.body, { ...env, row: item, rowType: itemType, bindings });
-        return Array.isArray(value) ? value : [value];
+        let scopedEnv = env;
+        if (isRecordRow(item)) {
+          bindings.set(expr.variable, [item]);
+          const itemType = rowTypeName(item, env.rowType);
+          scopedEnv = { ...env, row: item, rowType: itemType, bindings };
+        } else {
+          bindings.set(expr.variable, [{ __scalar: item }]);
+          scopedEnv = { ...env, bindings };
+        }
+        const value = evalFreeExpr(expr.body, scopedEnv);
+        return Array.isArray(value) ? value : value === null || value === undefined ? [] : [value];
       });
       if (expr.body.kind === "backlink_path") {
         return [...new Map(mapped
@@ -2922,6 +2935,52 @@ const tryEvaluateParsedRuntimeSelect = (
       const scalarCond = Array.isArray(cond) && cond.length === 1 ? cond[0] : cond;
       return scalarCond ? evalFreeExpr(expr.thenExpr, env) : evalFreeExpr(expr.elseExpr, env);
     }
+    if (expr.kind === "concat") {
+      let results: unknown[] = [""];
+      for (const part of expr.parts) {
+        const partValue = evalFreeExpr(part, env);
+        const partItems = Array.isArray(partValue) ? partValue : [partValue];
+        if (partItems.length === 0) {
+          return [];
+        }
+        const next: unknown[] = [];
+        for (const left of results) {
+          for (const right of partItems) {
+            if (right === null || right === undefined) {
+              continue;
+            }
+            next.push(`${left as string}${String(right)}`);
+          }
+        }
+        results = next;
+      }
+      return results;
+    }
+    if (expr.kind === "index_access") {
+      const base = evalFreeExpr(expr.expr, env);
+      const readIndex = (item: unknown): unknown => {
+        if (typeof item === "string") {
+          return item[expr.index] ?? null;
+        }
+        if (Array.isArray(item)) {
+          return item[expr.index] ?? null;
+        }
+        return null;
+      };
+      if (Array.isArray(base)) {
+        return base
+          .map((item) => readIndex(item))
+          .filter((value) => value !== null && value !== undefined);
+      }
+      return readIndex(base);
+    }
+    if (expr.kind === "coalesce") {
+      const left = evalFreeExpr(expr.left, env);
+      const isEmpty = left === null
+        || left === undefined
+        || (Array.isArray(left) && left.length === 0);
+      return isEmpty ? evalFreeExpr(expr.right, env) : left;
+    }
     if (expr.kind === "shape_projection") {
       const base = evalFreeExpr(expr.expr, env);
       const project = (item: unknown): unknown => {
@@ -2974,6 +3033,7 @@ const tryEvaluateParsedRuntimeSelect = (
     }
     if (expr.kind === "function_call") {
       const name = expr.call.name.includes("::") ? expr.call.name : `std::${expr.call.name}`;
+      const normalized = name.toLowerCase();
       if (name === "std::count") {
         const arg = expr.call.args[0];
         if (arg?.kind === "field_ref" && env.row) {
@@ -2987,6 +3047,12 @@ const tryEvaluateParsedRuntimeSelect = (
         }
         const value = arg ? evalFunctionArg(arg, env) : [];
         return Array.isArray(value) ? value.length : value === null || value === undefined ? 0 : 1;
+      }
+      if (normalized === "std::assert_distinct"
+        || normalized === "std::assert_exists"
+        || normalized === "std::assert_single") {
+        const arg = expr.call.args[0];
+        return arg ? evalFunctionArg(arg, env) : [];
       }
     }
     return null;
@@ -3033,6 +3099,12 @@ const tryEvaluateParsedRuntimeSelect = (
         }
         const value = expr.call.args[0] ? evalFunctionArg(expr.call.args[0], env) : [];
         return Array.isArray(value) ? value.length : value === null || value === undefined ? 0 : 1;
+      }
+      if (normalizedName === "std::assert_distinct"
+        || normalizedName === "std::assert_exists"
+        || normalizedName === "std::assert_single") {
+        const value = expr.call.args[0] ? evalFunctionArg(expr.call.args[0], env) : [];
+        return value;
       }
     }
     if (expr.kind === "select_expr") {
@@ -3187,11 +3259,17 @@ const tryEvaluateParsedRuntimeSelect = (
       if (Array.isArray(value)) return value.length > 0;
       return value !== null && value !== undefined;
     }
+    const unwrapBoundScalar = (value: unknown): unknown => {
+      if (value && typeof value === "object" && !Array.isArray(value) && "__scalar" in (value as Record<string, unknown>)) {
+        return (value as Record<string, unknown>).__scalar;
+      }
+      return value;
+    };
     const expected = typeof filter.value === "object" && filter.value !== null && "kind" in filter.value
       ? filter.value.kind === "field_ref"
         ? row[filter.value.field]
         : filter.value.kind === "binding_ref"
-          ? env.bindings.get(filter.value.name)?.[0]
+          ? unwrapBoundScalar(env.bindings.get(filter.value.name)?.[0])
           : filter.value.kind === "set_literal"
             ? filter.value.values
             : filter.value
@@ -4453,7 +4531,12 @@ const executeForLoop = (
   const body = ast.body;
 
   if (body.kind === "insert") {
-    const iteratorValues = evaluateForIteratorValues(iteratorExpr, schema, db, context);
+    let iteratorValues = evaluateForIteratorValues(iteratorExpr, schema, db, context);
+    if (ast.optional && iteratorValues.length === 0) {
+      iteratorValues = [null];
+    }
+    const insertedRows: Record<string, unknown>[] = [];
+    let lastTraceFields: Omit<QueryExecutionTrace, "result"> | undefined;
     for (const value of iteratorValues) {
       const insertValues: Record<string, InsertValue> = {};
       for (const [key, v] of Object.entries(body.values)) {
@@ -4484,21 +4567,29 @@ const executeForLoop = (
       const sqlTrail: SQLArtifact[] = [sqlArtifact];
 
       const writeResult = runWriteWithAccessPolicies(db, schema, insertAst, ir, sqlArtifact, subjectType, context);
-      const result = { kind: "insert" as const, changes: writeResult.changes };
 
       const currentOverlays = extractOverlays(ir);
       if (ir.kind !== "select" && ir.kind !== "select_free" && ir.kind !== "select_expr") {
         overlays.push(...currentOverlays);
       }
 
-      traces.push({
+      for (let i = 0; i < writeResult.changes; i += 1) {
+        insertedRows.push({});
+      }
+
+      lastTraceFields = {
         ast: insertAst,
         ir,
         sql: sqlArtifact,
         compiler: compiled.cache,
         sqlTrail,
         overlays: currentOverlays,
-        result,
+      };
+    }
+    if (lastTraceFields) {
+      traces.push({
+        ...lastTraceFields,
+        result: { kind: "select", rows: insertedRows },
       });
     }
     return;
@@ -4515,6 +4606,7 @@ const executeForLoop = (
         variable: ast.variable,
         iterator: iteratorExpr,
         body: body.expr,
+        optional: ast.optional,
       },
       orderBy: body.orderBy,
       pos: ast.pos,
@@ -4565,6 +4657,7 @@ const executeForLoop = (
             })),
           },
         },
+        optional: ast.optional,
       },
       pos: ast.pos,
     };
@@ -4593,7 +4686,10 @@ const executeForLoop = (
   }
 
   {
-    const iteratorValues = evaluateForIteratorValues(iteratorExpr, schema, db, context);
+    let iteratorValues = evaluateForIteratorValues(iteratorExpr, schema, db, context);
+    if (ast.optional && iteratorValues.length === 0) {
+      iteratorValues = [null];
+    }
     const allRows: Record<string, unknown>[] = [];
     for (const value of iteratorValues) {
       const selectAst = bindSelectAstVariable(body, ast.variable, value);
@@ -5698,6 +5794,9 @@ const evaluateSelectExprEntry = (
     if (value.kind === "if_else") {
       return isTupleLikeSelectExprEntry(value.thenExpr) && isTupleLikeSelectExprEntry(value.elseExpr);
     }
+    if (value.kind === "coalesce") {
+      return isTupleLikeSelectExprEntry(value.left) && isTupleLikeSelectExprEntry(value.right);
+    }
     if (value.kind === "select_expr_subquery") {
       return isTupleLikeSelectExprEntry(value.value);
     }
@@ -5817,6 +5916,13 @@ const evaluateSelectExprEntry = (
         return evaluateSelectExprEntry(schema, db, context, typedValue, sqlTrail, evalContext);
       });
     }
+    case "free_object": {
+      const record: Record<string, unknown> = {};
+      for (const item of entry.entries) {
+        record[item.name] = evaluateSelectExprEntry(schema, db, context, item.expr, sqlTrail, evalContext);
+      }
+      return record;
+    }
     case "index_access": {
       const value = evaluateSelectExprEntry(schema, db, context, entry.value, sqlTrail, evalContext);
       const valueIsTuple = Array.isArray(value)
@@ -5902,6 +6008,16 @@ const evaluateSelectExprEntry = (
       const rightValue = evaluateSelectExprEntry(schema, db, context, entry.right, sqlTrail, evalContext);
       return Number(leftValue) + Number(rightValue);
     }
+    case "coalesce": {
+      const leftValue = evaluateSelectExprEntry(schema, db, context, entry.left, sqlTrail, evalContext);
+      const isEmpty = leftValue === null
+        || leftValue === undefined
+        || (Array.isArray(leftValue) && leftValue.length === 0);
+      if (!isEmpty) {
+        return leftValue;
+      }
+      return evaluateSelectExprEntry(schema, db, context, entry.right, sqlTrail, evalContext);
+    }
     case "if_else": {
       const thenValue = evaluateSelectExprEntry(schema, db, context, entry.thenExpr, sqlTrail, evalContext);
       const conditionValue = evaluateSelectExprEntry(schema, db, context, entry.condition, sqlTrail, evalContext);
@@ -5954,7 +6070,10 @@ const evaluateSelectExprEntry = (
   } else {
     iteratorValue = evaluateSelectExprEntry(schema, db, context, entry.iterator, sqlTrail, evalContext);
   }
-  const iteratorItems = Array.isArray(iteratorValue) ? iteratorValue : [iteratorValue];
+  let iteratorItems: unknown[] = Array.isArray(iteratorValue) ? iteratorValue : [iteratorValue];
+  if (entry.optional && iteratorItems.length === 0) {
+    iteratorItems = [null];
+  }
   const out: unknown[] = [];
   const bodyProducesTupleValue = isTupleLikeSelectExprEntry(entry.body);
 
@@ -5997,6 +6116,15 @@ const evaluateSelectExprEntry = (
 
     if (Array.isArray(bodyValue) && !bodyProducesTupleValue) {
       out.push(...bodyValue);
+    } else if (
+      bodyProducesTupleValue
+      && Array.isArray(bodyValue)
+      && bodyValue.length > 0
+      && bodyValue.every((row) => Array.isArray(row))
+    ) {
+      out.push(...bodyValue);
+    } else if (bodyValue === null || bodyValue === undefined) {
+      // empty body — contributes nothing
     } else {
       out.push(bodyValue);
     }

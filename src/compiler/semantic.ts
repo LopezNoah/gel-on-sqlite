@@ -3114,6 +3114,15 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           values: expr.values.map((value) => asNestedExprEntry(compileExprToIREntry(value, currentItemBinding))),
         };
       }
+      if (expr.kind === "free_object_constructor") {
+        return {
+          kind: "free_object",
+          entries: expr.entries.map((entry) => ({
+            name: entry.name,
+            expr: asNestedExprEntry(compileExprToIREntry(entry.expr, currentItemBinding)),
+          })),
+        };
+      }
       if (expr.kind === "array_literal_expr") {
         return {
           kind: "array_literal_expr",
@@ -3163,6 +3172,13 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           elseExpr: asNestedExprEntry(compileExprToIREntry(expr.elseExpr, currentItemBinding)),
         };
       }
+      if (expr.kind === "coalesce") {
+        return {
+          kind: "coalesce",
+          left: asNestedExprEntry(compileExprToIREntry(expr.left, currentItemBinding)),
+          right: asNestedExprEntry(compileExprToIREntry(expr.right, currentItemBinding)),
+        };
+      }
       
       if (expr.kind === "for_expr") {
         if (
@@ -3194,6 +3210,16 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           }
         }
         const iterator = asNestedExprEntry(compileExprToIREntry(expr.iterator, currentItemBinding));
+        const isIndeterminateEmptyIterator = (entry: import("../ir/model.js").SelectExprIREntry): boolean => {
+          if (entry.kind === "set_literal" && entry.values.length === 0) return true;
+          if (entry.kind === "set_expr") {
+            return entry.values.length > 0 && entry.values.every((v) => isIndeterminateEmptyIterator(v as import("../ir/model.js").SelectExprIREntry));
+          }
+          return false;
+        };
+        if (isIndeterminateEmptyIterator(iterator)) {
+          fail("FOR statement has iterator of indeterminate type");
+        }
         forBindingStack.push(expr.variable);
         // const body = asNestedExprEntry(compileExprToIREntry(expr.body, expr.variable));
         // forBindingStack.pop();
@@ -3209,6 +3235,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     variable: expr.variable,
     iterator,
     body: asNestedExprEntry(compileExprToIREntry(expr.body, expr.variable)),
+    optional: expr.optional,
     filter: expr.filter
       ? asNestedExprEntry(compileExprToIREntry(expr.filter, expr.variable))
       : undefined,
@@ -3299,6 +3326,15 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
             if (isEnumScalarType) {
               fail("enum path expression lacks an enum member name, as in 'color_enum_t.GREEN'");
             }
+            return compileExprToIREntry(
+              {
+                kind: "select",
+                typeName: expr.name,
+                shape: [{ kind: "field", name: "id", operation: "assign", origin: "default" }],
+                clauses: {},
+              },
+              currentItemBinding,
+            );
           }
 
           if (/^__.+__/.test(expr.name)) {
@@ -3533,6 +3569,9 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
               value: asNestedExprEntry(coerceEnumValue(innerEntry)),
             };
           }
+          if (!castTypeDef.fields.some((f) => f.name === "__enum__")) {
+            return innerEntry;
+          }
           fail(`Unsupported cast type '${resolvedCastType}'`);
         }
         if (resolvedCastType === "str") {
@@ -3569,12 +3608,18 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
             if (bindingName && arg.name === bindingName) {
               return { kind: "current_item", bindingName: arg.name };
             }
+            if (forBindingStack.includes(arg.name)) {
+              return { kind: "current_item", bindingName: arg.name };
+            }
             const bindingValue = withBindings.get(arg.name);
             if (bindingValue?.kind === "set_literal") {
               return { kind: "set_literal", values: [...bindingValue.values] };
             }
             if (bindingValue?.kind === "array_literal") {
               return { kind: "set_literal", values: [...bindingValue.values] };
+            }
+            if (!bindingValue && schema.getType(normalizeTypeName(arg.name, activeModule))) {
+              return asNestedExprEntry(compileExprToIREntry({ kind: "binding_ref", name: arg.name }, bindingName)) as import("../ir/model.js").SelectExprIREntry<3>;
             }
             const scalar = resolveWithBindingScalar(arg.name);
             return { kind: "literal", value: scalar };

@@ -609,6 +609,12 @@ export type SelectExprIREntry<D extends Depth = 4> =
   | (D extends 0
       ? never
       : {
+          kind: "free_object";
+          entries: Array<{ name: string; expr: SelectExprIREntry<Dec<D>> }>;
+        })
+  | (D extends 0
+      ? never
+      : {
           kind: "array_literal_expr";
           values: SelectExprIREntry<Dec<D>>[];
         })
@@ -665,10 +671,18 @@ export type SelectExprIREntry<D extends Depth = 4> =
   | (D extends 0
       ? never
       : {
+          kind: "coalesce";
+          left: SelectExprIREntry<Dec<D>>;
+          right: SelectExprIREntry<Dec<D>>;
+        })
+  | (D extends 0
+      ? never
+      : {
           kind: "for_expr";
           variable: string;
           iterator: SelectExprIREntry<Dec<D>>;
           body: SelectExprIREntry<Dec<D>>;
+          optional?: boolean;
           filter?: SelectExprIREntry;
           orderBy?: OrderByIR<SelectExprIREntry>;
           limit?: number;
