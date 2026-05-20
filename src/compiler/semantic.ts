@@ -1188,6 +1188,49 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     return sources;
   };
 
+  const rewriteSubjectBindingRefsToCurrent = (
+    expr: import("../edgeql/ast.js").FreeObjectExpr,
+    subjectBindingName: string,
+  ): import("../edgeql/ast.js").FreeObjectExpr => {
+    type Expr = import("../edgeql/ast.js").FreeObjectExpr;
+    const walk = (node: Expr): Expr => {
+      if (node.kind === "binding_ref" && node.name === subjectBindingName) {
+        return { kind: "current_item" };
+      }
+      if (node.kind === "field_access") {
+        return { ...node, expr: walk(node.expr) };
+      }
+      if (node.kind === "math" || node.kind === "compare" || node.kind === "and" || node.kind === "or" || node.kind === "logical" || node.kind === "coalesce") {
+        return { ...node, left: walk(node.left), right: walk(node.right) };
+      }
+      if (node.kind === "if_else") {
+        return {
+          ...node,
+          condition: walk(node.condition),
+          thenExpr: walk(node.thenExpr),
+          elseExpr: walk(node.elseExpr),
+        };
+      }
+      if (node.kind === "not" || node.kind === "unary" || node.kind === "cast" || node.kind === "distinct" || node.kind === "exists" || node.kind === "shape_projection") {
+        return { ...node, expr: walk(node.expr) };
+      }
+      if (node.kind === "select_expr_subquery") {
+        return { ...node, expr: walk(node.expr) };
+      }
+      if (node.kind === "concat") {
+        return { ...node, parts: node.parts.map(walk) };
+      }
+      if (node.kind === "tuple" || node.kind === "array_literal_expr" || node.kind === "set_expr") {
+        return { ...node, values: node.values.map(walk) };
+      }
+      if (node.kind === "index_access" || node.kind === "slice_access") {
+        return { ...node, expr: walk(node.expr) };
+      }
+      return node;
+    };
+    return walk(expr);
+  };
+
   const compileSelectForType = (
     typeDef: TypeDef,
     pathId: string | PathIdIR,
@@ -1204,6 +1247,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       linkProperties?: Set<string>;
       typeFilterExprs?: import("../edgeql/ast.js").TypeExpr[];
       branchTypeFilterExprs?: import("../edgeql/ast.js").TypeExpr[];
+      subjectBindingName?: string;
     },
     ): {
       pathId: PathIdIR;
@@ -1999,13 +2043,16 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
               }
             }
           }
+          const rewrittenInnerExpr = options.subjectBindingName
+            ? rewriteSubjectBindingRefsToCurrent(shapeElement.expr.expr, options.subjectBindingName)
+            : shapeElement.expr.expr;
           shapeElements.push({
             kind: "computed",
             name: shapeElement.name,
             pathId: toPathIdIR(elementPathId),
             expr: {
               kind: "select_expr",
-              expr: shapeElement.expr.expr,
+              expr: rewrittenInnerExpr,
               withBindings: shapeElement.expr.clauses._withBindings,
             },
           });
@@ -3118,6 +3165,34 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       }
       
       if (expr.kind === "for_expr") {
+        if (
+          expr.variable === "__gel_backlink_item__"
+          && expr.body.kind === "backlink_path"
+          && expr.iterator.kind === "binding_ref"
+        ) {
+          const iteratorName = normalizeTypeName(expr.iterator.name, activeModule);
+          const iteratorType = schema.getType(iteratorName);
+          const isEnumScalar = iteratorType?.fields.length === 1
+            && iteratorType.fields[0]?.name === "__enum__"
+            && (iteratorType.fields[0]?.enumValues?.length ?? 0) > 0;
+          if (isEnumScalar) {
+            fail("enum types do not support backlink");
+          }
+        }
+        if (
+          expr.variable === "__gel_backlink_item__"
+          && expr.body.kind === "backlink_path"
+        ) {
+          const linkName = expr.body.link;
+          const linkIsBacklinkComputed = schema.listTypes().some((candidate) => (
+            (candidate.computeds ?? []).some((computed) => (
+              computed.kind === "link" && computed.name === linkName && computed.expr.kind === "backlink"
+            ))
+          ));
+          if (linkIsBacklinkComputed) {
+            fail(`cannot follow backlink '${linkName}' as it targets an alias`);
+          }
+        }
         const iterator = asNestedExprEntry(compileExprToIREntry(expr.iterator, currentItemBinding));
         forBindingStack.push(expr.variable);
         // const body = asNestedExprEntry(compileExprToIREntry(expr.body, expr.variable));
@@ -3933,6 +4008,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       aliasProjections: resolvedRootType.aliasProjections,
       typeFilterExprs: statement.typeFilterExprs,
       branchTypeFilterExprs: statement.branchTypeFilterExprs,
+      subjectBindingName: statement.typeName,
     });
 
     return {
@@ -4154,6 +4230,9 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       }
 
       if (knownFields.has(field)) {
+        if (typeof value === "object" && value !== null && "kind" in value && value.kind === "expr") {
+          continue;
+        }
         const fieldDef = requireValue(fieldByName.get(field), `Unknown field '${field}' on '${statement.typeName}'`);
         const scalar = fieldDef.multi
           ? JSON.stringify(resolveInsertSetValues(value))

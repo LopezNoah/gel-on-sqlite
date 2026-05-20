@@ -2779,8 +2779,24 @@ class Parser {
     return {
       field,
       operation: opToken.kind === "add_assign" ? "append" : opToken.kind === "sub_assign" ? "subtract" : "assign",
-      value: this.parseInsertValue(),
+      value: this.parseUpdateValue(),
     };
+  }
+
+  private parseUpdateValue(): InsertValue {
+    const insertAttempt = this.attempt<InsertValue>(() => {
+      const value = this.parseInsertValue();
+      const next = this.peek().kind;
+      if (next === "comma" || next === "rbrace") {
+        return value;
+      }
+      return undefined;
+    });
+    if (insertAttempt !== undefined) {
+      return insertAttempt;
+    }
+    const expr = this.parseFreeObjectExpr();
+    return { kind: "expr", expr };
   }
 
   private parseInsertValue(): InsertValue {
