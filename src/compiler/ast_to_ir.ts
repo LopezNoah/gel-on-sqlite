@@ -1244,6 +1244,24 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
       };
     }
 
+    case "free_object_constructor": {
+      const elements = expr.entries.map((entry) => ({ name: entry.name, val: compileFreeObjectExpr(entry.expr, ctx) }));
+      return {
+        kind: "set",
+        expr: {
+          kind: "tuple",
+          named: true,
+          elements,
+        },
+        pathId: defaultPathId("free_object"),
+        typeref: unknownTypeRef("std::tuple"),
+        shape: [],
+        isBinding: false,
+        isMaterializedRef: false,
+        isSchemaAlias: false,
+      };
+    }
+
     case "concat": {
       const partTypes = expr.parts.map((part) => inferAstExprTypeName(part, ctx));
       const nonStrIndex = partTypes.findIndex((typeName) => typeName !== undefined && typeName !== "std::str");
@@ -1609,6 +1627,7 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
           iterator,
           body,
           bindingKind: "with",
+          optional: expr.optional ?? false,
           where: expr.filter ? compileFreeObjectExpr(expr.filter, loopCtx) : undefined,
           orderBy: expr.orderBy
             ? [{ kind: "sort_expr", path: compileFreeObjectExpr(expr.orderBy.expr, loopCtx), direction: expr.orderBy.direction, nonesOrder: "last" }]
@@ -2367,7 +2386,7 @@ const compileInsertValue = (value: InsertValue, ctx: IRCompileContext, seenInser
         return literalToSet(Array.isArray(value.values) ? value.values.length : Object.keys(value.values).length);
       }
       if (value.kind === "for") {
-        return compileFreeObjectExpr({ kind: "for_expr", variable: value.variable, iterator: value.iteratorExpr, body: { kind: "literal", value: null } }, ctx);
+        return compileFreeObjectExpr({ kind: "for_expr", variable: value.variable, iterator: value.iteratorExpr, body: { kind: "literal", value: null }, optional: value.optional }, ctx);
       }
     }
   }
@@ -2525,7 +2544,7 @@ const compileForStatement = (statement: ForStatement, ctx: IRCompileContext): Se
     : statement.body.kind === "select"
       ? { kind: "select", typeName: statement.body.typeName, shape: statement.body.shape, clauses: { filter: statement.body.filter, orderBy: statement.body.orderBy, limit: statement.body.limit, offset: statement.body.offset } }
       : { kind: "literal", value: null };
-  const set = compileFreeObjectExpr({ kind: "for_expr", variable: statement.variable, iterator: statement.iteratorExpr, body: bodyExpr }, loopCtx);
+  const set = compileFreeObjectExpr({ kind: "for_expr", variable: statement.variable, iterator: statement.iteratorExpr, body: bodyExpr, optional: statement.optional }, loopCtx);
   return {
     kind: "select_stmt",
     expr: set,
