@@ -849,7 +849,10 @@ const generateId = (typeDef: TypeDef): string => {
 
 const generateFunctionId = (fn: FunctionDef): string => {
   const qName = `${fn.module}::${fn.name}`;
-  return `fn_${qName.replace(/[^A-Za-z0-9_]/g, "_")}`;
+  const signature = fn.params
+    .map((param) => `${param.type}${param.optional ? "?" : ""}${param.variadic ? "*" : ""}`)
+    .join(",");
+  return `fn_${qName.replace(/[^A-Za-z0-9_]/g, "_")}__${signature.replace(/[^A-Za-z0-9_]/g, "_")}`;
 };
 
 const scalarTypeId = (type: string): string => `scalar_${type}`;

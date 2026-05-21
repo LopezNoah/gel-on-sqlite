@@ -990,6 +990,60 @@ class Parser {
         this.consume();
         return { kind: "set_literal", values: [] };
       }
+      if (["kw_insert", "kw_update", "kw_delete"].includes(this.peek().kind)) {
+        const kind = this.peek().kind;
+        let statement: InsertStatement | UpdateStatement | DeleteStatement;
+        if (kind === "kw_insert") {
+          statement = this.parseInsert({}, false);
+        } else if (kind === "kw_update") {
+          statement = this.parseUpdate({}, false);
+        } else {
+          statement = this.parseDelete({}, false);
+        }
+        this.expect("rparen", "Expected ')' after parenthesized mutation expression");
+        return { kind: "mutation_expr", statement };
+      }
+      if (this.peek().kind === "kw_with") {
+        const withClause = this.parseWithClause();
+        let inner: FreeObjectExpr;
+        if (this.peek().kind === "kw_select") {
+          inner = this.parseSelectExprSubquery();
+        } else {
+          inner = this.parseFreeObjectExpr();
+        }
+        let filter: FreeObjectExpr | undefined;
+        if (this.peek().kind === "kw_filter") {
+          this.consume();
+          filter = this.parseFreeObjectExpr();
+        }
+        const orderBy = this.parseExprOrderBy();
+        const { limit, offset } = this.parseExprPagination();
+        const wrapped: FreeObjectExpr = {
+          kind: "select_expr_subquery",
+          expr: inner,
+          filter,
+          orderBy,
+          limit,
+          offset,
+          clauses: {
+            _withBindings: withClause.with,
+            _withModule: withClause.withModule,
+            _withModuleAliases: withClause.withModuleAliases,
+          },
+        };
+        if (this.peek().kind === "comma") {
+          const values: FreeObjectExpr[] = [wrapped];
+          while (this.peek().kind === "comma") {
+            this.consume();
+            if (this.peek().kind === "rparen") break;
+            values.push(this.parseFreeObjectExpr());
+          }
+          this.expect("rparen", "Expected ')' after tuple expression");
+          return { kind: "tuple", values };
+        }
+        this.expect("rparen", "Expected ')' after parenthesized WITH expression");
+        return wrapped;
+      }
       const expr = this.parseFreeObjectExpr();
       if (this.peek().kind === "comma") {
         const values: FreeObjectExpr[] = [expr];
@@ -3293,8 +3347,34 @@ class Parser {
       return inner;
     }
 
+    if (["kw_true", "kw_false", "kw_null", "number", "string", "bytes_string", "lbrace", "lbracket"].includes(this.peek().kind)) {
+      return {
+        kind: "free_expr",
+        expr: this.parseFreeObjectExpr(),
+      };
+    }
+
     if (this.isExistsToken(this.peek())) {
+      const savedIndex = this.index;
       this.consume();
+      const lookahead = this.peek();
+      const useFreeExpr =
+        lookahead.kind === "lparen"
+        || (this.isNameToken(lookahead) && this.peekNext().kind === "dot")
+        || (this.isNameToken(lookahead) && this.peekNext().kind === "backward_link")
+        || (this.isNameToken(lookahead) && this.peekNext().kind === "at")
+        || lookahead.kind === "kw_select"
+        || lookahead.kind === "kw_with"
+        || lookahead.kind === "kw_for"
+        || lookahead.kind === "kw_distinct";
+      if (useFreeExpr) {
+        this.index = savedIndex;
+        const expr = this.parseFreeObjectExpr();
+        return {
+          kind: "free_expr",
+          expr,
+        };
+      }
       return {
         kind: "predicate",
         target: this.parseFilterTarget(),
@@ -3333,6 +3413,17 @@ class Parser {
 
     const beforeTarget = this.index;
     const target = this.parseFilterTarget();
+    // If the target is a path rooted at a local binding (e.g. FOR variable),
+    // the simple predicate form doesn't apply — `user.name` isn't a field on
+    // the current row. Rewind and parse the whole predicate as a free_expr.
+    if (target.kind === "field" && target.field.includes(".")) {
+      const head = target.field.split(".")[0]!;
+      if (this.localBindings.includes(head)) {
+        this.index = beforeTarget;
+        const expr = this.parseFreeObjectExpr();
+        return { kind: "free_expr", expr };
+      }
+    }
     const token = this.peek();
     if (["kw_and", "kw_or", "kw_order", "kw_limit", "kw_offset", "rparen", "semi", "eof"].includes(token.kind)) {
       return {
@@ -3401,10 +3492,11 @@ class Parser {
       || token.kind === "modulo"
       || token.kind === "pow"
       || token.kind === "concat"
+      || token.kind === "lbracket"
     ) {
-      // Arithmetic / string-concat continues the LHS expression. Rewind
+      // Arithmetic / string-concat / indexing continues the LHS expression. Rewind
       // and parse the whole predicate as a FreeObjectExpr so we can
-      // capture `.field op operand cmp value`.
+      // capture `.field[op] cmp value` etc.
       this.index = beforeTarget;
       const expr = this.parseFreeObjectExpr();
       return { kind: "free_expr", expr };
@@ -3412,6 +3504,13 @@ class Parser {
       throw new AppError("E_SYNTAX", "Expected filter operator (=, !=, like, ilike, IN, NOT IN)", token.line, token.column);
     }
 
+    if (this.peek().kind === "lt" || this.peek().kind === "lparen") {
+      // Complex RHS like `<int64>v.0` or `(x)` — rewind to predicate start and
+      // parse as free_expr so the runtime evaluator handles it.
+      this.index = beforeTarget;
+      const expr = this.parseFreeObjectExpr();
+      return { kind: "free_expr", expr };
+    }
     return {
       kind: "predicate",
       target,
@@ -3562,7 +3661,7 @@ class Parser {
     }
 
     if (parts.length >= 2 && this.isTypeLikeName(parts[0]!)) {
-      return parts[parts.length - 1]!;
+      return parts.slice(1).join(".");
     }
 
     return parts.join(".");

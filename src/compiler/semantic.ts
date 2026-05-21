@@ -551,10 +551,56 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         if (!inner) return undefined;
         return { kind: "neg", expr: inner };
       }
+      if (expr.kind === "index_access") {
+        const inner = tryCompileScalarExpr(expr.expr);
+        if (!inner) return undefined;
+        return { kind: "index_access", value: inner, index: expr.index };
+      }
       return undefined;
     };
 
     const compileFreeExprFilter = (expr: FreeObjectExpr): FilterExprIR => {
+      if (expr.kind === "literal" && typeof expr.value === "boolean") {
+        return {
+          kind: "expr_compare",
+          left: { kind: "literal", value: true },
+          right: { kind: "literal", value: expr.value },
+          op: "=",
+        };
+      }
+      if (expr.kind === "set_literal" && expr.values.length === 0) {
+        return {
+          kind: "expr_compare",
+          left: { kind: "literal", value: true },
+          right: { kind: "literal", value: false },
+          op: "=",
+        };
+      }
+      if (
+        expr.kind === "cast"
+        && expr.expr.kind === "set_literal"
+        && expr.expr.values.length === 0
+      ) {
+        return {
+          kind: "expr_compare",
+          left: { kind: "literal", value: true },
+          right: { kind: "literal", value: false },
+          op: "=",
+        };
+      }
+      const isEmptySetExpr = (e: FreeObjectExpr): boolean => {
+        if (e.kind === "set_literal" && e.values.length === 0) return true;
+        if (e.kind === "cast" && e.expr.kind === "set_literal" && e.expr.values.length === 0) return true;
+        return false;
+      };
+      if (expr.kind === "compare" && (isEmptySetExpr(expr.left) || isEmptySetExpr(expr.right))) {
+        return {
+          kind: "expr_compare",
+          left: { kind: "literal", value: true },
+          right: { kind: "literal", value: false },
+          op: "=",
+        };
+      }
       if (
         expr.kind === "for_expr"
         && expr.iterator.kind === "field_access"
@@ -598,6 +644,44 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         const right = tryCompileScalarExpr(expr.right);
         if (left && right) {
           return { kind: "expr_compare", left, right, op: expr.op };
+        }
+      }
+      if (expr.kind === "exists") {
+        const shortTypeLabel = typeLabel.includes("::") ? typeLabel.split("::").at(-1)! : typeLabel;
+        const isSubjectRef = (e: FreeObjectExpr): boolean => {
+          if (e.kind === "current_item") return true;
+          if (e.kind === "binding_ref" && (e.name === typeLabel || e.name === shortTypeLabel)) return true;
+          if (
+            e.kind === "select"
+            && (e.typeName === typeLabel || e.typeName === shortTypeLabel)
+            && (!e.clauses || Object.keys(e.clauses).length === 0)
+          ) {
+            return true;
+          }
+          return false;
+        };
+        const fieldOfCurrentItem = (e: FreeObjectExpr): string | undefined => {
+          if (e.kind === "field_access" && !e.field.startsWith("@") && isSubjectRef(e.expr)) {
+            return e.field;
+          }
+          if (
+            e.kind === "path"
+            && (e.head === typeLabel || e.head === shortTypeLabel)
+            && !e.tail.startsWith("@")
+            && !e.steps?.length
+          ) {
+            return e.tail;
+          }
+          return undefined;
+        };
+        const field = fieldOfCurrentItem(expr.expr);
+        if (field && knownFields.has(field)) {
+          return {
+            kind: "expr_compare",
+            left: { kind: "column", column: field },
+            right: { kind: "literal", value: null },
+            op: "!=",
+          };
         }
       }
       fail("Unsupported free expression in filter");
@@ -890,6 +974,41 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     }
 
     const targetField = filter.target.kind === "field" ? filter.target.field : fail("Unsupported filter target");
+
+    if (!knownFields.has(targetField) && targetField.includes(".") && options.subjectType) {
+      const firstDot = targetField.indexOf(".");
+      const linkName = targetField.slice(0, firstDot);
+      const fieldName = targetField.slice(firstDot + 1);
+      const link = collectLinks(options.subjectType, true).find((candidate) => candidate.name === linkName);
+      if (link && !fieldName.includes(".")) {
+        const ownerQualifiedName = qualifiedTypeName(options.subjectType);
+        const ownerScopeModule = options.subjectType.module ?? options.fallbackModule;
+        const targetTypeNames = linkTargetNames(link.targetType, ownerScopeModule);
+        const targetType = targetTypeNames[0] ?? normalizeTypeName(link.targetType, ownerScopeModule);
+        const targetTableEntries = targetTypeNames.flatMap((targetTypeName) => targetTableRefsForType(targetTypeName));
+        const targetTables = [...new Map(targetTableEntries.map((entry) => [entry.name, entry] as const)).values()];
+        const usesLinkTable = Boolean(link.multi) || (link.properties?.length ?? 0) > 0;
+        return {
+          kind: "link_target_field_compare",
+          relation: {
+            sourceType: ownerQualifiedName,
+            targetType,
+            targetTable: tableNameForType(targetType),
+            targetTables,
+            propertyColumns: (link.properties ?? []).map((property) => property.name),
+            computedProperties: (link.computedProperties ?? []).map((property) => ({ ...property })),
+            multi: Boolean(link.multi),
+            storage: usesLinkTable ? "table" : "inline",
+            inlineColumn: usesLinkTable ? undefined : `${link.name}_id`,
+            linkTable: usesLinkTable ? `${tableNameForType(ownerQualifiedName)}__${link.name.toLowerCase()}` : undefined,
+            linkTables: usesLinkTable ? collectLinkTableSources(options.subjectType, link.name) : undefined,
+          },
+          targetColumn: fieldName,
+          value: resolvedFilterValue as ScalarValue,
+          op: filter.op,
+        };
+      }
+    }
 
     if (!knownFields.has(targetField)) {
       if (targetField === "__type__.name") {
@@ -1851,15 +1970,17 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         }
 
         if (shapeElement.expr.kind === "binding_ref") {
-          const boundValue = resolveWithBindingScalar(shapeElement.expr.name);
+          const bindingName = shapeElement.expr.name;
+          const bindingValue = withBindings.get(bindingName);
+          const isWithBinding = Boolean(bindingValue);
+          const expr: import("../ir/model.js").SelectShapeExprIR = isWithBinding
+            ? { kind: "literal", value: resolveWithBindingScalar(bindingName) }
+            : { kind: "binding_ref", name: bindingName };
           shapeElements.push({
             kind: "computed",
             name: shapeElement.name,
             pathId: toPathIdIR(elementPathId),
-            expr: {
-              kind: "literal",
-              value: boundValue,
-            },
+            expr,
           });
           shapeNames.add(shapeElement.name);
           scopeChildren.push({
@@ -2902,6 +3023,111 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
 
     const forBindingStack: string[] = [];
 
+    const bindingRootOfExpr = (expr: FreeObjectExpr | undefined): string | undefined => {
+      if (!expr) return undefined;
+      if (expr.kind === "binding_ref") return expr.name;
+      if (expr.kind === "current_item") return "__current__";
+      if (expr.kind === "path") return expr.head;
+      if (expr.kind === "path_chain") return expr.parts[0];
+      if (expr.kind === "path_steps") {
+        const first = expr.steps[0];
+        return first?.kind === "object_ref" ? first.name : undefined;
+      }
+      if (expr.kind === "field_access" || expr.kind === "index_access" || expr.kind === "slice_access" || expr.kind === "cast" || expr.kind === "is_type") {
+        return bindingRootOfExpr(expr.expr);
+      }
+      if (expr.kind === "select_expr_subquery" || expr.kind === "distinct") {
+        return bindingRootOfExpr(expr.expr);
+      }
+      return undefined;
+    };
+
+    const forIteratorIsScopedLink = (expr: FreeObjectExpr, currentItemBinding?: string): boolean => {
+      const scopedNames = new Set(["__current__", ...forBindingStack]);
+      if (currentItemBinding) scopedNames.add(currentItemBinding);
+      if (expr.kind === "field_access" && !expr.field.startsWith("@")) {
+        const root = bindingRootOfExpr(expr.expr);
+        return Boolean(root && scopedNames.has(root));
+      }
+      if (expr.kind === "path" || expr.kind === "path_chain" || expr.kind === "path_steps") {
+        const root = bindingRootOfExpr(expr);
+        return Boolean(root && scopedNames.has(root));
+      }
+      if (expr.kind === "backlink_path") return true;
+      if (expr.kind === "select_expr_subquery" || expr.kind === "distinct" || expr.kind === "cast" || expr.kind === "is_type") {
+        return forIteratorIsScopedLink(expr.expr, currentItemBinding);
+      }
+      return false;
+    };
+
+    const computedReferencesBindingLinkProperty = (expr: ComputedExpr, bindingName: string): boolean => {
+      if (expr.kind === "select_expr") return freeExprReferencesBindingLinkProperty(expr.expr, bindingName);
+      if (expr.kind === "function_call") {
+        return expr.call.args.some((arg) => arg.kind === "expr"
+          ? freeExprReferencesBindingLinkProperty(arg.expr, bindingName)
+          : arg.kind === "function_call"
+            ? computedReferencesBindingLinkProperty({ kind: "function_call", call: arg.call }, bindingName)
+            : false);
+      }
+      return false;
+    };
+
+    function freeExprReferencesBindingLinkProperty(expr: FreeObjectExpr, bindingName: string): boolean {
+      if (expr.kind === "field_access") {
+        if (expr.field.startsWith("@") && expr.expr.kind === "binding_ref" && expr.expr.name === bindingName) {
+          return true;
+        }
+        return freeExprReferencesBindingLinkProperty(expr.expr, bindingName);
+      }
+      if (expr.kind === "set_expr" || expr.kind === "tuple" || expr.kind === "array_literal_expr") {
+        return expr.values.some((value) => freeExprReferencesBindingLinkProperty(value, bindingName));
+      }
+      if (expr.kind === "concat") {
+        return expr.parts.some((part) => freeExprReferencesBindingLinkProperty(part, bindingName));
+      }
+      if (expr.kind === "free_object_constructor") {
+        return expr.entries.some((entry) => freeExprReferencesBindingLinkProperty(entry.expr, bindingName));
+      }
+      if (expr.kind === "shape_projection") {
+        return freeExprReferencesBindingLinkProperty(expr.expr, bindingName)
+          || expr.shape.some((element) => element.kind === "computed" && computedReferencesBindingLinkProperty(element.expr, bindingName));
+      }
+      if (expr.kind === "select_expr_subquery") {
+        return freeExprReferencesBindingLinkProperty(expr.expr, bindingName)
+          || Boolean(expr.filter && freeExprReferencesBindingLinkProperty(expr.filter, bindingName))
+          || Boolean(expr.orderBy && freeExprReferencesBindingLinkProperty(expr.orderBy.expr, bindingName));
+      }
+      if (expr.kind === "for_expr") {
+        return freeExprReferencesBindingLinkProperty(expr.iterator, bindingName)
+          || (expr.variable === bindingName ? false : freeExprReferencesBindingLinkProperty(expr.body, bindingName));
+      }
+      if (expr.kind === "distinct" || expr.kind === "cast" || expr.kind === "exists" || expr.kind === "index_access" || expr.kind === "slice_access" || expr.kind === "is_type") {
+        return freeExprReferencesBindingLinkProperty(expr.expr, bindingName);
+      }
+      if (expr.kind === "compare" || expr.kind === "math" || expr.kind === "logical" || expr.kind === "coalesce") {
+        return freeExprReferencesBindingLinkProperty(expr.left, bindingName) || freeExprReferencesBindingLinkProperty(expr.right, bindingName);
+      }
+      if (expr.kind === "and" || expr.kind === "or") {
+        return freeExprReferencesBindingLinkProperty(expr.left, bindingName) || freeExprReferencesBindingLinkProperty(expr.right, bindingName);
+      }
+      if (expr.kind === "not" || expr.kind === "unary") {
+        return freeExprReferencesBindingLinkProperty(expr.expr, bindingName);
+      }
+      if (expr.kind === "if_else") {
+        return freeExprReferencesBindingLinkProperty(expr.thenExpr, bindingName)
+          || freeExprReferencesBindingLinkProperty(expr.condition, bindingName)
+          || freeExprReferencesBindingLinkProperty(expr.elseExpr, bindingName);
+      }
+      if (expr.kind === "function_call") {
+        return expr.call.args.some((arg) => arg.kind === "expr"
+          ? freeExprReferencesBindingLinkProperty(arg.expr, bindingName)
+          : arg.kind === "function_call"
+            ? computedReferencesBindingLinkProperty({ kind: "function_call", call: arg.call }, bindingName)
+            : false);
+      }
+      return false;
+    }
+
     const compileExprToIREntry = (
       expr: FreeObjectExpr | ComputedExpr,
       currentItemBinding?: string,
@@ -2976,6 +3202,12 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           kind: "field_access",
           value,
           field: expr.field,
+        };
+      }
+      if (expr.kind === "mutation_expr") {
+        return {
+          kind: "mutation_expr",
+          statement: expr.statement,
         };
       }
       if (expr.kind === "shape_projection") {
@@ -3181,6 +3413,9 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       }
       
       if (expr.kind === "for_expr") {
+        if (freeExprReferencesBindingLinkProperty(expr.body, expr.variable) && !forIteratorIsScopedLink(expr.iterator, currentItemBinding)) {
+          fail(`unexpected reference to link property on '${expr.variable}'`);
+        }
         if (
           expr.variable === "__gel_backlink_item__"
           && expr.body.kind === "backlink_path"
@@ -3210,10 +3445,10 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           }
         }
         const iterator = asNestedExprEntry(compileExprToIREntry(expr.iterator, currentItemBinding));
-        const isIndeterminateEmptyIterator = (entry: import("../ir/model.js").SelectExprIREntry): boolean => {
-          if (entry.kind === "set_literal" && entry.values.length === 0) return true;
+        const isIndeterminateEmptyIterator = (entry: { kind: string; values?: unknown[] }): boolean => {
+          if (entry.kind === "set_literal" && Array.isArray(entry.values) && entry.values.length === 0) return true;
           if (entry.kind === "set_expr") {
-            return entry.values.length > 0 && entry.values.every((v) => isIndeterminateEmptyIterator(v as import("../ir/model.js").SelectExprIREntry));
+            return Array.isArray(entry.values) && entry.values.length > 0 && entry.values.every((v) => isIndeterminateEmptyIterator(v as { kind: string; values?: unknown[] }));
           }
           return false;
         };
@@ -3269,7 +3504,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
             if (bindingValue.kind === "subquery_expr") {
               value = compileExprToIREntry(bindingValue.expr, currentItemBinding);
             } else if (bindingValue.kind === "subquery_statement") {
-              value = compileExprToIREntry({ kind: "select", typeName: bindingValue.statement.typeName, shape: [{ kind: "splat", depth: 1, operation: "assign", origin: "explicit" }], clauses: {} }, currentItemBinding);
+              value = compileExprToIREntry({ kind: "select", typeName: bindingValue.statement.typeName ?? "Object", shape: [{ kind: "splat", depth: 1, operation: "assign", origin: "explicit" }], clauses: {} }, currentItemBinding);
             } else if (bindingValue.kind === "subquery") {
               value = compileExprToIREntry({ kind: "select", typeName: bindingValue.query.typeName, shape: bindingValue.query.shape, clauses: bindingValue.query.clauses }, currentItemBinding);
             } else if (bindingValue.kind === "binding_ref") {
@@ -3368,7 +3603,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           return compileExprToIREntry(bindingValue.expr, currentItemBinding);
         }
         if (bindingValue.kind === "subquery_statement") {
-          return compileExprToIREntry({ kind: "select", typeName: bindingValue.statement.typeName, shape: [{ kind: "splat", depth: 1, operation: "assign", origin: "explicit" }], clauses: {} }, currentItemBinding);
+          return compileExprToIREntry({ kind: "select", typeName: bindingValue.statement.typeName ?? "Object", shape: [{ kind: "splat", depth: 1, operation: "assign", origin: "explicit" }], clauses: {} }, currentItemBinding);
         }
         if (bindingValue.kind === "subquery") {
           const normalizedTypeName = normalizeTypeName(bindingValue.query.typeName, activeModule);
@@ -3504,7 +3739,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       }
       if (expr.kind === "cast") {
         const innerEntry = compileExprToIREntry(expr.expr, currentItemBinding);
-        const isBuiltinScalar = ["str", "int", "float", "bool", "json", "datetime", "duration", "local_datetime", "local_date", "local_time", "relative_duration", "date_duration", "uuid"].includes(expr.castType);
+        const isBuiltinScalar = ["str", "int", "int16", "int32", "int64", "bigint", "float", "float32", "float64", "decimal", "bool", "json", "datetime", "duration", "local_datetime", "local_date", "local_time", "relative_duration", "date_duration", "uuid", "bytes"].includes(expr.castType);
         const resolvedCastType = isBuiltinScalar ? expr.castType : normalizeTypeName(expr.castType, activeModule);
         const castTypeDef = isBuiltinScalar ? undefined : schema.getType(resolvedCastType);
         if (castTypeDef) {
@@ -3587,6 +3822,12 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
             castType: "json",
             value: asNestedExprEntry(innerEntry),
           };
+        }
+        if (isBuiltinScalar) {
+          // Pass through for non-str/json scalar casts (int, int64, bool, etc).
+          // The runtime currently doesn't reshape the value; this is a no-op
+          // type annotation in evaluation.
+          return innerEntry;
         }
         fail(`Unsupported cast type '${resolvedCastType}'`);
       }
@@ -3717,7 +3958,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
             return compileExprToIREntry(bindingValue.expr, currentItemBinding);
           }
           if (bindingValue.kind === "subquery_statement") {
-            return compileExprToIREntry({ kind: "select", typeName: bindingValue.statement.typeName, shape: [{ kind: "splat", depth: 1, operation: "assign", origin: "explicit" }], clauses: {} }, currentItemBinding);
+            return compileExprToIREntry({ kind: "select", typeName: bindingValue.statement.typeName ?? "Object", shape: [{ kind: "splat", depth: 1, operation: "assign", origin: "explicit" }], clauses: {} }, currentItemBinding);
           }
         if (bindingValue.kind === "subquery") {
           const normalizedTypeName = normalizeTypeName(bindingValue.query.typeName, activeModule);
@@ -3875,7 +4116,9 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       //   }
       // }
       if (expr.kind === "select_expr_subquery") {
-  const innerBinding = expr.alias ?? currentItemBinding;
+  const innerExpr = expr.expr;
+  const aliasFromInnerSubquery = innerExpr.kind === "select_expr_subquery" ? innerExpr.alias : undefined;
+  const innerBinding = expr.alias ?? aliasFromInnerSubquery ?? currentItemBinding;
 
   const pushedForBindings: string[] = [];
   let wrapped = expr.expr;

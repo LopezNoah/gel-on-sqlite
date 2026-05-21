@@ -594,6 +594,10 @@ export type FreeObjectExpr =
       orderBy?: OrderExprChain;
       limit?: number;
       offset?: number;
+    }
+  | {
+      kind: "mutation_expr";
+      statement: InsertStatement | UpdateStatement | DeleteStatement;
     };
 
 export interface SelectFreeStatement {

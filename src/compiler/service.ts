@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 
 import "../codegen/generated/schema_model.js";
 
-import type { Statement } from "../edgeql/ast.js";
+import type { FreeObjectExpr, Statement } from "../edgeql/ast.js";
 import type { Statement as GelIRStatement } from "../ir/gel_ir.js";
 import type { IRStatement, OverlayIR } from "../ir/model.js";
 import type { RuntimeTarget } from "../runtime/target.js";
@@ -168,7 +168,8 @@ const compileSqlWithStranglerFig = (
   context: CompileContext,
 ): { sql: SQLArtifact; gelIr?: GelIRStatement; usesGelIrSql: boolean } => {
   if (statement.kind === "select" || statement.kind === "select_free"
-    || ir.kind === "select" || ir.kind === "select_free") {
+    || ir.kind === "select" || ir.kind === "select_free"
+    || (statement.kind === "select_expr" && freeExprContainsMutation(statement.expr))) {
     return {
       sql: compileToSQL(ir, { target: context.target ?? "sqlite", parameterValues: context.params, globalValues: context.globals }),
       usesGelIrSql: false,
@@ -203,6 +204,48 @@ const resolveGelIrSqlLoweringEnabled = (context: CompileContext): boolean => {
   // Kept for compile cache key stability; lowering is always on.
   void context;
   return true;
+};
+
+const freeExprContainsMutation = (expr: FreeObjectExpr): boolean => {
+  if (expr.kind === "mutation_expr") return true;
+  if (expr.kind === "set_expr" || expr.kind === "tuple" || expr.kind === "array_literal_expr") {
+    return expr.values.some(freeExprContainsMutation);
+  }
+  if (expr.kind === "free_object_constructor") {
+    return expr.entries.some((entry) => freeExprContainsMutation(entry.expr));
+  }
+  if (expr.kind === "shape_projection") {
+    return freeExprContainsMutation(expr.expr);
+  }
+  if (expr.kind === "select_expr_subquery") {
+    return freeExprContainsMutation(expr.expr)
+      || Boolean(expr.filter && freeExprContainsMutation(expr.filter))
+      || Boolean(expr.orderBy && freeExprContainsMutation(expr.orderBy.expr));
+  }
+  if (expr.kind === "for_expr") {
+    return freeExprContainsMutation(expr.iterator)
+      || freeExprContainsMutation(expr.body)
+      || Boolean(expr.filter && freeExprContainsMutation(expr.filter))
+      || Boolean(expr.orderBy && freeExprContainsMutation(expr.orderBy.expr));
+  }
+  if (expr.kind === "distinct" || expr.kind === "cast" || expr.kind === "exists" || expr.kind === "field_access" || expr.kind === "index_access" || expr.kind === "slice_access" || expr.kind === "is_type" || expr.kind === "not" || expr.kind === "unary") {
+    return freeExprContainsMutation(expr.expr);
+  }
+  if (expr.kind === "compare" || expr.kind === "math" || expr.kind === "logical" || expr.kind === "coalesce" || expr.kind === "and" || expr.kind === "or") {
+    return freeExprContainsMutation(expr.left) || freeExprContainsMutation(expr.right);
+  }
+  if (expr.kind === "if_else") {
+    return freeExprContainsMutation(expr.thenExpr)
+      || freeExprContainsMutation(expr.condition)
+      || freeExprContainsMutation(expr.elseExpr);
+  }
+  if (expr.kind === "concat") {
+    return expr.parts.some(freeExprContainsMutation);
+  }
+  if (expr.kind === "function_call") {
+    return expr.call.args.some((arg) => arg.kind === "expr" && freeExprContainsMutation(arg.expr));
+  }
+  return false;
 };
 
 const fingerprintSchema = (schema: SchemaSnapshot): string => {

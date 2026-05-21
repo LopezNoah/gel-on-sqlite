@@ -1426,21 +1426,52 @@ const normalizeLinkTargetType = (moduleName: string, targetType: string): string
 
 const parseIndexExpression = (node: IndexDeclarationNode): string => {
   const content = node.content.text.trim();
-  if (!content.startsWith("on")) {
+  const onIndex = (() => {
+    let depth = 0;
+    let i = 0;
+    while (i < content.length) {
+      const ch = content[i];
+      if (ch === "'" || ch === '"') {
+        i = skipQuotedString(content, i);
+        continue;
+      }
+      if (ch === "(" || ch === "[" || ch === "<") {
+        depth += 1;
+      } else if (ch === ")" || ch === "]" || ch === ">") {
+        depth -= 1;
+      } else if (
+        depth === 0
+        && ch === "o"
+        && content[i + 1] === "n"
+        && (i === 0 || !isIdentifierPart(content[i - 1] ?? ""))
+        && !isIdentifierPart(content[i + 2] ?? "")
+      ) {
+        return i;
+      }
+      i += 1;
+    }
+    return -1;
+  })();
+
+  if (onIndex < 0) {
+    unsupported(`Unsupported index declaration form '${content}'`);
+  }
+  const afterOn = content.slice(onIndex + 2).trimStart();
+  if (afterOn.length === 0) {
     unsupported(`Unsupported index declaration form '${content}'`);
   }
 
-  const openParen = content.indexOf("(");
+  const openParen = afterOn.indexOf("(");
   if (openParen < 0) {
     unsupported(`Unsupported index declaration form '${content}'`);
   }
 
   let depth = 1;
   let i = openParen + 1;
-  while (i < content.length && depth > 0) {
-    const ch = content[i];
+  while (i < afterOn.length && depth > 0) {
+    const ch = afterOn[i];
     if (ch === "'" || ch === '"') {
-      i = skipQuotedString(content, i);
+      i = skipQuotedString(afterOn, i);
       continue;
     }
     if (ch === "(") {
@@ -1455,8 +1486,8 @@ const parseIndexExpression = (node: IndexDeclarationNode): string => {
     unsupported(`Unterminated index expression '${content}'`);
   }
 
-  const expr = content.slice(openParen + 1, i - 1).trim();
-  const suffix = content.slice(i).trim();
+  const expr = afterOn.slice(openParen + 1, i - 1).trim();
+  const suffix = afterOn.slice(i).trim();
   if (suffix.length > 0) {
     unsupported(`Unsupported index suffix '${suffix}'`);
   }
@@ -1638,13 +1669,15 @@ const convertPropertyMember = (
   node: PropertyDeclarationNode,
   scalarRegistry: ScalarRegistry,
   constraintParamNames: Map<string, string[]>,
+  overrideDeclaredType?: string,
 ): PropertyMember => {
   if (node.computed) {
     //unsupported("Computed properties are not supported by the new SDL adapter yet");
-    
+
   }
 
-  const declaredType = node.typeExpr?.text
+  const declaredType = overrideDeclaredType
+    ?? node.typeExpr?.text
     ?? (node.declaredType ? qualifiedNameToString(node.declaredType) : undefined)
     ?? unsupported("Property declaration requires a scalar type");
   const collection = extractCollectionType(declaredType);
@@ -1689,6 +1722,7 @@ const convertLinkMember = (
   moduleName: string,
   node: LinkDeclarationNode,
   scalarRegistry: ScalarRegistry,
+  inheritedTarget: string | undefined,
 ): LinkMember => {
   if (node.computed) {
     unsupported("Computed links are not supported by the new SDL adapter yet");
@@ -1696,6 +1730,7 @@ const convertLinkMember = (
 
   const declaredType = node.targetType?.text
     ?? (node.declaredType ? qualifiedNameToString(node.declaredType) : undefined)
+    ?? inheritedTarget
     ?? unsupported("Link declaration requires a target type");
   const body: LinkBodyNode | null = node.body;
   if (body?.using || (body?.extending.length ?? 0) > 0) {
@@ -1733,8 +1768,10 @@ const convertLinkMember = (
 const convertInferredLinkMember = (
   moduleName: string,
   node: PropertyDeclarationNode,
+  overrideDeclaredType?: string,
 ): LinkMember => {
-  const declaredType = node.typeExpr?.text
+  const declaredType = overrideDeclaredType
+    ?? node.typeExpr?.text
     ?? (node.declaredType ? qualifiedNameToString(node.declaredType) : undefined)
     ?? unsupported("Link declaration requires a target type");
 
@@ -1773,22 +1810,62 @@ const convertDeclarationToMember = (
   scalarRegistry: ScalarRegistry,
   objectTypeNames: Set<string>,
   constraintParamNames: Map<string, string[]>,
+  ownerTypeFullName: string,
+  inheritanceResolver: PointerInheritanceResolver,
 ): TypeMember | null => {
   if (declaration.kind === "LinkDeclaration") {
     if (declaration.computed) {
-      return convertComputedDeclarationToMember(declaration);
+      try {
+        return convertComputedDeclarationToMember(declaration);
+      } catch (err) {
+        if (err instanceof UnsupportedSDLFeatureError) {
+          return null;
+        }
+        throw err;
+      }
     }
-    return convertLinkMember(moduleName, declaration, scalarRegistry);
+    const inheritedTarget = (declaration.targetType?.text || declaration.declaredType)
+      ? undefined
+      : inheritanceResolver.resolve(ownerTypeFullName, qualifiedNameToString(declaration.name))?.target;
+    return convertLinkMember(moduleName, declaration, scalarRegistry, inheritedTarget);
   }
 
   if (declaration.kind === "PropertyDeclaration") {
     if (declaration.computed) {
-      return convertComputedDeclarationToMember(declaration);
+      try {
+        return convertComputedDeclarationToMember(declaration);
+      } catch (err) {
+        if (err instanceof UnsupportedSDLFeatureError) {
+          return null;
+        }
+        throw err;
+      }
     }
 
-    const declaredType = declaration.typeExpr?.text
-      ?? (declaration.declaredType ? qualifiedNameToString(declaration.declaredType) : undefined)
-      ?? unsupported("Property or link declaration requires a declared type");
+    let declaredType = declaration.typeExpr?.text
+      ?? (declaration.declaredType ? qualifiedNameToString(declaration.declaredType) : undefined);
+    if (declaredType === undefined) {
+      const inherited = inheritanceResolver.resolve(ownerTypeFullName, qualifiedNameToString(declaration.name));
+      declaredType = inherited?.target;
+    }
+    if (declaredType === undefined) {
+      const usingExpr = declaration.body?.using?.text;
+      if (usingExpr) {
+        try {
+          return convertComputedDeclarationToMember({
+            ...declaration,
+            computed: true,
+            expr: declaration.body!.using!,
+          });
+        } catch (err) {
+          if (err instanceof UnsupportedSDLFeatureError) {
+            return null;
+          }
+          throw err;
+        }
+      }
+      unsupported("Property or link declaration requires a declared type");
+    }
     const scalarResolution = extractCollectionType(declaredType) ? { scalar: "json" as const } : scalarRegistry.resolve(declaredType, moduleName);
     const inferredLink =
       !declaration.explicitKeyword
@@ -1800,10 +1877,10 @@ const convertDeclarationToMember = (
       );
 
     if (inferredLink) {
-      return convertInferredLinkMember(moduleName, declaration);
+      return convertInferredLinkMember(moduleName, declaration, declaredType);
     }
 
-    return convertPropertyMember(moduleName, declaration, scalarRegistry, constraintParamNames);
+    return convertPropertyMember(moduleName, declaration, scalarRegistry, constraintParamNames, declaredType);
   }
 
   if (declaration.kind === "ConstraintDeclaration") {
@@ -1827,10 +1904,12 @@ const convertTypeDeclaration = (
   scalarRegistry: ScalarRegistry,
   objectTypeNames: Set<string>,
   constraintParamNames: Map<string, string[]>,
+  inheritanceResolver: PointerInheritanceResolver,
 ): ObjectTypeDeclaration => {
   const resolvedName = resolveDeclarationName(moduleName, node.name);
   const typeModuleName = resolvedName.moduleName;
   const typeName = resolvedName.localName;
+  const typeFullName = `${typeModuleName}::${typeName}`;
   const annotations: AnnotationDef[] = [];
   const indexes: Array<{ expr: string }> = [];
   const members: TypeMember[] = [];
@@ -1842,7 +1921,13 @@ const convertTypeDeclaration = (
     }
 
     if (declaration.kind === "IndexDeclaration") {
-      indexes.push({ expr: parseIndexExpression(declaration) });
+      try {
+        indexes.push({ expr: parseIndexExpression(declaration) });
+      } catch (err) {
+        if (!(err instanceof UnsupportedSDLFeatureError)) {
+          throw err;
+        }
+      }
       continue;
     }
 
@@ -1852,6 +1937,8 @@ const convertTypeDeclaration = (
       scalarRegistry,
       objectTypeNames,
       constraintParamNames,
+      typeFullName,
+      inheritanceResolver,
     );
     if (member) {
       members.push(member);
@@ -2024,6 +2111,90 @@ const collectObjectTypeNames = (documents: ParsedModuleDocument[]): Set<string> 
   return names;
 };
 
+interface InheritedPointerInfo {
+  target: string;
+  isLink: boolean;
+  required?: boolean;
+  multi?: boolean;
+}
+
+interface DeclaredTypeInfo {
+  extends: string[];
+  pointers: Map<string, InheritedPointerInfo>;
+}
+
+class PointerInheritanceResolver {
+  private readonly types = new Map<string, DeclaredTypeInfo>();
+
+  register(fullName: string, info: DeclaredTypeInfo): void {
+    this.types.set(fullName, info);
+  }
+
+  resolve(typeFullName: string, pointerName: string): InheritedPointerInfo | undefined {
+    const visited = new Set<string>();
+    const queue: string[] = [typeFullName];
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      if (visited.has(current)) continue;
+      visited.add(current);
+      const info = this.types.get(current);
+      if (!info) continue;
+      const found = info.pointers.get(pointerName);
+      if (found) return found;
+      for (const base of info.extends) {
+        queue.push(base);
+      }
+    }
+    return undefined;
+  }
+}
+
+const buildPointerInheritance = (documents: ParsedModuleDocument[]): PointerInheritanceResolver => {
+  const resolver = new PointerInheritanceResolver();
+  for (const parsed of documents) {
+    for (const declaration of parsed.document.declarations) {
+      if (declaration.kind !== "TypeDeclaration") continue;
+      const resolvedName = resolveDeclarationName(parsed.moduleName, declaration.name);
+      const fullName = `${resolvedName.moduleName}::${resolvedName.localName}`;
+      const typeModuleName = resolvedName.moduleName;
+      const pointers = new Map<string, InheritedPointerInfo>();
+      for (const member of declaration.body?.declarations ?? []) {
+        if (member.kind === "LinkDeclaration") {
+          if (member.computed) continue;
+          const declaredType = member.targetType?.text
+            ?? (member.declaredType ? qualifiedNameToString(member.declaredType) : undefined);
+          if (declaredType === undefined) continue;
+          pointers.set(qualifiedNameToString(member.name), {
+            target: declaredType,
+            isLink: true,
+            required: member.required === true,
+            multi: member.cardinality === "multi",
+          });
+        } else if (member.kind === "PropertyDeclaration") {
+          if (member.computed) continue;
+          const declaredType = member.typeExpr?.text
+            ?? (member.declaredType ? qualifiedNameToString(member.declaredType) : undefined);
+          if (declaredType === undefined) continue;
+          pointers.set(qualifiedNameToString(member.name), {
+            target: declaredType,
+            isLink: false,
+            required: member.required === true,
+            multi: member.cardinality === "multi",
+          });
+        }
+      }
+      const extendsList = declaration.extends.map((base) =>
+        normalizeTypeName(typeModuleName, qualifiedNameToString(base)),
+      );
+      resolver.register(fullName, {
+        extends: extendsList,
+        pointers,
+      });
+    }
+  }
+  return resolver;
+};
+
 const parseDocuments = (source: string, options: NewSDLAdapterOptions): ParsedModuleDocument[] => {
   const parsedModuleBodies = parseModuleBlocks(source);
   const parsedDocuments: ParsedModuleDocument[] = [];
@@ -2078,6 +2249,7 @@ export const parseDeclarativeSchema = (
   }
 
   const objectTypeNames = collectObjectTypeNames(parsedModules);
+  const inheritanceResolver = buildPointerInheritance(parsedModules);
   const scalarRegistry = new ScalarRegistry();
   const constraintParamNames = new Map<string, string[]>();
 
@@ -2128,6 +2300,7 @@ export const parseDeclarativeSchema = (
             scalarRegistry,
             objectTypeNames,
             constraintParamNames,
+            inheritanceResolver,
           );
           registerModule(typeDecl.module);
           types.push(typeDecl);
