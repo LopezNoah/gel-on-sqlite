@@ -4139,7 +4139,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
   try {
     return {
       kind: "select_expr_subquery",
-      alias: expr.alias,
+      alias: expr.alias ?? aliasFromInnerSubquery,
       value: asNestedExprEntry(compileExprToIREntry(expr.expr, innerBinding)),
       filter: expr.filter
         ? asNestedExprEntry(compileExprToIREntry(expr.filter, innerBinding))
