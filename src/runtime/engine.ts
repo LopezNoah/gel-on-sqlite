@@ -1200,18 +1200,82 @@ const tryRuntimeSelectExprEvaluation = (
     return value;
   };
 
-  const evalFilter = (row: Record<string, unknown>, filter: SelectStatement["filter"], env: EvalEnv): boolean => {
+  const resolveFieldPathValue = (
+    row: Record<string, unknown>,
+    typeName: string | undefined,
+    fieldPath: string,
+  ): unknown => {
+    if (!fieldPath.includes(".")) {
+      return row[fieldPath];
+    }
+    if (!typeName) {
+      return undefined;
+    }
+    const parts = fieldPath.split(".");
+    let currentRows: Record<string, unknown>[] = [row];
+    let currentType = typeName;
+    for (let i = 0; i < parts.length - 1; i += 1) {
+      const linkName = parts[i];
+      const nextRows: Record<string, unknown>[] = [];
+      for (const r of currentRows) {
+        const linkDef = findRuntimeLinkDef(schema, currentType, linkName);
+        if (!linkDef) {
+          return undefined;
+        }
+        const sourceType = schema.getType(currentType);
+        if (!sourceType) return undefined;
+        const targetTypeNames = normalizeLinkTargetNames(linkDef.link.targetType, sourceType.module ?? "default");
+        const targetTypes = targetTypeNames.flatMap((name) => schema.listConcreteTypesAssignableTo(name));
+        if (linkDef.link.multi || (linkDef.link.properties?.length ?? 0) > 0) {
+          const owner = resolveLinkStorageOwner(schema, sourceType, linkDef.link);
+          const linkTable = `${tableNameForType(qualifiedTypeName(owner))}__${linkDef.link.name.toLowerCase()}`;
+          const linkRows = db.prepare(`SELECT ${quoteIdent("target")} FROM ${quoteIdent(linkTable)} WHERE ${quoteIdent("source")} = ?`).all(r.id as string) as Array<{ target?: unknown }>;
+          for (const linkRow of linkRows) {
+            if (typeof linkRow.target !== "string") continue;
+            for (const targetType of targetTypes) {
+              const targetTable = tableNameForType(qualifiedTypeName(targetType));
+              const fetched = db.prepare(`SELECT * FROM ${quoteIdent(targetTable)} WHERE ${quoteIdent("id")} = ?`).all(linkRow.target) as Record<string, unknown>[];
+              for (const t of fetched) {
+                nextRows.push(t);
+              }
+            }
+          }
+          currentType = qualifiedTypeName(targetTypes[0] ?? sourceType);
+        } else {
+          const targetId = r[`${linkDef.link.name}_id`];
+          if (typeof targetId !== "string") continue;
+          for (const targetType of targetTypes) {
+            const targetTable = tableNameForType(qualifiedTypeName(targetType));
+            const fetched = db.prepare(`SELECT * FROM ${quoteIdent(targetTable)} WHERE ${quoteIdent("id")} = ?`).all(targetId) as Record<string, unknown>[];
+            for (const t of fetched) {
+              nextRows.push(t);
+            }
+          }
+          currentType = qualifiedTypeName(targetTypes[0] ?? sourceType);
+        }
+      }
+      currentRows = nextRows;
+      if (currentRows.length === 0) return undefined;
+    }
+    const tail = parts[parts.length - 1];
+    if (currentRows.length === 1) {
+      return currentRows[0][tail];
+    }
+    return currentRows.map((r) => r[tail]);
+  };
+
+  const evalFilter = (row: Record<string, unknown>, filter: SelectStatement["filter"], env: EvalEnv, sourceTypeName?: string): boolean => {
     if (!filter) {
       return true;
     }
     if (filter.kind === "and") {
-      return evalFilter(row, filter.left, env) && evalFilter(row, filter.right, env);
+      return evalFilter(row, filter.left, env, sourceTypeName) && evalFilter(row, filter.right, env, sourceTypeName);
     }
     if (filter.kind === "or") {
-      return evalFilter(row, filter.left, env) || evalFilter(row, filter.right, env);
+      return evalFilter(row, filter.left, env, sourceTypeName) || evalFilter(row, filter.right, env, sourceTypeName);
     }
     if (filter.kind === "not") {
-      return !evalFilter(row, filter.expr, env);
+      return !evalFilter(row, filter.expr, env, sourceTypeName);
     }
     if (filter.kind === "free_expr") {
       const childEnv = new Map(env);
@@ -1222,13 +1286,16 @@ const tryRuntimeSelectExprEvaluation = (
     if (filter.target.kind !== "field") {
       return true;
     }
-    const left = row[filter.target.field];
+    const left = resolveFieldPathValue(row, sourceTypeName, filter.target.field);
     if (filter.kind === "in_predicate") {
       const values = filter.values.kind === "set_literal" ? filter.values.values : [];
       const hasValue = values.some((value) => value === left);
       return filter.op === "not_in" ? !hasValue : hasValue;
     }
     const right = evalFilterValue(filter.value, env);
+    if (Array.isArray(left)) {
+      return left.some((item) => runtimeAliasPredicateMatches(item, filter.op, right as ScalarValue));
+    }
     return runtimeAliasPredicateMatches(left, filter.op, right as ScalarValue);
   };
 
@@ -1674,7 +1741,7 @@ const tryRuntimeSelectExprEvaluation = (
           sourceType,
           linkOverrides: [],
         });
-        rows = rows.filter((row) => evalFilter(row, expr.clauses.filter, env));
+        rows = rows.filter((row) => evalFilter(row, expr.clauses.filter, env, sourceType));
         if (expr.clauses.orderBy) {
           const direction = expr.clauses.orderBy.direction === "desc" ? -1 : 1;
           rows.sort((a, b) => String(a[expr.clauses.orderBy!.field] ?? "").localeCompare(String(b[expr.clauses.orderBy!.field] ?? "")) * direction);
@@ -2477,6 +2544,7 @@ type ParsedRuntimeEnv = {
   bindings: Map<string, ParsedRuntimeRow[]>;
   outerRows?: Array<{ row: ParsedRuntimeRow; rowType?: string }>;
   iterationPath?: { typeName: string; steps: string[] };
+  iterationSource?: FreeObjectExpr;
 };
 
 const withInnerRow = (
@@ -2577,7 +2645,50 @@ const tryEvaluateParsedRuntimeSelect = (
     });
   }
 
-  if (!selectedAliasNeedsParsedRuntime && !shapeNeedsParsedRuntime(statement.shape) && !statement.with?.some((binding) => bindingNeedsParsedRuntime(binding.value))) {
+  const freeExprNeedsParsedRuntime = (expr: FreeObjectExpr): boolean => {
+    if (expr.kind === "for_expr") return true;
+    if (expr.kind === "exists") return freeExprNeedsParsedRuntime(expr.expr) || expr.expr.kind === "field_access" || expr.expr.kind === "select_expr_subquery" || expr.expr.kind === "path_steps";
+    if (expr.kind === "path_steps") {
+      return expr.steps.some((step) => step.kind === "ptr" && step.direction === "inbound");
+    }
+    if (expr.kind === "select_expr_subquery") return freeExprNeedsParsedRuntime(expr.expr) || (expr.filter ? freeExprNeedsParsedRuntime(expr.filter) : false);
+    if (expr.kind === "not" || expr.kind === "distinct" || expr.kind === "cast" || expr.kind === "unary" || expr.kind === "shape_projection") {
+      return freeExprNeedsParsedRuntime(expr.expr);
+    }
+    if (expr.kind === "and" || expr.kind === "or" || expr.kind === "logical" || expr.kind === "compare" || expr.kind === "math" || expr.kind === "coalesce") {
+      return freeExprNeedsParsedRuntime(expr.left) || freeExprNeedsParsedRuntime(expr.right);
+    }
+    if (expr.kind === "if_else") {
+      return freeExprNeedsParsedRuntime(expr.condition) || freeExprNeedsParsedRuntime(expr.thenExpr) || freeExprNeedsParsedRuntime(expr.elseExpr);
+    }
+    if (expr.kind === "function_call") {
+      return expr.call.args.some((arg) => arg.kind === "expr" && freeExprNeedsParsedRuntime(arg.expr));
+    }
+    if (expr.kind === "field_access" || expr.kind === "index_access" || expr.kind === "slice_access") {
+      return freeExprNeedsParsedRuntime(expr.expr);
+    }
+    if (expr.kind === "concat") return expr.parts.some(freeExprNeedsParsedRuntime);
+    if (expr.kind === "tuple" || expr.kind === "set_expr" || expr.kind === "array_literal_expr") {
+      return expr.values.some(freeExprNeedsParsedRuntime);
+    }
+    return false;
+  };
+  const filterNeedsParsedRuntime = (filter: SelectStatement["filter"]): boolean => {
+    if (!filter) return false;
+    if (filter.kind === "and" || filter.kind === "or") {
+      return filterNeedsParsedRuntime(filter.left) || filterNeedsParsedRuntime(filter.right);
+    }
+    if (filter.kind === "not") return filterNeedsParsedRuntime(filter.expr);
+    if (filter.kind === "free_expr") return freeExprNeedsParsedRuntime(filter.expr);
+    return false;
+  };
+
+  if (
+    !selectedAliasNeedsParsedRuntime
+    && !shapeNeedsParsedRuntime(statement.shape)
+    && !statement.with?.some((binding) => bindingNeedsParsedRuntime(binding.value))
+    && !filterNeedsParsedRuntime(statement.filter)
+  ) {
     return undefined;
   }
 
@@ -2960,6 +3071,50 @@ const tryEvaluateParsedRuntimeSelect = (
     return undefined;
   };
 
+  const freeExprStructurallyEqual = (left: FreeObjectExpr | undefined, right: FreeObjectExpr | undefined): boolean => {
+    if (!left || !right) return left === right;
+    if (left.kind !== right.kind) return false;
+    if (left.kind === "path_steps" && right.kind === "path_steps") {
+      if (left.steps.length !== right.steps.length) return false;
+      for (let i = 0; i < left.steps.length; i += 1) {
+        const ls = left.steps[i]!;
+        const rs = right.steps[i]!;
+        if (ls.kind !== rs.kind) return false;
+        if (ls.kind === "object_ref" && rs.kind === "object_ref") {
+          if (ls.name !== rs.name) return false;
+          continue;
+        }
+        if (ls.kind === "ptr" && rs.kind === "ptr") {
+          if (ls.name !== rs.name || ls.direction !== rs.direction) return false;
+          if ((ls.typeFilter ?? "") !== (rs.typeFilter ?? "")) return false;
+          continue;
+        }
+        if (ls.kind === "type_intersection" && rs.kind === "type_intersection") {
+          if ((ls.typeName ?? "") !== (rs.typeName ?? "")) return false;
+          continue;
+        }
+        return false;
+      }
+      return true;
+    }
+    if (left.kind === "binding_ref" && right.kind === "binding_ref") {
+      return left.name === right.name;
+    }
+    if (left.kind === "field_access" && right.kind === "field_access") {
+      return left.field === right.field && freeExprStructurallyEqual(left.expr, right.expr);
+    }
+    if (left.kind === "backlink_path" && right.kind === "backlink_path") {
+      return left.link === right.link && (left.sourceType ?? "") === (right.sourceType ?? "");
+    }
+    if (left.kind === "for_expr" && right.kind === "for_expr") {
+      return freeExprStructurallyEqual(left.iterator, right.iterator) && freeExprStructurallyEqual(left.body, right.body);
+    }
+    if (left.kind === "select" && right.kind === "select") {
+      return left.typeName === right.typeName;
+    }
+    return false;
+  };
+
   const innerExprProducesMultiSet = (expr: FreeObjectExpr): boolean => {
     if (expr.kind === "field_access") return innerExprProducesMultiSet(expr.expr);
     if (expr.kind === "select_expr_subquery") {
@@ -3034,6 +3189,10 @@ const tryEvaluateParsedRuntimeSelect = (
         if (typeQualified === qualifiedFirst) return true;
         return schema.listConcreteTypesAssignableTo(qualifiedFirst).some((t) => qualifiedTypeName(t) === typeQualified);
       };
+
+      if (env.iterationSource && env.row && freeExprStructurallyEqual(expr, env.iterationSource)) {
+        return env.row;
+      }
 
       if (env.iterationPath && env.row && env.iterationPath.typeName === first.name) {
         const ptrSteps = expr.steps.slice(1);
@@ -3270,6 +3429,9 @@ const tryEvaluateParsedRuntimeSelect = (
       return read(base);
     }
     if (expr.kind === "for_expr") {
+      if (env.iterationSource && env.row && freeExprStructurallyEqual(expr, env.iterationSource)) {
+        return env.row;
+      }
       const iterator = evalFreeExpr(expr.iterator, env);
       let items = Array.isArray(iterator) ? iterator : [iterator];
       if (expr.optional && items.length === 0) {
@@ -3514,14 +3676,15 @@ const tryEvaluateParsedRuntimeSelect = (
         let items = [...value];
         if (expr.filter) {
           const iterationPath = extractIterationPath(expr.expr) ?? extractCurrentItemIterationPath(expr.expr, subqueryEnv);
+          const iterationSource = expr.expr;
           items = items.filter((item) => {
             const bindings = new Map(subqueryEnv.bindings);
             if (expr.alias && isRecordRow(item)) {
               bindings.set(expr.alias, [item]);
             }
             const itemEnv = isRecordRow(item)
-              ? withInnerRow(subqueryEnv, item, rowTypeName(item, subqueryEnv.rowType), { bindings, iterationPath })
-              : { ...subqueryEnv, bindings };
+              ? withInnerRow(subqueryEnv, item, rowTypeName(item, subqueryEnv.rowType), { bindings, iterationPath, iterationSource })
+              : { ...subqueryEnv, bindings, iterationSource };
             const filterValue = evalFreeExpr(expr.filter!, itemEnv);
             return Array.isArray(filterValue) ? filterValue.some(Boolean) : Boolean(filterValue);
           });

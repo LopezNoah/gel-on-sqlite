@@ -10,14 +10,20 @@ describe("debug-filter", () => {
       resetDbFile: true,
     });
 
-    console.log("\n=== Assertion 3 ===");
+    console.log("\n=== two_scalar_exists04 ===");
     console.log("Result:", JSON.stringify(h.query(`
-      SELECT _ := (
-        SELECT Issue
-        FILTER Issue.owner.name = 'Elvis'
-      ).number ++ Status.name
-      FILTER Status.name = 'Open'
-      ORDER BY _;
+      WITH U2 := User
+      SELECT User{name}
+      FILTER EXISTS (
+          SELECT I := User.<owner[IS Issue]
+          FILTER NOT (
+              NOT EXISTS I.time_estimate OR
+              NOT EXISTS (
+                  (SELECT U2.<owner[IS Issue] FILTER I = U2.<owner[IS Issue]).due_date
+              )
+          )
+      )
+      ORDER BY User.name;
     `)));
   });
 });
