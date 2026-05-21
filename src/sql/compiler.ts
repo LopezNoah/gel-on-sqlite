@@ -1186,6 +1186,26 @@ const compileFilterExprSQL = (
     return clauses.length === 1 ? clauses[0]! : `(${clauses.join(" OR ")})`;
   }
 
+  if (filter.kind === "link_target_field_compare") {
+    const targets = filter.relation.targetTables.length > 0
+      ? filter.relation.targetTables
+      : [{ name: filter.relation.targetType, table: filter.relation.targetTable }];
+    const relationAlias = `lt_${Math.abs(hashString(`${filter.relation.sourceType}:${filter.relation.targetType}:${filter.targetColumn}`)).toString(16)}`;
+    const clauses = targets.map((target, index) => {
+      const targetAlias = `${relationAlias}_t${index}`;
+      const column = `${targetAlias}.${quoteIdent(filter.targetColumn)}`;
+      params.push(encodeParam(filter.value));
+      const predicate = compileFilterPredicate(column, filter.op);
+      if (filter.relation.storage === "inline") {
+        const inlineColumn = filter.relation.inlineColumn ?? `${filter.relation.targetType.split("::").at(-1)?.toLowerCase()}_id`;
+        return `EXISTS (SELECT 1 FROM ${quoteIdent(target.table)} ${targetAlias} WHERE ${targetAlias}.${quoteIdent("id")} = ${sourceAlias}.${quoteIdent(inlineColumn)} AND ${predicate})`;
+      }
+      return `EXISTS (SELECT 1 FROM ${linkJunctionFrom(filter.relation, relationAlias)} JOIN ${quoteIdent(target.table)} ${targetAlias} ON ${targetAlias}.${quoteIdent("id")} = ${relationAlias}.${quoteIdent("target")} WHERE ${relationAlias}.${quoteIdent("source")} = ${sourceAlias}.${quoteIdent("id")} AND ${predicate})`;
+    });
+    if (clauses.length === 0) return "0";
+    return clauses.length === 1 ? clauses[0]! : `(${clauses.join(" OR ")})`;
+  }
+
   if (filter.kind === "backlink_property_compare" || filter.kind === "backlink_property_in") {
     const clauses = filter.sources
       .filter((source) => source.storage === "table" && source.linkTable)
@@ -1232,6 +1252,13 @@ const compileFilterExprSQL = (
   }
 
   if (filter.kind === "expr_compare") {
+    const isNullLiteral = (e: import("../ir/model.js").ScalarExprIR): boolean =>
+      e.kind === "literal" && e.value === null;
+    if ((filter.op === "=" || filter.op === "!=") && (isNullLiteral(filter.left) || isNullLiteral(filter.right))) {
+      const nonNullSide = isNullLiteral(filter.left) ? filter.right : filter.left;
+      const sql = compileScalarExprSQL(nonNullSide, sourceAlias, params);
+      return filter.op === "=" ? `(${sql} IS NULL)` : `(${sql} IS NOT NULL)`;
+    }
     const left = compileScalarExprSQL(filter.left, sourceAlias, params);
     const right = compileScalarExprSQL(filter.right, sourceAlias, params);
     return `(${left} ${filter.op} ${right})`;
@@ -1256,6 +1283,10 @@ const compileScalarExprSQL = (
   }
   if (expr.kind === "neg") {
     return `(-${compileScalarExprSQL(expr.expr, sourceAlias, params)})`;
+  }
+  if (expr.kind === "index_access") {
+    const inner = compileScalarExprSQL(expr.value, sourceAlias, params);
+    return `substr(${inner}, ${expr.index + 1}, 1)`;
   }
   const leftSql = compileScalarExprSQL(expr.left, sourceAlias, params);
   const rightSql = compileScalarExprSQL(expr.right, sourceAlias, params);
@@ -1306,6 +1337,12 @@ const collectFieldFilterColumns = (filter: FilterExprIR | undefined): string[] =
     return [];
   }
 
+  if (filter.kind === "link_target_field_compare") {
+    return filter.relation.storage === "inline" && filter.relation.inlineColumn
+      ? [filter.relation.inlineColumn]
+      : [];
+  }
+
   if (filter.kind === "backlink_property_compare" || filter.kind === "backlink_property_in") {
     return [filter.column];
   }
@@ -1329,6 +1366,7 @@ const collectScalarExprColumns = (expr: import("../ir/model.js").ScalarExprIR): 
   if (expr.kind === "column") return [expr.column];
   if (expr.kind === "literal") return [];
   if (expr.kind === "neg") return collectScalarExprColumns(expr.expr);
+  if (expr.kind === "index_access") return collectScalarExprColumns(expr.value);
   return [...collectScalarExprColumns(expr.left), ...collectScalarExprColumns(expr.right)];
 };
 

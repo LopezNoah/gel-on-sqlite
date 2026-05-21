@@ -778,9 +778,11 @@ export class Parser {
 
         if (this.matchNameInsensitive("using")) {
           body = this.parseFunctionUsingClause();
-          this.expect("semicolon", "Expected ';' after using clause");
+          this.match("semicolon");
           continue;
         }
+
+        if (this.match("semicolon")) continue;
 
         this.unexpected("Unsupported function subcommand");
       }
@@ -797,7 +799,7 @@ export class Parser {
       this.unexpected("User defined functions cannot declare set of parameters");
     }
 
-    this.expect("semicolon", "Expected ';' after function declaration");
+    this.match("semicolon");
 
     return {
       kind: "FunctionDeclaration",
@@ -1190,7 +1192,7 @@ export class Parser {
     if (this.matchPointerTypeSeparator()) {
       typeExpr = this.parseTypeReferenceUntilBoundary("Expected property target type");
       declaredType = opaqueTypeReferenceToQualifiedName(typeExpr);
-    } else if (abstract) {
+    } else if (abstract || overloaded || this.check("lbrace")) {
       declaredType = null;
     } else {
       this.unexpected("Expected ':', '->', or ':=' after property name");
@@ -1321,7 +1323,7 @@ export class Parser {
     if (this.matchPointerTypeSeparator()) {
       targetType = this.parseTypeReferenceUntilBoundary("Expected link target type");
       declaredType = opaqueTypeReferenceToQualifiedName(targetType);
-    } else if (abstract) {
+    } else if (abstract || overloaded) {
       declaredType = null;
     } else {
       this.unexpected("Expected ':', '->', or ':=' after link name");

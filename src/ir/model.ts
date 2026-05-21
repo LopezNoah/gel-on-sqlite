@@ -239,6 +239,13 @@ export type FilterExprIR =
       op: "=" | "!=" | "<" | "<=" | ">" | ">=" | "?=" | "?!=" | "like" | "ilike";
     }
   | {
+      kind: "link_target_field_compare";
+      relation: LinkRelationIR;
+      targetColumn: string;
+      value: ScalarValue;
+      op: "=" | "!=" | "<" | "<=" | ">" | ">=" | "?=" | "?!=" | "like" | "ilike";
+    }
+  | {
       kind: "backlink_property_compare";
       sources: BacklinkSourceIR[];
       column: string;
@@ -286,7 +293,8 @@ export type ScalarExprIR =
   | { kind: "column"; column: string }
   | { kind: "literal"; value: ScalarValue }
   | { kind: "binop"; op: "+" | "-" | "*" | "/" | "//" | "%" | "++"; left: ScalarExprIR; right: ScalarExprIR }
-  | { kind: "neg"; expr: ScalarExprIR };
+  | { kind: "neg"; expr: ScalarExprIR }
+  | { kind: "index_access"; value: ScalarExprIR; index: number };
 
 /* ---------------------------------- */
 /* Select-shape expressions           */
@@ -715,6 +723,12 @@ export type SelectExprIREntry<D extends Depth = 4> =
           limit?: number;
           offset?: number;
         })
+  | {
+      kind: "mutation_expr";
+      statement: import("../edgeql/ast.js").InsertStatement
+        | import("../edgeql/ast.js").UpdateStatement
+        | import("../edgeql/ast.js").DeleteStatement;
+    }
   | (D extends 0 ? never : FunctionCallIR<SelectExprIREntry<Dec<D>>>)
   | {
       kind: "current_item";

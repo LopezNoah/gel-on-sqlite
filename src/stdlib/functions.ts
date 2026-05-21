@@ -57,6 +57,7 @@ const DEFINITIONS: StdlibFunctionDef[] = [
   { name: "std::range_unpack", minArgs: 1, maxArgs: 1 },
   { name: "std::array_agg", minArgs: 1, maxArgs: 1 },
   { name: "std::array_unpack", minArgs: 1, maxArgs: 1 },
+  { name: "std::enumerate", minArgs: 1, maxArgs: 1 },
   { name: "std::str_lower", minArgs: 1, maxArgs: 1 },
   { name: "std::str_upper", minArgs: 1, maxArgs: 1 },
   { name: "std::to_duration", minArgs: 1, maxArgs: 1 },
@@ -235,6 +236,13 @@ export const executeStdlibFunction = (name: string, args: RuntimeFunctionArg[]):
         return [...value.values];
       }
       return Array.isArray(value) ? value : [value as ScalarValue];
+    }
+    case "std::enumerate": {
+      const value = args[0];
+      const items: unknown[] = typeof value === "object" && value !== null && "kind" in value
+        ? [...value.values]
+        : Array.isArray(value) ? value : value === null || value === undefined ? [] : [value];
+      return items.map((item, index) => [index, item]);
     }
     case "std::count": {
       if (typeof args[0] === "object" && args[0] !== null && "kind" in args[0]) {
