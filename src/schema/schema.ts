@@ -56,6 +56,14 @@ export class SchemaSnapshot {
     return [...this.functionsBySignature.values()].map(cloneFunctionDef);
   }
 
+  addFunction(fn: FunctionDef): void {
+    this.functionsBySignature.set(functionSignature(fn), cloneFunctionDef(fn));
+  }
+
+  addType(typeDef: TypeDef): void {
+    this.typesByName.set(qualifiedTypeName(typeDef), cloneTypeDef(typeDef));
+  }
+
   getAlias(name: string): AliasDef | undefined {
     const existing = this.aliasesByName.get(name);
     return existing ? cloneAliasDef(existing) : undefined;

@@ -774,6 +774,28 @@ const describeSetLevelSide = (
     };
   }
 
+  // A constant set like `{60, 30}` is a `union` operator over scalar constants.
+  // Describe it as a multi-row subquery so optional-compare can cross-join.
+  if (expr.kind === "operator_call" && (expr as OperatorCall).operator === "union") {
+    const unionArgs = orderedCallArgs((expr as OperatorCall).args);
+    const paramsCheckpoint = params.length;
+    const elementSqls: string[] = [];
+    for (const arg of unionArgs) {
+      const elSql = compileValueSetSQL(arg.expr, "g0", params, target, options);
+      if (!elSql) {
+        params.length = paramsCheckpoint;
+        return null;
+      }
+      elementSqls.push(elSql);
+    }
+    const selects = elementSqls.map((s) => `SELECT ${s} AS v`).join(" UNION ALL ");
+    return {
+      kind: "subquery",
+      selectSQL: selects,
+      valueColumn: "v",
+    };
+  }
+
   return null;
 };
 
@@ -831,24 +853,38 @@ const tryCompileSetLevelOptionalCompareSQL = (
   }
 
   if (lhsDesc.kind === "always-present") {
-    // LHS is a single constant value: comparison yields a single row.
-    const rhsVal = rhsDesc.kind === "always-empty" ? "NULL" : rhsDesc.kind === "always-present" ? rhsDesc.valueSQL : `(SELECT ${rhsDesc.valueColumn} FROM rhs_q LIMIT 1)`;
+    // LHS is a single constant value. RHS may be empty, scalar, or multi-row.
     const head = rhsDesc.kind === "subquery" ? `WITH rhs_q AS (${rhsDesc.selectSQL}) ` : "";
-    return `${head}SELECT ${compareSql(lhsDesc.valueSQL, rhsVal)} AS ${quoteIdent("value")}`;
+    if (rhsDesc.kind === "subquery") {
+      // Cross with rhs_q so multi-set RHS yields one comparison per RHS row,
+      // plus an empty-fallback when rhs_q has no rows.
+      const elementWise = `SELECT ${compareSql(lhsDesc.valueSQL, `rhs_q.${rhsDesc.valueColumn}`)} AS ${quoteIdent("value")} FROM rhs_q`;
+      const fallback = `SELECT ${(op === "?=") ? "json('false')" : "json('true')"} AS ${quoteIdent("value")} WHERE NOT EXISTS (SELECT 1 FROM rhs_q)`;
+      return `${head}${elementWise} UNION ALL ${fallback}`;
+    }
+    const rhsVal = rhsDesc.kind === "always-empty" ? "NULL" : rhsDesc.valueSQL;
+    return `SELECT ${compareSql(lhsDesc.valueSQL, rhsVal)} AS ${quoteIdent("value")}`;
   }
 
   // LHS is a subquery — emit per-row comparison plus an empty-fallback row.
-  const rhsValueExpr = rhsDesc.kind === "always-empty"
-    ? "NULL"
-    : rhsDesc.kind === "always-present"
-      ? rhsDesc.valueSQL
-      : `(SELECT ${rhsDesc.valueColumn} FROM rhs_q LIMIT 1)`;
-
   const cteDefs: string[] = [`lhs_q AS (${lhsDesc.selectSQL})`];
   if (rhsDesc.kind === "subquery") cteDefs.push(`rhs_q AS (${rhsDesc.selectSQL})`);
 
-  const elementWise = `SELECT ${compareSql(`${"lhs_q"}.${lhsDesc.valueColumn}`, rhsValueExpr)} AS ${quoteIdent("value")} FROM lhs_q`;
-  const fallback = `SELECT ${emptyCaseTrue ? "json('true')" : "json('false')"} AS ${quoteIdent("value")} WHERE NOT EXISTS (SELECT 1 FROM lhs_q)`;
+  let elementWise: string;
+  let fallback: string;
+  if (rhsDesc.kind === "subquery") {
+    // Cross-join LHS × RHS so multi-set RHS produces a comparison per pair.
+    // When LHS is empty but RHS isn't, emit one fallback row per RHS row.
+    elementWise = `SELECT ${compareSql(`lhs_q.${lhsDesc.valueColumn}`, `rhs_q.${rhsDesc.valueColumn}`)} AS ${quoteIdent("value")} FROM lhs_q CROSS JOIN rhs_q`;
+    const fallbackBool = (op === "?=") ? "json('false')" : "json('true')";
+    fallback = `SELECT ${fallbackBool} AS ${quoteIdent("value")} FROM rhs_q WHERE NOT EXISTS (SELECT 1 FROM lhs_q)`;
+  } else {
+    const rhsValueExpr = rhsDesc.kind === "always-empty"
+      ? "NULL"
+      : rhsDesc.valueSQL;
+    elementWise = `SELECT ${compareSql(`lhs_q.${lhsDesc.valueColumn}`, rhsValueExpr)} AS ${quoteIdent("value")} FROM lhs_q`;
+    fallback = `SELECT ${emptyCaseTrue ? "json('true')" : "json('false')"} AS ${quoteIdent("value")} WHERE NOT EXISTS (SELECT 1 FROM lhs_q)`;
+  }
 
   return `WITH ${cteDefs.join(", ")} ${elementWise} UNION ALL ${fallback}`;
 };
@@ -2070,8 +2106,25 @@ const compileOperatorValueSQL = (
       params.length = checkpoint;
       return null;
     }
-    const selects = (values as string[]).map((value) => `SELECT ${value} AS ${quoteIdent("value")}`).join(" UNION ALL ");
-    return `(SELECT json_group_array(${quoteIdent("value")}) FROM (${selects}))`;
+    // Tuples/arrays compile to `json_array(...)` which SQLite emits as plain
+    // TEXT (e.g. the string `'[]'`). Feeding that TEXT into `json_group_array`
+    // produces an array of strings rather than an array of arrays. Wrap each
+    // aggregated value with `json(...)` when the set elements are structural
+    // JSON values so the aggregator embeds them as real JSON structures.
+    const valuesAreJsonStructures = args.some((arg) => {
+      let argExpr: any = arg?.expr;
+      while (argExpr && argExpr.kind === "set" && argExpr.expr) {
+        argExpr = argExpr.expr;
+      }
+      return argExpr?.kind === "tuple" || argExpr?.kind === "array";
+    });
+    const selects = (values as string[])
+      .map((value) => `SELECT ${value} AS ${quoteIdent("value")}`)
+      .join(" UNION ALL ");
+    const aggValueExpr = valuesAreJsonStructures
+      ? `json(${quoteIdent("value")})`
+      : quoteIdent("value");
+    return `(SELECT json_group_array(${aggValueExpr}) FROM (${selects}))`;
   }
 
   const infixOperator = operatorToInfixSql(call.operator);

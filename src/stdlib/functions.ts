@@ -77,6 +77,7 @@ const DEFINITIONS: StdlibFunctionDef[] = [
   { name: "cal::duration_normalize_days", minArgs: 1, maxArgs: 1 },
   { name: "std::__gel_subtract", minArgs: 2, maxArgs: 2 },
   { name: "std::__gel_if_eq", minArgs: 4, maxArgs: 4 },
+  { name: "std::to_json", minArgs: 1, maxArgs: 1 },
 ];
 
 const BY_NAME = new Map(DEFINITIONS.map((def) => [def.name, def]));
@@ -374,6 +375,17 @@ export const executeStdlibFunction = (name: string, args: RuntimeFunctionArg[]):
       const lhs = extractScalar(args[0]);
       const rhs = extractScalar(args[1]);
       return lhs === rhs ? extractScalar(args[2]) : extractScalar(args[3]);
+    }
+    case "std::to_json": {
+      const raw = extractScalar(args[0]);
+      if (raw === null || raw === undefined) {
+        return null;
+      }
+      const text = String(raw);
+      if (text === "null") {
+        return null;
+      }
+      return text;
     }
     default:
       return undefined;

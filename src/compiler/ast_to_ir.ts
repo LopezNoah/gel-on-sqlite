@@ -1598,7 +1598,7 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
     case "unary": {
       // Fold `-NUMBER` / `+NUMBER` into a single numeric constant so
       // downstream SQL lowering doesn't need to handle an operator_call(neg).
-      if ((expr.op === "neg" || expr.op === "+") && expr.expr.kind === "literal") {
+      if (expr.op === "neg" && expr.expr.kind === "literal") {
         const value = expr.expr.value;
         if (typeof value === "number") {
           const folded = expr.op === "neg" ? -value : value;
@@ -1754,6 +1754,23 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
 
     case "select_expr": {
       return compileFreeObjectExpr(expr.expr, ctx);
+    }
+
+    case "array_literal_expr": {
+      const values = expr.values.map((value) => compileFreeObjectExpr(value, ctx));
+      return {
+        kind: "set",
+        expr: {
+          kind: "array_constructor",
+          args: values,
+        } as never,
+        pathId: defaultPathId("array_literal"),
+        typeref: values[0]?.typeref ?? { id: "array", name: "array", isScalar: false },
+        shape: [],
+        isBinding: false,
+        isMaterializedRef: false,
+        isSchemaAlias: false,
+      };
     }
 
     default:

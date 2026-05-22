@@ -162,6 +162,13 @@ const compileSelectToSQL = (ir: SelectIR, target: RuntimeTarget): SQLArtifact =>
       );
       if (lowered) {
         projections.push(`${lowered} AS ${quoteIdent(computedValueAlias(element.pathId))}`);
+      } else {
+        // When SQL lowering fails for a shape-computed expression, the runtime
+        // falls back to JS evaluation on the row. Project any referenced raw
+        // columns so they're available on the row.
+        for (const column of referenced) {
+          projections.push(`${rootAlias}.${quoteIdent(column)} AS ${quoteIdent(column)}`);
+        }
       }
     }
   }
@@ -208,6 +215,12 @@ const compileSelectToSQL = (ir: SelectIR, target: RuntimeTarget): SQLArtifact =>
   }
 
   if (ir.orderBy) {
+    const computedByPointer = new Map<string, string>();
+    for (const element of ir.shape) {
+      if (element.kind !== "computed") continue;
+      if (!element.name) continue;
+      computedByPointer.set(element.name, computedValueAlias(element.pathId));
+    }
     const terms: string[] = [];
     let term: typeof ir.orderBy | undefined = ir.orderBy;
     while (term) {
@@ -216,7 +229,11 @@ const compileSelectToSQL = (ir: SelectIR, target: RuntimeTarget): SQLArtifact =>
         : term.nullsPosition === "last"
           ? " NULLS LAST"
           : "";
-      terms.push(`${rootAlias}.${quoteIdent(term.value)} ${term.direction.toUpperCase()}${nullsClause}`);
+      const alias = computedByPointer.get(term.value);
+      const ref = alias
+        ? quoteIdent(alias)
+        : `${rootAlias}.${quoteIdent(term.value)}`;
+      terms.push(`${ref} ${term.direction.toUpperCase()}${nullsClause}`);
       term = term.then;
     }
     sql += ` ORDER BY ${terms.join(", ")}`;
