@@ -12,9 +12,7 @@ describe("TestEdgeQLCoalesce", () => {
   beforeEach(async () => {
     h = await QueryHarness.create({
       schema: "issues",
-      setup: "issues_coalesce_setup",
-      dbFile: "./tests/.artifacts/coalesce.sqlite",
-      resetDbFile: true
+      setup: "issues_coalesce_setup"
     });
   });
 

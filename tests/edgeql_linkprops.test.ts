@@ -12,9 +12,7 @@ describe("TestEdgeQLLinkproperties", () => {
   beforeEach(async () => {
     h = await QueryHarness.create({
       schema: "cards",
-      setup: "cards_setup",
-      dbFile: "./tests/.artifacts/linkprops.sqlite",
-      resetDbFile: true
+      setup: "cards_setup"
     });
   });
 

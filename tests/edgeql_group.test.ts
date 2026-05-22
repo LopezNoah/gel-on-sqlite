@@ -13,9 +13,7 @@ describe("TestEdgeQLGroup", () => {
   beforeEach(async () => {
     h = await QueryHarness.create({
       schema: "issues",
-      setup: "issues_setup",
-      dbFile: "./tests/.artifacts/group.sqlite",
-      resetDbFile: true
+      setup: "issues_setup"
     });
   });
 

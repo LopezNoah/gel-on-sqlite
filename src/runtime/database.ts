@@ -23,6 +23,8 @@ export interface SQLiteStatement {
 export interface SQLiteDatabase extends RuntimeDatabaseAdapter {
   prepare: (sql: string) => SQLiteStatement;
   target: "sqlite";
+  /** Snapshot the entire DB as a Buffer. Only available on the better-sqlite3 backend. */
+  serialize?: () => Buffer;
 }
 
 export type SQLiteRuntime = RuntimeInstance<SQLiteDatabase>;
@@ -44,10 +46,13 @@ const toRowRecords = (value: unknown): Record<string, unknown>[] => {
   return out;
 };
 
-export const openSQLite = (file = ":memory:"): SQLiteRuntime => {
+export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime => {
   try {
-    const db = new BetterSQLite3(file);
-    db.pragma("journal_mode = WAL");
+    const db = new BetterSQLite3(target as string);
+    const isMemoryOrBuffer = typeof target !== "string" || target === ":memory:";
+    if (!isMemoryOrBuffer) {
+      db.pragma("journal_mode = WAL");
+    }
 
     return {
       db: {
@@ -64,6 +69,7 @@ export const openSQLite = (file = ":memory:"): SQLiteRuntime => {
         close: () => db.close(),
         target: "sqlite",
         pragma: (value) => db.pragma(value),
+        serialize: () => db.serialize(),
       },
       close: () => db.close(),
     };
@@ -77,8 +83,13 @@ export const openSQLite = (file = ":memory:"): SQLiteRuntime => {
       };
     };
 
-    const rawDb = new sqliteModule.DatabaseSync(file);
-    rawDb.exec("PRAGMA journal_mode = WAL");
+    if (typeof target !== "string") {
+      throw new Error("Opening SQLite from a Buffer requires better-sqlite3");
+    }
+    const rawDb = new sqliteModule.DatabaseSync(target);
+    if (target !== ":memory:") {
+      rawDb.exec("PRAGMA journal_mode = WAL");
+    }
 
     const db: SQLiteDatabase = {
       prepare: (sql) => {

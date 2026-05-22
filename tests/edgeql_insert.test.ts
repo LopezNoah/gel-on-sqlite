@@ -13,9 +13,7 @@ describe("TestInsert", () => {
 
   beforeEach(async () => {
     h = await QueryHarness.create({
-      schema: "insert",
-      dbFile: "./tests/.artifacts/insert_testinsert.sqlite",
-      resetDbFile: true
+      schema: "insert"
     });
   });
 
@@ -453,7 +451,7 @@ describe("TestInsert", () => {
                 l2 := 0,
                 subordinates := (INSERT Subordinate {
                     name := 'nested sub 4.1',
-                    @comment := 'comment 4.1',
+                    @comment := 'comment 4.1'
                 })
             };
         `
@@ -804,7 +802,7 @@ describe("TestInsert", () => {
       `
                 SELECT (INSERT DefaultTest1 {
                     foo := 'ret2',
-                    num := 2,
+                    num := 2
                 }) {foo};
             `,
       [
@@ -818,7 +816,7 @@ describe("TestInsert", () => {
       `
                 SELECT (INSERT DefaultTest1 {
                     foo := 'ret3',
-                    num := 3,
+                    num := 3
                 }).num;
             `,
       [3]
@@ -845,7 +843,7 @@ describe("TestInsert", () => {
       `
                 SELECT (INSERT DefaultTest1 {
                     foo := 'ret2',
-                    num := 2,
+                    num := 2
                 }) {foo};
             `,
       [
@@ -859,7 +857,7 @@ describe("TestInsert", () => {
       `
                 SELECT (INSERT DefaultTest1 {
                     foo := 'ret3',
-                    num := 3,
+                    num := 3
                 }).num;
             `,
       [3]
@@ -918,7 +916,7 @@ describe("TestInsert", () => {
       `
                 SELECT (INSERT DefaultTest1 {
                     foo := 'DT returning 4',
-                    num := 33,
+                    num := 33
                 }) {foo, num};
             `,
       [
@@ -934,7 +932,7 @@ describe("TestInsert", () => {
                 WITH
                     I := (INSERT InsertTest {
                         name := 'IT returning 4',
-                        l2 := 9999,
+                        l2 := 9999
                     })
                 SELECT
                     DefaultTest1 {foo, num}
@@ -948,7 +946,7 @@ describe("TestInsert", () => {
                 WITH
                     I := (INSERT InsertTest {
                         name := 'IT returning 4',
-                        l2 := 9,
+                        l2 := 9
                     })
                 SELECT
                     DefaultTest1 {foo, num}
@@ -968,7 +966,7 @@ describe("TestInsert", () => {
       h,
       `
                 SELECT (INSERT DefaultTest1 {
-                    foo := 'DT returning 5',
+                    foo := 'DT returning 5'
                 }) {
                     foo,
                     # test that num will show up with the default value
@@ -996,7 +994,7 @@ describe("TestInsert", () => {
       h,
       `
                 SELECT (INSERT DefaultTest5 {
-                    name := 'ret6/DT5',
+                    name := 'ret6/DT5'
                 }) {
                     name,
                     # test that other will show up with the default value
@@ -1028,7 +1026,7 @@ describe("TestInsert", () => {
       h,
       `
                 SELECT (INSERT DefaultTest6 {
-                    name := 'ret7/DT6',
+                    name := 'ret7/DT6'
                 }) {
                     name,
                     # test that other will show up with the default value
@@ -1066,7 +1064,7 @@ describe("TestInsert", () => {
       h,
       `
                 SELECT (INSERT DefaultTest7 {
-                    name := 'ret8/DT7',
+                    name := 'ret8/DT7'
                 }) {
                     name,
                     # test that other will show up with the default value
@@ -1155,7 +1153,7 @@ describe("TestInsert", () => {
             WITH N := (INSERT Note {name := "!" }),
                  P := (INSERT Person {
                     name := "Emmanuel Villip",
-                    notes := N,
+                    notes := N
                  }),
             SELECT ((
                 INSERT PersonWrapper { person := P }
@@ -1277,7 +1275,7 @@ describe("TestInsert", () => {
                 notes := assert_distinct({
                     (SELECT Note FILTER .name = "anote"),
                     (INSERT DerivedNote { name := "new note", note := "hi" }),
-                    (UPDATE Note FILTER .name = "dnote" SET { note := "b" }),
+                    (UPDATE Note FILTER .name = "dnote" SET { note := "b" })
                 })
             })
             { name, notes: {name, note} ORDER BY .name };
@@ -1320,7 +1318,7 @@ describe("TestInsert", () => {
                 notes := assert_distinct({
                     (SELECT Note FILTER .name = "anote"),
                     (INSERT DerivedNote { name := "new note", note := "hi" }),
-                    (UPDATE Note FILTER .name = "dnote" SET { note := "b" }),
+                    (UPDATE Note FILTER .name = "dnote" SET { note := "b" })
                 })
             })
             {
@@ -2717,7 +2715,7 @@ describe("TestInsert", () => {
                         FOR y IN {3, 5, 7, 2}
                         UNION (INSERT InsertTest {
                             name := 'insert expr 1',
-                            l2 := y,
+                            l2 := y
                         })
                     ) ORDER BY _i.l2 DESC LIMIT 1
                 )}
@@ -3386,7 +3384,7 @@ describe("TestInsert", () => {
             select (insert InsertTest {
                 l2 := 1,
                 subordinates := assert_distinct(
-                    noobs.0 { @comment := noobs.1 }),
+                    noobs.0 { @comment := noobs.1 })
             }) { subordinates: {name, @comment} order by .name };
             `,
       [
@@ -10249,9 +10247,7 @@ describe("TestRepeatableReadInsert", () => {
 
   beforeEach(async () => {
     h = await QueryHarness.create({
-      schema: "insert",
-      dbFile: "./tests/.artifacts/insert_testrepeatablereadinsert.sqlite",
-      resetDbFile: true
+      schema: "insert"
     });
   });
 

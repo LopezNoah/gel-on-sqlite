@@ -14,9 +14,7 @@ describe("TestEdgeQLSelect", () => {
   beforeEach(async () => {
     h = await QueryHarness.create({
       schema: "issues",
-      setup: "issues_setup",
-      dbFile: "./tests/.artifacts/select.sqlite",
-      resetDbFile: true
+      setup: "issues_setup"
     });
   });
 
@@ -2317,10 +2315,10 @@ describe("TestEdgeQLSelect", () => {
                                 SELECT User { @list_order := v.0 }
                                 FILTER .name = v.1
                             )
-                        ),
+                        )
                     }),
                     (insert File {
-                        name := 'file01.jpg',
+                        name := 'file01.jpg'
                     }),
                 }
             }
@@ -6339,7 +6337,7 @@ describe("TestEdgeQLSelect", () => {
                 # this select shows all the relevant data for next tests
                 x := (SELECT Issue {
                     name := Issue.owner.name,
-                    w := count(Issue.watchers.name),
+                    w := count(Issue.watchers.name)
                 })
             SELECT count(x.name ++ <str>x.w);
             `,
@@ -10869,7 +10867,7 @@ describe("TestEdgeQLSelect", () => {
             status5 := ( .status { a := .__type__.name, b := .__type__.id } ),
             status6 := ( .status { a := .__type__.name, b := .__type__.id } ),
             status7 := ( .status { a := .__type__.name, b := .__type__.id } ),
-            status8 := ( .status { a := .__type__.name, b := .__type__.id } ),
+            status8 := ( .status { a := .__type__.name, b := .__type__.id } )
           })),
         };
         `
@@ -10966,7 +10964,7 @@ describe("TestEdgeQLSelect", () => {
         `
                 select { foo := 1 } filter
                         (INSERT User {
-                            name := 't1',
+                            name := 't1'
                         })
             `
       );
@@ -10976,7 +10974,7 @@ describe("TestEdgeQLSelect", () => {
         `
                 select { foo := 1 } filter
                         (UPDATE User set {
-                            name := 't1',
+                            name := 't1'
                         })
             `
       );
@@ -10994,7 +10992,7 @@ describe("TestEdgeQLSelect", () => {
         `
                 select { foo := 1 } order by
                         (INSERT User {
-                            name := 't1',
+                            name := 't1'
                         })
             `
       );
@@ -11004,7 +11002,7 @@ describe("TestEdgeQLSelect", () => {
         `
                 select { foo := 1 } order by
                         (UPDATE User set {
-                            name := 't1',
+                            name := 't1'
                         })
             `
       );

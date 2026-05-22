@@ -96,9 +96,7 @@ describe("TestExpressions", () => {
 
   beforeEach(async () => {
     h = await QueryHarness.create({
-      schema: "issues",
-      dbFile: "./tests/.artifacts/expressions.sqlite",
-      resetDbFile: true
+      schema: "issues"
     });
   });
 
@@ -14639,7 +14637,7 @@ describe("TestExpressions", () => {
                         SELECT ObjectType {
                             a := 1,
                             b := 1 + 0 * random(),  # float64
-                            c := 1 + 0 * <int64>random(),
+                            c := 1 + 0 * <int64>random()
                         })
                 SELECT (3 / (A.a + A.b), 3 / (A.a + A.c)) LIMIT 1;
             `,

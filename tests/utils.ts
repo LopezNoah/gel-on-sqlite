@@ -101,6 +101,18 @@ function defaultModuleForSchema(schemaDir: string, schemaName: string): string {
   return fs.existsSync(defaultPath) ? "default" : inferredModuleNameFromSchema(schemaName);
 }
 
+interface CachedSnapshot {
+  schema: ReturnType<typeof schemaSnapshotFromDeclarative>;
+  buffer: Buffer;
+  fallbackModule: string;
+}
+
+const snapshotCache = new Map<string, CachedSnapshot>();
+
+function snapshotCacheKey(schema: string | undefined, setup: string | undefined): string {
+  return `${schema ?? "<none>"}|${setup ?? "<none>"}`;
+}
+
 export class QueryHarness {
   db: any;
   schema: any;
@@ -113,9 +125,25 @@ export class QueryHarness {
   }
 
   /**
-   * Factory method to create a fresh test database with schema/data
+   * Factory method to create a fresh test database with schema/data.
+   *
+   * Fast path (no `dbFile` provided): the schema is parsed and the setup script
+   * is run **once per (schema, setup) pair** per process. The fully-populated
+   * in-memory DB is captured as a Buffer via better-sqlite3 `serialize()` and
+   * subsequent calls open a fresh DB from that Buffer. This mirrors the
+   * snapshot/restore pattern used by `experimental_interpreter.py` in the
+   * Python testbase.
+   *
+   * Slow path (`dbFile` provided, or running on the node:sqlite fallback):
+   * falls back to building everything from scratch — useful for debugging
+   * since the resulting `.sqlite` file can be inspected directly.
    */
   static async create(options: HarnessOptions): Promise<QueryHarness> {
+    if (!options.dbFile) {
+      const fast = QueryHarness.tryCreateFromSnapshot(options);
+      if (fast) return fast;
+    }
+
     const dbFile = options.dbFile ?? ":memory:";
     const hadExistingDbFile = Boolean(options.dbFile) && fs.existsSync(dbFile);
     if (options.dbFile) {
@@ -165,6 +193,58 @@ export class QueryHarness {
       const rawSource = fs.readFileSync(p, "utf-8");
       harness.script(rawSource);
     }
+
+    return harness;
+  }
+
+  /**
+   * Snapshot-cached construction. Returns null if the runtime cannot serialize
+   * (e.g. better-sqlite3 native binding unavailable), so the caller falls
+   * back to the slow path.
+   */
+  private static tryCreateFromSnapshot(options: HarnessOptions): QueryHarness | null {
+    const key = snapshotCacheKey(options.schema, options.setup);
+    const cached = snapshotCache.get(key);
+    const fallbackModule = options.schema
+      ? defaultModuleForSchema(path.join(__dirname, "schemas"), options.schema)
+      : "default";
+
+    if (cached) {
+      const { db } = openSQLite(cached.buffer);
+      return new QueryHarness(db, cached.schema, cached.fallbackModule);
+    }
+
+    const { db } = openSQLite(":memory:");
+    if (typeof db.serialize !== "function") {
+      db.close();
+      return null;
+    }
+
+    let schemaSource = "";
+    if (options.schema) {
+      const schemaDir = path.join(__dirname, "schemas");
+      schemaSource = loadSchemaSource(schemaDir, options.schema);
+    }
+    const decl = parseDeclarativeSchema(schemaSource, { legacySyntaxCompat: true });
+    const schema = schemaSnapshotFromDeclarative(decl);
+    materializeSchema(db, schema);
+    ensureGelSchemaTables(db);
+    serializeSchemaToGelTables(db, schema);
+    serializeSchemaToInstdata(db, schema);
+
+    const harness = new QueryHarness(db, schema, fallbackModule);
+
+    if (options.setup) {
+      const p = path.join(__dirname, "schemas", `${options.setup}.edgeql`);
+      const rawSource = fs.readFileSync(p, "utf-8");
+      harness.script(rawSource);
+    }
+
+    snapshotCache.set(key, {
+      schema,
+      buffer: db.serialize(),
+      fallbackModule,
+    });
 
     return harness;
   }
