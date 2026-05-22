@@ -3272,6 +3272,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
             fields.push({
               name: element.name,
               expr: asNestedExprEntry(compileExprToIREntry(element.expr, currentItemBinding)),
+              multi: Boolean(element.multi || element.cardinality === "many"),
             });
             continue;
           }
@@ -3378,6 +3379,15 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       if (expr.kind === "and" || expr.kind === "or") {
         return {
           kind: expr.kind,
+          left: asNestedExprEntry(compileExprToIREntry(expr.left, currentItemBinding)),
+          right: asNestedExprEntry(compileExprToIREntry(expr.right, currentItemBinding)),
+        };
+      }
+      // The parser emits `{ kind: "logical", op: "and"|"or", ... }` for
+      // top-level boolean operators; the IR uses `and`/`or` directly.
+      if (expr.kind === "logical") {
+        return {
+          kind: expr.op,
           left: asNestedExprEntry(compileExprToIREntry(expr.left, currentItemBinding)),
           right: asNestedExprEntry(compileExprToIREntry(expr.right, currentItemBinding)),
         };
@@ -3706,6 +3716,25 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
                 fail(`enum path expression lacks an enum member name, as in '${bindingValue.name}.GREEN'`);
               }
             }
+            return {
+              kind: "field_access",
+              value: asNestedExprEntry(compileExprToIREntry({ kind: "binding_ref", name: bindingValue.name }, currentItemBinding)),
+              field: expr.tail,
+            };
+          }
+          if (bindingValue.kind === "subquery_expr") {
+            return {
+              kind: "field_access",
+              value: asNestedExprEntry(compileExprToIREntry(bindingValue.expr, currentItemBinding)),
+              field: expr.tail,
+            };
+          }
+          if (bindingValue.kind === "subquery") {
+            return {
+              kind: "field_access",
+              value: asNestedExprEntry(compileExprToIREntry({ kind: "select", typeName: bindingValue.query.typeName, shape: bindingValue.query.shape, clauses: bindingValue.query.clauses }, currentItemBinding)),
+              field: expr.tail,
+            };
           }
           if (bindingValue.kind === "enum_path") {
             fail(`invalid property reference on an expression of primitive type`);
@@ -3839,6 +3868,19 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           // Pass through for non-str/json scalar casts (int, int64, bool, etc).
           // The runtime currently doesn't reshape the value; this is a no-op
           // type annotation in evaluation.
+          return innerEntry;
+        }
+        if (/^(default::)?array<.*>$/.test(resolvedCastType)) {
+          // Preserve the array<...> cast so runtime evaluation can coerce
+          // JSON-null sources into an empty array. Pass-through loses that
+          // signal and leaves null as the value.
+          return {
+            kind: "cast",
+            castType: resolvedCastType,
+            value: asNestedExprEntry(innerEntry),
+          };
+        }
+        if (/^(default::)?tuple<.*>$/.test(resolvedCastType)) {
           return innerEntry;
         }
         fail(`Unsupported cast type '${resolvedCastType}'`);

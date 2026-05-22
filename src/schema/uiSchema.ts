@@ -1220,6 +1220,22 @@ const parseFunctionBody = (fn: FunctionDeclaration): FunctionDef["body"] => {
     };
   }
 
+  // If the body is a bare expression (e.g. `x ?? -1`), the simple-expr path
+  // only round-trips param_ref/literal/concat — anything else (coalesce,
+  // math, function calls, …) gets degraded to `""` by the AST→FunctionExpr
+  // fallback. Route those through the query path with a `select` prefix so
+  // the full evaluator handles them.
+  const wrappedStatement = parseFunctionStatement(`select ${trimmed}`);
+  if (wrappedStatement?.kind === "select_expr"
+    && !wrappedStatement.with
+    && wrappedStatement.expr.kind !== "concat") {
+    return {
+      kind: "query",
+      language: fn.body.language,
+      query: `select ${trimmed}`,
+    };
+  }
+
   return {
     kind: "expr",
     expr: parseFunctionExpr(trimmed, paramNames),

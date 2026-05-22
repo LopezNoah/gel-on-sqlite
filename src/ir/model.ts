@@ -594,6 +594,7 @@ export type SelectExprIREntry<D extends Depth = 4> =
             backlinkLink?: string;
             backlinkSourceType?: string;
             expr?: SelectExprIREntry<Dec<D>>;
+            multi?: boolean;
             itemFields?: Array<{
               name: string;
               sourceField?: string;

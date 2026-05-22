@@ -23,6 +23,8 @@ import type {
   ShapeElement,
   Statement,
   TransactionStatement,
+  TupleLiteralElementValue,
+  TupleLiteralValue,
   TypeExpr,
   UpdateStatement,
   WithBinding,
@@ -219,6 +221,15 @@ class Parser {
   private parseNumberLexeme(value: string): number {
     const normalized = value.endsWith("n") ? value.slice(0, -1) : value;
     return Number(normalized.replace(/_/g, ""));
+  }
+
+  private buildIndexAccessExpr(expr: FreeObjectExpr, indexLexeme: string): FreeObjectExpr {
+    const normalized = indexLexeme.endsWith("n") ? indexLexeme.slice(0, -1) : indexLexeme;
+    return normalized.split(".").reduce<FreeObjectExpr>((current, part) => ({
+      kind: "index_access",
+      expr: current,
+      index: Number(part.replace(/_/g, "")),
+    }), expr);
   }
 
   private parseParameterLexeme(value: string): string {
@@ -544,9 +555,11 @@ class Parser {
 
     const name = this.parseQualifiedName("Expected DDL object name");
     let value: DDLStatement["value"];
-    if (action === "create" && (objectKind === "alias" || objectKind === "global")) {
+    if (action === "create" && (objectKind === "alias" || objectKind === "global") && this.peek().kind === "assign") {
       this.expect("assign", "Expected ':=' in DDL definition");
       value = this.parseFreeObjectExpr();
+    } else {
+      this.skipDDLBody();
     }
     if (this.peek().kind === "semi") {
       this.consume();
@@ -561,6 +574,22 @@ class Parser {
       value,
       pos: { line: start.line, column: start.column },
     };
+  }
+
+  private skipDDLBody(): void {
+    let depth = 0;
+    while (this.peek().kind !== "eof") {
+      const token = this.peek();
+      if (token.kind === "semi" && depth === 0) {
+        break;
+      }
+      if (token.kind === "lbrace" || token.kind === "lparen" || token.kind === "lbracket") {
+        depth += 1;
+      } else if (token.kind === "rbrace" || token.kind === "rparen" || token.kind === "rbracket") {
+        depth = Math.max(0, depth - 1);
+      }
+      this.consume();
+    }
   }
 
   private parseFor(ctx: ParseContext = {}): ForStatement {
@@ -1037,7 +1066,8 @@ class Parser {
       this.consume();
       if (this.peek().kind === "rparen") {
         this.consume();
-        return { kind: "set_literal", values: [] };
+        // `()` is the empty tuple in EdgeQL, distinct from `{}` (empty set).
+        return { kind: "tuple", values: [] };
       }
       if (["kw_insert", "kw_update", "kw_delete"].includes(this.peek().kind)) {
         const kind = this.peek().kind;
@@ -1305,11 +1335,7 @@ class Parser {
       }
       if (this.peek().kind === "number") {
         const indexToken = this.consume();
-        return {
-          kind: "index_access",
-          expr: { kind: "current_item" },
-          index: this.parseNumberLexeme(indexToken.lexeme),
-        };
+        return this.buildIndexAccessExpr({ kind: "current_item" }, indexToken.lexeme);
       }
 
       const field = this.expectName("Expected field name after '.'").lexeme;
@@ -1493,11 +1519,7 @@ class Parser {
           };
         } else if (this.peek().kind === "number") {
           const indexToken = this.consume();
-          expr = {
-            kind: "index_access",
-            expr,
-            index: this.parseNumberLexeme(indexToken.lexeme),
-          };
+          expr = this.buildIndexAccessExpr(expr, indexToken.lexeme);
         } else {
           const field = this.expectName("Expected field name after '.'").lexeme;
           if (expr.kind === "path_steps") {
@@ -3117,9 +3139,9 @@ class Parser {
     };
   }
 
-  private readTupleLiteralValue(): { kind: "tuple_literal"; values: ScalarValue[] | Record<string, ScalarValue> } {
-    const items: ScalarValue[] = [];
-    const named: Record<string, ScalarValue> = {};
+  private readTupleLiteralValue(): TupleLiteralValue {
+    const items: TupleLiteralElementValue[] = [];
+    const named: Record<string, TupleLiteralElementValue> = {};
     let hasNamed = false;
 
     while (this.peek().kind !== "rparen") {
@@ -3127,13 +3149,13 @@ class Parser {
         hasNamed = true;
         const key = this.consume().lexeme;
         this.consume();
-        named[key] = this.readScalarLikeValue();
+        named[key] = this.readTupleLiteralElementValue();
       } else {
         if (hasNamed) {
           const token = this.peek();
           throw new AppError("E_SYNTAX", "Cannot mix unnamed and named tuple elements", token.line, token.column);
         }
-        items.push(this.readScalarLikeValue());
+        items.push(this.readTupleLiteralElementValue());
       }
 
       if (this.peek().kind === "comma") {
@@ -3150,10 +3172,25 @@ class Parser {
     };
   }
 
+  private readTupleLiteralElementValue(): TupleLiteralElementValue {
+    if (this.peek().kind === "lparen") {
+      this.consume();
+      return this.readTupleLiteralValue().values;
+    }
+    return this.readScalarLikeValue();
+  }
+
   private parseNestedInsertExpr(): { kind: "insert"; typeName: string; values: Record<string, InsertValue> } {
     const typeName = this.parseQualifiedName("Expected type name in nested insert");
-    this.expect("lbrace", "Expected '{' in nested insert");
     const values: Record<string, InsertValue> = {};
+    if (this.peek().kind !== "lbrace") {
+      return {
+        kind: "insert",
+        typeName,
+        values,
+      };
+    }
+    this.consume();
     for (const assignment of this.parseDelimited("rbrace", () => this.parseNestedInsertAssignment(), "Expected ',' between assignments")) {
       values[assignment.field] = assignment.value;
     }
@@ -3842,6 +3879,50 @@ class Parser {
     }
   }
 
+  private isWithBindingValueTerminator(): boolean {
+    return [
+      "comma",
+      "eof",
+      "semi",
+      "kw_select",
+      "kw_insert",
+      "kw_update",
+      "kw_delete",
+      "kw_for",
+      "kw_configure",
+      "kw_create",
+      "kw_alter",
+      "kw_drop",
+      "kw_start",
+      "kw_commit",
+      "kw_rollback",
+    ].includes(this.peek().kind);
+  }
+
+  private preferLegacyWithBindingValue(expr: FreeObjectExpr): boolean {
+    return expr.kind === "binding_ref"
+      || expr.kind === "path"
+      || expr.kind === "path_chain"
+      || expr.kind === "backlink_path"
+      || expr.kind === "select";
+  }
+
+  private tryParseWithBindingExpressionValue(allowLegacy = true): WithBindingValue | undefined {
+    return this.attempt(() => {
+      const expr = this.parseFreeObjectExpr();
+      if (!this.isWithBindingValueTerminator()) {
+        return undefined;
+      }
+      if (!allowLegacy && this.preferLegacyWithBindingValue(expr)) {
+        return undefined;
+      }
+      return {
+        kind: "subquery_expr" as const,
+        expr,
+      };
+    });
+  }
+
   private parseWithBindingValue(): WithBindingValue {
     if (this.peek().kind === "lparen" && ["kw_insert", "kw_update", "kw_delete"].includes(this.peekNext().kind)) {
       this.consume(); // lparen
@@ -3927,7 +4008,7 @@ class Parser {
     if (this.peek().kind === "lbrace") {
       const exprBinding = this.attempt(() => {
         const expr = this.parseFreeObjectExpr();
-        if (["comma", "eof", "semi", "kw_select", "kw_insert", "kw_update", "kw_delete", "kw_for"].includes(this.peek().kind)) {
+        if (this.isWithBindingValueTerminator()) {
           return { kind: "subquery_expr" as const, expr };
         }
         return undefined;
@@ -3967,17 +4048,23 @@ class Parser {
       };
     }
 
-    if (this.peek().kind === "lt") {
+    const typedParameter = this.attempt(() => {
+      if (this.peek().kind !== "lt") {
+        return undefined;
+      }
       this.consume();
       const castType = this.parseQualifiedName("Expected scalar type in parameter cast");
       this.expect("gt", "Expected '>' after parameter cast");
       this.expect("dollar", "Expected '$' before parameter name");
       const name = this.expectName("Expected parameter name after '$'").lexeme;
       return {
-        kind: "parameter",
+        kind: "parameter" as const,
         name,
         castType: castType as ScalarType,
       };
+    });
+    if (typedParameter) {
+      return typedParameter;
     }
 
     if (this.peek().kind === "parameter") {
@@ -3985,6 +4072,11 @@ class Parser {
         kind: "parameter",
         name: this.consume().lexeme.slice(1),
       };
+    }
+
+    const expressionBinding = this.tryParseWithBindingExpressionValue(false);
+    if (expressionBinding) {
+      return expressionBinding;
     }
 
     if (this.peek().kind === "kw_detached" && this.isNameToken(this.peekNext())) {
@@ -4072,7 +4164,7 @@ class Parser {
 
     const fallbackExpr = this.attempt(() => {
       const expr = this.parseFreeObjectExpr();
-      if (["comma", "eof", "semi", "kw_select", "kw_insert", "kw_update", "kw_delete", "kw_for"].includes(this.peek().kind)) {
+      if (this.isWithBindingValueTerminator()) {
         return {
           kind: "subquery_expr" as const,
           expr,

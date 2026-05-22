@@ -152,9 +152,15 @@ export interface ArrayLiteralValue {
   values: ScalarValue[];
 }
 
+export type TupleLiteralElementValue = ScalarValue | TupleLiteralElementArray | TupleLiteralElementObject;
+export interface TupleLiteralElementArray extends Array<TupleLiteralElementValue> {}
+export interface TupleLiteralElementObject {
+  [key: string]: TupleLiteralElementValue;
+}
+
 export interface TupleLiteralValue {
   kind: "tuple_literal";
-  values: ScalarValue[] | Record<string, ScalarValue>;
+  values: TupleLiteralElementValue[] | Record<string, TupleLiteralElementValue>;
 }
 
 export type WithBindingValue =
