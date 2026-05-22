@@ -253,6 +253,24 @@ class Parser {
     return parts.join("::");
   }
 
+  // Parses a (possibly parametric) type used in cast position: handles
+  // `str`, `std::int64`, `array<str>`, `tuple<int64, str>`, `tuple<tuple<...>, ...>`.
+  private parseCastTypeName(message: string): string {
+    const head = this.parseQualifiedName(message);
+    if (this.peek().kind !== "lt") {
+      return head;
+    }
+    this.consume();
+    const args: string[] = [];
+    args.push(this.parseCastTypeName("Expected type argument"));
+    while (this.peek().kind === "comma") {
+      this.consume();
+      args.push(this.parseCastTypeName("Expected type argument"));
+    }
+    this.expect("gt", `Expected '>' to close ${head}<...>`);
+    return `${head}<${args.join(", ")}>`;
+  }
+
   private kindAfterQualifiedName(): Token["kind"] {
     if (!this.isNameToken(this.peek())) {
       return this.peek().kind;
@@ -683,6 +701,37 @@ class Parser {
     }
 
     if (this.isNameToken(this.peek()) && (this.peekNext().kind === "semi" || this.peekNext().kind === "eof")) {
+      return this.parseSelectExprTail(start, ctx, this.parseFreeObjectExpr(), expectEof);
+    }
+
+    // Name followed by a binary operator — treat as a free expression so the
+    // expression parser handles the full RHS instead of letting parseTypedSelect
+    // stop at the bare name and choke on the trailing operator.
+    const binaryOpKinds: Token["kind"][] = [
+      "coalesce",
+      "not_distinct_from",
+      "distinct_from",
+      "plus",
+      "minus",
+      "star",
+      "slash",
+      "floor_div",
+      "modulo",
+      "pow",
+      "concat",
+      "equals",
+      "not_equals",
+      "lt",
+      "gt",
+      "lte",
+      "gte",
+      "kw_and",
+      "kw_or",
+      "kw_is",
+      "kw_if",
+      "kw_union",
+    ];
+    if (this.isNameToken(this.peek()) && binaryOpKinds.includes(this.peekNext().kind)) {
       return this.parseSelectExprTail(start, ctx, this.parseFreeObjectExpr(), expectEof);
     }
 
@@ -1191,7 +1240,7 @@ class Parser {
 
     if (this.peek().kind === "lt") {
       this.consume();
-      const castType = this.parseQualifiedName("Expected type name in cast");
+      const castType = this.parseCastTypeName("Expected type name in cast");
       this.expect("gt", "Expected '>' after cast type");
       const expr = this.parseFreeObjectPostfixExpr();
       return { kind: "cast", castType, expr };
@@ -1634,8 +1683,16 @@ class Parser {
     return expr;
   }
 
+  private parseFreeObjectUnaryAtom(): FreeObjectExpr {
+    if (this.peek().kind === "minus") {
+      this.consume();
+      return { kind: "unary", op: "neg", expr: this.parseFreeObjectUnaryAtom() };
+    }
+    return this.parseFreeObjectPostfixExpr();
+  }
+
   private parseFreeObjectExprWithPrecedence(minPrecedence = 0): FreeObjectExpr {
-    let left = this.parseFreeObjectPostfixExpr();
+    let left = this.parseFreeObjectUnaryAtom();
 
     while (true) {
       if (this.peek().kind === "coalesce") {
@@ -2144,18 +2201,40 @@ class Parser {
     }
 
     if (this.isNameToken(this.peek()) && this.peekNext().kind === "dot") {
-      this.consume();
-      this.consume();
-      const fieldName = this.expectName("Expected field name after '.'").lexeme;
-      if (this.peek().kind === "dot" || this.peek().kind === "lbracket" || this.peek().kind === "at" || this.peek().kind === "lbrace") {
-        let base: FreeObjectExpr = { kind: "field_access", expr: { kind: "current_item" }, field: fieldName };
-        base = this.applyPostfixExprChain(base);
-        return { kind: "select_expr", expr: base, clauses: {} };
+      const shortcutTerminators: Token["kind"][] = [
+        "comma",
+        "rbrace",
+        "rparen",
+        "kw_filter",
+        "kw_order",
+        "kw_limit",
+        "kw_offset",
+        "eof",
+      ];
+      const shortcutContinuations: Token["kind"][] = ["dot", "lbracket", "at", "lbrace"];
+      const shortcut = this.attempt(() => {
+        this.consume();
+        this.consume();
+        const fieldName = this.expectName("Expected field name after '.'").lexeme;
+        if (shortcutContinuations.includes(this.peek().kind)) {
+          let base: FreeObjectExpr = { kind: "field_access", expr: { kind: "current_item" }, field: fieldName };
+          base = this.applyPostfixExprChain(base);
+          if (!shortcutTerminators.includes(this.peek().kind)) {
+            return undefined;
+          }
+          return { kind: "select_expr" as const, expr: base, clauses: {} };
+        }
+        if (!shortcutTerminators.includes(this.peek().kind)) {
+          return undefined;
+        }
+        return {
+          kind: "field_ref" as const,
+          field: fieldName,
+        };
+      });
+      if (shortcut) {
+        return shortcut;
       }
-      return {
-        kind: "field_ref",
-        field: fieldName,
-      };
     }
 
     const suffixMathExpr = this.parseFieldSuffixMathExpr();
@@ -2942,7 +3021,7 @@ class Parser {
 
   private parseCastInsertValue(): InsertValue {
     this.consume();
-    const castType = this.parseQualifiedName("Expected cast type");
+    const castType = this.parseCastTypeName("Expected cast type");
     this.expect("gt", "Expected '>' after cast type");
     const inner = this.parseInsertValue();
     if (castType === "json" || castType === "std::json") {

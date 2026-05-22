@@ -1673,11 +1673,59 @@ const tryRuntimeSelectExprEvaluation = (
         }
         return record;
       }
-      case "math":
-        return Number(evalExpr(expr.left, env)) + Number(evalExpr(expr.right, env));
+      case "math": {
+        const leftValue = evalExpr(expr.left, env);
+        const rightValue = evalExpr(expr.right, env);
+        const applyMath = (l: unknown, r: unknown): number | null => {
+          const ln = Number(l);
+          const rn = Number(r);
+          switch (expr.op) {
+            case "+": return ln + rn;
+            case "-": return ln - rn;
+            case "*": return ln * rn;
+            case "/": return ln / rn;
+            case "//": return Math.floor(ln / rn);
+            case "%": return ln % rn;
+            case "^": return Math.pow(ln, rn);
+            default: return null;
+          }
+        };
+        const leftIsSet = Array.isArray(leftValue);
+        const rightIsSet = Array.isArray(rightValue);
+        if (!leftIsSet && !rightIsSet) {
+          return applyMath(leftValue, rightValue);
+        }
+        const leftItems = leftIsSet ? leftValue : [leftValue];
+        const rightItems = rightIsSet ? rightValue : [rightValue];
+        const out: unknown[] = [];
+        for (const l of leftItems) {
+          for (const r of rightItems) {
+            out.push(applyMath(l, r));
+          }
+        }
+        return out;
+      }
       case "compare": {
         const left = evalExpr(expr.left, env);
         const right = evalExpr(expr.right, env);
+        const isEmpty = (v: unknown): boolean =>
+          v === null || v === undefined || (Array.isArray(v) && v.length === 0);
+        if (expr.op === "?=" || expr.op === "?!=") {
+          const leftEmpty = isEmpty(left);
+          const rightEmpty = isEmpty(right);
+          if (leftEmpty && rightEmpty) return expr.op === "?=";
+          if (leftEmpty || rightEmpty) return expr.op === "?!=";
+          const lItems = Array.isArray(left) ? left : [left];
+          const rItems = Array.isArray(right) ? right : [right];
+          const out: boolean[] = [];
+          for (const l of lItems) {
+            for (const r of rItems) {
+              const eq = l === r;
+              out.push(expr.op === "?=" ? eq : !eq);
+            }
+          }
+          return (Array.isArray(left) || Array.isArray(right)) ? out : out[0] ?? false;
+        }
         const compareOne = (l: unknown, r: unknown): boolean => {
           if (expr.op === "=") return l === r;
           if (expr.op === "!=") return l !== r;
@@ -5834,7 +5882,12 @@ const materializeSelectRow = (
       } else if (element.expr.kind === "select_expr") {
         const loweredAlias = computedValueAlias(element.pathId);
         if (Object.prototype.hasOwnProperty.call(row, loweredAlias)) {
-          output[element.name] = row[loweredAlias];
+          const raw = row[loweredAlias];
+          if (typeof raw === "string" && (raw === "true" || raw === "false" || raw === "null")) {
+            output[element.name] = JSON.parse(raw);
+          } else {
+            output[element.name] = raw;
+          }
           continue;
         }
         output[element.name] = evaluateSelectExprShapeEntry(db, schema, element.expr.expr, row, sourceType);
@@ -6731,6 +6784,32 @@ const evaluateSelectExprEntry = (
       const leftValue = evaluateSelectExprEntry(schema, db, context, entry.left, sqlTrail, evalContext);
       const rightValue = evaluateSelectExprEntry(schema, db, context, entry.right, sqlTrail, evalContext);
 
+      const isEmpty = (v: unknown): boolean =>
+        v === null || v === undefined || (Array.isArray(v) && v.length === 0);
+
+      // Coalescing equality operators (?=, ?!=) treat empty sets as comparable
+      // values: two empties are equal; empty vs non-empty is unequal.
+      if (entry.op === "?=" || entry.op === "?!=") {
+        const leftEmpty = isEmpty(leftValue);
+        const rightEmpty = isEmpty(rightValue);
+        if (leftEmpty && rightEmpty) {
+          return entry.op === "?=";
+        }
+        if (leftEmpty || rightEmpty) {
+          return entry.op === "?!=";
+        }
+        const leftItems = Array.isArray(leftValue) ? leftValue : [leftValue];
+        const rightItems = Array.isArray(rightValue) ? rightValue : [rightValue];
+        const out: boolean[] = [];
+        for (const l of leftItems) {
+          for (const r of rightItems) {
+            const eq = l === r;
+            out.push(entry.op === "?=" ? eq : !eq);
+          }
+        }
+        return (Array.isArray(leftValue) || Array.isArray(rightValue)) ? out : out[0] ?? false;
+      }
+
       const leftItems = Array.isArray(leftValue) ? leftValue : [leftValue];
       const rightItems = Array.isArray(rightValue) ? rightValue : [rightValue];
       const compareOne = (left: unknown, right: unknown): boolean => {
@@ -6742,6 +6821,12 @@ const evaluateSelectExprEntry = (
         }
         if (entry.op === ">") {
           return Number(left) > Number(right);
+        }
+        if (entry.op === ">=") {
+          return Number(left) >= Number(right);
+        }
+        if (entry.op === "<=") {
+          return Number(left) <= Number(right);
         }
         return Number(left) < Number(right);
       };
@@ -6776,7 +6861,34 @@ const evaluateSelectExprEntry = (
     case "math": {
       const leftValue = evaluateSelectExprEntry(schema, db, context, entry.left, sqlTrail, evalContext);
       const rightValue = evaluateSelectExprEntry(schema, db, context, entry.right, sqlTrail, evalContext);
-      return Number(leftValue) + Number(rightValue);
+      const applyMath = (l: unknown, r: unknown): number | null => {
+        const ln = Number(l);
+        const rn = Number(r);
+        switch (entry.op) {
+          case "+": return ln + rn;
+          case "-": return ln - rn;
+          case "*": return ln * rn;
+          case "/": return ln / rn;
+          case "//": return Math.floor(ln / rn);
+          case "%": return ln % rn;
+          case "^": return Math.pow(ln, rn);
+          default: return null;
+        }
+      };
+      const leftIsSet = Array.isArray(leftValue);
+      const rightIsSet = Array.isArray(rightValue);
+      if (!leftIsSet && !rightIsSet) {
+        return applyMath(leftValue, rightValue);
+      }
+      const leftItems = leftIsSet ? leftValue : [leftValue];
+      const rightItems = rightIsSet ? rightValue : [rightValue];
+      const out: unknown[] = [];
+      for (const l of leftItems) {
+        for (const r of rightItems) {
+          out.push(applyMath(l, r));
+        }
+      }
+      return out;
     }
     case "coalesce": {
       const leftValue = evaluateSelectExprEntry(schema, db, context, entry.left, sqlTrail, evalContext);
