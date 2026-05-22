@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { QueryHarness } from "./utils.js";
 import {
   assertQueryResult,
+  queryRows,
+  querySingle,
   unorderedBag,
   unorderedSet
 } from "./python_query_test_helpers.js";
@@ -93,8 +95,8 @@ describe("TestDelete", () => {
   });
 
   it("test_edgeql_delete_simple_02", () => {
-    let id1 = String(h.query("\n            SELECT(INSERT DeleteTest {\n                name := 'delete-test1'\n            }) LIMIT 1;\n        ").id);
-    let id2 = String(h.query("\n            SELECT(INSERT DeleteTest {\n                name := 'delete-test2'\n            }) LIMIT 1;\n        ").id);
+    let id1 = String(querySingle<{ id: string }>(h, "\n            SELECT(INSERT DeleteTest {\n                name := 'delete-test1'\n            }) LIMIT 1;\n        ").id);
+    let id2 = String(querySingle<{ id: string }>(h, "\n            SELECT(INSERT DeleteTest {\n                name := 'delete-test2'\n            }) LIMIT 1;\n        ").id);
     assertQueryResult(
       h,
       `
@@ -143,7 +145,7 @@ describe("TestDelete", () => {
   });
 
   it("test_edgeql_delete_returning_01", () => {
-    let id1 = String(h.query("\n            SELECT (INSERT DeleteTest {\n                name := 'delete-test1'\n            }) LIMIT 1;\n        ").id);
+    let id1 = String(querySingle<{ id: string }>(h, "\n            SELECT (INSERT DeleteTest {\n                name := 'delete-test1'\n            }) LIMIT 1;\n        ").id);
     h.script(
       `
             INSERT DeleteTest {
@@ -251,8 +253,8 @@ describe("TestDelete", () => {
             },
           ]
     );
-    let deleted = h.query("\n                DELETE DeleteTest2;\n            ");
-    expect(hasattr(deleted[0], "__tid__")).toBeTruthy();
+    let deleted = queryRows<Record<string, unknown>>(h, "\n                DELETE DeleteTest2;\n            ");
+    expect(Object.prototype.hasOwnProperty.call(deleted[0], "__tid__")).toBeTruthy();
     expect(deleted[0].__tname__).toEqual("default::DeleteTest2");
   });
 
@@ -540,51 +542,33 @@ describe("TestDelete", () => {
   });
 
   it("test_edgeql_delete_multi_simultaneous_01", () => {
-    h.script(
-      `
+    const setup = `
             with
               a := (insert DeleteTest { name := '1' }),
               b := (insert DeleteTest { name := '2' }),
               c := (insert LinkingType { objs := {a, b} })
             select c;
-        `
-    );
-    let bind_q = lstrip();
-    let q = `
+        `;
+    const deletions = {
+      a: "(DELETE DeleteTest)",
+      b: "(DELETE LinkingType)",
+    } as const;
+    const perms = [["a", "b"], ["b", "a"]] as const;
+
+    for (const bindOrder of perms) {
+      for (const useOrder of perms) {
+        h.script(setup);
+        const bind_q = bindOrder
+          .map((name) => `${name} := ${deletions[name]},`)
+          .join("\n                  ");
+        const q = `
                 with
                   ${bind_q}
-                select {${"a, b"}};
+                select {${useOrder.join(", ")}};
             `;
-    h.script(
-      q
-    );
-    bind_q = lstrip();
-    q = `
-                with
-                  ${bind_q}
-                select {${"b, a"}};
-            `;
-    h.script(
-      q
-    );
-    bind_q = lstrip();
-    q = `
-                with
-                  ${bind_q}
-                select {${"a, b"}};
-            `;
-    h.script(
-      q
-    );
-    bind_q = lstrip();
-    q = `
-                with
-                  ${bind_q}
-                select {${"b, a"}};
-            `;
-    h.script(
-      q
-    );
+        h.script(q);
+      }
+    }
   });
 
   it("test_edgeql_delete_multi_simultaneous_02", () => {
@@ -692,18 +676,8 @@ describe("TestDelete", () => {
     }).toThrow(new RegExp("DELETE statements cannot be used in an ORDER BY clause"));
   });
 
-  it("test_edgeql_delete_read_only_tx_01", () => {
-    let con = with_transaction_options(edgedb.TransactionOptions());
-    try {
-      expect(() => {
-        for (const tx of (con.transaction() as any)) {
-          h.script(
-            "delete DeleteTest"
-          );
-        }
-      }).toThrow(new RegExp("Modifications not allowed in a read-only transaction"));
-    } finally {
-      // ignored awaited call: con.aclose
-    }
+  it.skip("test_edgeql_delete_read_only_tx_01", () => {
+    // The Python original exercises EdgeDB client read-only transactions;
+    // QueryHarness does not expose transaction options yet.
   });
 });

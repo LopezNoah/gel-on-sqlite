@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { QueryHarness } from "./utils.js";
 import {
   assertQueryResult,
+  queryRows,
+  querySingle,
   unorderedBag,
   unorderedSet
 } from "./python_query_test_helpers.js";
@@ -1322,7 +1324,7 @@ describe("TestEdgeQLSelect", () => {
   });
 
   it("test_edgeql_select_type_04", () => {
-    let res = h.query("\n            SELECT User {\n                __type__: {\n                    name,\n                    id,\n                }\n            } LIMIT 1;\n        ");
+    let res = querySingle<{ __type__: { name: string; id: unknown } }>(h, "\n            SELECT User {\n                __type__: {\n                    name,\n                    id,\n                }\n            } LIMIT 1;\n        ");
     assertQueryResult(
       h,
       `
@@ -2569,19 +2571,19 @@ describe("TestEdgeQLSelect", () => {
   });
 
   it("test_edgeql_select_splat_07", () => {
-    let res = json.loads(con.query_json("\n            select Issue {\n                **,\n            }\n            filter .number = \"1\"\n            "));
-    expect(res[0] as any).not.toContain("tags");
-    expect(res[0] as any).not.toContain("related_to");
-    expect(res[0] as any).toContain("num_watchers");
+    let res = queryRows<Record<string, unknown>>(h, "\n            select Issue {\n                **,\n            }\n            filter .number = \"1\"\n            ");
+    expect(res[0]).not.toHaveProperty("tags");
+    expect(res[0]).not.toHaveProperty("related_to");
+    expect(res[0]).toHaveProperty("num_watchers");
     h.script(
       `
             create future no_linkful_computed_splats
         `
     );
-    res = json.loads(con.query_json("\n            select Issue {\n                **,\n            }\n            filter .number = \"1\"\n            "));
-    expect(res[0] as any).not.toContain("tags");
-    expect(res[0] as any).not.toContain("related_to");
-    expect(res[0] as any).not.toContain("num_watchers");
+    res = queryRows<Record<string, unknown>>(h, "\n            select Issue {\n                **,\n            }\n            filter .number = \"1\"\n            ");
+    expect(res[0]).not.toHaveProperty("tags");
+    expect(res[0]).not.toHaveProperty("related_to");
+    expect(res[0]).not.toHaveProperty("num_watchers");
   });
 
   it("test_edgeql_select_id_01", () => {
@@ -3672,7 +3674,7 @@ describe("TestEdgeQLSelect", () => {
   });
 
   it("test_edgeql_select_setops_20", () => {
-    let res = h.query("\n            SELECT (\n                {(SELECT Issue.time_spent_log.body FILTER false), 'asdf'},\n                Issue,\n            )\n        ");
+    let res = queryRows<unknown[]>(h, "\n            SELECT (\n                {(SELECT Issue.time_spent_log.body FILTER false), 'asdf'},\n                Issue,\n            )\n        ");
     expect((res).length).toEqual(4);
     for (const row of (res as any)) {
       expect(row[1].id).not.toEqual(null);
@@ -3680,7 +3682,7 @@ describe("TestEdgeQLSelect", () => {
   });
 
   it("test_edgeql_select_setops_21", () => {
-    let res = h.query("\n            SELECT (\n                'oh no' ?? (SELECT Issue.time_spent_log.body FILTER false),\n                Issue,\n            )\n        ");
+    let res = queryRows<unknown[]>(h, "\n            SELECT (\n                'oh no' ?? (SELECT Issue.time_spent_log.body FILTER false),\n                Issue,\n            )\n        ");
     expect((res).length).toEqual(4);
     for (const row of (res as any)) {
       expect(row[1].id).not.toEqual(null);
@@ -3688,7 +3690,7 @@ describe("TestEdgeQLSelect", () => {
   });
 
   it("test_edgeql_select_setops_22", () => {
-    let res = h.query("\n            SELECT (\n                (SELECT Issue.time_spent_log.body FILTER false)\n                 if false else 'asdf',\n                Issue,\n            )\n        ");
+    let res = queryRows<unknown[]>(h, "\n            SELECT (\n                (SELECT Issue.time_spent_log.body FILTER false)\n                 if false else 'asdf',\n                Issue,\n            )\n        ");
     expect((res).length).toEqual(4);
     for (const row of (res as any)) {
       expect(row[1].id).not.toEqual(null);
@@ -6956,7 +6958,7 @@ describe("TestEdgeQLSelect", () => {
   });
 
   it("test_edgeql_select_alias_indirection_04", () => {
-    let result = h.query("\n            # Reference a constant expression in an alias.\n            WITH U := (\n                    SELECT User {\n                        issues := (\n                            SELECT Issue {\n                                foo := 1 + random()\n                            } FILTER Issue.owner = User\n                        )\n                    } FILTER .name = 'Elvis'\n                )\n            SELECT\n                U.issues.foo;\n            ");
+    let result = queryRows(h, "\n            # Reference a constant expression in an alias.\n            WITH U := (\n                    SELECT User {\n                        issues := (\n                            SELECT Issue {\n                                foo := 1 + random()\n                            } FILTER Issue.owner = User\n                        )\n                    } FILTER .name = 'Elvis'\n                )\n            SELECT\n                U.issues.foo;\n            ");
     expect((result).length).toEqual(2);
   });
 
@@ -7438,8 +7440,8 @@ describe("TestEdgeQLSelect", () => {
             `,
       []
     );
-    expect(h.query("\n                select to_json('[true, 3, 4, null]')[1:];\n                ")).toEqual(edgedb.Set(["[3, 4, null]"]));
-    expect(h.query("\n                select to_json('[true, 3, 4, null]')[:2];\n                ")).toEqual(edgedb.Set(["[true, 3]"]));
+    assertQueryResult(h, "\n                select to_json('[true, 3, 4, null]')[1:];\n                ", ["[3, 4, null]"]);
+    assertQueryResult(h, "\n                select to_json('[true, 3, 4, null]')[:2];\n                ", ["[true, 3]"]);
     assertQueryResult(
       h,
       `
@@ -7447,8 +7449,8 @@ describe("TestEdgeQLSelect", () => {
             `,
       []
     );
-    expect(h.query("\n                select to_json('\"hello world\"')[2:];\n                ")).toEqual(edgedb.Set(["\"llo world\""]));
-    expect(h.query("\n                select to_json('\"hello world\"')[:4];\n                ")).toEqual(edgedb.Set(["\"hell\""]));
+    assertQueryResult(h, "\n                select to_json('\"hello world\"')[2:];\n                ", ["\"llo world\""]);
+    assertQueryResult(h, "\n                select to_json('\"hello world\"')[:4];\n                ", ["\"hell\""]);
     assertQueryResult(
       h,
       `
@@ -8650,7 +8652,7 @@ describe("TestEdgeQLSelect", () => {
   });
 
   it("test_edgeql_select_json_02", () => {
-    let [json_res] = h.query("\n            SELECT <json>array_agg(Issue)\n            ");
+    let [json_res] = queryRows<string>(h, "\n            SELECT <json>array_agg(Issue)\n            ");
     expect(json_res as any).not.toContain("__tname__");
   });
 
@@ -9171,12 +9173,12 @@ describe("TestEdgeQLSelect", () => {
   });
 
   it("test_edgeql_select_big_set_literal", () => {
-    let res = h.query("\n            SELECT {\n                 (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,),\n                 (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,),\n                 (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,),\n                 (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,),\n                 (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,),\n                 (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,),\n                 (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,),\n                 (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,),\n                 (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,),\n                 (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,),\n            };\n        ");
+    let res = queryRows(h, "\n            SELECT {\n                 (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,),\n                 (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,),\n                 (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,),\n                 (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,),\n                 (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,),\n                 (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,),\n                 (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,),\n                 (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,),\n                 (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,),\n                 (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,),\n            };\n        ");
     expect(((res).length === 100)).toBeTruthy();
   });
 
   it("test_edgeql_select_big_unions", () => {
-    let res = h.query("\n            SELECT (\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,)\n            );\n        ");
+    let res = queryRows(h, "\n            SELECT (\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,)\n            );\n        ");
     expect(((res).length === 100)).toBeTruthy();
   });
 
@@ -9566,7 +9568,7 @@ describe("TestEdgeQLSelect", () => {
   });
 
   it("test_edgeql_select_array_common_type_01", () => {
-    let res = h.query("\n            SELECT [User, Issue];\n        ");
+    let res = queryRows<Array<{ __tname__: string }>>(h, "\n            SELECT [User, Issue];\n        ");
     for (const row of (res as any)) {
       expect(row[0].__tname__).toEqual("default::User");
       expect(row[1].__tname__).toEqual("default::Issue");
@@ -9574,14 +9576,14 @@ describe("TestEdgeQLSelect", () => {
   });
 
   it("test_edgeql_select_array_common_type_02", () => {
-    let res = h.query("\n            SELECT [Object];\n        ");
-    for (const row of (res as any)) {
-      expect(__tname__.startswith("default::")).toBeTruthy();
+    let res = queryRows<Array<{ __tname__: string }>>(h, "\n            SELECT [Object];\n        ");
+    for (const row of res) {
+      expect(row[0].__tname__.startsWith("default::")).toBeTruthy();
     }
   });
 
   it("test_edgeql_select_free_shape_01", () => {
-    let res = h.query("SELECT {test := 1}");
+    let res = querySingle<{ test: number }>(h, "SELECT {test := 1}");
     expect(res.test).toEqual(1);
   });
 
@@ -10757,8 +10759,8 @@ describe("TestEdgeQLSelect", () => {
   });
 
   it("test_edgeql_select_free_object_distinct_01", () => {
-    let foo = h.query("\n            select {foo := \"test\"}\n        ");
-    expect(hasattr(foo, "id")).toBeFalsy();
+    let foo = querySingle<Record<string, unknown>>(h, "\n            select {foo := \"test\"}\n        ");
+    expect(Object.prototype.hasOwnProperty.call(foo, "id")).toBeFalsy();
   });
 
   it("test_edgeql_select_free_object_distinct_02", () => {
@@ -10896,54 +10898,54 @@ describe("TestEdgeQLSelect", () => {
   });
 
   it.skip("test_edgeql_select_tid_position_01", () => {
-    let res = h.query("\n            SELECT Issue {\n              *, lol := 1, sigh := 2,\n            };\n        ");
+    let res = queryRows<Record<string, any>>(h, "\n            SELECT Issue {\n              *, lol := 1, sigh := 2,\n            };\n        ");
     let val = res[0];
-    let ptrs = list(val.__dataclass_fields__.keys());
+    let ptrs = Object.keys(val.__dataclass_fields__);
     expect(ptrs[0]).toEqual("__tid__");
   });
 
   it.skip("test_edgeql_select_tid_position_02", () => {
-    let res = h.query("\n            FOR issue IN Issue SELECT issue {\n              *, lol := 1, sigh := 2,\n            };\n        ");
+    let res = queryRows<Record<string, any>>(h, "\n            FOR issue IN Issue SELECT issue {\n              *, lol := 1, sigh := 2,\n            };\n        ");
     let val = res[0];
-    let ptrs = list(val.__dataclass_fields__.keys());
+    let ptrs = Object.keys(val.__dataclass_fields__);
     expect(ptrs[0]).toEqual("__tid__");
   });
 
   it.skip("test_edgeql_select_tid_position_03", () => {
-    let res = h.query("\n            FOR issue IN Issue SELECT issue {\n              *, lol := 1, sigh := 2,\n            };\n        ");
+    let res = queryRows<Record<string, any>>(h, "\n            FOR issue IN Issue SELECT issue {\n              *, lol := 1, sigh := 2,\n            };\n        ");
     let val = res[0];
-    let ptrs = list(val.__dataclass_fields__.keys());
+    let ptrs = Object.keys(val.__dataclass_fields__);
     expect(ptrs[0]).toEqual("__tname__");
     expect(ptrs[1]).toEqual("__tid__");
   });
 
   it.skip("test_edgeql_select_tid_position_04", () => {
-    let res = h.query("\n            FOR issue IN Issue SELECT issue {\n              *,\n              owner := issue.owner { *, test := 3 },\n              lol := 1, sigh := 2,\n            };\n        ");
+    let res = queryRows<Record<string, any>>(h, "\n            FOR issue IN Issue SELECT issue {\n              *,\n              owner := issue.owner { *, test := 3 },\n              lol := 1, sigh := 2,\n            };\n        ");
     let val = res[0];
     let owner = val.owner;
-    let ptrs = list(owner.__dataclass_fields__.keys());
+    let ptrs = Object.keys(owner.__dataclass_fields__);
     expect(ptrs[0]).toEqual("__tid__");
-    ptrs = list(val.__dataclass_fields__.keys());
+    ptrs = Object.keys(val.__dataclass_fields__);
     expect(ptrs[0]).toEqual("__tid__");
   });
 
   it.skip("test_edgeql_select_tid_position_05", () => {
-    let res = h.query("\n            FOR issue IN Issue SELECT issue {\n              **,\n              lol := 1, sigh := 2,\n            };\n        ");
+    let res = queryRows<Record<string, any>>(h, "\n            FOR issue IN Issue SELECT issue {\n              **,\n              lol := 1, sigh := 2,\n            };\n        ");
     let val = res[0];
     let owner = val.owner;
-    let ptrs = list(owner.__dataclass_fields__.keys());
+    let ptrs = Object.keys(owner.__dataclass_fields__);
     expect(ptrs[0]).toEqual("__tid__");
-    ptrs = list(val.__dataclass_fields__.keys());
+    ptrs = Object.keys(val.__dataclass_fields__);
     expect(ptrs[0]).toEqual("__tid__");
   });
 
   it.skip("test_edgeql_select_tid_position_06 [xerror: a linkprop related ISE! This one is kind of screwy. *An* issue is that the FOR loop over a single link is hiding the linkprop (despite our `needs_link_table` based efforts). But: 1. This code obviously ought to work, though you could argue about whether the link property should be in the shape. 2. If the link prop was specified explicitly in the shape, that ought to work (per our paper semantics, at least!). 3. It only passes the frontend for bad reasons, though! If we name the field `owner2` we get a \"has no property\" error!!]", () => {
-    let res = h.query("\n            FOR issue IN Issue SELECT issue {\n              *,\n              owner := (for owner in issue.owner select owner { * }),\n              lol := 1, sigh := 2,\n            };\n        ");
+    let res = queryRows<Record<string, any>>(h, "\n            FOR issue IN Issue SELECT issue {\n              *,\n              owner := (for owner in issue.owner select owner { * }),\n              lol := 1, sigh := 2,\n            };\n        ");
     let val = res[0];
     let owner = val.owner;
-    let ptrs = list(owner.__dataclass_fields__.keys());
+    let ptrs = Object.keys(owner.__dataclass_fields__);
     expect(ptrs[0]).toEqual("__tid__");
-    ptrs = list(val.__dataclass_fields__.keys());
+    ptrs = Object.keys(val.__dataclass_fields__);
     expect(ptrs[0]).toEqual("__tid__");
   });
 
