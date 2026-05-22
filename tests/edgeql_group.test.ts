@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { QueryHarness } from "./utils.js";
 import {
   assertQueryResult,
+  queryRows,
   unorderedBag,
   unorderedSet
 } from "./python_query_test_helpers.js";
@@ -18,7 +19,7 @@ describe("TestEdgeQLGroup", () => {
     });
   });
 
-  function _test_edgeql_group_by_group_by_03(): void {
+  function _test_edgeql_group_by_group_by_03(qry: string): void {
     assertQueryResult(
       h,
       qry,
@@ -346,8 +347,8 @@ describe("TestEdgeQLGroup", () => {
   });
 
   it("test_edgeql_group_simple_no_id_output_01", () => {
-    let res = h.query("GROUP cards::Card {name} BY .element");
-    let el = tuple(tuple(res)[0].elements)[0];
+    let res = queryRows<{ elements: unknown[] }>(h, "GROUP cards::Card {name} BY .element");
+    let el = res[0].elements[0];
     expect(String(el) as any).not.toContain("id := ");
   });
 
@@ -2926,15 +2927,50 @@ describe("TestEdgeQLGroup", () => {
   });
 
   it("test_edgeql_group_by_group_by_03a", () => {
-    _test_edgeql_group_by_group_by_03();
+    _test_edgeql_group_by_group_by_03(`
+            with module cards
+            select (group Card by .element) {
+                el := .key.element,
+                groups := (
+                  with z := (group .elements using x := .cost%2 by x)
+                  for z in z union (
+                    even := z.key.x,
+                    elements := array_agg(z.elements{name, cost}),
+                  )
+                )
+            };
+            `);
   });
 
   it("test_edgeql_group_by_group_by_03b", () => {
-    _test_edgeql_group_by_group_by_03();
+    _test_edgeql_group_by_group_by_03(`
+            with module cards
+            select (group Card by .element) {
+                el := .key.element,
+                groups := (
+                  with z := (group .elements using x := .cost%2 by x)
+                  select (
+                    even := z.key.x,
+                    elements := array_agg(z.elements{name, cost}),
+                  )
+                )
+            };
+            `);
   });
 
   it("test_edgeql_group_by_group_by_03c", () => {
-    _test_edgeql_group_by_group_by_03();
+    _test_edgeql_group_by_group_by_03(`
+            with module cards
+            select (group Card by .element) {
+                el := .key.element,
+                groups := (
+                  for z in (group .elements using x := .cost%2 by x) union (
+                    even := z.key.x,
+                    elements := array_agg(z.elements{name, cost}),
+                  )
+                )
+            };
+            `);
   });
 
   it("test_edgeql_group_errors_id", () => {
@@ -4998,23 +5034,28 @@ describe("TestEdgeQLGroup", () => {
                 elements: { name, z := .b <= 1 },
             };
             `,
-      tb.bag({
-        "name": "Alice",
-        "grouping": unorderedSet(["b"]),
-        "elements": unorderedBag(["name", "z"]),
-      }, {
-        "name": "Bob",
-        "grouping": unorderedSet(["b"]),
-        "elements": unorderedBag(["name", "z"]),
-      }, {
-        "name": "Carol",
-        "grouping": unorderedSet(["b"]),
-        "elements": unorderedBag(["name", "z"]),
-      }, {
-        "name": "Dave",
-        "grouping": unorderedSet(["b"]),
-        "elements": unorderedBag(["name", "z"]),
-      })
+      unorderedBag([
+        {
+          "name": "Alice",
+          "grouping": unorderedSet(["b"]),
+          "elements": unorderedBag([{ "name": "Alice", "z": true }]),
+        },
+        {
+          "name": "Bob",
+          "grouping": unorderedSet(["b"]),
+          "elements": unorderedBag([{ "name": "Bob", "z": true }]),
+        },
+        {
+          "name": "Carol",
+          "grouping": unorderedSet(["b"]),
+          "elements": unorderedBag([{ "name": "Carol", "z": true }]),
+        },
+        {
+          "name": "Dave",
+          "grouping": unorderedSet(["b"]),
+          "elements": unorderedBag([{ "name": "Dave", "z": true }]),
+        },
+      ])
     );
   });
 
