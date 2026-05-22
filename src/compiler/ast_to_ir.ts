@@ -941,7 +941,38 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
 
     case "select": {
       const typeref = resolveTypeRef(ctx, expr.typeName);
-      return setFromTypeRoot(typeref);
+      const root = setFromTypeRoot(typeref);
+      const clauses = expr.clauses;
+      const hasClauses = clauses && (
+        clauses.filter !== undefined
+        || clauses.orderBy !== undefined
+        || clauses.limit !== undefined
+        || clauses.offset !== undefined
+      );
+      if (!hasClauses) {
+        return root;
+      }
+      const where = clauses?.filter ? compileFilterExpr(clauses.filter, root, ctx) : undefined;
+      return {
+        kind: "set",
+        expr: {
+          kind: "select_expr",
+          result: root,
+          where,
+          orderBy: clauses?.orderBy
+            ? [{ kind: "sort_expr", path: compileFreeObjectExpr({ kind: "field_access", expr: { kind: "binding_ref", name: "__current__" }, field: clauses.orderBy.field, optional: false }, ctx), direction: clauses.orderBy.direction, nonesOrder: "last" }]
+            : undefined,
+          offset: clauses?.offset === undefined ? undefined : literalToSet(clauses.offset),
+          limit: clauses?.limit === undefined ? undefined : literalToSet(clauses.limit),
+          implicitWrapper: false,
+        },
+        pathId: defaultPathId(`select_with_clauses:${expr.typeName}`),
+        typeref,
+        shape: [],
+        isBinding: false,
+        isMaterializedRef: false,
+        isSchemaAlias: false,
+      };
     }
 
     case "subquery": {
@@ -1565,6 +1596,15 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
     }
 
     case "unary": {
+      // Fold `-NUMBER` / `+NUMBER` into a single numeric constant so
+      // downstream SQL lowering doesn't need to handle an operator_call(neg).
+      if ((expr.op === "neg" || expr.op === "+") && expr.expr.kind === "literal") {
+        const value = expr.expr.value;
+        if (typeof value === "number") {
+          const folded = expr.op === "neg" ? -value : value;
+          return compileFreeObjectExpr({ kind: "literal", value: folded } as typeof expr.expr, ctx);
+        }
+      }
       const inner = compileFreeObjectExpr(expr.expr, ctx);
       return {
         kind: "set",
@@ -1775,11 +1815,19 @@ const compileFilterValue = (value: FilterValue, ctx: IRCompileContext): Set => {
 
 const compileFilterTarget = (target: FilterTarget, subject: Set, ctx: IRCompileContext): Set => {
   if (target.kind === "field") {
-    const ptrref = resolvePointerRef(ctx, subject.typeref, target.field);
-    return ptrref ? extendPathSet(subject, ptrref) : {
-      ...subject,
-      pathId: defaultPathId(`${subject.typeref.id}.${target.field}`),
-    };
+    const segments = target.field.split(".");
+    let result = subject;
+    for (const segment of segments) {
+      const ptrref = resolvePointerRef(ctx, result.typeref, segment);
+      if (!ptrref) {
+        return {
+          ...result,
+          pathId: defaultPathId(`${result.typeref.id}.${segment}`),
+        };
+      }
+      result = extendPathSet(result, ptrref);
+    }
+    return result;
   }
   if (target.kind === "backlink") {
     const ptrref = resolveBacklinkPointerRef(ctx, subject.typeref, target.link, target.sourceType);

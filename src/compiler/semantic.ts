@@ -3396,6 +3396,18 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           right: asNestedExprEntry(compileExprToIREntry(expr.right, currentItemBinding)),
         };
       }
+      if (expr.kind === "unary") {
+        const inner = asNestedExprEntry(compileExprToIREntry(expr.expr, currentItemBinding));
+        if (expr.op === "not") {
+          return { kind: "not", expr: inner };
+        }
+        return {
+          kind: "math",
+          op: "-",
+          left: asNestedExprEntry({ kind: "literal", value: 0 }),
+          right: inner,
+        };
+      }
       if (expr.kind === "if_else") {
         return {
           kind: "if_else",
@@ -4376,6 +4388,12 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         return;
       }
       if (value.kind === "for") {
+        return;
+      }
+      if (value.kind === "function_call") {
+        return;
+      }
+      if (value.kind === "expr") {
         return;
       }
 
