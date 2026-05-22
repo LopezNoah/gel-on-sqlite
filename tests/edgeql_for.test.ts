@@ -12,9 +12,7 @@ describe("TestEdgeQLFor", () => {
   beforeEach(async () => {
     h = await QueryHarness.create({
       schema: "cards",
-      setup: "cards_setup",
-      dbFile: "./tests/.artifacts/for.sqlite",
-      resetDbFile: true
+      setup: "cards_setup"
     });
   });
 
@@ -410,12 +408,12 @@ describe("TestEdgeQLFor", () => {
                     (INSERT Card {
                         name := "Ice Elemental",
                         element := "Water",
-                        cost := 10,
+                        cost := 10
                     }),
                     (INSERT Card {
                         name := "Basilisk",
                         element := "Earth",
-                        cost := 20,
+                        cost := 20
                     }),
                 }
             }
@@ -553,12 +551,12 @@ describe("TestEdgeQLFor", () => {
                     (INSERT Card {
                         name := "Ice Elemental",
                         element := "Water",
-                        cost := 10,
+                        cost := 10
                     }),
                     (INSERT Card {
                         name := "Basilisk",
                         element := "Earth",
-                        cost := 20,
+                        cost := 20
                     }),
                 }
             }

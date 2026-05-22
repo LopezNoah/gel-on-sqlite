@@ -5,9 +5,7 @@ describe("debug-filter", () => {
   it("debug", async () => {
     const h = await QueryHarness.create({
       schema: "issues",
-      setup: "issues_filter_setup",
-      dbFile: "./tests/.artifacts/_debug.sqlite",
-      resetDbFile: true,
+      setup: "issues_filter_setup"
     });
 
     console.log("\n=== two_scalar_exists04 ===");

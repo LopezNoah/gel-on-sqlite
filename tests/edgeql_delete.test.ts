@@ -13,8 +13,6 @@ describe("TestDelete", () => {
 
   beforeEach(async () => {
     h = await QueryHarness.create({
-      dbFile: "./tests/.artifacts/delete.sqlite",
-      resetDbFile: true
     });
   });
 
@@ -615,7 +613,7 @@ describe("TestDelete", () => {
                 delete DeleteTest
                 filter
                         (INSERT DeleteTest {
-                            name := 't1',
+                            name := 't1'
                         })
             `
       );
@@ -626,7 +624,7 @@ describe("TestDelete", () => {
                 delete DeleteTest
                 filter
                         (UPDATE DeleteTest set {
-                            name := 't1',
+                            name := 't1'
                         })
             `
       );
@@ -646,7 +644,7 @@ describe("TestDelete", () => {
                 delete DeleteTest
                 order by
                         (INSERT DeleteTest {
-                            name := 't1',
+                            name := 't1'
                         })
                 limit 1
             `
@@ -658,7 +656,7 @@ describe("TestDelete", () => {
                 delete DeleteTest
                 order by
                         (UPDATE DeleteTest set {
-                            name := 't1',
+                            name := 't1'
                         })
                 limit 1
             `
