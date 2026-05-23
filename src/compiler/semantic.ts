@@ -1,18 +1,25 @@
 import { AppError } from "../errors.js";
 import { parseEdgeQL } from "../edgeql/parser.js";
 import { simpleTypeName } from "../edgeql/ast.js";
-import type { ComputedExpr, FilterExpr, FreeObjectExpr, InsertValue, OrderExpr, SelectStatement, ShapeElement, Statement, WithBindingValue } from "../edgeql/ast.js";
+import type { ClauseChain, ComputedExpr, FilterExpr, FreeObjectExpr, GroupByAtom, InsertValue, OrderExpr, OrderExprChain, SelectStatement, ShapeElement, Statement, TypeExpr, WithBindingValue } from "../edgeql/ast.js";
+import type { GeneratedSchema } from "../codegen/schema.js";
 import type {
   BacklinkSourceIR,
   FilterExprIR,
+  GroupIR,
   InferenceResult,
   IRStatement,
   LinkRelationIR,
   OrderByIR,
   OverlayIR,
   PathIdIR,
+  ScalarExprIR,
   ScopeTreeIR,
+  SchemaTypeRefIR,
+  SelectExprIREntry,
+  SelectFreeIREntry,
   SelectShapeElementIR,
+  SelectShapeExprIR,
   TriggerIR,
   PolicyIR,
 } from "../ir/model.js";
@@ -25,15 +32,15 @@ const tableNameForType = (qualifiedName: string): string => qualifiedName.replac
 export interface CompileContext {
   overlays?: OverlayIR[];
   globals?: Record<string, ScalarValue>;
-  schemaModel?: import("../codegen/schema.js").GeneratedSchema;
+  schemaModel?: GeneratedSchema;
   schemaModelName?: string;
 }
 
 interface PeeledGroupForm {
   group: Extract<FreeObjectExpr, { kind: "group_expr" }>;
   postFilter?: FreeObjectExpr;
-  postShape?: import("../edgeql/ast.js").ShapeElement[];
-  postOrderBy?: import("../edgeql/ast.js").OrderExprChain;
+  postShape?: ShapeElement[];
+  postOrderBy?: OrderExprChain;
   postLimit?: number;
   postOffset?: number;
 }
@@ -83,7 +90,7 @@ const compileGroupStatement = (
   schema: SchemaSnapshot,
   statement: Extract<Statement, { kind: "group" }>,
   context: CompileContext,
-): import("../ir/model.js").GroupIR => {
+): GroupIR => {
   const fail = (message: string): never => {
     throw new AppError("E_SEMANTIC", message, statement.pos.line, statement.pos.column);
   };
@@ -97,7 +104,7 @@ const compileGroupStatement = (
   // materialises the rows.
   const sourceUserShape: ShapeElement[] = rawSource.kind === "select" ? rawSource.shape : [];
   const sourceTypeName: string | undefined = rawSource.kind === "select" ? rawSource.typeName : undefined;
-  const sourceClauses: import("../edgeql/ast.js").ClauseChain | undefined = rawSource.kind === "select" ? rawSource.clauses : undefined;
+  const sourceClauses: ClauseChain | undefined = rawSource.kind === "select" ? rawSource.clauses : undefined;
 
   const hiddenByFields: string[] = [];
   const shapeNames = new Set(
@@ -153,10 +160,10 @@ const compileGroupStatement = (
     hiddenByFields.push(usingBinding.alias);
   }
 
-  const atomName = (atom: import("../edgeql/ast.js").GroupByAtom): string =>
+  const atomName = (atom: GroupByAtom): string =>
     atom.kind === "field_ref" ? atom.field : atom.name;
 
-  const ensureAtomInShape = (atom: import("../edgeql/ast.js").GroupByAtom): string => {
+  const ensureAtomInShape = (atom: GroupByAtom): string => {
     const name = atomName(atom);
     if (atom.kind === "name_ref") {
       if (!shapeNames.has(name)) {
@@ -182,7 +189,7 @@ const compileGroupStatement = (
   // SQL-style `GROUPING SETS / CUBE / ROLLUP` composition.
   let groupingSets: string[][] = [[]];
   const atomOrder: string[] = [];
-  const addAtom = (atom: import("../edgeql/ast.js").GroupByAtom): string => {
+  const addAtom = (atom: GroupByAtom): string => {
     const name = ensureAtomInShape(atom);
     if (!atomOrder.includes(name)) atomOrder.push(name);
     return name;
@@ -244,7 +251,7 @@ const compileGroupStatement = (
   const sourceIsBinding = sourceTypeName !== undefined && withBindingNames.has(sourceTypeName);
   const sourceIsRealType = sourceTypeName !== undefined && !sourceIsBinding;
 
-  let source: import("../ir/model.js").GroupIR["source"];
+  let source: GroupIR["source"];
   if (sourceIsRealType) {
     // Real-type source. Let it flow through the IR path; the parsed runtime
     // fallback in `runGroupIR` handles the cases the IR compile rejects
@@ -321,14 +328,14 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
 
   type ExtractedLiteralValue = ScalarValue | ExtractedLiteralValue[];
 
-  const extractLiteralValue = (entry: import("../ir/model.js").SelectExprIREntry): ExtractedLiteralValue => {
+  const extractLiteralValue = (entry: SelectExprIREntry): ExtractedLiteralValue => {
     switch (entry.kind) {
       case "literal":
         return entry.value;
       case "set_literal":
         return entry.values;
       case "set_expr":
-        return (entry.values as unknown[]).map((value) => extractLiteralValue(value as import("../ir/model.js").SelectExprIREntry));
+        return (entry.values as unknown[]).map((value) => extractLiteralValue(value as SelectExprIREntry));
       case "cast":
         return extractLiteralValue(entry.value);
       case "enum_path":
@@ -336,7 +343,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       case "type_field_path":
         return null;
       case "concat":
-        return (entry.parts as unknown[]).map((value) => extractLiteralValue(value as import("../ir/model.js").SelectExprIREntry)).join("");
+        return (entry.parts as unknown[]).map((value) => extractLiteralValue(value as SelectExprIREntry)).join("");
       case "is_type":
         return null;
       case "select_expr_subquery":
@@ -783,7 +790,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     // scalar-expressible (paths through links, function calls, etc.).
     const tryCompileScalarExpr = (
       expr: FreeObjectExpr,
-    ): import("../ir/model.js").ScalarExprIR | undefined => {
+    ): ScalarExprIR | undefined => {
       if (expr.kind === "literal") {
         return { kind: "literal", value: expr.value };
       }
@@ -1459,7 +1466,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       .map((typeDef) => qualifiedTypeName(typeDef));
 
   const concreteTypeNamesForTypeExpr = (
-    expr: import("../edgeql/ast.js").TypeExpr,
+    expr: TypeExpr,
     moduleName: string,
   ): string[] => {
     if (expr.kind === "type_name") {
@@ -1577,10 +1584,10 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
   };
 
   const rewriteSubjectBindingRefsToCurrent = (
-    expr: import("../edgeql/ast.js").FreeObjectExpr,
+    expr: FreeObjectExpr,
     subjectBindingName: string,
-  ): import("../edgeql/ast.js").FreeObjectExpr => {
-    type Expr = import("../edgeql/ast.js").FreeObjectExpr;
+  ): FreeObjectExpr => {
+    type Expr = FreeObjectExpr;
     const walk = (node: Expr): Expr => {
       if (node.kind === "binding_ref" && node.name === subjectBindingName) {
         return { kind: "current_item" };
@@ -1633,14 +1640,14 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       allowBacklinkFilter: boolean;
       aliasProjections?: Map<string, string>;
       linkProperties?: Set<string>;
-      typeFilterExprs?: import("../edgeql/ast.js").TypeExpr[];
-      branchTypeFilterExprs?: import("../edgeql/ast.js").TypeExpr[];
+      typeFilterExprs?: TypeExpr[];
+      branchTypeFilterExprs?: TypeExpr[];
       subjectBindingName?: string;
     },
     ): {
       pathId: PathIdIR;
       sourceType: string;
-      typeRef: import("../ir/model.js").SchemaTypeRefIR;
+      typeRef: SchemaTypeRefIR;
       table: string;
       sourceTables: Array<{ name: string; table: string }>;
       columns: string[];
@@ -2242,7 +2249,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           const bindingName = shapeElement.expr.name;
           const bindingValue = withBindings.get(bindingName);
           const isWithBinding = Boolean(bindingValue);
-          const expr: import("../ir/model.js").SelectShapeExprIR = isWithBinding
+          const expr: SelectShapeExprIR = isWithBinding
             ? { kind: "literal", value: resolveWithBindingScalar(bindingName) }
             : { kind: "binding_ref", name: bindingName };
           shapeElements.push({
@@ -2655,7 +2662,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         ? sourceTables.filter((source) => source.name === resolvedFilter.value)
         : sourceTables;
 
-    const resolveOrderByTerm = (term: import("../edgeql/ast.js").OrderExpr | undefined): OrderByIR<string> | undefined => {
+    const resolveOrderByTerm = (term: OrderExpr | undefined): OrderByIR<string> | undefined => {
       if (!term) return undefined;
       let value = term.field.startsWith("@") ? term.field.slice(1) : term.field;
       if (!term.field.startsWith("@") && value.includes(".")) {
@@ -2746,8 +2753,6 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     };
   };
 
-  type TypeExpr = import("../edgeql/ast.js").TypeExpr;
-
   // Convert a `FreeObjectExpr` whose value set is determined entirely by
   // type expressions (a bare type name, type intersections, set unions of
   // those, or `DISTINCT` of those) into a single `TypeExpr` describing the
@@ -2807,7 +2812,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
   };
 
   const orderByChainToOrderExpr = (
-    chain: import("../edgeql/ast.js").OrderExprChain | undefined,
+    chain: OrderExprChain | undefined,
   ): OrderExpr | undefined => {
     if (!chain) return undefined;
     const field = fieldAccessOrderByField(chain.expr);
@@ -3165,10 +3170,10 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     const pathId = createPathId();
     const names = new Set<string>();
     const asNestedFreeEntry = (
-      entry: import("../ir/model.js").SelectFreeIREntry,
-    ): import("../ir/model.js").SelectFreeIREntry<3> => entry as import("../ir/model.js").SelectFreeIREntry<3>;
+      entry: SelectFreeIREntry,
+    ): SelectFreeIREntry<3> => entry as SelectFreeIREntry<3>;
 
-    const compileFreeObjectExprToSelectFreeEntry = (expr: FreeObjectExpr, name: string): import("../ir/model.js").SelectFreeIREntry => {
+    const compileFreeObjectExprToSelectFreeEntry = (expr: FreeObjectExpr, name: string): SelectFreeIREntry => {
       if (expr.kind === "literal") {
         return { kind: "literal", name, value: expr.value };
       }
@@ -3257,7 +3262,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       throw new Error("unreachable");
     };
 
-    const entries = statement.entries.map((entry): import("../ir/model.js").SelectFreeIREntry => {
+    const entries = statement.entries.map((entry): SelectFreeIREntry => {
       if (names.has(entry.name)) {
         fail(`Duplicate free object field '${entry.name}'`);
       }
@@ -3312,8 +3317,8 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     }
     const pathId = createPathId();
     const asNestedExprEntry = (
-      entry: import("../ir/model.js").SelectExprIREntry,
-    ): import("../ir/model.js").SelectExprIREntry<3> => entry as import("../ir/model.js").SelectExprIREntry<3>;
+      entry: SelectExprIREntry,
+    ): SelectExprIREntry<3> => entry as SelectExprIREntry<3>;
 
     const withBindings = new Map<string, WithBindingValue>();
     for (const binding of statement.with ?? []) {
@@ -3430,7 +3435,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     const compileExprToIREntry = (
       expr: FreeObjectExpr | ComputedExpr,
       currentItemBinding?: string,
-    ): import("../ir/model.js").SelectExprIREntry => {
+    ): SelectExprIREntry => {
       if (expr.kind === "group_expr") {
         throw new AppError("E_SEMANTIC", "GROUP statement is not yet implemented", statement.pos.line, statement.pos.column);
       }
@@ -3518,11 +3523,11 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           sourceField?: string;
           backlinkLink?: string;
           backlinkSourceType?: string;
-          expr?: import("../ir/model.js").SelectExprIREntry<3>;
+          expr?: SelectExprIREntry<3>;
           itemFields?: Array<{
             name: string;
             sourceField?: string;
-            expr?: import("../ir/model.js").SelectExprIREntry<3>;
+            expr?: SelectExprIREntry<3>;
             multi?: boolean;
           }>;
           multi?: boolean;
@@ -3824,7 +3829,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         if (first?.kind === "object_ref") {
           const bindingValue = withBindings.get(first.name);
           if (bindingValue) {
-            let value: import("../ir/model.js").SelectExprIREntry;
+            let value: SelectExprIREntry;
             if (bindingValue.kind === "subquery_expr") {
               value = compileExprToIREntry(bindingValue.expr, currentItemBinding);
             } else if (bindingValue.kind === "subquery_statement") {
@@ -4103,7 +4108,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
               }
               return { kind: "cast", castType: resolvedCastType, value: { kind: "literal", value: jsonInnerString } };
             }
-            const coerceEnumValue = (entry: import("../ir/model.js").SelectExprIREntry): import("../ir/model.js").SelectExprIREntry => {
+            const coerceEnumValue = (entry: SelectExprIREntry): SelectExprIREntry => {
               if (entry.kind === "set_literal") {
                 return {
                   kind: "set_literal",
@@ -4122,7 +4127,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
                 return {
                   kind: "set_expr",
                   values: (entry.values as unknown[]).map((item) => {
-                    const rawValue = extractLiteralValue(item as import("../ir/model.js").SelectExprIREntry);
+                    const rawValue = extractLiteralValue(item as SelectExprIREntry);
                     const enumValue = expectStringLiteral(rawValue, `Cannot cast to enum '${resolvedCastType}': expected string value`);
                     if (!allEnumValues.includes(enumValue)) {
                       fail(`invalid input value for enum '${resolvedCastType}': "${enumValue}"`);
@@ -4197,7 +4202,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         const compileSelectExprFunctionArg = (
           arg: NonNullable<Extract<FreeObjectExpr, { kind: "function_call" }>["call"]>["args"][number],
           bindingName?: string,
-        ): import("../ir/model.js").SelectExprIREntry<3> => {
+        ): SelectExprIREntry<3> => {
           if (arg.kind === "literal") {
             return { kind: "literal", value: arg.value };
           }
@@ -4216,7 +4221,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
               return { kind: "set_literal", values: [...bindingValue.values] };
             }
             if (!bindingValue && schema.getType(normalizeTypeName(arg.name, activeModule))) {
-              return asNestedExprEntry(compileExprToIREntry({ kind: "binding_ref", name: arg.name }, bindingName)) as import("../ir/model.js").SelectExprIREntry<3>;
+              return asNestedExprEntry(compileExprToIREntry({ kind: "binding_ref", name: arg.name }, bindingName)) as SelectExprIREntry<3>;
             }
             const scalar = resolveWithBindingScalar(arg.name);
             return { kind: "literal", value: scalar };
@@ -4238,8 +4243,8 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
             return {
               kind: "function_call",
               functionName: nestedResolved.qualifiedName,
-              args: arg.call.args.map((nestedArg): import("../ir/model.js").SelectExprIREntry<2> => (
-                compileSelectExprFunctionArg(nestedArg, bindingName) as import("../ir/model.js").SelectExprIREntry<2>
+              args: arg.call.args.map((nestedArg): SelectExprIREntry<2> => (
+                compileSelectExprFunctionArg(nestedArg, bindingName) as SelectExprIREntry<2>
               )),
             };
           }
@@ -4252,7 +4257,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         return {
           kind: "function_call",
           functionName: resolved.qualifiedName,
-          args: expr.call.args.map((arg): import("../ir/model.js").SelectExprIREntry<3> => (
+          args: expr.call.args.map((arg): SelectExprIREntry<3> => (
             compileSelectExprFunctionArg(arg, currentItemBinding)
           )),
         };

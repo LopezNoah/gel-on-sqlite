@@ -2,13 +2,13 @@ import { getCompilerService, type CompilerCacheMeta } from "../compiler/service.
 import { AppError, asAppError } from "../errors.js";
 import { parseEdgeQL, parseEdgeQLScript, type ParseEdgeQLOptions } from "../edgeql/parser.js";
 import { tokenize, type Token } from "../edgeql/tokenizer.js";
-import type { ComputedExpr, FilterValue, ForStatement, FreeObjectExpr, FunctionCallArgExpr, InsertStatement, InsertValue, OrderExpr, OrderExprChain, PathStep, SelectExprStatement, SelectStatement, ShapeElement, Statement, TypeExpr, UpdateStatement, WithBinding, WithBindingValue } from "../edgeql/ast.js";
+import type { BacklinkExpr, ComputedExpr, DeleteStatement, FilterExpr, FilterValue, ForStatement, FreeObjectExpr, FunctionCallArgExpr, FunctionCallExpr, InsertStatement, InsertValue, OrderExpr, OrderExprChain, PathStep, SelectExprStatement, SelectStatement, ShapeElement, Statement, TypeExpr, UpdateStatement, WithBinding, WithBindingValue } from "../edgeql/ast.js";
 import type { RuntimeDatabaseAdapter } from "./adapter.js";
 import type { SchemaSnapshot } from "../schema/schema.js";
 import { compileToSQL, computedValueAlias, shapePayloadAlias, type SQLArtifact } from "../sql/compiler.js";
 import { executeStdlibFunction, resolveStdlibFunction, type RuntimeFunctionArg } from "../stdlib/functions.js";
 import { assertTargetSqlCompatibility, type RuntimeTarget } from "./target.js";
-import type { BacklinkSourceIR, FilterExprIR, GroupIR, IRStatement, LinkRelationIR, OrderByIR, OverlayIR, SelectExprIREntry, SelectExprIR, SelectIR, SelectShapeElementIR } from "../ir/model.js";
+import type { BacklinkSourceIR, FilterExprIR, GroupIR, IRStatement, LinkRelationIR, OrderByIR, OverlayIR, ScalarExprIR, SelectExprIREntry, SelectExprIR, SelectIR, SelectShapeElementIR } from "../ir/model.js";
 import type { AccessPolicyCondition, AccessPolicyDef, AliasDef, ComputedLinkPropertyExpr, FieldDef, FunctionDef, FunctionExprDef, ScalarType, ScalarValue, TypeDef } from "../types.js";
 import { qualifiedTypeName } from "../schema/schema.js";
 import { materializeSchema, type SQLiteDatabase } from "../runtime/database.js";
@@ -6080,8 +6080,8 @@ const concreteTypeNamesForTypeExprAtRuntime = (
 
 const expandPolymorphicMutation = (
   schema: SchemaSnapshot,
-  ast: UpdateStatement | import("../edgeql/ast.js").DeleteStatement,
-): Array<UpdateStatement | import("../edgeql/ast.js").DeleteStatement> | undefined => {
+  ast: UpdateStatement | DeleteStatement,
+): Array<UpdateStatement | DeleteStatement> | undefined => {
   const target = ast.target;
   if (!target) {
     const qualified = ast.typeName.includes("::") ? ast.typeName : `default::${ast.typeName}`;
@@ -6224,11 +6224,11 @@ export const executeQueryUnitWithTrace = (
 };
 
 const substituteBindingInFreeObjectExpr = (
-  expr: import("../edgeql/ast.js").FreeObjectExpr,
+  expr: FreeObjectExpr,
   variable: string,
   value: ScalarValue,
-): import("../edgeql/ast.js").FreeObjectExpr => {
-  const rec = (e: import("../edgeql/ast.js").FreeObjectExpr): import("../edgeql/ast.js").FreeObjectExpr => substituteBindingInFreeObjectExpr(e, variable, value);
+): FreeObjectExpr => {
+  const rec = (e: FreeObjectExpr): FreeObjectExpr => substituteBindingInFreeObjectExpr(e, variable, value);
   switch (expr.kind) {
     case "binding_ref":
       return expr.name === variable ? { kind: "literal", value } : expr;
@@ -6265,10 +6265,10 @@ const substituteBindingInFreeObjectExpr = (
 };
 
 const substituteBindingInASTFilter = (
-  filter: import("../edgeql/ast.js").FilterExpr,
+  filter: FilterExpr,
   variable: string,
   value: ScalarValue,
-): import("../edgeql/ast.js").FilterExpr => {
+): FilterExpr => {
   if (filter.kind === "predicate") {
     const fv = filter.value;
     if (typeof fv === "object" && fv !== null && "kind" in fv && fv.kind === "binding_ref" && fv.name === variable) {
@@ -6301,12 +6301,12 @@ const substituteBindingInASTFilter = (
 // set_expr of nested constructors/literals, scalars become literal nodes.
 const jsValueToFreeObjectExpr = (
   value: unknown,
-): import("../edgeql/ast.js").FreeObjectExpr => {
+): FreeObjectExpr => {
   if (value === null || value === undefined) {
     return { kind: "literal", value: null };
   }
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-    return { kind: "literal", value: value as import("../types.js").ScalarValue };
+    return { kind: "literal", value: value as ScalarValue };
   }
   if (typeof value === "bigint") {
     return { kind: "literal", value: Number(value) };
@@ -6339,7 +6339,7 @@ const preEvaluateGroupBindings = (
   let rewrote = false;
   const newWith = ast.with.map((binding) => {
     const value = binding.value;
-    let groupExpr: Extract<import("../edgeql/ast.js").FreeObjectExpr, { kind: "group_expr" }> | undefined;
+    let groupExpr: Extract<FreeObjectExpr, { kind: "group_expr" }> | undefined;
     if (value.kind === "subquery_expr") {
       if (value.expr.kind === "group_expr") {
         groupExpr = value.expr;
@@ -6382,9 +6382,9 @@ const preEvaluateGroupBindings = (
 };
 
 const unwrapGroupIteratorExpr = (
-  expr: import("../edgeql/ast.js").FreeObjectExpr,
-): Extract<import("../edgeql/ast.js").FreeObjectExpr, { kind: "group_expr" }> | undefined => {
-  let cursor: import("../edgeql/ast.js").FreeObjectExpr = expr;
+  expr: FreeObjectExpr,
+): Extract<FreeObjectExpr, { kind: "group_expr" }> | undefined => {
+  let cursor: FreeObjectExpr = expr;
   if (cursor.kind === "select_expr_subquery") {
     cursor = cursor.expr;
   }
@@ -7705,7 +7705,7 @@ const runGroupIR = (
 };
 
 const evalGroupRowExpr = (
-  expr: import("../edgeql/ast.js").FreeObjectExpr,
+  expr: FreeObjectExpr,
   row: Record<string, unknown>,
   bindings?: ReadonlyMap<string, unknown>,
 ): unknown => {
@@ -7809,7 +7809,7 @@ const evalGroupRowExpr = (
 
 const projectShape = (
   base: unknown,
-  shape: import("../edgeql/ast.js").ShapeElement[],
+  shape: ShapeElement[],
   bindings?: ReadonlyMap<string, unknown>,
 ): unknown => {
   if (base == null || typeof base !== "object" || Array.isArray(base)) {
@@ -7847,7 +7847,7 @@ const projectShape = (
 };
 
 const evalGroupRowComputed = (
-  expr: import("../edgeql/ast.js").ComputedExpr | import("../edgeql/ast.js").BacklinkExpr,
+  expr: ComputedExpr | BacklinkExpr,
   row: Record<string, unknown>,
   bindings?: ReadonlyMap<string, unknown>,
 ): unknown => {
@@ -7871,7 +7871,7 @@ const evalGroupRowComputed = (
 };
 
 const evalGroupRowFunctionCall = (
-  call: import("../edgeql/ast.js").FunctionCallExpr,
+  call: FunctionCallExpr,
   row: Record<string, unknown>,
   bindings?: ReadonlyMap<string, unknown>,
 ): unknown => {
@@ -7958,7 +7958,7 @@ const canonicalCompareEqual = (left: unknown, right: unknown): boolean => {
 const compareByOrderChain = (
   a: Record<string, unknown>,
   b: Record<string, unknown>,
-  chain: import("../edgeql/ast.js").OrderExprChain,
+  chain: OrderExprChain,
 ): number => {
   const aValue = evalGroupRowExpr(chain.expr, a);
   const bValue = evalGroupRowExpr(chain.expr, b);
@@ -10595,7 +10595,7 @@ const resolveLinks = (
   sqlTrail: SQLArtifact[],
 ): Record<string, unknown>[] => {
   const collectScalarExprColumnsLocal = (
-    expr: import("../ir/model.js").ScalarExprIR,
+    expr: ScalarExprIR,
   ): string[] => {
     if (expr.kind === "column") return expr.column.startsWith("@") ? [] : [expr.column];
     if (expr.kind === "literal") return [];
