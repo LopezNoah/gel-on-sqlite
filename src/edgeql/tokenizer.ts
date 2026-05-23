@@ -319,6 +319,66 @@ const isAlphaNumeric = (c: string): boolean => isAlpha(c) || isDigit(c);
 const isIdentStart = (c: string): boolean => isAlpha(c);
 const isIdentPart = (c: string): boolean => isAlphaNumeric(c);
 
+// Character code constants for the hot tokenizer paths. Using charCodeAt
+// avoids allocating one-character strings for every byte of input.
+const CC_TAB = 9;
+const CC_LF = 10;
+const CC_CR = 13;
+const CC_SPACE = 32;
+const CC_EXCL = 33;
+const CC_DQUOTE = 34;
+const CC_HASH = 35;
+const CC_DOLLAR = 36;
+const CC_PERCENT = 37;
+const CC_AMP = 38;
+const CC_SQUOTE = 39;
+const CC_LPAREN = 40;
+const CC_RPAREN = 41;
+const CC_STAR = 42;
+const CC_PLUS = 43;
+const CC_COMMA = 44;
+const CC_MINUS = 45;
+const CC_DOT = 46;
+const CC_SLASH = 47;
+const CC_0 = 48;
+const CC_9 = 57;
+const CC_COLON = 58;
+const CC_SEMI = 59;
+const CC_LT = 60;
+const CC_EQ = 61;
+const CC_GT = 62;
+const CC_QMARK = 63;
+const CC_AT = 64;
+const CC_A = 65;
+const CC_B_UP = 66;
+const CC_E_UP = 69;
+const CC_R_UP = 82;
+const CC_Z = 90;
+const CC_LBRACK = 91;
+const CC_BACKSLASH = 92;
+const CC_RBRACK = 93;
+const CC_CARET = 94;
+const CC_UNDERSCORE = 95;
+const CC_BACKTICK = 96;
+const CC_a = 97;
+const CC_b = 98;
+const CC_e = 101;
+const CC_n = 110;
+const CC_r = 114;
+const CC_z = 122;
+const CC_LBRACE = 123;
+const CC_PIPE = 124;
+const CC_RBRACE = 125;
+
+const isAlphaCC = (cc: number): boolean =>
+  (cc >= CC_a && cc <= CC_z) || (cc >= CC_A && cc <= CC_Z) || cc === CC_UNDERSCORE;
+const isDigitCC = (cc: number): boolean => cc >= CC_0 && cc <= CC_9;
+const isIdentPartCC = (cc: number): boolean =>
+  (cc >= CC_a && cc <= CC_z) ||
+  (cc >= CC_A && cc <= CC_Z) ||
+  (cc >= CC_0 && cc <= CC_9) ||
+  cc === CC_UNDERSCORE;
+
 type FixedToken = readonly [lexeme: string, kind: TokenKind];
 
 const FIXED_TOKENS_BY_START: Partial<Record<string, readonly FixedToken[]>> = {
@@ -352,272 +412,260 @@ const FIXED_TOKENS_BY_START: Partial<Record<string, readonly FixedToken[]>> = {
 
 export const tokenize = (input: string): Token[] => {
   const tokens: Token[] = [];
+  const len = input.length;
 
   let i = 0;
   let line = 1;
   let column = 1;
   let openParens = 0;
-  const strInterpStack: Array<{ quote: "'" | '"'; parenDepth: number }> = [];
-
-  const isAtEnd = (): boolean => i >= input.length;
-
-  const peek = (): string => (isAtEnd() ? "\0" : input[i]!);
-  const peekNext = (): string => (i + 1 >= input.length ? "\0" : input[i + 1]!);
-
-  const advance = (): string => {
-    const c = input[i]!;
-    i += 1;
-
-    if (c === "\n") {
-      line += 1;
-      column = 1;
-    } else {
-      column += 1;
-    }
-
-    return c;
-  };
-
-  const push = (kind: TokenKind, lexeme: string, tokenLine: number, tokenColumn: number): void => {
-    tokens.push({ kind, lexeme, line: tokenLine, column: tokenColumn });
-  };
+  const strInterpStack: Array<{ quote: number; parenDepth: number }> = [];
 
   const syntaxError = (message: string, tokenLine: number, tokenColumn: number): never => {
     throw new AppError("E_SYNTAX", message, tokenLine, tokenColumn);
   };
 
+  // scanEscapeValue: at entry, `i` is just past the leading backslash; the
+  // escape character has not been consumed yet. Returns the unescaped char.
   const scanEscapeValue = (tokenLine: number, tokenColumn: number): string => {
-    if (isAtEnd()) {
+    if (i >= len) {
       syntaxError("Unterminated escape sequence", tokenLine, tokenColumn);
     }
-
-    const esc = advance();
+    const esc = input.charCodeAt(i);
+    i += 1;
+    column += 1;
     switch (esc) {
-      case "n":
-        return "\n";
-      case "r":
-        return "\r";
-      case "t":
-        return "\t";
-      case "\\":
-        return "\\";
-      case "'":
-        return "'";
-      case '"':
-        return '"';
+      case CC_n: return "\n";
+      case CC_r: return "\r";
+      // 't' is 116
+      case 116: return "\t";
+      case CC_BACKSLASH: return "\\";
+      case CC_SQUOTE: return "'";
+      case CC_DQUOTE: return '"';
       default:
-        return syntaxError(`Unsupported escape sequence '\\${esc}'`, tokenLine, tokenColumn);
+        return syntaxError(`Unsupported escape sequence '\\${input[i - 1]}'`, tokenLine, tokenColumn);
     }
   };
 
+  // scanParameterLexeme: enters at the '$' starting the parameter.
   const scanParameterLexeme = (): string => {
-    advance(); // '$'
-    let value = "$";
+    const start = i;
+    i += 1;
+    column += 1;
 
-    if (peek() === "`") {
-      advance();
-      value += "`";
-      while (!isAtEnd()) {
-        const ch = advance();
-        value += ch;
-        if (ch === "`") {
-          break;
+    if (i < len && input.charCodeAt(i) === CC_BACKTICK) {
+      i += 1;
+      column += 1;
+      while (i < len) {
+        const cc = input.charCodeAt(i);
+        i += 1;
+        if (cc === CC_LF) {
+          line += 1;
+          column = 1;
+        } else {
+          column += 1;
         }
+        if (cc === CC_BACKTICK) break;
       }
-      return value;
+      return input.slice(start, i);
     }
 
-    while (isIdentPart(peek()) || isDigit(peek())) {
-      value += advance();
+    while (i < len) {
+      const cc = input.charCodeAt(i);
+      if (!isIdentPartCC(cc)) break;
+      i += 1;
+      column += 1;
     }
-    return value;
-  };
-
-  const scanFixedToken = (tokenLine: number, tokenColumn: number): boolean => {
-    const candidates = FIXED_TOKENS_BY_START[peek()];
-    if (!candidates) {
-      return false;
-    }
-
-    for (const [lexeme, kind] of candidates) {
-      if (!input.startsWith(lexeme, i)) {
-        continue;
-      }
-      for (let j = 0; j < lexeme.length; j += 1) {
-        advance();
-      }
-      push(kind, lexeme, tokenLine, tokenColumn);
-      return true;
-    }
-    return false;
+    return input.slice(start, i);
   };
 
   const scanBacktickName = (tokenLine: number, tokenColumn: number): void => {
-    advance();
+    i += 1; // opening backtick
+    column += 1;
     let value = "";
+    let segStart = i;
 
-    while (!isAtEnd()) {
-      const c = advance();
-      if (c === "`") {
-        if (peek() === "`") {
-          advance();
+    while (i < len) {
+      const cc = input.charCodeAt(i);
+      if (cc === CC_LF) {
+        line += 1;
+        column = 1;
+        i += 1;
+        continue;
+      }
+      if (cc === CC_BACKTICK) {
+        // Append any pending segment.
+        if (i > segStart) value += input.slice(segStart, i);
+        i += 1;
+        column += 1;
+        if (i < len && input.charCodeAt(i) === CC_BACKTICK) {
+          // escaped backtick
           value += "`";
+          i += 1;
+          column += 1;
+          segStart = i;
           continue;
         }
         if (value.length === 0) {
           syntaxError("backtick quotes cannot be empty", tokenLine, tokenColumn);
         }
-        if (value.startsWith("@") || value.startsWith("$")) {
+        if (value.charCodeAt(0) === CC_AT || value.charCodeAt(0) === CC_DOLLAR) {
           syntaxError("backtick-quoted name cannot start with '@' or '$'", tokenLine, tokenColumn);
         }
         if (value.includes("::")) {
           syntaxError("backtick-quoted name cannot contain '::'", tokenLine, tokenColumn);
         }
-        push("backtick_name", value, tokenLine, tokenColumn);
+        tokens.push({ kind: "backtick_name", lexeme: value, line: tokenLine, column: tokenColumn });
         return;
       }
-      value += c;
+      i += 1;
+      column += 1;
     }
 
     syntaxError("unterminated backtick name", tokenLine, tokenColumn);
   };
 
-  const skipWhitespaceAndComments = (): void => {
-    while (!isAtEnd()) {
-      const c = peek();
-
-      if (c === " " || c === "\t" || c === "\r" || c === "\n") {
-        advance();
-        continue;
-      }
-
-      if (c === "#") {
-        while (!isAtEnd() && peek() !== "\n") {
-          advance();
-        }
-        continue;
-      }
-
-      break;
-    }
-  };
-
   const scanString = (
-    quote: "'" | '"',
+    quoteCC: number,
     tokenLine: number,
     tokenColumn: number,
     kind: "string" | "bytes_string",
-    opts?: { raw?: boolean },
+    raw: boolean,
   ): void => {
-    const raw = opts?.raw ?? false;
-    advance(); // opening quote
+    i += 1; // opening quote
+    column += 1;
 
-    let value = "";
+    let segStart = i;
+    let value: string | undefined;
 
-    while (!isAtEnd()) {
-      const c = peek();
-
-      if (c === "\n") {
+    while (i < len) {
+      const cc = input.charCodeAt(i);
+      if (cc === CC_LF) {
         syntaxError("Unterminated string literal", tokenLine, tokenColumn);
       }
-
-      if (c === quote) {
-        advance(); // closing quote
-        push(kind, value, tokenLine, tokenColumn);
+      if (cc === quoteCC) {
+        const seg = input.slice(segStart, i);
+        const out = value === undefined ? seg : value + seg;
+        i += 1;
+        column += 1;
+        tokens.push({ kind, lexeme: out, line: tokenLine, column: tokenColumn });
         return;
       }
-
-      if (c === "\\" && !raw) {
-        advance(); // backslash
-
-        if (kind === "string" && peek() === "(") {
-          advance();
-          push("str_interp_start", value, tokenLine, tokenColumn);
-          strInterpStack.push({ quote, parenDepth: openParens });
+      if (cc === CC_BACKSLASH && !raw) {
+        if (value === undefined) {
+          value = input.slice(segStart, i);
+        } else {
+          value += input.slice(segStart, i);
+        }
+        i += 1;
+        column += 1;
+        if (kind === "string" && i < len && input.charCodeAt(i) === CC_LPAREN) {
+          i += 1;
+          column += 1;
+          tokens.push({ kind: "str_interp_start", lexeme: value, line: tokenLine, column: tokenColumn });
+          strInterpStack.push({ quote: quoteCC, parenDepth: openParens });
           return;
         }
-
         value += scanEscapeValue(tokenLine, tokenColumn);
+        segStart = i;
         continue;
       }
-
-      value += advance();
+      i += 1;
+      column += 1;
     }
 
     syntaxError("Unterminated string literal", tokenLine, tokenColumn);
   };
 
   const scanStringInterpolationCont = (
-    quote: "'" | '"',
+    quoteCC: number,
     tokenLine: number,
     tokenColumn: number,
   ): void => {
-    advance(); // consume ')'
-    let value = "";
+    i += 1; // consume ')'
+    column += 1;
+    let segStart = i;
+    let value: string | undefined;
 
-    while (!isAtEnd()) {
-      const c = peek();
-
-      if (c === "\\") {
-        advance();
-        if (peek() === "(") {
-          advance();
-          push("str_interp_cont", value, tokenLine, tokenColumn);
+    while (i < len) {
+      const cc = input.charCodeAt(i);
+      if (cc === CC_BACKSLASH) {
+        if (value === undefined) value = input.slice(segStart, i);
+        else value += input.slice(segStart, i);
+        i += 1;
+        column += 1;
+        if (i < len && input.charCodeAt(i) === CC_LPAREN) {
+          i += 1;
+          column += 1;
+          tokens.push({ kind: "str_interp_cont", lexeme: value, line: tokenLine, column: tokenColumn });
           return;
         }
         value += scanEscapeValue(tokenLine, tokenColumn);
+        segStart = i;
         continue;
       }
-
-      if (c === quote) {
-        advance();
-        push("str_interp_end", value, tokenLine, tokenColumn);
+      if (cc === quoteCC) {
+        const seg = input.slice(segStart, i);
+        const out = value === undefined ? seg : value + seg;
+        i += 1;
+        column += 1;
+        tokens.push({ kind: "str_interp_end", lexeme: out, line: tokenLine, column: tokenColumn });
         strInterpStack.pop();
         return;
       }
-
-      value += advance();
+      if (cc === CC_LF) {
+        line += 1;
+        column = 1;
+        i += 1;
+        continue;
+      }
+      i += 1;
+      column += 1;
     }
 
     syntaxError("Unterminated string interpolation", tokenLine, tokenColumn);
   };
 
+  const advanceColumnFor = (start: number, end: number): void => {
+    // Used after slicing a span we already know contains no newlines.
+    column += end - start;
+  };
+
   const scanDollarQuotedString = (tokenLine: number, tokenColumn: number): boolean => {
-    if (peek() !== "$") {
-      return false;
-    }
-    const next = peekNext();
-    if (next === "$") {
+    // First char is '$'.
+    if (i + 1 >= len) return false;
+    const next = input.charCodeAt(i + 1);
+    if (next === CC_DOLLAR) {
       const contentStart = i + 2;
       const close = input.indexOf("$$", contentStart);
       if (close < 0) {
         syntaxError("Unterminated string started with $$", tokenLine, tokenColumn);
       }
       const value = input.slice(contentStart, close);
-      const totalLen = close + 2 - i;
-      for (let k = 0; k < totalLen; k += 1) {
-        advance();
+      // Advance through the literal, updating line/column.
+      const endIdx = close + 2;
+      for (let k = i; k < endIdx; k += 1) {
+        if (input.charCodeAt(k) === CC_LF) {
+          line += 1;
+          column = 1;
+        } else {
+          column += 1;
+        }
       }
-      push("string", value, tokenLine, tokenColumn);
+      i = endIdx;
+      tokens.push({ kind: "string", lexeme: value, line: tokenLine, column: tokenColumn });
       return true;
     }
 
-    if (!isAlpha(next) && next !== "_") {
-      return false;
-    }
+    if (!isAlphaCC(next)) return false;
 
     let j = i + 1;
-    while (j < input.length) {
-      const ch = input[j]!;
-      if (ch === "$") break;
-      if (!isAlphaNumeric(ch) && ch !== "_") {
-        return false;
-      }
+    while (j < len) {
+      const cc = input.charCodeAt(j);
+      if (cc === CC_DOLLAR) break;
+      if (!isIdentPartCC(cc)) return false;
       j += 1;
     }
-    if (j >= input.length || input[j] !== "$") {
-      return false;
-    }
+    if (j >= len || input.charCodeAt(j) !== CC_DOLLAR) return false;
 
     const marker = input.slice(i, j + 1);
     const contentStart = j + 1;
@@ -626,291 +674,476 @@ export const tokenize = (input: string): Token[] => {
       syntaxError(`Unterminated string started with ${marker}`, tokenLine, tokenColumn);
     }
     const value = input.slice(contentStart, close);
-    const totalLen = close + marker.length - i;
-    for (let k = 0; k < totalLen; k += 1) {
-      advance();
+    const endIdx = close + marker.length;
+    for (let k = i; k < endIdx; k += 1) {
+      if (input.charCodeAt(k) === CC_LF) {
+        line += 1;
+        column = 1;
+      } else {
+        column += 1;
+      }
     }
-    push("string", value, tokenLine, tokenColumn);
+    i = endIdx;
+    tokens.push({ kind: "string", lexeme: value, line: tokenLine, column: tokenColumn });
     return true;
   };
 
   const scanNumber = (tokenLine: number, tokenColumn: number): void => {
     const start = i;
 
-    if (peek() === "0" && isDigit(peekNext())) {
+    if (
+      input.charCodeAt(i) === CC_0 &&
+      i + 1 < len &&
+      isDigitCC(input.charCodeAt(i + 1))
+    ) {
       syntaxError("leading zeros are not allowed in numbers", tokenLine, tokenColumn);
     }
 
-    while (isDigit(peek()) || peek() === "_") {
-      advance();
+    while (i < len) {
+      const cc = input.charCodeAt(i);
+      if (!isDigitCC(cc) && cc !== CC_UNDERSCORE) break;
+      i += 1;
     }
 
-    if (peek() === "." && isDigit(peekNext())) {
-      advance(); // '.'
-      while (isDigit(peek()) || peek() === "_") {
-        advance();
+    if (
+      i < len &&
+      input.charCodeAt(i) === CC_DOT &&
+      i + 1 < len &&
+      isDigitCC(input.charCodeAt(i + 1))
+    ) {
+      i += 1;
+      while (i < len) {
+        const cc = input.charCodeAt(i);
+        if (!isDigitCC(cc) && cc !== CC_UNDERSCORE) break;
+        i += 1;
       }
     }
 
-    if (peek() === "e" || peek() === "E") {
-      advance();
-      if (peek() === "+" || peek() === "-") {
-        advance();
-      }
-      if (!isDigit(peek())) {
-        syntaxError("expected digit after exponent marker", tokenLine, tokenColumn);
-      }
-      while (isDigit(peek()) || peek() === "_") {
-        advance();
+    if (i < len) {
+      const cc = input.charCodeAt(i);
+      if (cc === CC_e || cc === CC_E_UP) {
+        i += 1;
+        if (i < len) {
+          const sign = input.charCodeAt(i);
+          if (sign === CC_PLUS || sign === CC_MINUS) i += 1;
+        }
+        if (i >= len || !isDigitCC(input.charCodeAt(i))) {
+          syntaxError("expected digit after exponent marker", tokenLine, tokenColumn);
+        }
+        while (i < len) {
+          const dc = input.charCodeAt(i);
+          if (!isDigitCC(dc) && dc !== CC_UNDERSCORE) break;
+          i += 1;
+        }
       }
     }
 
-    if (peek() === "n") {
-      advance();
-    }
+    if (i < len && input.charCodeAt(i) === CC_n) i += 1;
 
-    push("number", input.slice(start, i), tokenLine, tokenColumn);
+    advanceColumnFor(start, i);
+    tokens.push({ kind: "number", lexeme: input.slice(start, i), line: tokenLine, column: tokenColumn });
   };
 
+  // Scan an identifier or keyword starting at `i`. Caller has verified the
+  // first char is an alpha/underscore. Returns true on success.
   const scanIdentifierOrKeyword = (tokenLine: number, tokenColumn: number): void => {
     const start = i;
     let hasUppercase = false;
 
-    while (isIdentPart(peek())) {
-      const c = advance();
-      hasUppercase ||= c >= "A" && c <= "Z";
+    while (i < len) {
+      const cc = input.charCodeAt(i);
+      if (cc >= CC_a && cc <= CC_z) { i += 1; continue; }
+      if (cc >= CC_A && cc <= CC_Z) { hasUppercase = true; i += 1; continue; }
+      if (cc === CC_UNDERSCORE) { i += 1; continue; }
+      if (cc >= CC_0 && cc <= CC_9) { i += 1; continue; }
+      break;
     }
 
+    advanceColumnFor(start, i);
     const value = input.slice(start, i);
     const lowered = hasUppercase ? value.toLowerCase() : value;
     const keyword = KEYWORDS[lowered];
 
-    if (keyword && !(keyword === "kw_named" && hasUppercase)) {
-      push(keyword, lowered, tokenLine, tokenColumn);
+    if (keyword !== undefined && !(keyword === "kw_named" && hasUppercase)) {
+      tokens.push({ kind: keyword, lexeme: lowered, line: tokenLine, column: tokenColumn });
     } else {
-      push("identifier", value, tokenLine, tokenColumn);
+      tokens.push({ kind: "identifier", lexeme: value, line: tokenLine, column: tokenColumn });
     }
   };
 
-  while (!isAtEnd()) {
-    skipWhitespaceAndComments();
-    if (isAtEnd()) break;
+  while (i < len) {
+    // Skip whitespace and comments inline. This is the hottest path between
+    // tokens; using charCodeAt avoids one-char string allocations.
+    while (i < len) {
+      const cc = input.charCodeAt(i);
+      if (cc === CC_SPACE || cc === CC_TAB || cc === CC_CR) {
+        i += 1;
+        column += 1;
+        continue;
+      }
+      if (cc === CC_LF) {
+        i += 1;
+        line += 1;
+        column = 1;
+        continue;
+      }
+      if (cc === CC_HASH) {
+        i += 1;
+        column += 1;
+        while (i < len) {
+          const cc2 = input.charCodeAt(i);
+          if (cc2 === CC_LF) break;
+          i += 1;
+          column += 1;
+        }
+        continue;
+      }
+      break;
+    }
+
+    if (i >= len) break;
 
     const tokenLine = line;
     const tokenColumn = column;
-    const c = peek();
+    const cc = input.charCodeAt(i);
 
+    // String interpolation continuation: ')' that closes a held interpolation.
     if (
       strInterpStack.length > 0 &&
-      c === ")" &&
+      cc === CC_RPAREN &&
       strInterpStack[strInterpStack.length - 1]!.parenDepth === openParens
     ) {
-      scanStringInterpolationCont(strInterpStack[strInterpStack.length - 1]!.quote, tokenLine, tokenColumn);
+      const top = strInterpStack[strInterpStack.length - 1]!;
+      scanStringInterpolationCont(top.quote, tokenLine, tokenColumn);
       continue;
+    }
+
+    // Single-character punctuation: handle the common cases first since they
+    // dominate the token stream after whitespace.
+    switch (cc) {
+      case CC_LBRACE:
+        i += 1; column += 1;
+        tokens.push({ kind: "lbrace", lexeme: "{", line: tokenLine, column: tokenColumn });
+        continue;
+      case CC_RBRACE:
+        i += 1; column += 1;
+        tokens.push({ kind: "rbrace", lexeme: "}", line: tokenLine, column: tokenColumn });
+        continue;
+      case CC_LPAREN:
+        i += 1; column += 1;
+        openParens += 1;
+        tokens.push({ kind: "lparen", lexeme: "(", line: tokenLine, column: tokenColumn });
+        continue;
+      case CC_RPAREN:
+        i += 1; column += 1;
+        if (openParens > 0) openParens -= 1;
+        tokens.push({ kind: "rparen", lexeme: ")", line: tokenLine, column: tokenColumn });
+        continue;
+      case CC_LBRACK:
+        i += 1; column += 1;
+        tokens.push({ kind: "lbracket", lexeme: "[", line: tokenLine, column: tokenColumn });
+        continue;
+      case CC_RBRACK:
+        i += 1; column += 1;
+        tokens.push({ kind: "rbracket", lexeme: "]", line: tokenLine, column: tokenColumn });
+        continue;
+      case CC_COMMA:
+        i += 1; column += 1;
+        tokens.push({ kind: "comma", lexeme: ",", line: tokenLine, column: tokenColumn });
+        continue;
+      case CC_SEMI:
+        i += 1; column += 1;
+        tokens.push({ kind: "semi", lexeme: ";", line: tokenLine, column: tokenColumn });
+        continue;
+      case CC_AT:
+        i += 1; column += 1;
+        tokens.push({ kind: "at", lexeme: "@", line: tokenLine, column: tokenColumn });
+        continue;
+      case CC_PIPE:
+        i += 1; column += 1;
+        tokens.push({ kind: "pipe", lexeme: "|", line: tokenLine, column: tokenColumn });
+        continue;
+      case CC_AMP:
+        i += 1; column += 1;
+        tokens.push({ kind: "ampersand", lexeme: "&", line: tokenLine, column: tokenColumn });
+        continue;
+      case CC_PERCENT:
+        i += 1; column += 1;
+        tokens.push({ kind: "modulo", lexeme: "%", line: tokenLine, column: tokenColumn });
+        continue;
+      case CC_CARET:
+        i += 1; column += 1;
+        tokens.push({ kind: "pow", lexeme: "^", line: tokenLine, column: tokenColumn });
+        continue;
+      case CC_EQ:
+        i += 1; column += 1;
+        tokens.push({ kind: "equals", lexeme: "=", line: tokenLine, column: tokenColumn });
+        continue;
+      case CC_STAR: {
+        // '*' or '**'
+        if (i + 1 < len && input.charCodeAt(i + 1) === CC_STAR) {
+          i += 2; column += 2;
+          tokens.push({ kind: "double_splat", lexeme: "**", line: tokenLine, column: tokenColumn });
+        } else {
+          i += 1; column += 1;
+          tokens.push({ kind: "star", lexeme: "*", line: tokenLine, column: tokenColumn });
+        }
+        continue;
+      }
+      case CC_SLASH: {
+        // '/' or '//'
+        if (i + 1 < len && input.charCodeAt(i + 1) === CC_SLASH) {
+          i += 2; column += 2;
+          tokens.push({ kind: "floor_div", lexeme: "//", line: tokenLine, column: tokenColumn });
+        } else {
+          i += 1; column += 1;
+          tokens.push({ kind: "slash", lexeme: "/", line: tokenLine, column: tokenColumn });
+        }
+        continue;
+      }
+      case CC_PLUS: {
+        // '+', '++', or '+='
+        if (i + 1 < len) {
+          const n = input.charCodeAt(i + 1);
+          if (n === CC_PLUS) {
+            i += 2; column += 2;
+            tokens.push({ kind: "concat", lexeme: "++", line: tokenLine, column: tokenColumn });
+            continue;
+          }
+          if (n === CC_EQ) {
+            i += 2; column += 2;
+            tokens.push({ kind: "add_assign", lexeme: "+=", line: tokenLine, column: tokenColumn });
+            continue;
+          }
+        }
+        i += 1; column += 1;
+        tokens.push({ kind: "plus", lexeme: "+", line: tokenLine, column: tokenColumn });
+        continue;
+      }
+      case CC_MINUS: {
+        // '-', '->', or '-='
+        if (i + 1 < len) {
+          const n = input.charCodeAt(i + 1);
+          if (n === CC_GT) {
+            i += 2; column += 2;
+            tokens.push({ kind: "arrow", lexeme: "->", line: tokenLine, column: tokenColumn });
+            continue;
+          }
+          if (n === CC_EQ) {
+            i += 2; column += 2;
+            tokens.push({ kind: "sub_assign", lexeme: "-=", line: tokenLine, column: tokenColumn });
+            continue;
+          }
+        }
+        i += 1; column += 1;
+        tokens.push({ kind: "minus", lexeme: "-", line: tokenLine, column: tokenColumn });
+        continue;
+      }
+      case CC_COLON: {
+        // ':', ':=', '::'
+        if (i + 1 < len) {
+          const n = input.charCodeAt(i + 1);
+          if (n === CC_EQ) {
+            i += 2; column += 2;
+            tokens.push({ kind: "assign", lexeme: ":=", line: tokenLine, column: tokenColumn });
+            continue;
+          }
+          if (n === CC_COLON) {
+            i += 2; column += 2;
+            tokens.push({ kind: "coloncolon", lexeme: "::", line: tokenLine, column: tokenColumn });
+            continue;
+          }
+        }
+        i += 1; column += 1;
+        tokens.push({ kind: "colon", lexeme: ":", line: tokenLine, column: tokenColumn });
+        continue;
+      }
+      case CC_LT: {
+        // '<', '<=', or '<NN>$param'
+        if (i + 1 < len) {
+          const n = input.charCodeAt(i + 1);
+          if (n === CC_EQ) {
+            i += 2; column += 2;
+            tokens.push({ kind: "lte", lexeme: "<=", line: tokenLine, column: tokenColumn });
+            continue;
+          }
+          if (isDigitCC(n)) {
+            const start = i;
+            const startLine = line;
+            const startCol = column;
+            i += 1; column += 1;
+            while (i < len && isDigitCC(input.charCodeAt(i))) {
+              i += 1; column += 1;
+            }
+            if (
+              i < len &&
+              input.charCodeAt(i) === CC_GT &&
+              i + 1 < len &&
+              input.charCodeAt(i + 1) === CC_DOLLAR
+            ) {
+              i += 1; column += 1; // consume '>'
+              const param = scanParameterLexeme();
+              const lex = input.slice(start, i - param.length) + param;
+              tokens.push({ kind: "parameter_and_type", lexeme: lex, line: tokenLine, column: tokenColumn });
+              continue;
+            }
+            i = start;
+            line = startLine;
+            column = startCol;
+          }
+        }
+        i += 1; column += 1;
+        tokens.push({ kind: "lt", lexeme: "<", line: tokenLine, column: tokenColumn });
+        continue;
+      }
+      case CC_GT: {
+        if (i + 1 < len && input.charCodeAt(i + 1) === CC_EQ) {
+          i += 2; column += 2;
+          tokens.push({ kind: "gte", lexeme: ">=", line: tokenLine, column: tokenColumn });
+        } else {
+          i += 1; column += 1;
+          tokens.push({ kind: "gt", lexeme: ">", line: tokenLine, column: tokenColumn });
+        }
+        continue;
+      }
+      case CC_DOT: {
+        // '.', '.?>', '.<', '.?' (error)
+        if (i + 1 < len) {
+          const n = input.charCodeAt(i + 1);
+          if (n === CC_QMARK) {
+            if (i + 2 < len && input.charCodeAt(i + 2) === CC_GT) {
+              i += 3; column += 3;
+              tokens.push({ kind: "optional_link", lexeme: ".?>", line: tokenLine, column: tokenColumn });
+              continue;
+            }
+            syntaxError(".? is not an operator, did you mean .?> ?", tokenLine, tokenColumn);
+          }
+          if (n === CC_LT) {
+            i += 2; column += 2;
+            tokens.push({ kind: "backward_link", lexeme: ".<", line: tokenLine, column: tokenColumn });
+            continue;
+          }
+        }
+        i += 1; column += 1;
+        tokens.push({ kind: "dot", lexeme: ".", line: tokenLine, column: tokenColumn });
+        continue;
+      }
+      case CC_QMARK: {
+        if (i + 1 < len) {
+          const n = input.charCodeAt(i + 1);
+          if (n === CC_QMARK) {
+            i += 2; column += 2;
+            tokens.push({ kind: "coalesce", lexeme: "??", line: tokenLine, column: tokenColumn });
+            continue;
+          }
+          if (n === CC_EQ) {
+            i += 2; column += 2;
+            tokens.push({ kind: "not_distinct_from", lexeme: "?=", line: tokenLine, column: tokenColumn });
+            continue;
+          }
+          if (n === CC_EXCL) {
+            if (i + 2 < len && input.charCodeAt(i + 2) === CC_EQ) {
+              i += 3; column += 3;
+              tokens.push({ kind: "distinct_from", lexeme: "?!=", line: tokenLine, column: tokenColumn });
+              continue;
+            }
+            syntaxError("?! is not an operator, did you mean ?!= ?", tokenLine, tokenColumn);
+          }
+        }
+        syntaxError("Bare '?' is not an operator, did you mean '?=' or '??'?", tokenLine, tokenColumn);
+        continue;
+      }
+      case CC_EXCL: {
+        if (i + 1 < len && input.charCodeAt(i + 1) === CC_EQ) {
+          i += 2; column += 2;
+          tokens.push({ kind: "not_equals", lexeme: "!=", line: tokenLine, column: tokenColumn });
+          continue;
+        }
+        syntaxError("Bare '!' is not an operator, did you mean '!='?", tokenLine, tokenColumn);
+        continue;
+      }
+      case CC_BACKTICK: {
+        scanBacktickName(tokenLine, tokenColumn);
+        continue;
+      }
+      case CC_SQUOTE:
+      case CC_DQUOTE: {
+        scanString(cc, tokenLine, tokenColumn, "string", false);
+        continue;
+      }
+      case CC_DOLLAR: {
+        // dollar-quoted string, parameter, or bare $
+        if (scanDollarQuotedString(tokenLine, tokenColumn)) continue;
+        if (i + 1 < len) {
+          const n = input.charCodeAt(i + 1);
+          if (isAlphaCC(n) || isDigitCC(n) || n === CC_BACKTICK) {
+            const value = scanParameterLexeme();
+            tokens.push({ kind: "parameter", lexeme: value, line: tokenLine, column: tokenColumn });
+            continue;
+          }
+        }
+        i += 1; column += 1;
+        tokens.push({ kind: "dollar", lexeme: "$", line: tokenLine, column: tokenColumn });
+        continue;
+      }
+      case CC_BACKSLASH: {
+        if (i + 1 < len && input.charCodeAt(i + 1) === CC_LPAREN) {
+          const start = i;
+          i += 2; column += 2;
+          while (i < len) {
+            const cc2 = input.charCodeAt(i);
+            if (cc2 === CC_RPAREN) break;
+            if (!isIdentPartCC(cc2)) {
+              syntaxError("only alphanumerics are allowed in \\(name) token", tokenLine, tokenColumn);
+            }
+            i += 1; column += 1;
+          }
+          if (i >= len || input.charCodeAt(i) !== CC_RPAREN) {
+            syntaxError("unclosed \\(name) token", tokenLine, tokenColumn);
+          }
+          i += 1; column += 1;
+          tokens.push({ kind: "substitution", lexeme: input.slice(start, i), line: tokenLine, column: tokenColumn });
+          continue;
+        }
+        break; // fall through to error
+      }
+      default:
+        break;
     }
 
     // Byte strings: b'...' or b"..."
-    if ((c === "b" || c === "B") && (peekNext() === "'" || peekNext() === '"')) {
-      advance(); // consume b/B
-      scanString(peek() as "'" | '"', tokenLine, tokenColumn, "bytes_string");
-      continue;
+    if ((cc === CC_b || cc === CC_B_UP) && i + 1 < len) {
+      const n = input.charCodeAt(i + 1);
+      if (n === CC_SQUOTE || n === CC_DQUOTE) {
+        i += 1; column += 1; // consume 'b'/'B'
+        scanString(n, tokenLine, tokenColumn, "bytes_string", false);
+        continue;
+      }
     }
 
     // Raw strings: r'...' or r"..."
-    if ((c === "r" || c === "R") && (peekNext() === "'" || peekNext() === '"')) {
-      advance();
-      scanString(peek() as "'" | '"', tokenLine, tokenColumn, "string", { raw: true });
-      continue;
-    }
-
-    if (c === "$" && scanDollarQuotedString(tokenLine, tokenColumn)) {
-      continue;
-    }
-
-    if (c === "`") {
-      scanBacktickName(tokenLine, tokenColumn);
-      continue;
-    }
-
-    // Strings
-    if (c === "'" || c === '"') {
-      scanString(c, tokenLine, tokenColumn, "string");
-      continue;
-    }
-
-    if (scanFixedToken(tokenLine, tokenColumn)) {
-      continue;
-    }
-
-    if (c === "." && peekNext() === "?") {
-      syntaxError(".? is not an operator, did you mean .?> ?", tokenLine, tokenColumn);
-    }
-
-    if (c === "?" && peekNext() === "!") {
-      syntaxError("?! is not an operator, did you mean ?!= ?", tokenLine, tokenColumn);
-    }
-
-    if (c === "?" ) {
-      syntaxError("Bare '?' is not an operator, did you mean '?=' or '??'?", tokenLine, tokenColumn);
-    }
-
-    if (c === "!") {
-      syntaxError("Bare '!' is not an operator, did you mean '!='?", tokenLine, tokenColumn);
-    }
-
-    if (c === "<" && isDigit(peekNext())) {
-      const start = i;
-      advance();
-      while (isDigit(peek())) {
-        advance();
-      }
-      if (peek() === ">" && input[i + 1] === "$") {
-        advance();
-        const param = scanParameterLexeme();
-        push("parameter_and_type", `${input.slice(start, i - param.length)}${param}`, tokenLine, tokenColumn);
+    if ((cc === CC_r || cc === CC_R_UP) && i + 1 < len) {
+      const n = input.charCodeAt(i + 1);
+      if (n === CC_SQUOTE || n === CC_DQUOTE) {
+        i += 1; column += 1;
+        scanString(n, tokenLine, tokenColumn, "string", true);
         continue;
       }
-      i = start;
-    }
-
-    if (c === "$" && (isIdentStart(peekNext()) || isDigit(peekNext()) || peekNext() === "`")) {
-      const value = scanParameterLexeme();
-      push("parameter", value, tokenLine, tokenColumn);
-      continue;
-    }
-
-    if (c === "\\" && peekNext() === "(") {
-      advance();
-      advance();
-      let value = "\\(";
-      while (!isAtEnd() && peek() !== ")") {
-        const ch = peek();
-        if (!isAlphaNumeric(ch) && ch !== "_") {
-          syntaxError("only alphanumerics are allowed in \\(name) token", tokenLine, tokenColumn);
-        }
-        value += advance();
-      }
-      if (peek() !== ")") {
-        syntaxError("unclosed \\(name) token", tokenLine, tokenColumn);
-      }
-      value += advance();
-      push("substitution", value, tokenLine, tokenColumn);
-      continue;
-    }
-
-    // Single-character tokens
-    switch (c) {
-      case "{":
-        advance();
-        push("lbrace", "{", tokenLine, tokenColumn);
-        continue;
-      case "}":
-        advance();
-        push("rbrace", "}", tokenLine, tokenColumn);
-        continue;
-      case "(":
-        advance();
-        openParens += 1;
-        push("lparen", "(", tokenLine, tokenColumn);
-        continue;
-      case ")":
-        advance();
-        if (openParens > 0) {
-          openParens -= 1;
-        }
-        push("rparen", ")", tokenLine, tokenColumn);
-        continue;
-      case "[":
-        advance();
-        push("lbracket", "[", tokenLine, tokenColumn);
-        continue;
-      case "]":
-        advance();
-        push("rbracket", "]", tokenLine, tokenColumn);
-        continue;
-      case ",":
-        advance();
-        push("comma", ",", tokenLine, tokenColumn);
-        continue;
-      case ":":
-        advance();
-        push("colon", ":", tokenLine, tokenColumn);
-        continue;
-      case ";":
-        advance();
-        push("semi", ";", tokenLine, tokenColumn);
-        continue;
-      case ".":
-        advance();
-        push("dot", ".", tokenLine, tokenColumn);
-        continue;
-      case "*":
-        advance();
-        push("star", "*", tokenLine, tokenColumn);
-        continue;
-      case "/":
-        advance();
-        push("slash", "/", tokenLine, tokenColumn);
-        continue;
-      case "%":
-        advance();
-        push("modulo", "%", tokenLine, tokenColumn);
-        continue;
-      case "^":
-        advance();
-        push("pow", "^", tokenLine, tokenColumn);
-        continue;
-      case "=":
-        advance();
-        push("equals", "=", tokenLine, tokenColumn);
-        continue;
-      case "<":
-        advance();
-        push("lt", "<", tokenLine, tokenColumn);
-        continue;
-      case ">":
-        advance();
-        push("gt", ">", tokenLine, tokenColumn);
-        continue;
-      case "-":
-        advance();
-        push("minus", "-", tokenLine, tokenColumn);
-        continue;
-      case "+":
-        advance();
-        push("plus", "+", tokenLine, tokenColumn);
-        continue;
-      case "$":
-        advance();
-        push("dollar", "$", tokenLine, tokenColumn);
-        continue;
-      case "@":
-        advance();
-        push("at", "@", tokenLine, tokenColumn);
-        continue;
-      case "|":
-        advance();
-        push("pipe", "|", tokenLine, tokenColumn);
-        continue;
-      case "&":
-        advance();
-        push("ampersand", "&", tokenLine, tokenColumn);
-        continue;
     }
 
     // Numbers
-    if (isDigit(c)) {
+    if (isDigitCC(cc)) {
       scanNumber(tokenLine, tokenColumn);
       continue;
     }
 
     // Identifiers / keywords
-    if (isAlpha(c)) {
+    if (isAlphaCC(cc)) {
       scanIdentifierOrKeyword(tokenLine, tokenColumn);
       continue;
     }
 
-    syntaxError(`Unexpected token '${c}'`, tokenLine, tokenColumn);
+    syntaxError(`Unexpected token '${input[i]}'`, tokenLine, tokenColumn);
   }
 
   tokens.push({ kind: "eof", lexeme: "", line, column });

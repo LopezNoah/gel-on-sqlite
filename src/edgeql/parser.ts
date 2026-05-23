@@ -39,8 +39,147 @@ import type {
   ShapeElementModifiers,
 } from "./ast.js";
 import { simpleTypeName } from "./ast.js";
-import type { Token } from "./tokenizer.js";
+import type { Token, TokenKind } from "./tokenizer.js";
 import { tokenize } from "./tokenizer.js";
+
+// Token kinds the parser treats as "name-like" (identifier or context-sensitive
+// keyword that can also be used as a name). Using a Set lets isNameToken run as
+// a single hash lookup instead of a long string-compare chain ending in
+// startsWith("kw_current_reserved_").
+const NAME_TOKEN_KINDS: ReadonlySet<TokenKind> = new Set<TokenKind>([
+  "identifier",
+  "backtick_name",
+  "kw_object",
+  "kw_named",
+  "kw_unreserved",
+  "kw_partial_reserved",
+  "kw_future_reserved",
+  "kw_current_reserved",
+  "kw_current_reserved_source",
+  "kw_current_reserved_subject",
+  "kw_current_reserved_type",
+  "kw_current_reserved_std",
+  "kw_current_reserved_edgedbsys",
+  "kw_current_reserved_edgedbtpl",
+  "kw_current_reserved_new",
+  "kw_current_reserved_old",
+  "kw_current_reserved_specified",
+  "kw_current_reserved_default",
+]);
+
+// Set of token kinds whose string name begins with "kw_". Used by
+// isKeywordLikeToken to avoid String.prototype.startsWith.
+const KW_TOKEN_KINDS: ReadonlySet<TokenKind> = new Set<TokenKind>([
+  "kw_unreserved",
+  "kw_partial_reserved",
+  "kw_future_reserved",
+  "kw_current_reserved",
+  "kw_select",
+  "kw_insert",
+  "kw_update",
+  "kw_delete",
+  "kw_for",
+  "kw_in",
+  "kw_except",
+  "kw_intersect",
+  "kw_union",
+  "kw_filter",
+  "kw_set",
+  "kw_with",
+  "kw_order",
+  "kw_by",
+  "kw_limit",
+  "kw_offset",
+  "kw_asc",
+  "kw_desc",
+  "kw_is",
+  "kw_true",
+  "kw_false",
+  "kw_null",
+  "kw_like",
+  "kw_ilike",
+  "kw_and",
+  "kw_or",
+  "kw_not",
+  "kw_distinct",
+  "kw_as",
+  "kw_module",
+  "kw_unless",
+  "kw_conflict",
+  "kw_on",
+  "kw_else",
+  "kw_if",
+  "kw_then",
+  "kw_detached",
+  "kw_exists",
+  "kw_create",
+  "kw_alter",
+  "kw_drop",
+  "kw_configure",
+  "kw_describe",
+  "kw_typeof",
+  "kw_introspect",
+  "kw_extending",
+  "kw_variadic",
+  "kw_optional",
+  "kw_commit",
+  "kw_rollback",
+  "kw_start",
+  "kw_transaction",
+  "kw_global",
+  "kw_annotation",
+  "kw_type",
+  "kw_named",
+  "kw_only",
+  "kw_package",
+  "kw_extension",
+  "kw_over",
+  "kw_partition",
+  "kw_window",
+  "kw_group",
+  "kw_using",
+  "kw_empty",
+  "kw_single",
+  "kw_multi",
+  "kw_required",
+  "kw_property",
+  "kw_link",
+  "kw_abstract",
+  "kw_scalar",
+  "kw_object",
+  "kw_function",
+  "kw_index",
+  "kw_constraint",
+  "kw_policy",
+  "kw_trigger",
+  "kw_schema",
+  "kw_database",
+  "kw_branch",
+  "kw_role",
+  "kw_current_reserved_source",
+  "kw_current_reserved_subject",
+  "kw_current_reserved_type",
+  "kw_current_reserved_std",
+  "kw_current_reserved_edgedbsys",
+  "kw_current_reserved_edgedbtpl",
+  "kw_current_reserved_new",
+  "kw_current_reserved_old",
+  "kw_current_reserved_specified",
+  "kw_current_reserved_default",
+]);
+
+const GLOBAL_RESERVED_KINDS: ReadonlySet<TokenKind> = new Set<TokenKind>([
+  "kw_current_reserved_source",
+  "kw_current_reserved_subject",
+  "kw_current_reserved_type",
+  "kw_current_reserved_std",
+  "kw_current_reserved_edgedbsys",
+  "kw_current_reserved_edgedbtpl",
+  "kw_current_reserved_new",
+  "kw_current_reserved_old",
+  "kw_current_reserved_specified",
+  "kw_current_reserved_default",
+]);
 
 interface ParseContext {
   with?: WithBinding[];
@@ -146,7 +285,8 @@ class Parser {
   }
 
   private isKeywordLikeToken(token: Token): boolean {
-    return token.kind.startsWith("kw_") || this.isNameToken(token);
+    const k = token.kind;
+    return KW_TOKEN_KINDS.has(k) || k === "identifier" || k === "backtick_name";
   }
 
   private matchKeywordLexeme(lexeme: string): Token | undefined {
@@ -203,15 +343,7 @@ class Parser {
   }
 
   private isNameToken(token: Token): boolean {
-    return token.kind === "identifier"
-      || token.kind === "backtick_name"
-      || token.kind === "kw_object"
-      || token.kind === "kw_named"
-      || token.kind === "kw_unreserved"
-      || token.kind === "kw_partial_reserved"
-      || token.kind === "kw_future_reserved"
-      || token.kind === "kw_current_reserved"
-      || token.kind.startsWith("kw_current_reserved_");
+    return NAME_TOKEN_KINDS.has(token.kind);
   }
 
   private nameTokenLexeme(token: Token): string {
@@ -299,7 +431,7 @@ class Parser {
   }
 
   private isGlobalReservedToken(token: Token): boolean {
-    return token.kind.startsWith("kw_current_reserved_");
+    return GLOBAL_RESERVED_KINDS.has(token.kind);
   }
 
   private parseQualifiedName(message: string): string {
