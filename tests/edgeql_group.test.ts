@@ -13,7 +13,9 @@ describe("TestEdgeQLGroup", () => {
   beforeEach(async () => {
     h = await QueryHarness.create({
       schema: "issues",
-      setup: "issues_setup"
+      setup: "issues_setup",
+      extraModules: { cards: "cards" },
+      extraSetups: [{ module: "cards", setup: "cards_setup" }],
     });
   });
 

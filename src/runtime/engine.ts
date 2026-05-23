@@ -8,7 +8,7 @@ import type { SchemaSnapshot } from "../schema/schema.js";
 import { compileToSQL, computedValueAlias, shapePayloadAlias, type SQLArtifact } from "../sql/compiler.js";
 import { executeStdlibFunction, resolveStdlibFunction, type RuntimeFunctionArg } from "../stdlib/functions.js";
 import { assertTargetSqlCompatibility, type RuntimeTarget } from "./target.js";
-import type { BacklinkSourceIR, FilterExprIR, IRStatement, LinkRelationIR, OrderByIR, OverlayIR, SelectExprIREntry, SelectExprIR, SelectIR, SelectShapeElementIR } from "../ir/model.js";
+import type { BacklinkSourceIR, FilterExprIR, GroupIR, IRStatement, LinkRelationIR, OrderByIR, OverlayIR, SelectExprIREntry, SelectExprIR, SelectIR, SelectShapeElementIR } from "../ir/model.js";
 import type { AccessPolicyCondition, AccessPolicyDef, AliasDef, ComputedLinkPropertyExpr, FieldDef, FunctionDef, FunctionExprDef, ScalarType, ScalarValue, TypeDef } from "../types.js";
 import { qualifiedTypeName } from "../schema/schema.js";
 import { materializeSchema, type SQLiteDatabase } from "../runtime/database.js";
@@ -1295,6 +1295,28 @@ const tryRuntimeSelectExprEvaluation = (
     return undefined;
   }
 
+  // Defer to the GROUP-aware preprocessing in `executeQuery` when any WITH
+  // binding holds a GROUP — the parsed-runtime evaluator can't resolve
+  // synthetic group rows against `binding_ref` directly, so let
+  // `preEvaluateGroupBindings` inline them first.
+  if (ast.with?.some((binding) =>
+    binding.value.kind === "subquery_expr"
+    && (binding.value.expr.kind === "group_expr"
+      || (binding.value.expr.kind === "select_expr_subquery"
+        && binding.value.expr.expr.kind === "group_expr"))
+  )) {
+    return undefined;
+  }
+
+  return tryRuntimeSelectExprEvaluationAst(db, schema, ast, context);
+};
+
+const tryRuntimeSelectExprEvaluationAst = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  ast: Extract<Statement, { kind: "select_expr" }>,
+  context: SecurityContext,
+): QueryResult | undefined => {
   type EvalEnv = Map<string, unknown>;
 
   const needsRuntimeEval = (expr: FreeObjectExpr): boolean => {
@@ -5713,6 +5735,34 @@ export const executeQuery = (
   }
 
   const parsedQuery = parseEdgeQL(rewrittenQuery);
+  const preprocessed = preEvaluateGroupBindings(db, schema, parsedQuery, normalizeSecurityContext(securityContext));
+  if (preprocessed !== parsedQuery) {
+    // GROUP results were inlined as synthetic WITH bindings. Run the rewritten
+    // AST directly so we don't re-parse the original query string (which would
+    // discard the inlined results).
+    const ctx = normalizeSecurityContext(securityContext);
+    if (preprocessed.kind === "select_expr") {
+      const r = tryRuntimeSelectExprEvaluationAst(db, schema, preprocessed, ctx);
+      if (r) return r;
+    }
+    if (preprocessed.kind === "select") {
+      const r = tryEvaluateParsedRuntimeSelect(db, schema, preprocessed, ctx);
+      if (r) return r;
+    }
+    if (preprocessed.kind === "group") {
+      const compiled = getCompilerService().compile(schema, preprocessed, {
+        globals: ctx.globals,
+        target: resolvedRuntimeTarget(ctx, db),
+      });
+      if (compiled.ir.kind === "group") {
+        return {
+          kind: "select",
+          rows: runGroupIR(db, schema, compiled.ir, ctx, []),
+        };
+      }
+    }
+  }
+
   const parsedRuntimeResult = tryEvaluateParsedRuntimeSelect(db, schema, parsedQuery, securityContext);
   if (parsedRuntimeResult) {
     return parsedRuntimeResult;
@@ -5927,6 +5977,11 @@ export const executeQueryWithTrace = (
           ? runGelSelectExprSQL(db, sqlArtifact)
           : materializeSelectExprRows(db, schema, ir, context, sqlTrail),
       };
+    } else if (ir.kind === "group") {
+      result = {
+        kind: "select",
+        rows: runGroupIR(db, schema, ir, context, sqlTrail),
+      };
     } else {
       const writeResult = runWriteWithAccessPolicies(db, schema, ast, ir, sqlArtifact, subjectType!, context);
 
@@ -6133,6 +6188,11 @@ export const executeQueryUnitWithTrace = (
             ? runGelSelectExprSQL(db, sqlArtifact)
             : materializeSelectExprRows(db, schema, ir, context, sqlTrail),
         };
+      } else if (ir.kind === "group") {
+        result = {
+          kind: "select",
+          rows: runGroupIR(db, schema, ir, context, sqlTrail),
+        };
       } else {
         const writeResult = runWriteWithAccessPolicies(db, schema, ast, ir, sqlArtifact, subjectType!, context);
         result = { kind: ir.kind, changes: writeResult.changes };
@@ -6235,6 +6295,105 @@ const substituteBindingInASTFilter = (
   return filter;
 };
 
+// Convert a JS value materialised at runtime (e.g. a row from runGroupIR)
+// back into a FreeObjectExpr AST so it can be inlined as a synthetic WITH
+// binding value. Objects become free_object_constructor, arrays become
+// set_expr of nested constructors/literals, scalars become literal nodes.
+const jsValueToFreeObjectExpr = (
+  value: unknown,
+): import("../edgeql/ast.js").FreeObjectExpr => {
+  if (value === null || value === undefined) {
+    return { kind: "literal", value: null };
+  }
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return { kind: "literal", value: value as import("../types.js").ScalarValue };
+  }
+  if (typeof value === "bigint") {
+    return { kind: "literal", value: Number(value) };
+  }
+  if (Array.isArray(value)) {
+    return { kind: "set_expr", values: value.map(jsValueToFreeObjectExpr) };
+  }
+  if (typeof value === "object") {
+    return {
+      kind: "free_object_constructor",
+      entries: Object.entries(value as Record<string, unknown>).map(([name, val]) => ({
+        name,
+        expr: jsValueToFreeObjectExpr(val),
+      })),
+    };
+  }
+  return { kind: "literal", value: null };
+};
+
+// Walk an AST and pre-evaluate any WITH binding whose value is a GROUP.
+// Returns the rewritten AST (with the GROUP results inlined) or the original
+// when nothing needed pre-evaluation.
+const preEvaluateGroupBindings = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  ast: Statement,
+  context: SecurityContext,
+): Statement => {
+  if (!ast.with || ast.with.length === 0) return ast;
+  let rewrote = false;
+  const newWith = ast.with.map((binding) => {
+    const value = binding.value;
+    let groupExpr: Extract<import("../edgeql/ast.js").FreeObjectExpr, { kind: "group_expr" }> | undefined;
+    if (value.kind === "subquery_expr") {
+      if (value.expr.kind === "group_expr") {
+        groupExpr = value.expr;
+      } else if (value.expr.kind === "select_expr_subquery" && value.expr.expr.kind === "group_expr") {
+        groupExpr = value.expr.expr;
+      }
+    }
+    if (!groupExpr) return binding;
+    const groupStatement: Extract<Statement, { kind: "group" }> = {
+      kind: "group",
+      source: groupExpr.source,
+      using: groupExpr.using,
+      by: groupExpr.by,
+      with: ast.with,
+      withModule: ast.withModule,
+      withModuleAliases: ast.withModuleAliases,
+      pos: ast.pos,
+    };
+    try {
+      const compiled = getCompilerService().compile(schema, groupStatement, {
+        globals: context.globals,
+        target: resolvedRuntimeTarget(context, db),
+      });
+      if (compiled.ir.kind !== "group") return binding;
+      const rows = runGroupIR(db, schema, compiled.ir, context, []);
+      rewrote = true;
+      return {
+        name: binding.name,
+        value: {
+          kind: "subquery_expr" as const,
+          expr: { kind: "set_expr" as const, values: rows.map(jsValueToFreeObjectExpr) },
+        },
+      };
+    } catch {
+      return binding;
+    }
+  });
+  if (!rewrote) return ast;
+  return { ...ast, with: newWith };
+};
+
+const unwrapGroupIteratorExpr = (
+  expr: import("../edgeql/ast.js").FreeObjectExpr,
+): Extract<import("../edgeql/ast.js").FreeObjectExpr, { kind: "group_expr" }> | undefined => {
+  let cursor: import("../edgeql/ast.js").FreeObjectExpr = expr;
+  if (cursor.kind === "select_expr_subquery") {
+    cursor = cursor.expr;
+  }
+  if (cursor.kind === "group_expr") {
+    return cursor;
+  }
+  return undefined;
+};
+
 const executeForLoop = (
   db: SQLiteDatabase,
   schema: SchemaSnapshot,
@@ -6247,6 +6406,52 @@ const executeForLoop = (
 ): void => {
   const iteratorExpr = ast.iteratorExpr;
   const body = ast.body;
+
+  // `FOR g IN (GROUP …) UNION (…body…)` — run the GROUP, then evaluate the
+  // body once per group row with `g` bound to that row. Also accept the iterator
+  // wrapped in a no-op SELECT subquery (`FOR g IN (SELECT (GROUP …)) UNION …`).
+  const groupIterator = unwrapGroupIteratorExpr(iteratorExpr);
+  if (groupIterator && body.kind === "select_expr") {
+    const groupStatement = {
+      kind: "group" as const,
+      source: groupIterator.source,
+      using: groupIterator.using,
+      by: groupIterator.by,
+      with: ast.with,
+      withModule: ast.withModule,
+      withModuleAliases: ast.withModuleAliases,
+      pos: ast.pos,
+    };
+    const compiled = compilerService.compile(schema, groupStatement, {
+      overlays,
+      globals: context.globals,
+      target: runtimeTarget,
+    });
+    const ir = compiled.ir;
+    const sqlArtifact = compiled.sql;
+    const sqlTrail: SQLArtifact[] = [sqlArtifact];
+    const groupRows = ir.kind === "group"
+      ? runGroupIR(db, schema, ir, context, sqlTrail)
+      : [];
+    const outputRows = groupRows.map((groupRow) => {
+      const bindings = new Map<string, unknown>([[ast.variable, groupRow]]);
+      const result = evalGroupRowExpr(body.expr, groupRow, bindings);
+      if (result && typeof result === "object" && !Array.isArray(result)) {
+        return result as Record<string, unknown>;
+      }
+      return { value: result };
+    });
+    traces.push({
+      ast,
+      ir,
+      sql: sqlArtifact,
+      compiler: compiled.cache,
+      sqlTrail,
+      overlays: extractOverlays(ir),
+      result: { kind: "select", rows: outputRows },
+    });
+    return;
+  }
 
   if (body.kind === "insert") {
     let iteratorValues = evaluateForIteratorValues(iteratorExpr, schema, db, context);
@@ -7377,6 +7582,407 @@ const runSelectFreeSQL = (
   db: SQLiteDatabase,
   sqlArtifact: SQLArtifact,
 ): Record<string, unknown>[] => db.prepare(sqlArtifact.sql).all(...sqlArtifact.params) as Record<string, unknown>[];
+
+const runGroupIR = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  ir: GroupIR,
+  context: SecurityContext,
+  sqlTrail: SQLArtifact[],
+): Record<string, unknown>[] => {
+  // Materialise the source rows by routing through whichever runtime path
+  // matches the source AST kind. The strict IR/SQL compile rejects shape
+  // entries that touch backlinks (`count(.owners)`), so we prefer the parsed
+  // runtimes; the IR path is the last-resort fallback.
+  let rows: Record<string, unknown>[] = [];
+  const tryExpr = ir.source.kind === "select_expr"
+    ? tryRuntimeSelectExprEvaluationAst(db, schema, ir.source, context)
+    : undefined;
+  if (tryExpr && tryExpr.kind === "select" && tryExpr.rows) {
+    rows = tryExpr.rows as Record<string, unknown>[];
+  } else {
+    const tryParsed = ir.source.kind === "select"
+      ? tryEvaluateParsedRuntimeSelect(db, schema, ir.source, context)
+      : undefined;
+    if (tryParsed && tryParsed.kind === "select" && tryParsed.rows) {
+      rows = tryParsed.rows as Record<string, unknown>[];
+    } else {
+      try {
+        const sourceCompiled = getCompilerService().compile(schema, ir.source, {
+          globals: context.globals,
+          target: resolvedRuntimeTarget(context, db),
+        });
+        if (sourceCompiled.ir.kind === "select") {
+          sqlTrail.push(sourceCompiled.sql);
+          rows = runSelectIR(db, schema, sourceCompiled.ir, context, sourceCompiled.sql, sqlTrail);
+        } else if (sourceCompiled.ir.kind === "select_expr") {
+          sqlTrail.push(sourceCompiled.sql);
+          const exprRows = materializeSelectExprRows(db, schema, sourceCompiled.ir, context, sqlTrail);
+          rows = exprRows.filter((row): row is Record<string, unknown> => row !== null && typeof row === "object");
+        }
+      } catch {
+        // Source couldn't be lowered — leave rows empty so the caller surfaces
+        // an empty group result instead of a hard error.
+      }
+    }
+  }
+
+  const hidden = new Set(ir.hiddenByFields);
+
+  const stripElement = (row: Record<string, unknown>): Record<string, unknown> => {
+    const element: Record<string, unknown> = {};
+    for (const [name, value] of Object.entries(row)) {
+      if (hidden.has(name)) continue;
+      element[name] = value;
+    }
+    return element;
+  };
+
+  // Each grouping set produces its own set of partitions; we concatenate the
+  // result rows from all sets. A row in a partition for set `{a}` has its
+  // other key fields (e.g. `b`) set to NULL, and `grouping: ["a"]`.
+  let groupRows: Record<string, unknown>[] = [];
+  for (const set of ir.groupingSets) {
+    const partitions = new Map<string, { key: Record<string, unknown>; elements: Record<string, unknown>[] }>();
+    for (const row of rows) {
+      const key: Record<string, unknown> = {};
+      for (const atom of ir.byAtoms) {
+        key[atom] = set.includes(atom) ? (row[atom] ?? null) : null;
+      }
+      const keyStr = JSON.stringify(key);
+      let bucket = partitions.get(keyStr);
+      if (!bucket) {
+        bucket = { key, elements: [] };
+        partitions.set(keyStr, bucket);
+      }
+      bucket.elements.push(stripElement(row));
+    }
+    for (const bucket of partitions.values()) {
+      groupRows.push({
+        key: bucket.key,
+        elements: bucket.elements,
+        grouping: [...set],
+      });
+    }
+  }
+
+  // Shape projection runs first: filter / order / limit on `SELECT (GROUP …) { shape }`
+  // reference the projected field names, not the raw `{key, elements}` row.
+  if (ir.postShape) {
+    groupRows = groupRows.map((row) => {
+      const projected: Record<string, unknown> = {};
+      for (const element of ir.postShape!) {
+        if (element.kind === "field") {
+          projected[element.name] = row[element.name] ?? null;
+          continue;
+        }
+        if (element.kind === "computed") {
+          projected[element.name] = evalGroupRowComputed(element.expr, row);
+          continue;
+        }
+      }
+      return projected;
+    });
+  }
+
+  if (ir.postFilter) {
+    groupRows = groupRows.filter((row) => Boolean(evalGroupRowExpr(ir.postFilter!, row)));
+  }
+
+  if (ir.postOrderBy) {
+    const orderBy = ir.postOrderBy;
+    groupRows = [...groupRows].sort((a, b) => compareByOrderChain(a, b, orderBy));
+  }
+
+  if (typeof ir.postOffset === "number") {
+    groupRows = groupRows.slice(ir.postOffset);
+  }
+  if (typeof ir.postLimit === "number") {
+    groupRows = groupRows.slice(0, ir.postLimit);
+  }
+
+  return groupRows;
+};
+
+const evalGroupRowExpr = (
+  expr: import("../edgeql/ast.js").FreeObjectExpr,
+  row: Record<string, unknown>,
+  bindings?: ReadonlyMap<string, unknown>,
+): unknown => {
+  switch (expr.kind) {
+    case "literal":
+      return expr.value;
+    case "current_item":
+      return row;
+    case "binding_ref": {
+      if (bindings && bindings.has(expr.name)) {
+        return bindings.get(expr.name);
+      }
+      return null;
+    }
+    case "path": {
+      const head = bindings?.get(expr.head);
+      if (head == null || typeof head !== "object") {
+        return null;
+      }
+      return (head as Record<string, unknown>)[expr.tail] ?? null;
+    }
+    case "path_chain": {
+      let current: unknown = bindings?.get(expr.parts[0]!);
+      for (let i = 1; i < expr.parts.length; i += 1) {
+        if (current == null || typeof current !== "object") {
+          return null;
+        }
+        current = (current as Record<string, unknown>)[expr.parts[i]!] ?? null;
+      }
+      return current;
+    }
+    case "field_access": {
+      const target = evalGroupRowExpr(expr.expr, row, bindings);
+      if (target == null || typeof target !== "object") {
+        return null;
+      }
+      return (target as Record<string, unknown>)[expr.field] ?? null;
+    }
+    case "select_expr_subquery":
+    case "distinct":
+      return evalGroupRowExpr(expr.expr, row, bindings);
+    case "shape_projection": {
+      const base = evalGroupRowExpr(expr.expr, row, bindings);
+      if (Array.isArray(base)) {
+        return base.map((item) => projectShape(item, expr.shape, bindings));
+      }
+      if (base == null || typeof base !== "object") {
+        return null;
+      }
+      return projectShape(base, expr.shape, bindings);
+    }
+    case "free_object_constructor": {
+      const out: Record<string, unknown> = {};
+      for (const entry of expr.entries) {
+        out[entry.name] = evalGroupRowExpr(entry.expr, row, bindings);
+      }
+      return out;
+    }
+    case "compare":
+    case "logical": {
+      const left = evalGroupRowExpr(expr.left, row, bindings);
+      const right = evalGroupRowExpr(expr.right, row, bindings);
+      return applyComparisonOp(expr.op, left, right);
+    }
+    case "unary": {
+      const inner = evalGroupRowExpr(expr.expr, row, bindings);
+      if (expr.op === "not") return !inner;
+      if (expr.op === "neg") return -Number(inner);
+      return null;
+    }
+    case "math": {
+      const left = Number(evalGroupRowExpr(expr.left, row, bindings) ?? 0);
+      const right = Number(evalGroupRowExpr(expr.right, row, bindings) ?? 0);
+      switch (expr.op) {
+        case "+": return left + right;
+        case "-": return left - right;
+        case "*": return left * right;
+        case "/": return right === 0 ? null : left / right;
+        case "%": return right === 0 ? null : left % right;
+        default: return null;
+      }
+    }
+    case "function_call":
+      return evalGroupRowFunctionCall(expr.call, row, bindings);
+    case "cast": {
+      const value = evalGroupRowExpr(expr.expr, row, bindings);
+      return value;
+    }
+    case "if_else": {
+      const cond = evalGroupRowExpr(expr.condition, row, bindings);
+      return cond
+        ? evalGroupRowExpr(expr.thenExpr, row, bindings)
+        : evalGroupRowExpr(expr.elseExpr, row, bindings);
+    }
+    case "tuple":
+      return expr.values.map((value) => evalGroupRowExpr(value, row, bindings));
+    default:
+      return null;
+  }
+};
+
+const projectShape = (
+  base: unknown,
+  shape: import("../edgeql/ast.js").ShapeElement[],
+  bindings?: ReadonlyMap<string, unknown>,
+): unknown => {
+  if (base == null || typeof base !== "object" || Array.isArray(base)) {
+    return null;
+  }
+  const baseRow = base as Record<string, unknown>;
+  const projected: Record<string, unknown> = {};
+  for (const element of shape) {
+    if (element.kind === "field") {
+      projected[element.name] = baseRow[element.name] ?? null;
+      continue;
+    }
+    if (element.kind === "computed") {
+      projected[element.name] = evalGroupRowComputed(element.expr, baseRow, bindings);
+      continue;
+    }
+    if (element.kind === "link" || element.kind === "backlink") {
+      const linkValue = baseRow[element.name];
+      const linkShape = element.shape;
+      if (!linkShape) {
+        projected[element.name] = linkValue ?? null;
+        continue;
+      }
+      if (Array.isArray(linkValue)) {
+        projected[element.name] = linkValue.map((item) => projectShape(item, linkShape, bindings));
+      } else if (linkValue && typeof linkValue === "object") {
+        projected[element.name] = projectShape(linkValue, linkShape, bindings);
+      } else {
+        projected[element.name] = null;
+      }
+      continue;
+    }
+  }
+  return projected;
+};
+
+const evalGroupRowComputed = (
+  expr: import("../edgeql/ast.js").ComputedExpr | import("../edgeql/ast.js").BacklinkExpr,
+  row: Record<string, unknown>,
+  bindings?: ReadonlyMap<string, unknown>,
+): unknown => {
+  if (!("kind" in expr)) {
+    return null;
+  }
+  switch (expr.kind) {
+    case "literal":
+      return expr.value;
+    case "field_ref":
+      return row[expr.field] ?? null;
+    case "select_expr":
+      return evalGroupRowExpr(expr.expr, row, bindings);
+    case "function_call":
+      return evalGroupRowFunctionCall(expr.call, row, bindings);
+    case "binding_ref":
+      return bindings?.get(expr.name) ?? null;
+    default:
+      return null;
+  }
+};
+
+const evalGroupRowFunctionCall = (
+  call: import("../edgeql/ast.js").FunctionCallExpr,
+  row: Record<string, unknown>,
+  bindings?: ReadonlyMap<string, unknown>,
+): unknown => {
+  const args = call.args.map((arg) => {
+    if (arg.kind === "expr") {
+      return evalGroupRowExpr(arg.expr, row, bindings);
+    }
+    if (arg.kind === "literal") {
+      return arg.value;
+    }
+    return null;
+  });
+
+  const name = call.name.split("::").pop()!;
+
+  if (name === "count") {
+    const value = args[0];
+    if (Array.isArray(value)) return value.length;
+    if (value == null) return 0;
+    return 1;
+  }
+  if (name === "sum") {
+    const list = asNumericList(args[0]);
+    return list.reduce((acc, v) => acc + v, 0);
+  }
+  if (name === "min") {
+    const list = asNumericList(args[0]);
+    return list.length === 0 ? null : Math.min(...list);
+  }
+  if (name === "max") {
+    const list = asNumericList(args[0]);
+    return list.length === 0 ? null : Math.max(...list);
+  }
+  if (name === "mean" || name === "avg") {
+    const list = asNumericList(args[0]);
+    return list.length === 0 ? null : list.reduce((a, v) => a + v, 0) / list.length;
+  }
+  if (name === "array_agg") {
+    const value = args[0];
+    if (Array.isArray(value)) return [...value];
+    return value == null ? [] : [value];
+  }
+  if (name === "str_lower") return typeof args[0] === "string" ? args[0].toLowerCase() : null;
+  if (name === "str_upper") return typeof args[0] === "string" ? args[0].toUpperCase() : null;
+  if (name === "len") {
+    if (typeof args[0] === "string") return args[0].length;
+    if (Array.isArray(args[0])) return args[0].length;
+    return 0;
+  }
+  return null;
+};
+
+const asNumericList = (value: unknown): number[] => {
+  if (Array.isArray(value)) {
+    return value.filter((v) => v != null).map((v) => Number(v));
+  }
+  if (value == null) return [];
+  return [Number(value)];
+};
+
+const applyComparisonOp = (op: string, left: unknown, right: unknown): unknown => {
+  switch (op) {
+    case "=": return canonicalCompareEqual(left, right);
+    case "!=": return !canonicalCompareEqual(left, right);
+    case "<": return Number(left) < Number(right);
+    case ">": return Number(left) > Number(right);
+    case "<=": return Number(left) <= Number(right);
+    case ">=": return Number(left) >= Number(right);
+    case "and": return Boolean(left) && Boolean(right);
+    case "or": return Boolean(left) || Boolean(right);
+    default: return null;
+  }
+};
+
+const canonicalCompareEqual = (left: unknown, right: unknown): boolean => {
+  if (left === right) return true;
+  if (left == null || right == null) return left == right;
+  if (typeof left === "object" || typeof right === "object") {
+    return JSON.stringify(left) === JSON.stringify(right);
+  }
+  return false;
+};
+
+const compareByOrderChain = (
+  a: Record<string, unknown>,
+  b: Record<string, unknown>,
+  chain: import("../edgeql/ast.js").OrderExprChain,
+): number => {
+  const aValue = evalGroupRowExpr(chain.expr, a);
+  const bValue = evalGroupRowExpr(chain.expr, b);
+  let cmp = compareScalar(aValue, bValue);
+  if (cmp === 0 && chain.then) {
+    return compareByOrderChain(a, b, chain.then);
+  }
+  if (chain.direction === "desc") cmp = -cmp;
+  return cmp;
+};
+
+const compareScalar = (a: unknown, b: unknown): number => {
+  if (a == null && b == null) return 0;
+  if (a == null) return -1;
+  if (b == null) return 1;
+  if (typeof a === "number" && typeof b === "number") {
+    return a - b;
+  }
+  const aStr = String(a);
+  const bStr = String(b);
+  if (aStr < bStr) return -1;
+  if (aStr > bStr) return 1;
+  return 0;
+};
 
 const materializeFreeObjectRow = (
   db: SQLiteDatabase,
@@ -10653,6 +11259,10 @@ const extractOverlays = (ir: IRStatement): OverlayIR[] => {
   }
 
   if (ir.kind === "select_expr") {
+    return [];
+  }
+
+  if (ir.kind === "group") {
     return [];
   }
 

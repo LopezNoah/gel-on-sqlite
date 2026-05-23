@@ -29,10 +29,279 @@ export interface CompileContext {
   schemaModelName?: string;
 }
 
+interface PeeledGroupForm {
+  group: Extract<FreeObjectExpr, { kind: "group_expr" }>;
+  postFilter?: FreeObjectExpr;
+  postShape?: import("../edgeql/ast.js").ShapeElement[];
+  postOrderBy?: import("../edgeql/ast.js").OrderExprChain;
+  postLimit?: number;
+  postOffset?: number;
+}
+
+// Peels common wrappers around a `(GROUP …)` expression inside a
+// `SELECT (GROUP …)` statement, collecting any filter / shape / order /
+// limit / offset to apply as post-processing on the group's output rows.
+const peelGroupExprFromSelectExpr = (
+  statement: Extract<Statement, { kind: "select_expr" }>,
+): PeeledGroupForm | undefined => {
+  let cursor: FreeObjectExpr = statement.expr;
+  const peeled: PeeledGroupForm = { group: undefined as never };
+
+  if (cursor.kind === "shape_projection") {
+    peeled.postShape = cursor.shape;
+    cursor = cursor.expr;
+  }
+
+  if (cursor.kind === "select_expr_subquery") {
+    peeled.postFilter = cursor.filter;
+    peeled.postOrderBy = cursor.orderBy;
+    peeled.postLimit = cursor.limit;
+    peeled.postOffset = cursor.offset;
+    cursor = cursor.expr;
+  }
+
+  if (cursor.kind === "shape_projection" && !peeled.postShape) {
+    peeled.postShape = cursor.shape;
+    cursor = cursor.expr;
+  }
+
+  if (cursor.kind !== "group_expr") {
+    return undefined;
+  }
+
+  // A trailing `ORDER BY` on the SELECT (`statement.orderBy`) applies to
+  // the group's output rows just like an in-paren ORDER BY does.
+  if (statement.orderBy && !peeled.postOrderBy) {
+    peeled.postOrderBy = statement.orderBy;
+  }
+
+  peeled.group = cursor;
+  return peeled;
+};
+
+const compileGroupStatement = (
+  schema: SchemaSnapshot,
+  statement: Extract<Statement, { kind: "group" }>,
+  context: CompileContext,
+): import("../ir/model.js").GroupIR => {
+  const fail = (message: string): never => {
+    throw new AppError("E_SEMANTIC", message, statement.pos.line, statement.pos.column);
+  };
+
+  const rawSource = statement.source;
+
+  // The source might be a typed select (`Card { name }`), a binding ref
+  // (`X { a, b }` where X is WITH-bound), or any other FreeObjectExpr. For
+  // anything that isn't a clean typed select on a real type, we wrap as a
+  // select_expr over a shape_projection so the runtime's expression evaluator
+  // materialises the rows.
+  const sourceUserShape: ShapeElement[] = rawSource.kind === "select" ? rawSource.shape : [];
+  const sourceTypeName: string | undefined = rawSource.kind === "select" ? rawSource.typeName : undefined;
+  const sourceClauses: import("../edgeql/ast.js").ClauseChain | undefined = rawSource.kind === "select" ? rawSource.clauses : undefined;
+
+  const hiddenByFields: string[] = [];
+  const shapeNames = new Set(
+    sourceUserShape
+      .filter((element): element is Extract<ShapeElement, { name: string }> => "name" in element)
+      .map((element) => element.name),
+  );
+  // For non-select sources (e.g. `{a := 1, b := 2}`) the source's natural
+  // fields are already present on each row, so they shouldn't be marked
+  // hidden when referenced by BY.
+  if (rawSource.kind === "free_object_constructor") {
+    for (const entry of rawSource.entries) {
+      shapeNames.add(entry.name);
+    }
+  }
+  const augmentedShape: ShapeElement[] = [...sourceUserShape];
+
+  // USING bindings become computed shape entries on the source. The engine's
+  // existing per-row shape evaluator computes them once per source row, so the
+  // alias is available as a regular field for partitioning and we don't need
+  // a separate per-row evaluator pass. Each alias is also marked hidden so it
+  // doesn't leak into the group's `elements` projection.
+  const usingExprToComputed = (expr: FreeObjectExpr): ComputedExpr => {
+    // Match the shape-entry form the regular parser produces, so the source
+    // SelectIR compiles the USING expression along the same path as a
+    // hand-written `nowners := count(.owners)` inside a SELECT … {} shape.
+    if (expr.kind === "function_call") {
+      return { kind: "function_call", call: expr.call };
+    }
+    if (expr.kind === "field_access" && expr.expr.kind === "current_item") {
+      return { kind: "field_ref", field: expr.field };
+    }
+    if (expr.kind === "literal") {
+      return { kind: "literal", value: expr.value };
+    }
+    return { kind: "select_expr", expr, clauses: {} };
+  };
+
+  for (const usingBinding of statement.using ?? []) {
+    if (shapeNames.has(usingBinding.alias)) {
+      // Already in the source shape — `by name_ref` will find it; no need to
+      // append, and don't hide a user-visible field.
+      continue;
+    }
+    augmentedShape.push({
+      kind: "computed",
+      name: usingBinding.alias,
+      expr: usingExprToComputed(usingBinding.expr),
+      operation: "assign",
+      origin: "explicit",
+    });
+    shapeNames.add(usingBinding.alias);
+    hiddenByFields.push(usingBinding.alias);
+  }
+
+  const atomName = (atom: import("../edgeql/ast.js").GroupByAtom): string =>
+    atom.kind === "field_ref" ? atom.field : atom.name;
+
+  const ensureAtomInShape = (atom: import("../edgeql/ast.js").GroupByAtom): string => {
+    const name = atomName(atom);
+    if (atom.kind === "name_ref") {
+      if (!shapeNames.has(name)) {
+        fail(`BY clause references '${name}' which is not declared in USING`);
+      }
+      return name;
+    }
+    if (!shapeNames.has(name)) {
+      augmentedShape.push({
+        kind: "field",
+        name,
+        operation: "assign",
+        origin: "default",
+      });
+      shapeNames.add(name);
+      hiddenByFields.push(name);
+    }
+    return name;
+  };
+
+  // Expand each BY-element into a list of grouping sets (each a list of atom
+  // names). Top-level entries combine by Cartesian product, matching
+  // SQL-style `GROUPING SETS / CUBE / ROLLUP` composition.
+  let groupingSets: string[][] = [[]];
+  const atomOrder: string[] = [];
+  const addAtom = (atom: import("../edgeql/ast.js").GroupByAtom): string => {
+    const name = ensureAtomInShape(atom);
+    if (!atomOrder.includes(name)) atomOrder.push(name);
+    return name;
+  };
+
+  const subsetsOfList = (items: string[], mode: "cube" | "rollup"): string[][] => {
+    if (mode === "rollup") {
+      const out: string[][] = [];
+      for (let i = 0; i <= items.length; i += 1) {
+        out.push(items.slice(0, i));
+      }
+      return out;
+    }
+    // cube: power set
+    const out: string[][] = [[]];
+    for (const item of items) {
+      const len = out.length;
+      for (let i = 0; i < len; i += 1) {
+        out.push([...out[i]!, item]);
+      }
+    }
+    return out;
+  };
+
+  const crossProduct = (left: string[][], right: string[][]): string[][] => {
+    const out: string[][] = [];
+    for (const l of left) {
+      for (const r of right) {
+        out.push([...l, ...r]);
+      }
+    }
+    return out;
+  };
+
+  for (const element of statement.by) {
+    if (element.kind === "field_ref" || element.kind === "name_ref") {
+      const name = addAtom(element);
+      groupingSets = groupingSets.map((s) => [...s, name]);
+      continue;
+    }
+    if (element.kind === "sets") {
+      const setOptions: string[][] = element.sets.map((atomList) => atomList.map(addAtom));
+      groupingSets = crossProduct(groupingSets, setOptions);
+      continue;
+    }
+    if (element.kind === "cube" || element.kind === "rollup") {
+      const names = element.atoms.map(addAtom);
+      const subsets = subsetsOfList(names, element.kind);
+      groupingSets = crossProduct(groupingSets, subsets);
+      continue;
+    }
+  }
+
+  if (groupingSets.length === 0) {
+    groupingSets = [[]];
+  }
+
+  const withBindingNames = new Set((statement.with ?? []).map((binding) => binding.name));
+  const sourceIsBinding = sourceTypeName !== undefined && withBindingNames.has(sourceTypeName);
+  const sourceIsRealType = sourceTypeName !== undefined && !sourceIsBinding;
+
+  let source: import("../ir/model.js").GroupIR["source"];
+  if (sourceIsRealType) {
+    // Real-type source. Let it flow through the IR path; the parsed runtime
+    // fallback in `runGroupIR` handles the cases the IR compile rejects
+    // (e.g. link-typed USING aliases).
+    source = {
+      kind: "select",
+      typeName: sourceTypeName!,
+      shape: augmentedShape,
+      fields: [],
+      filter: sourceClauses?.filter,
+      orderBy: sourceClauses?.orderBy,
+      limit: sourceClauses?.limit,
+      offset: sourceClauses?.offset,
+      pos: statement.pos,
+      with: statement.with,
+      withModule: statement.withModule,
+      withModuleAliases: statement.withModuleAliases,
+    };
+  } else {
+    // Any other source shape — wrap in select_expr. When the source is a
+    // binding-named typed-select we project over `binding_ref(name)` with the
+    // user's explicit shape; when the source is a raw expression like
+    // `{a := 1, b := 2}` or `Card.element` we use it as-is (no
+    // shape_projection) so the runtime keeps every field the source emits.
+    const innerExpr: FreeObjectExpr = sourceIsBinding
+      ? { kind: "binding_ref", name: sourceTypeName! }
+      : rawSource;
+    const projection: FreeObjectExpr = sourceIsBinding && augmentedShape.length > 0
+      ? { kind: "shape_projection", expr: innerExpr, shape: augmentedShape }
+      : innerExpr;
+    source = {
+      kind: "select_expr",
+      with: statement.with,
+      withModule: statement.withModule,
+      withModuleAliases: statement.withModuleAliases,
+      expr: projection,
+      pos: statement.pos,
+    };
+  }
+
+  return {
+    kind: "group",
+    source,
+    byAtoms: atomOrder,
+    groupingSets,
+    hiddenByFields,
+  };
+};
+
 export const compileToIR = (schema: SchemaSnapshot, statement: Statement, context: CompileContext = {}): IRStatement => {
   const fail = (message: string): never => {
     throw new AppError("E_SEMANTIC", message, statement.pos.line, statement.pos.column);
   };
+
+  if (statement.kind === "group") {
+    return compileGroupStatement(schema, statement, context);
+  }
 
   const requireValue = <T>(value: T, message: string): NonNullable<T> => {
     if (value === undefined || value === null) {
@@ -3011,6 +3280,36 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     if (rewritten) {
       return compileToIR(schema, rewritten, context);
     }
+
+    // `SELECT (GROUP …)` and its wrapped forms (with filter / shape / order /
+    // limit / offset on top of the group) — peel the wrapper, lower the
+    // GROUP, and attach the post-process so the engine applies it to the
+    // group's output rows.
+    const groupForm = peelGroupExprFromSelectExpr(statement);
+    if (groupForm) {
+      const groupStatement: Extract<Statement, { kind: "group" }> = {
+        kind: "group",
+        source: groupForm.group.source,
+        using: groupForm.group.using,
+        by: groupForm.group.by,
+        with: statement.with,
+        withModule: statement.withModule,
+        withModuleAliases: statement.withModuleAliases,
+        pos: statement.pos,
+      };
+      const groupIR = compileToIR(schema, groupStatement, context);
+      if (groupIR.kind === "group") {
+        return {
+          ...groupIR,
+          postFilter: groupForm.postFilter,
+          postShape: groupForm.postShape,
+          postOrderBy: groupForm.postOrderBy,
+          postLimit: groupForm.postLimit,
+          postOffset: groupForm.postOffset,
+        };
+      }
+      return groupIR;
+    }
     const pathId = createPathId();
     const asNestedExprEntry = (
       entry: import("../ir/model.js").SelectExprIREntry,
@@ -3132,6 +3431,9 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       expr: FreeObjectExpr | ComputedExpr,
       currentItemBinding?: string,
     ): import("../ir/model.js").SelectExprIREntry => {
+      if (expr.kind === "group_expr") {
+        throw new AppError("E_SEMANTIC", "GROUP statement is not yet implemented", statement.pos.line, statement.pos.column);
+      }
       if (expr.kind === "literal") {
         return { kind: "literal", value: expr.value };
       }

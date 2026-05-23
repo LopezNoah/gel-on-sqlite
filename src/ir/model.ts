@@ -743,10 +743,56 @@ export interface SelectExprIR {
   orderBy?: OrderByIR<SelectExprIREntry>;
 }
 
+/* ---------------------------------- */
+/* Group                              */
+/* ---------------------------------- */
+
+// Phase 6: keys are flat name strings used at runtime to read each row's
+// already-materialised value (USING aliases land in the source shape as
+// computed entries, BY-only fields land as plain field entries). Field vs.
+// alias provenance is tracked at compile time and no longer needed at runtime.
+export type GroupByElementIR = never;
+
+export interface GroupIR {
+  kind: "group";
+  // Underlying source query AS AN AST so the runtime can route it through the
+  // existing `tryEvaluateParsedRuntimeSelect` path. That path materialises
+  // computed shape entries (e.g. `count(.owners)` over a backlink) at runtime
+  // — something the strict IR/SQL compile rejects because backlinks aren't in
+  // `knownFields`. BY fields and USING aliases are folded into the shape so
+  // their values come back on each row. When the source typeName is a WITH
+  // binding (free-object, set-literal, path, etc.) we build a `select_expr`
+  // wrapping a `shape_projection` over the binding ref so the parsed runtime
+  // recognizes it.
+  source:
+    | import("../edgeql/ast.js").SelectStatement
+    | import("../edgeql/ast.js").SelectExprStatement;
+  // The union of all atom names referenced by any grouping set. Each row's
+  // `key` includes every name in this list — for rows produced by a grouping
+  // set that doesn't include an atom, that key field is NULL.
+  byAtoms: string[];
+  // Each entry is a list of atom names; the runtime runs one partition pass
+  // per entry. Plain `BY a, b` → `[[a, b]]`; `BY {a, b}` → `[[a], [b]]`;
+  // CUBE / ROLLUP enumerate further subsets; mixing produces the Cartesian
+  // product.
+  groupingSets: string[][];
+  // Field names that the source select materialises but that should be
+  // stripped from `elements`, e.g. BY-only fields or USING aliases.
+  hiddenByFields: string[];
+  // Post-process the {key, elements, grouping} group rows. These are AST
+  // nodes evaluated by the engine against each row as `current_item`.
+  postFilter?: import("../edgeql/ast.js").FreeObjectExpr;
+  postShape?: import("../edgeql/ast.js").ShapeElement[];
+  postOrderBy?: import("../edgeql/ast.js").OrderExprChain;
+  postLimit?: number;
+  postOffset?: number;
+}
+
 export type IRStatement =
   | SelectIR
   | SelectFreeIR
   | SelectExprIR
   | InsertIR
   | UpdateIR
-  | DeleteIR;
+  | DeleteIR
+  | GroupIR;

@@ -12,6 +12,11 @@ import type {
   FunctionCallArgExpr,
   FunctionCallExpr,
   FreeObjectExpr,
+  GroupByAtom,
+  GroupByElement,
+  GroupExpr,
+  GroupStatement,
+  GroupUsingBinding,
   InsertConflict,
   InsertValue,
   InsertStatement,
@@ -399,6 +404,10 @@ class Parser {
         return this.parseConfigure(withClause);
       }
 
+      if (token.kind === "kw_group") {
+        return this.parseGroup(withClause);
+      }
+
       if (token.kind === "kw_start" || token.kind === "kw_commit" || token.kind === "kw_rollback") {
         return this.parseTransaction();
       }
@@ -465,6 +474,193 @@ class Parser {
       value,
       pos: { line: start.line, column: start.column },
     };
+  }
+
+  private parseGroup(ctx: ParseContext = {}): GroupStatement {
+    const start = this.expect("kw_group", "Expected 'group'");
+    const body = this.parseGroupBody();
+    while (this.peek().kind === "semi") {
+      this.consume();
+    }
+    this.expect("eof", "Unexpected tokens after group statement");
+    return {
+      ...this.withContext(ctx),
+      kind: "group",
+      source: body.source,
+      using: body.using,
+      by: body.by,
+      pos: { line: start.line, column: start.column },
+    };
+  }
+
+  private parseGroupExpr(): GroupExpr {
+    this.expect("kw_group", "Expected 'group'");
+    const body = this.parseGroupBody();
+    return {
+      kind: "group_expr",
+      source: body.source,
+      using: body.using,
+      by: body.by,
+    };
+  }
+
+  private parseGroupBody(): { source: FreeObjectExpr; using?: GroupUsingBinding[]; by: GroupByElement[] } {
+    const source = this.parseGroupSource();
+
+    let using: GroupUsingBinding[] | undefined;
+    if (this.peek().kind === "kw_using") {
+      this.consume();
+      using = this.parseGroupUsingBindings();
+    }
+
+    const byKeyword = this.expect("kw_by", "Expected 'BY' in group statement");
+    const by = this.parseGroupByList(byKeyword);
+
+    this.validateGroupBindings(using, by);
+
+    return { source, using, by };
+  }
+
+  private parseGroupSource(): FreeObjectExpr {
+    // `GROUP cards::Card [{shape}] [USING ...] BY ...` -- a bare or shape-decorated
+    // type name. parseFreeObjectExpr won't recognise `cards::Card BY` as a typed
+    // source (it isn't followed by '.field' or '{shape}'), so we route through
+    // parseInlineSelectExpr when the next thing after the qualified name is one
+    // of the GROUP-tail keywords.
+    if (this.isNameToken(this.peek())) {
+      const afterName = this.kindAfterQualifiedName();
+      if (afterName === "lbrace" || afterName === "kw_using" || afterName === "kw_by") {
+        return this.parseInlineSelectExpr();
+      }
+    }
+    return this.parseFreeObjectExpr();
+  }
+
+  private parseGroupUsingBindings(): GroupUsingBinding[] {
+    const bindings: GroupUsingBinding[] = [];
+    while (true) {
+      const aliasToken = this.peek();
+      if (!this.isNameToken(aliasToken)) {
+        throw new AppError("E_SYNTAX", "Expected alias name in USING clause", aliasToken.line, aliasToken.column);
+      }
+      const alias = this.consume().lexeme;
+      if (alias === "id") {
+        throw new AppError("E_SYNTAX", "may not name a grouping alias 'id'", aliasToken.line, aliasToken.column);
+      }
+      this.expect("assign", "Expected ':=' in USING binding");
+      const aliasExpr = this.withLocalBinding(alias, () => this.parseFreeObjectExpr());
+      bindings.push({ alias, expr: aliasExpr });
+      if (this.peek().kind !== "comma") {
+        break;
+      }
+      this.consume();
+      if (this.peek().kind === "kw_by") {
+        break;
+      }
+    }
+    return bindings;
+  }
+
+  private parseGroupByList(byKeyword: Token): GroupByElement[] {
+    const elements: GroupByElement[] = [];
+    while (true) {
+      elements.push(this.parseGroupByElement(byKeyword));
+      if (this.peek().kind !== "comma") {
+        break;
+      }
+      this.consume();
+    }
+    if (elements.length === 0) {
+      throw new AppError("E_SYNTAX", "Expected at least one element in BY clause", byKeyword.line, byKeyword.column);
+    }
+    return elements;
+  }
+
+  private parseGroupByElement(byKeyword: Token): GroupByElement {
+    const token = this.peek();
+
+    // `BY { atom, atom, … }` — comma-separated grouping sets, each set
+    // implicitly a singleton atom. Nested braces would mean multi-column
+    // sets, but the current grammar reads atoms only.
+    if (token.kind === "lbrace") {
+      this.consume();
+      const sets: GroupByAtom[][] = [];
+      while (this.peek().kind !== "rbrace") {
+        sets.push([this.parseGroupByAtom()]);
+        if (this.peek().kind === "rbrace") break;
+        this.expect("comma", "Expected ',' between grouping sets in BY {...}");
+      }
+      this.expect("rbrace", "Expected '}' after BY grouping sets");
+      return { kind: "sets", sets };
+    }
+
+    if (this.isNameToken(token) && token.lexeme.toLowerCase() === "cube" && this.peekNext().kind === "lparen") {
+      this.consume(); this.consume();
+      const atoms = this.parseGroupByAtomList();
+      this.expect("rparen", "Expected ')' after CUBE(...)");
+      return { kind: "cube", atoms };
+    }
+    if (this.isNameToken(token) && token.lexeme.toLowerCase() === "rollup" && this.peekNext().kind === "lparen") {
+      this.consume(); this.consume();
+      const atoms = this.parseGroupByAtomList();
+      this.expect("rparen", "Expected ')' after ROLLUP(...)");
+      return { kind: "rollup", atoms };
+    }
+
+    return this.parseGroupByAtom();
+  }
+
+  private parseGroupByAtom(): GroupByAtom {
+    const token = this.peek();
+    if (token.kind === "at") {
+      throw new AppError("E_SYNTAX", "BY clause cannot refer to link properties (parser does not yet support '@<name>' in BY)", token.line, token.column);
+    }
+    if (token.kind === "dot") {
+      this.consume();
+      const fieldToken = this.peek();
+      if (!this.isNameToken(fieldToken)) {
+        throw new AppError("E_SYNTAX", "Expected field name after '.' in BY clause", fieldToken.line, fieldToken.column);
+      }
+      const field = this.consume().lexeme;
+      if (field === "id") {
+        throw new AppError("E_SYNTAX", "may not group by a field named id", fieldToken.line, fieldToken.column);
+      }
+      return { kind: "field_ref", field };
+    }
+    if (this.isNameToken(token)) {
+      const nameToken = this.consume();
+      return { kind: "name_ref", name: nameToken.lexeme };
+    }
+    if (token.kind === "kw_by") {
+      throw new AppError("E_SYNTAX", "Expected BY-clause atom", token.line, token.column);
+    }
+    throw new AppError("E_SYNTAX", "Expected '.field' or USING alias name as BY atom", token.line, token.column);
+  }
+
+  private parseGroupByAtomList(): GroupByAtom[] {
+    const atoms: GroupByAtom[] = [];
+    while (true) {
+      atoms.push(this.parseGroupByAtom());
+      if (this.peek().kind !== "comma") {
+        break;
+      }
+      this.consume();
+    }
+    return atoms;
+  }
+
+  private validateGroupBindings(using: GroupUsingBinding[] | undefined, by: GroupByElement[]): void {
+    const declared = new Set<string>();
+    if (using) {
+      for (const binding of using) {
+        declared.add(binding.alias);
+      }
+    }
+    for (const element of by) {
+      if (element.kind === "name_ref" && !declared.has(element.name)) {
+        throw new AppError("E_SYNTAX", `variable '${element.name}' referenced in BY but not declared in USING`, 0, 0);
+      }
+    }
   }
 
   private parseTransaction(): TransactionStatement {
@@ -1088,6 +1284,26 @@ class Parser {
         this.expect("rparen", "Expected ')' after parenthesized mutation expression");
         return { kind: "mutation_expr", statement };
       }
+      // Parenthesised free-object constructor: `( name := expr, name := expr )`
+      if (this.isNameToken(this.peek()) && this.peekNext().kind === "assign") {
+        const entries: Array<{ name: string; expr: FreeObjectExpr }> = [];
+        while (true) {
+          const name = this.expectName("Expected free object field name").lexeme;
+          this.expect("assign", "Expected ':=' in free object field");
+          const fieldExpr = this.parseFreeObjectExpr();
+          entries.push({ name, expr: fieldExpr });
+          if (this.peek().kind !== "comma") {
+            break;
+          }
+          this.consume();
+          if (this.peek().kind === "rparen") {
+            break;
+          }
+        }
+        this.expect("rparen", "Expected ')' after free object entries");
+        return { kind: "free_object_constructor", entries };
+      }
+
       if (this.peek().kind === "kw_with") {
         const withClause = this.parseWithClause();
         let inner: FreeObjectExpr;
@@ -1268,6 +1484,10 @@ class Parser {
 
     if (this.peek().kind === "kw_select") {
       return this.parseSelectExprSubquery();
+    }
+
+    if (this.peek().kind === "kw_group") {
+      return this.parseGroupExpr();
     }
 
     if (this.peek().kind === "str_interp_start") {
@@ -2312,6 +2532,7 @@ class Parser {
       || token.kind === "lbrace"
       || token.kind === "lbracket"
       || token.kind === "lt"
+      || token.kind === "dot"
       || token.kind === "str_interp_start"
       || nameStartsGeneralExpr
       || literalStartsGeneralExpr;
@@ -2367,6 +2588,29 @@ class Parser {
     if (this.peek().kind !== "dot" && this.peek().kind !== "backward_link") {
       return undefined;
     }
+    // If the dot-chain is followed by a binary operator (`/`, `*`, `+`, `-`,
+    // `%`, `??`, `=`, `!=`, `<`, …) we defer to the general computed-expr
+    // parser so the whole binary expression compiles, instead of stopping at
+    // the field ref. Scan ahead non-destructively.
+    if (this.peek().kind === "dot") {
+      let i = this.index + 1;
+      // Skip a chain of `.fieldName` tokens.
+      while (i + 1 < this.tokens.length
+        && this.isNameToken(this.tokens[i]!)
+        && this.tokens[i + 1]?.kind === "dot") {
+        i += 2;
+      }
+      if (i < this.tokens.length && this.isNameToken(this.tokens[i]!)) {
+        const afterChain = this.tokens[i + 1]?.kind;
+        const continuesAsBinary: Array<Token["kind"]> = [
+          "plus", "minus", "star", "slash",
+          "coalesce", "equals", "not_equals", "lt", "gt", "lte", "gte",
+        ];
+        if (afterChain && continuesAsBinary.includes(afterChain)) {
+          return undefined;
+        }
+      }
+    }
     const op = this.peek().kind;
     this.consume();
 
@@ -2403,11 +2647,31 @@ class Parser {
       };
     }
 
+    // Chained access (e.g. `.key.element` or `.elements[is T].name`) — wrap as a
+    // select_expr over a field_access chain so the downstream IR sees the full path.
+    if (this.peek().kind === "dot" || this.peek().kind === "lbracket" || this.peek().kind === "at") {
+      let chained: FreeObjectExpr = {
+        kind: "field_access",
+        expr: { kind: "current_item" },
+        field: fieldName,
+      };
+      chained = this.applyPostfixExprChain(chained);
+      return {
+        kind: "select_expr",
+        expr: chained,
+        clauses: {},
+      };
+    }
+
     return {
       kind: "field_ref",
       field: fieldName,
     };
   }
+
+  // If a computed shape entry's value starts with `.field` and is followed by
+  // a math operator (`/`, `*`, `+`, `-`, `%`), `?`/`?=`/`?!=` etc., we need to
+  // parse the rest of the expression too.
 
   private parseComputedSubqueryExpr(): ComputedExpr | undefined {
     if (this.peek().kind === "lparen" && this.peekNext().kind === "kw_with") {
@@ -3910,6 +4174,7 @@ class Parser {
       "kw_delete",
       "kw_for",
       "kw_configure",
+      "kw_group",
       "kw_create",
       "kw_alter",
       "kw_drop",
@@ -4133,6 +4398,24 @@ class Parser {
           kind: "subquery",
           query: this.parseInlineSelectExpr(),
         };
+      }
+
+      // `WITH x := cards::Card GROUP ...` — a bare qualified type name as the
+      // binding value, with the binding terminating at the start of the next
+      // statement. parseInlineSelectExpr handles the qualified name and gives
+      // back a default-shape select; the binding terminator check guards us
+      // from over-consuming non-binding tokens.
+      if (this.peekNext().kind === "coloncolon") {
+        const candidate = this.attempt(() => {
+          const nested = this.parseInlineSelectExpr();
+          if (!this.isWithBindingValueTerminator()) {
+            return undefined;
+          }
+          return { kind: "subquery" as const, query: nested };
+        });
+        if (candidate) {
+          return candidate;
+        }
       }
 
       if ((this.peekNext().kind === "dot" && this.peekNth(2).kind === "lt") || this.peekNext().kind === "backward_link") {
