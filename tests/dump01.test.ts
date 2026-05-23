@@ -7,9 +7,7 @@ describe("TestDump01", () => {
   beforeEach(async () => {
     h = await QueryHarness.create({
       schema: "dump01_test",
-      setup: "dump01_setup",
-      dbFile: "./tests/.artifacts/dump01.sqlite",
-      resetDbFile: true
+      setup: "dump01_setup"
     });
   });
 

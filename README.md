@@ -51,6 +51,16 @@ npm run ui:build
 npm run dev
 ```
 
+Python QueryTestCase conversion:
+
+```bash
+npm run test:convert-py -- ../tests/test_edgeql_for.py
+```
+
+By default this writes to `sqlite-ts/tests/<python_file_without_test_>.test.ts`.
+Unsupported constructs are emitted as skipped tests with an `[unconverted: ...]` suffix.
+Use `--strict` to fail on the first unsupported construct.
+
 Default server: `http://localhost:4000`
 
 Playground UI: `http://localhost:4000/`

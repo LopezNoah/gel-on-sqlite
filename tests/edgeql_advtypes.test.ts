@@ -11,9 +11,7 @@ describe("TestEdgeQLAdvancedTypes", () => {
 
   beforeEach(async () => {
     h = await QueryHarness.create({
-      schema: "advtypes",
-      dbFile: "./tests/.artifacts/advtypes.sqlite",
-      resetDbFile: true
+      schema: "advtypes"
     });
   });
 

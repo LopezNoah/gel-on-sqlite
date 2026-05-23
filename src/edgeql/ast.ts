@@ -5,6 +5,52 @@ export interface SourcePos {
   column: number;
 }
 
+export type TypeExpr =
+  | { kind: "type_name"; name: string }
+  | { kind: "type_union"; left: TypeExpr; right: TypeExpr }
+  | { kind: "type_intersection"; left: TypeExpr; right: TypeExpr };
+
+export const simpleTypeName = (expr: TypeExpr | undefined): string | undefined =>
+  expr && expr.kind === "type_name" ? expr.name : undefined;
+
+export type PathStep =
+  | {
+      kind: "object_ref";
+      name: string;
+    }
+  | {
+      kind: "ptr";
+      name: string;
+      direction?: "outbound" | "inbound";
+      typeFilter?: string;
+      typeFilterExpr?: TypeExpr;
+      optional?: boolean;
+    }
+  | {
+      kind: "type_intersection";
+      typeName: string;
+      typeExpr?: TypeExpr;
+    }
+  | {
+      kind: "splat";
+      depth: 1 | 2;
+      typeName?: string;
+      intersectionTypeName?: string;
+      typeExpr?: TypeExpr;
+      intersectionTypeExpr?: TypeExpr;
+    };
+
+export interface ShapeElementModifiers {
+  cardinality?: "one" | "many" | "unknown";
+  required?: boolean;
+  operation?: "assign" | "append" | "subtract" | "materialize";
+  origin?: "explicit" | "default" | "splat_expansion" | "materialization";
+  where?: FreeObjectExpr;
+  orderBy?: OrderExpr[];
+  offset?: number;
+  limit?: number;
+}
+
 export type FilterTarget =
   | {
       kind: "field";
@@ -44,7 +90,7 @@ export type FilterExpr =
   | {
       kind: "predicate";
       target: FilterTarget;
-      op: "=" | "!=" | "like" | "ilike";
+      op: "=" | "!=" | "<" | "<=" | ">" | ">=" | "?=" | "?!=" | "like" | "ilike";
       value: FilterValue;
     }
   | {
@@ -106,9 +152,15 @@ export interface ArrayLiteralValue {
   values: ScalarValue[];
 }
 
+export type TupleLiteralElementValue = ScalarValue | TupleLiteralElementArray | TupleLiteralElementObject;
+export interface TupleLiteralElementArray extends Array<TupleLiteralElementValue> {}
+export interface TupleLiteralElementObject {
+  [key: string]: TupleLiteralElementValue;
+}
+
 export interface TupleLiteralValue {
   kind: "tuple_literal";
-  values: ScalarValue[] | Record<string, ScalarValue>;
+  values: TupleLiteralElementValue[] | Record<string, TupleLiteralElementValue>;
 }
 
 export type WithBindingValue =
@@ -136,6 +188,14 @@ export type WithBindingValue =
       };
     }
   | {
+      kind: "subquery_statement";
+      statement: Statement;
+    }
+  | {
+      kind: "subquery_expr";
+      expr: FreeObjectExpr;
+    }
+  | {
       kind: "enum_path";
       enumType: string;
       member: string;
@@ -144,16 +204,19 @@ export type WithBindingValue =
       kind: "path";
       head: string;
       tail: string;
+      steps?: PathStep[];
     }
   | {
       kind: "path_chain";
       parts: string[];
+      steps?: PathStep[];
     }
   | {
       kind: "backlink_path";
       head: string;
       link: string;
       sourceType?: string;
+      sourceTypeExpr?: TypeExpr;
     };
 
 export interface WithModuleAlias {
@@ -164,6 +227,7 @@ export interface WithModuleAlias {
 export interface OrderExpr {
   field: string;
   direction: "asc" | "desc";
+  nullsPosition?: "first" | "last";
   then?: OrderExpr;
 }
 
@@ -172,6 +236,12 @@ export interface ClauseChain {
   orderBy?: OrderExpr;
   limit?: number;
   offset?: number;
+  groupBy?: FreeObjectExpr[];
+  using?: Record<string, FreeObjectExpr>;
+  window?: {
+    partitionBy?: FreeObjectExpr[];
+    orderBy?: OrderExpr[];
+  };
   _withBindings?: WithBinding[];
   _withModule?: string;
   _withModuleAliases?: WithModuleAlias[];
@@ -189,6 +259,7 @@ export type ComputedExpr =
   | {
       kind: "polymorphic_field_ref";
       sourceType: string;
+      sourceTypeExpr?: TypeExpr;
       field: string;
     }
   | {
@@ -219,11 +290,27 @@ export type ComputedExpr =
       fromEnd: number;
       op: "negate" | "const_minus";
       constant?: number;
+    }
+  | {
+      kind: "parameter";
+      name: string;
+      castType?: string;
+    }
+  | {
+      kind: "global_ref";
+      name: string;
+    }
+  | {
+      kind: "type_intersection";
+      sourceType: string;
+      sourceTypeExpr?: TypeExpr;
+      expr: FreeObjectExpr;
     };
 
 export interface BacklinkExpr {
   link: string;
   sourceType?: string;
+  sourceTypeExpr?: TypeExpr;
 }
 
 export type FunctionCallArgExpr =
@@ -248,6 +335,11 @@ export type FunctionCallArgExpr =
   | {
       kind: "expr";
       expr: FreeObjectExpr;
+    }
+  | {
+      kind: "parameter";
+      name: string;
+      castType?: string;
     };
 
 export interface FunctionCallExpr {
@@ -256,35 +348,37 @@ export interface FunctionCallExpr {
 }
 
 export type ShapeElement =
-  | {
+  | ({
       kind: "field";
       name: string;
-    }
-  | {
+    } & ShapeElementModifiers)
+  | ({
       kind: "splat";
       depth: 1 | 2;
       sourceType?: string;
+      sourceTypeExpr?: TypeExpr;
       intersection?: boolean;
-    }
-  | {
+    } & ShapeElementModifiers)
+  | ({
       kind: "computed";
       name: string;
       expr: ComputedExpr;
       multi?: boolean;
-    }
-  | {
+    } & ShapeElementModifiers)
+  | ({
       kind: "backlink";
       name: string;
       expr: BacklinkExpr;
       shape?: ShapeElement[];
-    }
-  | {
+    } & ShapeElementModifiers)
+  | ({
       kind: "link";
       name: string;
       typeFilter?: string;
+      typeFilterExpr?: TypeExpr;
       shape: ShapeElement[];
       clauses: ClauseChain;
-    };
+    } & ShapeElementModifiers);
 
 export interface SelectStatement {
   kind: "select";
@@ -292,6 +386,15 @@ export interface SelectStatement {
   withModule?: string;
   withModuleAliases?: WithModuleAlias[];
   typeName: string;
+  typeFilterExprs?: TypeExpr[];
+  /**
+   * Per-branch type filter expressions arising from a set-expression like
+   * `{T1, T2}` at the SELECT subject. Unlike `typeFilterExprs` (which
+   * intersect to narrow the subject), the branches are UNION ALL'd, so
+   * matching concrete types that occur in more than one branch appear
+   * once per branch in the result.
+   */
+  branchTypeFilterExprs?: TypeExpr[];
   shape: ShapeElement[];
   fields: string[];
   filter?: ClauseChain["filter"];
@@ -346,16 +449,30 @@ export type FreeObjectExpr =
       kind: "path";
       head: string;
       tail: string;
+      steps?: PathStep[];
+    }
+  | {
+      kind: "path_chain";
+      parts: string[];
+      steps?: PathStep[];
+    }
+  | {
+      kind: "path_steps";
+      steps: PathStep[];
+      partial?: boolean;
     }
   | {
       kind: "backlink_path";
       link: string;
       sourceType?: string;
+      sourceTypeExpr?: TypeExpr;
+      optional?: boolean;
     }
   | {
       kind: "field_access";
       expr: FreeObjectExpr;
       field: string;
+      optional?: boolean;
     }
   | {
       kind: "shape_projection";
@@ -368,7 +485,21 @@ export type FreeObjectExpr =
       index: number;
     }
   | {
+      kind: "slice_access";
+      expr: FreeObjectExpr;
+      start?: number;
+      end?: number;
+    }
+  | {
       kind: "tuple";
+      values: FreeObjectExpr[];
+    }
+  | {
+      kind: "free_object_constructor";
+      entries: Array<{ name: string; expr: FreeObjectExpr }>;
+    }
+  | {
+      kind: "array_literal_expr";
       values: FreeObjectExpr[];
     }
   | {
@@ -377,7 +508,7 @@ export type FreeObjectExpr =
     }
   | {
       kind: "compare";
-      op: "=" | "!=" | ">" | "<";
+      op: "=" | "!=" | ">" | "<" | ">=" | "<=" | "?=" | "?!=" | "like" | "ilike";
       left: FreeObjectExpr;
       right: FreeObjectExpr;
     }
@@ -397,9 +528,20 @@ export type FreeObjectExpr =
     }
   | {
       kind: "math";
-      op: "+";
+      op: "+" | "-" | "*" | "/" | "//" | "%" | "^";
       left: FreeObjectExpr;
       right: FreeObjectExpr;
+    }
+  | {
+      kind: "logical";
+      op: "and" | "or";
+      left: FreeObjectExpr;
+      right: FreeObjectExpr;
+    }
+  | {
+      kind: "unary";
+      op: "not" | "neg";
+      expr: FreeObjectExpr;
     }
   | {
       kind: "if_else";
@@ -412,6 +554,14 @@ export type FreeObjectExpr =
       variable: string;
       iterator: FreeObjectExpr;
       body: FreeObjectExpr;
+      optional?: boolean;
+      filter?: FreeObjectExpr;
+      orderBy?: {
+        expr: FreeObjectExpr;
+        direction: "asc" | "desc";
+      };
+      limit?: number;
+      offset?: number;
     }
   | {
       kind: "concat";
@@ -421,18 +571,66 @@ export type FreeObjectExpr =
       kind: "is_type";
       expr: FreeObjectExpr;
       typeName: string;
+      typeExpr?: TypeExpr;
+    }
+  | {
+      kind: "coalesce";
+      left: FreeObjectExpr;
+      right: FreeObjectExpr;
+    }
+  | {
+      kind: "parameter";
+      name: string;
+      castType?: string;
+    }
+  | {
+      kind: "substitution";
+      name: string;
+    }
+  | {
+      kind: "global_ref";
+      name: string;
     }
   | {
       kind: "select_expr_subquery";
       alias?: string;
       expr: FreeObjectExpr;
-      orderBy?: {
-        expr: FreeObjectExpr;
-        direction: "asc" | "desc";
-      };
+      clauses?: ClauseChain;
+      filter?: FreeObjectExpr;
+      orderBy?: OrderExprChain;
       limit?: number;
       offset?: number;
-    };
+    }
+  | {
+      kind: "mutation_expr";
+      statement: InsertStatement | UpdateStatement | DeleteStatement;
+    }
+  | GroupExpr;
+
+export interface GroupUsingBinding {
+  alias: string;
+  expr: FreeObjectExpr;
+}
+
+export type GroupByAtom =
+  | { kind: "field_ref"; field: string }
+  | { kind: "name_ref"; name: string };
+
+// Top-level BY entries combine to form one or more "grouping sets" — each set
+// is a list of atom names. Plain `BY a, b` → one set [a, b]; `BY {a, b}` →
+// two sets [[a], [b]]; CUBE / ROLLUP enumerate further subsets.
+export type GroupByElement =
+  | GroupByAtom
+  | { kind: "sets"; sets: GroupByAtom[][] }
+  | { kind: "cube"; atoms: GroupByAtom[] }
+  | { kind: "rollup"; atoms: GroupByAtom[] };
+
+export interface GroupExpr {
+  kind: "group_expr";
+  source: FreeObjectExpr;
+  using?: GroupUsingBinding[];
+  by: GroupByElement[];
+}
 
 export interface SelectFreeStatement {
   kind: "select_free";
@@ -446,16 +644,20 @@ export interface SelectFreeStatement {
   pos: SourcePos;
 }
 
+export interface OrderExprChain {
+  expr: FreeObjectExpr;
+  direction: "asc" | "desc";
+  nullsPosition?: "first" | "last";
+  then?: OrderExprChain;
+}
+
 export interface SelectExprStatement {
   kind: "select_expr";
   with?: WithBinding[];
   withModule?: string;
   withModuleAliases?: WithModuleAlias[];
   expr: FreeObjectExpr;
-  orderBy?: {
-    expr: FreeObjectExpr;
-    direction: "asc" | "desc";
-  };
+  orderBy?: OrderExprChain;
   pos: SourcePos;
 }
 
@@ -497,6 +699,10 @@ export type InsertValue =
       kind: "function_call";
       call: FunctionCallExpr;
     }
+  | {
+      kind: "expr";
+      expr: FreeObjectExpr;
+    }
   | ForStatement;
 
 export interface InsertConflict {
@@ -522,8 +728,10 @@ export interface UpdateStatement {
   withModule?: string;
   withModuleAliases?: WithModuleAlias[];
   typeName: string;
+  target?: FreeObjectExpr;
   filter?: FilterExpr;
   values: Record<string, InsertValue>;
+  operations?: Record<string, "assign" | "append" | "subtract">;
   pos: SourcePos;
 }
 
@@ -533,6 +741,7 @@ export interface DeleteStatement {
   withModule?: string;
   withModuleAliases?: WithModuleAlias[];
   typeName: string;
+  target?: FreeObjectExpr;
   filter?: FilterExpr;
   pos: SourcePos;
 }
@@ -543,9 +752,111 @@ export interface ForStatement {
   withModule?: string;
   withModuleAliases?: WithModuleAlias[];
   variable: string;
+  optional?: boolean;
   iteratorExpr: FreeObjectExpr;
   body: InsertStatement | SelectStatement | SelectExprStatement | SelectFreeStatement;
   pos: SourcePos;
 }
 
-export type Statement = SelectStatement | SelectFreeStatement | SelectExprStatement | InsertStatement | UpdateStatement | DeleteStatement | ForStatement;
+export interface ConfigureStatement {
+  kind: "configure";
+  with?: WithBinding[];
+  withModule?: string;
+  withModuleAliases?: WithModuleAlias[];
+  scope: "session" | "current_database" | "instance";
+  operation: "set" | "insert" | "reset";
+  target: string;
+  value?: FreeObjectExpr;
+  pos: SourcePos;
+}
+
+export interface TransactionStatement {
+  kind: "transaction";
+  with?: WithBinding[];
+  withModule?: string;
+  withModuleAliases?: WithModuleAlias[];
+  action: "start" | "commit" | "rollback";
+  isolation?: "serializable" | "repeatable_read";
+  pos: SourcePos;
+}
+
+export interface DDLStatement {
+  kind: "ddl";
+  with?: WithBinding[];
+  withModule?: string;
+  withModuleAliases?: WithModuleAlias[];
+  action: "create" | "alter" | "drop";
+  objectKind:
+    | "type"
+    | "scalar"
+    | "link"
+    | "property"
+    | "function"
+    | "constraint"
+    | "index"
+    | "trigger"
+    | "policy"
+    | "module"
+    | "database"
+    | "branch"
+    | "role"
+    | "extension"
+    | "alias"
+    | "global";
+  name: string;
+  value?: FreeObjectExpr;
+  pos: SourcePos;
+}
+
+export interface GroupStatement {
+  kind: "group";
+  with?: WithBinding[];
+  withModule?: string;
+  withModuleAliases?: WithModuleAlias[];
+  source: FreeObjectExpr;
+  using?: GroupUsingBinding[];
+  by: GroupByElement[];
+  pos: SourcePos;
+}
+
+export interface DescribeStatement {
+  kind: "describe";
+  with?: WithBinding[];
+  withModule?: string;
+  withModuleAliases?: WithModuleAlias[];
+  objectKind: "schema" | "current_database" | "instance" | "type";
+  objectName?: string;
+  format?: "ddl" | "sdl" | "json" | "text";
+  pos: SourcePos;
+}
+
+export interface ExplainStatement {
+  kind: "explain";
+  with?: WithBinding[];
+  withModule?: string;
+  withModuleAliases?: WithModuleAlias[];
+  analyze: boolean;
+  query: Statement;
+  pos: SourcePos;
+}
+
+export type Statement = (
+  | SelectStatement
+  | SelectFreeStatement
+  | SelectExprStatement
+  | InsertStatement
+  | UpdateStatement
+  | DeleteStatement
+  | ForStatement
+  | ConfigureStatement
+  | TransactionStatement
+  | DDLStatement
+  | GroupStatement
+  | DescribeStatement
+  | ExplainStatement) & {
+  with?: WithBinding[];
+  withModule?: string;
+  withModuleAliases?: WithModuleAlias[];
+  typeName?: string;
+  filter?: FilterExpr;
+};

@@ -7,8 +7,7 @@ describe("EdgeQL Enums (SPEC-PARITY)", () => {
 
   beforeEach(async () => {
     h = await QueryHarness.create({
-      schema: "enums",
-      dbFile: "./tests/.artifacts/enums.sqlite",
+      schema: "enums"
     });
   });
 

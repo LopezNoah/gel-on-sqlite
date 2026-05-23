@@ -1,0 +1,168 @@
+import fs from "node:fs";
+import path from "node:path";
+import { parseDeclarativeSchema } from "../src/schema/declarative.js";
+import { schemaSnapshotFromDeclarative } from "../src/schema/uiSchema.js";
+import { generateSchemaModel, renderSchemaModelModule } from "../src/codegen/schema.js";
+
+type CliArgs = {
+  schemaName?: string;
+  schemaDir: string;
+  sourceFiles: string[];
+  outputFile: string;
+  exportName: string;
+  registerAs?: string;
+};
+
+const inferredModuleNameFromSchema = (schemaName: string): string => {
+  const idx = schemaName.lastIndexOf("_");
+  if (idx < 0) {
+    return "default";
+  }
+  return schemaName.slice(idx + 1).toLowerCase().replace(/_/g, "::");
+};
+
+const hasExplicitModuleDeclaration = (source: string): boolean => {
+  const withoutComments = source.replace(/^\s*#.*$/gm, "");
+  return withoutComments.trimStart().startsWith("module ");
+};
+
+const wrapModule = (moduleName: string, source: string): string => {
+  if (hasExplicitModuleDeclaration(source)) {
+    return source;
+  }
+  return `module ${moduleName} {\n${source}\n}`;
+};
+
+const normalizeSchemaPath = (schemaDir: string, input: string): string => {
+  if (path.isAbsolute(input)) {
+    return input;
+  }
+  if (input.endsWith(".esdl")) {
+    return path.join(schemaDir, input);
+  }
+  return path.join(schemaDir, `${input}.esdl`);
+};
+
+const loadSchemaSourceByName = (schemaDir: string, schemaName: string): string => {
+  const parts: Array<{ fileName: string; moduleName: string }> = [];
+  const primaryModule = inferredModuleNameFromSchema(schemaName);
+  const idx = schemaName.lastIndexOf("_");
+
+  if (idx > 0) {
+    const baseName = schemaName.slice(0, idx);
+    const defaultName = `${baseName}_default`;
+    if (defaultName !== schemaName) {
+      const defaultPath = path.join(schemaDir, `${defaultName}.esdl`);
+      if (fs.existsSync(defaultPath)) {
+        parts.push({ fileName: defaultName, moduleName: "default" });
+      }
+    }
+  }
+
+  parts.push({ fileName: schemaName, moduleName: primaryModule });
+
+  return parts
+    .map(({ fileName, moduleName }) => {
+      const schemaPath = path.join(schemaDir, `${fileName}.esdl`);
+      if (!fs.existsSync(schemaPath)) {
+        throw new Error(`Schema file not found: ${schemaPath}`);
+      }
+      const source = fs.readFileSync(schemaPath, "utf8");
+      return wrapModule(moduleName, source);
+    })
+    .join("\n\n");
+};
+
+const loadSchemaSourceByFiles = (schemaDir: string, sourceFiles: string[]): string => {
+  if (sourceFiles.length === 0) {
+    throw new Error("No schema files were provided");
+  }
+
+  return sourceFiles
+    .map((rawFile) => {
+      const schemaPath = normalizeSchemaPath(schemaDir, rawFile);
+      if (!fs.existsSync(schemaPath)) {
+        throw new Error(`Schema file not found: ${schemaPath}`);
+      }
+      const source = fs.readFileSync(schemaPath, "utf8");
+      const inferredModule = inferredModuleNameFromSchema(path.basename(schemaPath, ".esdl"));
+      return wrapModule(inferredModule, source);
+    })
+    .join("\n\n");
+};
+
+const defaultOutputFile = path.join(process.cwd(), "src", "codegen", "generated", "schema_model.ts");
+
+const parseArgs = (argv: string[]): CliArgs => {
+  const out: CliArgs = {
+    schemaDir: path.join(process.cwd(), "tests", "schemas"),
+    sourceFiles: [],
+    outputFile: defaultOutputFile,
+    exportName: "generatedSchema",
+  };
+
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === "--schema-name") {
+      out.schemaName = argv[i + 1];
+      i += 1;
+      continue;
+    }
+    if (arg === "--schema-dir") {
+      out.schemaDir = path.isAbsolute(argv[i + 1] ?? "")
+        ? (argv[i + 1] as string)
+        : path.join(process.cwd(), argv[i + 1] ?? "");
+      i += 1;
+      continue;
+    }
+    if (arg === "--sources") {
+      const value = argv[i + 1] ?? "";
+      out.sourceFiles = value
+        .split(",")
+        .map((part) => part.trim())
+        .filter((part) => part.length > 0);
+      i += 1;
+      continue;
+    }
+    if (arg === "--out") {
+      const value = argv[i + 1] ?? "";
+      out.outputFile = path.isAbsolute(value) ? value : path.join(process.cwd(), value);
+      i += 1;
+      continue;
+    }
+    if (arg === "--export-name") {
+      out.exportName = argv[i + 1] ?? out.exportName;
+      i += 1;
+      continue;
+    }
+    if (arg === "--register-as") {
+      out.registerAs = argv[i + 1] ?? undefined;
+      i += 1;
+      continue;
+    }
+  }
+
+  if (!out.schemaName && out.sourceFiles.length === 0) {
+    out.schemaName = "dump01_test";
+  }
+
+  return out;
+};
+
+const args = parseArgs(process.argv.slice(2));
+
+const schemaSource = args.schemaName
+  ? loadSchemaSourceByName(args.schemaDir, args.schemaName)
+  : loadSchemaSourceByFiles(args.schemaDir, args.sourceFiles);
+
+const declarative = parseDeclarativeSchema(schemaSource);
+const snapshot = schemaSnapshotFromDeclarative(declarative);
+const generated = generateSchemaModel(snapshot);
+
+const banner = "// Generated by scripts/generate-schema-model.ts\n// Do not edit manually.\n\n";
+const outputText = banner + renderSchemaModelModule(generated, args.exportName, { registerAs: args.registerAs });
+
+fs.mkdirSync(path.dirname(args.outputFile), { recursive: true });
+fs.writeFileSync(args.outputFile, outputText, "utf8");
+
+process.stdout.write(`Wrote schema model to ${args.outputFile}\n`);

@@ -86,8 +86,7 @@ export interface Base {
   system_comment: string | null | undefined;
 }
 
-export interface GrammarEntryPoint extends Base {
-}
+export type GrammarEntryPoint = Base;
 
 export interface OptionValue extends Base {
   name: string;
@@ -101,8 +100,7 @@ export interface Options extends Base {
   options: Record<string, OptionValue> | undefined;
 }
 
-export interface Expr extends GrammarEntryPoint, Base {
-}
+export type Expr = GrammarEntryPoint & Base;
 
 export interface Placeholder extends Expr {
   name: string;
@@ -114,8 +112,7 @@ export interface SortExpr extends Base {
   nones_order: NonesOrder | null | undefined;
 }
 
-export interface Alias extends Base {
-}
+export type Alias = Base;
 
 export interface AliasedExpr extends Alias {
   alias: string;
@@ -127,11 +124,9 @@ export interface ModuleAliasDecl extends Alias {
   alias: string | null;
 }
 
-export interface GroupingAtom extends Base {
-}
+export type GroupingAtom = Base;
 
-export interface BaseObjectRef extends Base {
-}
+export type BaseObjectRef = Base;
 
 export interface ObjectRef extends BaseObjectRef, GroupingAtom {
   name: string;
@@ -152,11 +147,9 @@ export interface IRAnchor extends Anchor {
   move_scope: boolean | undefined;
 }
 
-export interface SpecialAnchor extends Anchor {
-}
+export type SpecialAnchor = Anchor;
 
-export interface Cursor extends Expr {
-}
+export type Cursor = Expr;
 
 export interface DetachedExpr extends Expr {
   expr: Expr;
@@ -211,8 +204,7 @@ export interface StrInterp extends Expr {
   interpolations: StrInterpFragment[];
 }
 
-export interface BaseConstant extends Expr {
-}
+export type BaseConstant = Expr;
 
 export interface Constant extends BaseConstant {
   kind: ConstantKind;
@@ -350,11 +342,9 @@ export interface SessionResetAliasDecl extends Command {
   alias: string;
 }
 
-export interface SessionResetModule extends Command {
-}
+export type SessionResetModule = Command;
 
-export interface SessionResetAllAliases extends Command {
-}
+export type SessionResetAllAliases = Command;
 
 export interface ShapeOperation extends Base {
   op: ShapeOp;
@@ -380,8 +370,7 @@ export interface Shape extends Expr {
   allow_factoring: boolean | undefined;
 }
 
-export interface Query extends Expr, GrammarEntryPoint, Command {
-}
+export type Query = Expr & GrammarEntryPoint & Command;
 
 export interface SelectQuery extends Query {
   result_alias: string | null | undefined;
@@ -398,8 +387,7 @@ export interface GroupingIdentList extends GroupingAtom, Base {
   elements: GroupingAtom[];
 }
 
-export interface GroupingElement extends Base {
-}
+export type GroupingElement = Base;
 
 export interface GroupingSimple extends GroupingElement {
   element: GroupingAtom;
@@ -465,8 +453,7 @@ export interface ForQuery extends Query {
   result: Expr;
 }
 
-export interface Transaction extends Base {
-}
+export type Transaction = Base;
 
 export interface StartTransaction extends Transaction {
   isolation: string | null | undefined;
@@ -474,11 +461,9 @@ export interface StartTransaction extends Transaction {
   deferrable: string | null | undefined;
 }
 
-export interface CommitTransaction extends Transaction {
-}
+export type CommitTransaction = Transaction;
 
-export interface RollbackTransaction extends Transaction {
-}
+export type RollbackTransaction = Transaction;
 
 export interface DeclareSavepoint extends Transaction {
   name: string;
@@ -492,8 +477,7 @@ export interface ReleaseSavepoint extends Transaction {
   name: string;
 }
 
-export interface DDL extends Base {
-}
+export type DDL = Base;
 
 export interface Position extends DDL {
   ref: ObjectRef | null | undefined;
@@ -504,15 +488,13 @@ export interface DDLOperation extends DDL {
   commands: DDLOperation[] | undefined;
 }
 
-export interface DDLCommand extends DDLOperation, Command {
-}
+export type DDLCommand = DDLOperation & Command;
 
 export interface DDLQuery extends DDLCommand {
   query: Query;
 }
 
-export interface NonTransactionalDDLCommand extends DDLCommand {
-}
+export type NonTransactionalDDLCommand = DDLCommand;
 
 export interface AlterAddInherit extends DDLOperation {
   position: Position | null | undefined;
@@ -559,11 +541,9 @@ export interface CreateObject extends ObjectDDL {
   create_if_not_exists: boolean | undefined;
 }
 
-export interface AlterObject extends ObjectDDL {
-}
+export type AlterObject = ObjectDDL;
 
-export interface DropObject extends ObjectDDL {
-}
+export type DropObject = ObjectDDL;
 
 export interface CreateExtendingObject extends CreateObject {
   final: boolean | undefined;
@@ -579,8 +559,7 @@ export interface NestedQLBlock extends DDL {
   text: string | null | undefined;
 }
 
-export interface MigrationCommand extends DDLCommand {
-}
+export type MigrationCommand = DDLCommand;
 
 export interface CreateMigration extends CreateObject, MigrationCommand, GrammarEntryPoint {
   body: NestedQLBlock;
@@ -589,28 +568,23 @@ export interface CreateMigration extends CreateObject, MigrationCommand, Grammar
   target_sdl: string | null | undefined;
 }
 
-export interface CommittedSchema extends DDL {
-}
+export type CommittedSchema = DDL;
 
 export interface StartMigration extends MigrationCommand {
   target: Schema | CommittedSchema;
 }
 
-export interface AbortMigration extends MigrationCommand {
-}
+export type AbortMigration = MigrationCommand;
 
-export interface PopulateMigration extends MigrationCommand {
-}
+export type PopulateMigration = MigrationCommand;
 
-export interface AlterCurrentMigrationRejectProposed extends MigrationCommand {
-}
+export type AlterCurrentMigrationRejectProposed = MigrationCommand;
 
 export interface DescribeCurrentMigration extends MigrationCommand {
   language: string;
 }
 
-export interface CommitMigration extends MigrationCommand {
-}
+export type CommitMigration = MigrationCommand;
 
 export interface AlterMigration extends AlterObject, MigrationCommand {
 }
@@ -622,20 +596,15 @@ export interface ResetSchema extends MigrationCommand {
   target: ObjectRef;
 }
 
-export interface StartMigrationRewrite extends MigrationCommand {
-}
+export type StartMigrationRewrite = MigrationCommand;
 
-export interface AbortMigrationRewrite extends MigrationCommand {
-}
+export type AbortMigrationRewrite = MigrationCommand;
 
-export interface CommitMigrationRewrite extends MigrationCommand {
-}
+export type CommitMigrationRewrite = MigrationCommand;
 
-export interface UnqualifiedObjectCommand extends ObjectDDL {
-}
+export type UnqualifiedObjectCommand = ObjectDDL;
 
-export interface GlobalObjectCommand extends UnqualifiedObjectCommand {
-}
+export type GlobalObjectCommand = UnqualifiedObjectCommand;
 
 export interface DatabaseCommand extends GlobalObjectCommand, NonTransactionalDDLCommand {
   flavor: string | undefined;
@@ -665,8 +634,7 @@ export interface CreateExtensionPackage extends CreateObject, ExtensionPackageCo
 export interface DropExtensionPackage extends DropObject, ExtensionPackageCommand {
 }
 
-export interface ExtensionPackageMigrationCommand extends GlobalObjectCommand {
-}
+export type ExtensionPackageMigrationCommand = GlobalObjectCommand;
 
 export interface CreateExtensionPackageMigration extends CreateObject, ExtensionPackageMigrationCommand {
   from_version: Constant;
@@ -679,8 +647,7 @@ export interface DropExtensionPackageMigration extends DropObject, ExtensionPack
   to_version: Constant;
 }
 
-export interface ExtensionCommand extends UnqualifiedObjectCommand {
-}
+export type ExtensionCommand = UnqualifiedObjectCommand;
 
 export interface CreateExtension extends CreateObject, ExtensionCommand {
   version: Constant | null | undefined;
@@ -695,8 +662,7 @@ export interface DropExtension extends DropObject, ExtensionCommand {
   version: Constant | null | undefined;
 }
 
-export interface FutureCommand extends UnqualifiedObjectCommand {
-}
+export type FutureCommand = UnqualifiedObjectCommand;
 
 export interface CreateFuture extends CreateObject, FutureCommand {
 }
@@ -704,8 +670,7 @@ export interface CreateFuture extends CreateObject, FutureCommand {
 export interface DropFuture extends DropObject, FutureCommand {
 }
 
-export interface ModuleCommand extends UnqualifiedObjectCommand {
-}
+export type ModuleCommand = UnqualifiedObjectCommand;
 
 export interface CreateModule extends ModuleCommand, CreateObject {
 }
@@ -716,8 +681,7 @@ export interface AlterModule extends ModuleCommand, AlterObject {
 export interface DropModule extends ModuleCommand, DropObject {
 }
 
-export interface RoleCommand extends GlobalObjectCommand {
-}
+export type RoleCommand = GlobalObjectCommand;
 
 export interface CreateRole extends CreateObject, RoleCommand {
   superuser: boolean | undefined;
@@ -730,8 +694,7 @@ export interface AlterRole extends AlterObject, RoleCommand {
 export interface DropRole extends DropObject, RoleCommand {
 }
 
-export interface AnnotationCommand extends ObjectDDL {
-}
+export type AnnotationCommand = ObjectDDL;
 
 export interface CreateAnnotation extends CreateExtendingObject, AnnotationCommand {
   type: TypeExpr | null;
@@ -744,14 +707,12 @@ export interface AlterAnnotation extends AlterObject, AnnotationCommand {
 export interface DropAnnotation extends DropObject, AnnotationCommand {
 }
 
-export interface PseudoTypeCommand extends ObjectDDL {
-}
+export type PseudoTypeCommand = ObjectDDL;
 
 export interface CreatePseudoType extends CreateObject, PseudoTypeCommand {
 }
 
-export interface ScalarTypeCommand extends ObjectDDL {
-}
+export type ScalarTypeCommand = ObjectDDL;
 
 export interface CreateScalarType extends CreateExtendingObject, ScalarTypeCommand {
 }
@@ -762,8 +723,7 @@ export interface AlterScalarType extends AlterObject, ScalarTypeCommand {
 export interface DropScalarType extends DropObject, ScalarTypeCommand {
 }
 
-export interface PropertyCommand extends ObjectDDL {
-}
+export type PropertyCommand = ObjectDDL;
 
 export interface CreateProperty extends CreateExtendingObject, PropertyCommand {
 }
@@ -782,8 +742,7 @@ export interface CreateConcretePointer extends CreateObject {
   bases: TypeName[];
 }
 
-export interface CreateConcreteUnknownPointer extends CreateConcretePointer {
-}
+export type CreateConcreteUnknownPointer = CreateConcretePointer;
 
 export interface AlterConcreteUnknownPointer extends AlterObject, PropertyCommand {
 }
@@ -797,8 +756,7 @@ export interface AlterConcreteProperty extends AlterObject, PropertyCommand {
 export interface DropConcreteProperty extends DropObject, PropertyCommand {
 }
 
-export interface ObjectTypeCommand extends ObjectDDL {
-}
+export type ObjectTypeCommand = ObjectDDL;
 
 export interface CreateObjectType extends CreateExtendingObject, ObjectTypeCommand {
 }
@@ -809,8 +767,7 @@ export interface AlterObjectType extends AlterObject, ObjectTypeCommand {
 export interface DropObjectType extends DropObject, ObjectTypeCommand {
 }
 
-export interface AliasCommand extends ObjectDDL {
-}
+export type AliasCommand = ObjectDDL;
 
 export interface CreateAlias extends CreateObject, AliasCommand {
 }
@@ -821,8 +778,7 @@ export interface AlterAlias extends AlterObject, AliasCommand {
 export interface DropAlias extends DropObject, AliasCommand {
 }
 
-export interface GlobalCommand extends ObjectDDL {
-}
+export type GlobalCommand = ObjectDDL;
 
 export interface CreateGlobal extends CreateObject, GlobalCommand {
   is_required: boolean | null | undefined;
@@ -841,8 +797,7 @@ export interface SetGlobalType extends SetField {
   reset_value: boolean | undefined;
 }
 
-export interface PermissionCommand extends ObjectDDL {
-}
+export type PermissionCommand = ObjectDDL;
 
 export interface CreatePermission extends CreateObject, PermissionCommand {
 }
@@ -853,8 +808,7 @@ export interface AlterPermission extends AlterObject, PermissionCommand {
 export interface DropPermission extends DropObject, PermissionCommand {
 }
 
-export interface LinkCommand extends ObjectDDL {
-}
+export type LinkCommand = ObjectDDL;
 
 export interface CreateLink extends CreateExtendingObject, LinkCommand {
 }
@@ -874,8 +828,7 @@ export interface AlterConcreteLink extends AlterObject, LinkCommand {
 export interface DropConcreteLink extends DropObject, LinkCommand {
 }
 
-export interface ConstraintCommand extends ObjectDDL {
-}
+export type ConstraintCommand = ObjectDDL;
 
 export interface CreateConstraint extends CreateExtendingObject, ConstraintCommand {
   subjectexpr: Expr | null;
@@ -910,8 +863,7 @@ export interface IndexType extends DDL {
   kwargs: Record<string, Expr> | undefined;
 }
 
-export interface IndexCommand extends ObjectDDL {
-}
+export type IndexCommand = ObjectDDL;
 
 export interface IndexCode extends DDL {
   language: Language;
@@ -968,8 +920,7 @@ export interface AlterAnnotationValue extends AnnotationCommand, AlterObject {
 export interface DropAnnotationValue extends AnnotationCommand, DropObject {
 }
 
-export interface AccessPolicyCommand extends ObjectDDL {
-}
+export type AccessPolicyCommand = ObjectDDL;
 
 export interface CreateAccessPolicy extends CreateObject, AccessPolicyCommand {
   condition: Expr | null;
@@ -989,8 +940,7 @@ export interface AlterAccessPolicy extends AlterObject, AccessPolicyCommand {
 export interface DropAccessPolicy extends DropObject, AccessPolicyCommand {
 }
 
-export interface TriggerCommand extends ObjectDDL {
-}
+export type TriggerCommand = ObjectDDL;
 
 export interface CreateTrigger extends CreateObject, TriggerCommand {
   timing: string;
@@ -1133,8 +1083,7 @@ export interface AdministerStmt extends Command {
   expr: FunctionCall;
 }
 
-export interface SDL extends Base {
-}
+export type SDL = Base;
 
 export interface ModuleDeclaration extends SDL {
   name: ObjectRef;

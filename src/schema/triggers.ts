@@ -1,5 +1,5 @@
 import * as errors from "./errors.js";
-import { CompiledExpression, Expression } from "./expr.js";
+import { type CompiledExpression, Expression, type EdgeQLExpr } from "./expr.js";
 
 export enum TriggerTiming {
   After = "After",
@@ -68,18 +68,22 @@ export class Trigger {
   constructor(public data: TriggerData) {}
 
   getKinds(_schema: TriggerSchema): ReadonlySet<TriggerKind> {
+    void _schema;
     return this.data.kinds;
   }
 
   getScope(_schema: TriggerSchema): TriggerScope {
+    void _schema;
     return this.data.scope;
   }
 
   getDisplayname(_schema: TriggerSchema): string {
+    void _schema;
     return this.data.name;
   }
 
   getSubject(_schema: TriggerSchema): TriggerTypeLike {
+    void _schema;
     return this.data.subject;
   }
 }
@@ -265,8 +269,8 @@ export class TriggerCommand extends BaseTriggerCommand {
 }
 
 export interface CreateTriggerAst {
-  expr?: unknown;
-  condition?: unknown;
+  expr?: EdgeQLExpr;
+  condition?: EdgeQLExpr;
   timing: TriggerTiming;
   kinds: ReadonlySet<TriggerKind>;
   scope: TriggerScope;
@@ -291,31 +295,31 @@ export class CreateTrigger extends TriggerCommand {
   ): CreateTrigger {
     if (astnode.expr) {
       cmd.setAttributeValue("expr", Expression.fromAst(
-        astnode.expr as any,
+        astnode.expr,
         {
           ...schema,
           hasObject: () => true,
         },
         context.modaliases ?? {},
         context.localnames ?? new Set(),
-      ) as any);
+      ));
     }
 
     if (astnode.condition) {
       cmd.setAttributeValue("condition", Expression.fromAst(
-        astnode.condition as any,
+        astnode.condition,
         {
           ...schema,
           hasObject: () => true,
         },
         context.modaliases ?? {},
         context.localnames ?? new Set(),
-      ) as any);
+      ));
     }
 
-    cmd.setAttributeValue("timing", astnode.timing as any);
-    cmd.setAttributeValue("kinds", astnode.kinds as any);
-    cmd.setAttributeValue("scope", astnode.scope as any);
+    cmd.setAttributeValue("timing", astnode.timing);
+    cmd.setAttributeValue("kinds", astnode.kinds);
+    cmd.setAttributeValue("scope", astnode.scope);
 
     return cmd;
   }
@@ -330,6 +334,7 @@ export class AlterTrigger extends TriggerCommand {
   static readonly referencedAstnode = "AlterTrigger" as const;
 
   alterBegin(schema: TriggerSchema, context: TriggerCommandContextState): TriggerSchema {
+    void context;
     if (this.getAttributeValue("owned") && !this.getOrigAttributeValue("owned")) {
       throw new errors.SchemaDefinitionError(
         `cannot alter the definition of inherited trigger ${this.scls.getDisplayname(schema)}`,

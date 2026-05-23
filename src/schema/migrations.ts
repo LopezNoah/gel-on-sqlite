@@ -173,6 +173,9 @@ const buildCreateTypeSteps = (
       const lt = linkTable(typeDecl, member);
       const linkColumns = [`${quoteIdent("source")} TEXT NOT NULL`, `${quoteIdent("target")} TEXT NOT NULL`];
       for (const property of member.properties) {
+        if (property.computed === true) {
+          continue;
+        }
         linkColumns.push(
           `${quoteIdent(property.name)} ${sqlType(property.scalar)}${property.required ? " NOT NULL" : ""}`,
         );
@@ -242,6 +245,9 @@ const buildAlterTypeSteps = (
       const lt = linkTable(toType, member);
       const linkColumns = [`${quoteIdent("source")} TEXT NOT NULL`, `${quoteIdent("target")} TEXT NOT NULL`];
       for (const property of member.properties) {
+        if (property.computed === true) {
+          continue;
+        }
         linkColumns.push(
           `${quoteIdent(property.name)} ${sqlType(property.scalar)}${property.required ? " NOT NULL" : ""}`,
         );

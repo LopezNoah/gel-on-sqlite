@@ -527,6 +527,34 @@ export interface QualifiedNameNode {
   parts: string[];
 }
 
+const opaqueTypeReferenceToQualifiedName = (node: OpaqueNode): QualifiedNameNode | null => {
+  const text = node.text.trim();
+  if (text.length === 0 || text.includes("|") || text.includes("<") || text.includes(">")) {
+    return null;
+  }
+
+  const parts: string[] = [];
+  let start = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    if (text[i] === ":" && text[i + 1] === ":") {
+      const part = text.slice(start, i).trim();
+      if (part.length === 0) {
+        return null;
+      }
+      parts.push(part);
+      i += 1;
+      start = i + 1;
+    }
+  }
+
+  const last = text.slice(start).trim();
+  if (last.length === 0) {
+    return null;
+  }
+  parts.push(last);
+  return { kind: "QualifiedName", parts };
+};
+
 export interface AbstractAnnotationNode {
   kind: "AbstractAnnotation";
   abstract: true;
@@ -555,6 +583,7 @@ export interface PropertyDeclarationNode {
   cardinality: "single" | "multi" | null;
   name: QualifiedNameNode;
   declaredType: QualifiedNameNode | null;
+  typeExpr: OpaqueNode | null;
   computed: boolean;
   expr: OpaqueNode | null;
   body: PropertyBodyNode | null;
@@ -579,6 +608,7 @@ export interface LinkDeclarationNode {
   cardinality: "single" | "multi" | null;
   name: QualifiedNameNode;
   declaredType: QualifiedNameNode | null;
+  targetType: OpaqueNode | null;
   computed: boolean;
   expr: OpaqueNode | null;
   body: LinkBodyNode | null;
@@ -748,9 +778,11 @@ export class Parser {
 
         if (this.matchNameInsensitive("using")) {
           body = this.parseFunctionUsingClause();
-          this.expect("semicolon", "Expected ';' after using clause");
+          this.match("semicolon");
           continue;
         }
+
+        if (this.match("semicolon")) continue;
 
         this.unexpected("Unsupported function subcommand");
       }
@@ -767,7 +799,7 @@ export class Parser {
       this.unexpected("User defined functions cannot declare set of parameters");
     }
 
-    this.expect("semicolon", "Expected ';' after function declaration");
+    this.match("semicolon");
 
     return {
       kind: "FunctionDeclaration",
@@ -862,7 +894,8 @@ export class Parser {
       if (this.match("semicolon")) {
         continue;
       }
-      declarations.push(this.parseDeclaration());
+      const decl = this.parseDeclaration();
+      declarations.push(decl);
     }
 
     return { kind: "TypeBody", declarations };
@@ -1112,8 +1145,10 @@ export class Parser {
     this.expectKeyword("annotation");
     const name = this.parseQualifiedName();
     this.expect("assign", "Expected ':=' in annotation assignment");
-    const value = this.parseOpaqueUntilSemicolon();
-    this.expect("semicolon", "Expected ';' after annotation assignment");
+    const value = this.parseOpaqueUntilSemicolonOrBrace();
+    if (!this.match("semicolon") && !this.check("rbrace")) {
+      this.expect("semicolon", "Expected ';' after annotation assignment");
+    }
 
     return {
       kind: "AnnotationAssignment",
@@ -1145,6 +1180,7 @@ export class Parser {
         cardinality,
         name,
         declaredType: null,
+        typeExpr: null,
         computed: true,
         expr,
         body: null,
@@ -1152,10 +1188,11 @@ export class Parser {
     }
 
     let declaredType: QualifiedNameNode | null = null;
+    let typeExpr: OpaqueNode | null = null;
     if (this.matchPointerTypeSeparator()) {
-      declaredType = this.parseQualifiedName();
-      this.consumeTypeExpressionRemainder();
-    } else if (abstract) {
+      typeExpr = this.parseTypeReferenceUntilBoundary("Expected property target type");
+      declaredType = opaqueTypeReferenceToQualifiedName(typeExpr);
+    } else if (abstract || overloaded || this.check("lbrace")) {
       declaredType = null;
     } else {
       this.unexpected("Expected ':', '->', or ':=' after property name");
@@ -1179,6 +1216,7 @@ export class Parser {
       cardinality,
       name,
       declaredType,
+      typeExpr,
       computed: false,
       expr: null,
       body,
@@ -1212,8 +1250,10 @@ export class Parser {
 
       if (this.matchKeyword("default")) {
         this.expect("assign", "Expected ':=' after default");
-        defaultExpr = this.parseOpaqueUntilSemicolon();
-        this.expect("semicolon", "Expected ';' after default");
+        defaultExpr = this.parseOpaqueDefaultExpr();
+        if (!this.match("semicolon") && !this.check("rbrace")) {
+          this.expect("semicolon", "Expected ';' after default");
+        }
         continue;
       }
 
@@ -1233,6 +1273,11 @@ export class Parser {
 
       if (this.isConstraintStart()) {
         constraints.push(this.parseConstraintDeclaration());
+        continue;
+      }
+
+      if (this.isGenericOptionStart()) {
+        this.skipGenericOption();
         continue;
       }
 
@@ -1273,6 +1318,7 @@ export class Parser {
         cardinality,
         name,
         declaredType: null,
+        targetType: null,
         computed: true,
         expr,
         body: null,
@@ -1280,10 +1326,11 @@ export class Parser {
     }
 
     let declaredType: QualifiedNameNode | null = null;
+    let targetType: OpaqueNode | null = null;
     if (this.matchPointerTypeSeparator()) {
-      declaredType = this.parseQualifiedName();
-      this.consumeTypeExpressionRemainder();
-    } else if (abstract) {
+      targetType = this.parseTypeReferenceUntilBoundary("Expected link target type");
+      declaredType = opaqueTypeReferenceToQualifiedName(targetType);
+    } else if (abstract || overloaded) {
       declaredType = null;
     } else {
       this.unexpected("Expected ':', '->', or ':=' after link name");
@@ -1307,6 +1354,7 @@ export class Parser {
       cardinality,
       name,
       declaredType,
+      targetType,
       computed: false,
       expr: null,
       body,
@@ -1344,8 +1392,10 @@ export class Parser {
 
       if (this.matchKeyword("default")) {
         this.expect("assign", "Expected ':=' after default");
-        defaultExpr = this.parseOpaqueUntilSemicolon();
-        this.expect("semicolon", "Expected ';' after default");
+        defaultExpr = this.parseOpaqueDefaultExpr();
+        if (!this.match("semicolon") && !this.check("rbrace")) {
+          this.expect("semicolon", "Expected ';' after default");
+        }
         continue;
       }
 
@@ -1499,7 +1549,7 @@ export class Parser {
 
       this.expect("rbrace", "Expected '}' after constraint body");
       this.match("semicolon");
-    } else {
+    } else if (!this.match("semicolon") && !this.check("rbrace")) {
       this.expect("semicolon", "Expected ';' after constraint declaration");
     }
 
@@ -1767,6 +1817,58 @@ export class Parser {
     return { kind: "Opaque", text: this.sourceText.slice(start, end).trim() };
   }
 
+  private parseOpaqueDefaultExpr(): OpaqueNode {
+    const start = this.current().start;
+    let parenDepth = 0;
+    let braceDepth = 0;
+    let bracketDepth = 0;
+
+    while (!this.check("eof")) {
+      if (this.check("lparen")) {
+        parenDepth += 1;
+        this.pos += 1;
+        continue;
+      }
+      if (this.check("rparen")) {
+        if (parenDepth === 0) break;
+        parenDepth -= 1;
+        this.pos += 1;
+        continue;
+      }
+      if (this.check("lbrace")) {
+        braceDepth += 1;
+        this.pos += 1;
+        continue;
+      }
+      if (this.check("rbrace")) {
+        if (braceDepth === 0) break;
+        braceDepth -= 1;
+        this.pos += 1;
+        continue;
+      }
+      if (this.check("lbracket")) {
+        bracketDepth += 1;
+        this.pos += 1;
+        continue;
+      }
+      if (this.check("rbracket")) {
+        if (bracketDepth === 0) break;
+        bracketDepth -= 1;
+        this.pos += 1;
+        continue;
+      }
+
+      if (this.check("semicolon") && parenDepth === 0 && braceDepth === 0 && bracketDepth === 0) {
+        break;
+      }
+
+      this.pos += 1;
+    }
+
+    const end = this.current().start;
+    return { kind: "Opaque", text: this.sourceText.slice(start, end).trim() };
+  }
+
   private parseOpaqueUntilSemicolonOrBrace(): OpaqueNode {
     const start = this.current().start;
     while (!this.check("semicolon") && !this.check("rbrace") && !this.check("eof")) {
@@ -1831,6 +1933,26 @@ export class Parser {
 
   private isAnnotationAssignmentStart(): boolean {
     return this.checkKeyword("annotation");
+  }
+
+  private isGenericOptionStart(): boolean {
+    let i = 0;
+    while (this.peekType(i) === "identifier" || this.peekType(i) === "keyword") {
+      i += 1;
+      if (this.peekType(i) !== "colon2") break;
+      i += 1;
+    }
+    if (i === 0) return false;
+    return this.peekType(i) === "assign";
+  }
+
+  private skipGenericOption(): void {
+    this.parseQualifiedName();
+    this.expect("assign", "Expected ':=' in option assignment");
+    this.parseOpaqueUntilSemicolonOrBrace();
+    if (!this.match("semicolon") && !this.check("rbrace")) {
+      this.expect("semicolon", "Expected ';' after option assignment");
+    }
   }
 
   private isPropertyStart(): boolean {
@@ -1922,7 +2044,36 @@ export class Parser {
       i += 1;
     }
 
-    return this.checkKeyword("on", i) || this.checkKeyword("index", i) || this.isPropertyStartAt(i);
+    return this.checkKeyword("on", i)
+      || this.checkKeyword("index", i)
+      || this.isNestedPointerDeclAt(i);
+  }
+
+  private isNestedPointerDeclAt(offset: number): boolean {
+    let i = offset;
+    if (this.checkKeyword("abstract", i)) i += 1;
+    if (this.checkKeyword("overloaded", i)) i += 1;
+    if (this.checkKeyword("required", i) || this.checkKeyword("optional", i)) i += 1;
+    if (this.checkKeyword("single", i) || this.checkKeyword("multi", i)) i += 1;
+
+    if (this.checkKeyword("property", i) || this.checkKeyword("link", i)) {
+      const headType = this.peekType(i + 1);
+      return headType === "identifier" || headType === "keyword";
+    }
+
+    if (this.peekType(i) !== "identifier") {
+      return false;
+    }
+    i += 1;
+    while (this.peekType(i) === "colon2") {
+      i += 1;
+      const next = this.peekType(i);
+      if (next !== "identifier" && next !== "keyword") {
+        return false;
+      }
+      i += 1;
+    }
+    return this.peekType(i) === "colon" || this.peekType(i) === "arrow";
   }
 
   private isPropertyStartAt(offset: number): boolean {

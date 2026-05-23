@@ -145,6 +145,26 @@ export type ComputedValuePart =
       value: ScalarValue;
     };
 
+export type ComputedLinkPropertyExpr =
+  | {
+      kind: "binary_op";
+      op: "*" | "+" | "-" | "/" | "++" | "??";
+      left: ComputedLinkPropertyExpr;
+      right: ComputedLinkPropertyExpr;
+    }
+  | {
+      kind: "field_ref";
+      name: string;
+    }
+  | {
+      kind: "link_property_ref";
+      name: string;
+    }
+  | {
+      kind: "literal";
+      value: ScalarValue;
+    };
+
 export type ComputedDef = {
   name: string;
   required?: boolean;
@@ -161,6 +181,10 @@ export type ComputedDef = {
         | {
             kind: "literal";
             value: ScalarValue;
+          }
+        | {
+            kind: "set_literal";
+            values: ScalarValue[];
           }
         | {
             kind: "concat";
@@ -194,6 +218,11 @@ export type ComputedDef = {
             kind: "backlink";
             link: string;
             sourceType?: string;
+          }
+        | {
+            kind: "select_type";
+            typeName: string;
+            exprText: string;
           };
     }
 );
@@ -325,6 +354,13 @@ export interface LinkPropertyDef {
   annotations?: AnnotationDef[];
 }
 
+export interface ComputedLinkPropertyDef {
+  name: string;
+  exprText: string;
+  computedExpr: ComputedLinkPropertyExpr;
+  annotations?: AnnotationDef[];
+}
+
 export type OnTargetDeleteAction = "restrict" | "delete_source" | "allow" | "deferred_restrict";
 
 export interface LinkDef {
@@ -337,6 +373,7 @@ export interface LinkDef {
   onTargetDelete?: OnTargetDeleteAction;
   defaultTargetValues?: string[];
   properties?: LinkPropertyDef[];
+  computedProperties?: ComputedLinkPropertyDef[];
   annotations?: AnnotationDef[];
 }
 
