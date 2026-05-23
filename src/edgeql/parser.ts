@@ -58,6 +58,20 @@ export interface ParseEdgeQLOptions {
 
 type ParsedLiteralValue = ScalarValue | ParsedLiteralValue[];
 
+type SelectExprTailParts = {
+  filter?: FreeObjectExpr;
+  orderBy?: OrderExprChain;
+  limit?: number;
+  offset?: number;
+};
+
+interface PostfixChainOptions {
+  indexes?: boolean;
+  typeFilters?: boolean;
+  shapeProjections?: boolean;
+  pathSteps?: boolean;
+}
+
 class Parser {
   private readonly tokens: Token[];
   private index = 0;
@@ -113,6 +127,41 @@ class Parser {
       this.restore(checkpoint);
       return undefined;
     }
+  }
+
+  private match(kind: Token["kind"]): Token | undefined {
+    return this.peek().kind === kind ? this.consume() : undefined;
+  }
+
+  private matchAny(...kinds: Token["kind"][]): Token | undefined {
+    return kinds.includes(this.peek().kind) ? this.consume() : undefined;
+  }
+
+  private expectAny(kinds: readonly Token["kind"][], message: string): Token {
+    const token = this.peek();
+    if (!kinds.includes(token.kind)) {
+      throw new AppError("E_SYNTAX", message, token.line, token.column);
+    }
+    return this.consume();
+  }
+
+  private isKeywordLikeToken(token: Token): boolean {
+    return token.kind.startsWith("kw_") || this.isNameToken(token);
+  }
+
+  private matchKeywordLexeme(lexeme: string): Token | undefined {
+    const token = this.peek();
+    return this.isKeywordLikeToken(token) && token.lexeme.toLowerCase() === lexeme ? this.consume() : undefined;
+  }
+
+  private parseKeywordChoice<T extends string>(choices: Record<string, T>, message: string): { token: Token; value: T } {
+    const token = this.peek();
+    const value = this.isKeywordLikeToken(token) ? choices[token.lexeme.toLowerCase()] : undefined;
+    if (!value) {
+      throw new AppError("E_SYNTAX", message, token.line, token.column);
+    }
+    this.consume();
+    return { token, value };
   }
 
   private atFunctionCall(): boolean {
@@ -426,32 +475,19 @@ class Parser {
 
   private parseConfigure(ctx: ParseContext = {}): ConfigureStatement {
     const start = this.expect("kw_configure", "Expected 'configure'");
-    const scopeToken = this.expectName("Expected configuration scope");
-    const scopeLexeme = scopeToken.lexeme.toLowerCase();
-    let scope: ConfigureStatement["scope"];
-    if (scopeLexeme === "session") {
-      scope = "session";
-    } else if (scopeLexeme === "instance") {
-      scope = "instance";
-    } else if (scopeLexeme === "current_database" || scopeLexeme === "currentdatabase" || scopeLexeme === "database") {
-      scope = "current_database";
-    } else {
-      throw new AppError("E_SYNTAX", "Expected configure scope: session, current_database, or instance", scopeToken.line, scopeToken.column);
-    }
+    const { value: scope } = this.parseKeywordChoice<ConfigureStatement["scope"]>({
+      session: "session",
+      instance: "instance",
+      current_database: "current_database",
+      currentdatabase: "current_database",
+      database: "current_database",
+    }, "Expected configure scope: session, current_database, or instance");
 
-    const opToken = this.peek();
-    this.consume();
-    const opLexeme = opToken.lexeme.toLowerCase();
-    let operation: ConfigureStatement["operation"];
-    if (opLexeme === "set") {
-      operation = "set";
-    } else if (opLexeme === "insert") {
-      operation = "insert";
-    } else if (opLexeme === "reset") {
-      operation = "reset";
-    } else {
-      throw new AppError("E_SYNTAX", "Expected configure operation: set, insert, or reset", opToken.line, opToken.column);
-    }
+    const { value: operation } = this.parseKeywordChoice<ConfigureStatement["operation"]>({
+      set: "set",
+      insert: "insert",
+      reset: "reset",
+    }, "Expected configure operation: set, insert, or reset");
 
     const target = this.parseQualifiedName("Expected configuration target");
     let value: FreeObjectExpr | undefined;
@@ -564,7 +600,7 @@ class Parser {
   private parseGroupByList(byKeyword: Token): GroupByElement[] {
     const elements: GroupByElement[] = [];
     while (true) {
-      elements.push(this.parseGroupByElement(byKeyword));
+      elements.push(this.parseGroupByElement());
       if (this.peek().kind !== "comma") {
         break;
       }
@@ -576,7 +612,7 @@ class Parser {
     return elements;
   }
 
-  private parseGroupByElement(byKeyword: Token): GroupByElement {
+  private parseGroupByElement(): GroupByElement {
     const token = this.peek();
 
     // `BY { atom, atom, … }` — comma-separated grouping sets, each set
@@ -664,25 +700,19 @@ class Parser {
   }
 
   private parseTransaction(): TransactionStatement {
-    const token = this.peek();
+    const token = this.expectAny(["kw_start", "kw_commit", "kw_rollback"], "Expected 'start', 'commit', or 'rollback'");
     let action: TransactionStatement["action"];
     if (token.kind === "kw_start") {
       action = "start";
-      this.consume();
-      if (this.peek().kind === "kw_transaction" || (this.isNameToken(this.peek()) && this.peek().lexeme.toLowerCase() === "transaction")) {
-        this.consume();
-      }
+      this.matchKeywordLexeme("transaction");
     } else if (token.kind === "kw_commit") {
       action = "commit";
-      this.consume();
     } else {
       action = "rollback";
-      this.expect("kw_rollback", "Expected 'start', 'commit', or 'rollback'");
     }
 
     let isolation: TransactionStatement["isolation"];
-    if (action === "start" && this.isNameToken(this.peek()) && this.peek().lexeme.toLowerCase() === "isolation") {
-      this.consume();
+    if (action === "start" && this.matchKeywordLexeme("isolation")) {
       const level = this.expectName("Expected transaction isolation level").lexeme.toLowerCase();
       if (level === "serializable") {
         isolation = "serializable";
@@ -710,17 +740,14 @@ class Parser {
   }
 
   private parseDDL(): DDLStatement {
-    const start = this.peek();
+    const start = this.expectAny(["kw_create", "kw_alter", "kw_drop"], "Expected 'create', 'alter', or 'drop'");
     let action: DDLStatement["action"];
     if (start.kind === "kw_create") {
       action = "create";
-      this.consume();
     } else if (start.kind === "kw_alter") {
       action = "alter";
-      this.consume();
     } else {
       action = "drop";
-      this.expect("kw_drop", "Expected 'create', 'alter', or 'drop'");
     }
 
     const objectToken = this.peek();
@@ -1075,21 +1102,12 @@ class Parser {
   }
 
   private parseSelectExprTail(start: Token, ctx: ParseContext, expr: FreeObjectExpr, expectEof = true): SelectExprStatement {
-    let filterExpr: FreeObjectExpr | undefined;
-    if (this.peek().kind === "kw_filter") {
-      this.consume();
-      filterExpr = this.parseFreeObjectExpr();
-    }
-    const orderBy = this.parseExprOrderBy();
-    const pagination = this.parseExprPagination();
-    const paginatedExpr: FreeObjectExpr = filterExpr !== undefined || pagination.limit !== undefined || pagination.offset !== undefined
+    const tail = this.parseSelectExprTailParts();
+    const paginatedExpr: FreeObjectExpr = this.hasSelectExprTailParts(tail, false)
       ? {
           kind: "select_expr_subquery",
           expr,
-          filter: filterExpr,
-          orderBy,
-          limit: pagination.limit,
-          offset: pagination.offset,
+          ...tail,
         }
       : expr;
     if (expectEof && this.peek().kind === "semi") {
@@ -1102,7 +1120,7 @@ class Parser {
       ...this.withContext(ctx),
       kind: "select_expr",
       expr: paginatedExpr,
-      orderBy: paginatedExpr === expr ? orderBy : undefined,
+      orderBy: paginatedExpr === expr ? tail.orderBy : undefined,
       pos: { line: start.line, column: start.column },
     };
   }
@@ -1312,20 +1330,11 @@ class Parser {
         } else {
           inner = this.parseFreeObjectExpr();
         }
-        let filter: FreeObjectExpr | undefined;
-        if (this.peek().kind === "kw_filter") {
-          this.consume();
-          filter = this.parseFreeObjectExpr();
-        }
-        const orderBy = this.parseExprOrderBy();
-        const { limit, offset } = this.parseExprPagination();
+        const tail = this.parseSelectExprTailParts();
         const wrapped: FreeObjectExpr = {
           kind: "select_expr_subquery",
           expr: inner,
-          filter,
-          orderBy,
-          limit,
-          offset,
+          ...tail,
           clauses: {
             _withBindings: withClause.with,
             _withModule: withClause.withModule,
@@ -1434,49 +1443,14 @@ class Parser {
       for (const binder of binders) {
         this.localBindings.push(binder.variable);
       }
-      let filter: FreeObjectExpr | undefined;
-      if (this.peek().kind === "kw_filter") {
-        this.consume();
-        filter = this.parseFreeObjectExpr();
-      }
-      const orderBy = this.parseExprOrderBy();
-      const { limit, offset } = this.parseExprPagination();
+      const tail = this.parseSelectExprTailParts();
       for (let binderIndex = 0; binderIndex < binders.length; binderIndex += 1) {
         this.localBindings.pop();
       }
-      if (filter || orderBy || limit !== undefined || offset !== undefined) {
-        // const wrapLeaf = (node: FreeObjectExpr): FreeObjectExpr => {
-        //   if (node.kind === "for_expr") {
-        //     return {
-        //       kind: "for_expr",
-        //       variable: node.variable,
-        //       iterator: node.iterator,
-        //       body: {
-        //         kind: "select_expr_subquery",
-        //         expr: node.body,
-        //         filter,
-        //         orderBy,
-        //         limit,
-        //         offset,
-        //       },
-        //     };
-        //   }
-        //   return {
-        //     kind: "select_expr_subquery",
-        //     expr: node,
-        //     filter,
-        //     orderBy,
-        //     limit,
-        //     offset,
-        //   };
-        // };
-        // expr = wrapLeaf(expr);
+      if (this.hasSelectExprTailParts(tail)) {
         expr = {
           ...expr,
-          filter,
-          orderBy,
-          limit,
-          offset,
+          ...tail,
         };
       }
       return expr;
@@ -1716,16 +1690,24 @@ class Parser {
   }
 
   private applyPostfixExprChain(expr: FreeObjectExpr): FreeObjectExpr {
+    return this.parsePostfixChain(expr, {
+      indexes: true,
+      typeFilters: true,
+      shapeProjections: true,
+      pathSteps: true,
+    });
+  }
+
+  private parsePostfixChain(baseExpr: FreeObjectExpr, options: PostfixChainOptions = {}): FreeObjectExpr {
+    let expr = baseExpr;
     const backlinkBindingName = "__gel_backlink_item__";
 
     while (true) {
-      if (this.peek().kind === "dot" || this.peek().kind === "backward_link" || this.peek().kind === "optional_link") {
-        const op = this.peek().kind;
-        this.consume();
+      const opToken = this.matchAny("dot", "backward_link", "optional_link");
+      if (opToken) {
+        const op = opToken.kind;
         if (op === "backward_link" || this.peek().kind === "lt") {
-          if (this.peek().kind === "lt") {
-            this.consume();
-          }
+          this.match("lt");
           const link = this.expectName("Expected backlink name after '.<'").lexeme;
           let sourceTypeExpr: TypeExpr | undefined;
           if (this.peek().kind === "lbracket") {
@@ -1743,12 +1725,12 @@ class Parser {
               optional: op === "optional_link",
             },
           };
-        } else if (this.peek().kind === "number") {
+        } else if (options.indexes && this.peek().kind === "number") {
           const indexToken = this.consume();
           expr = this.buildIndexAccessExpr(expr, indexToken.lexeme);
         } else {
           const field = this.expectName("Expected field name after '.'").lexeme;
-          if (expr.kind === "path_steps") {
+          if (options.pathSteps && expr.kind === "path_steps") {
             expr = {
               kind: "path_steps",
               steps: [...expr.steps, { kind: "ptr", name: field, direction: "outbound", optional: op === "optional_link" }],
@@ -1766,8 +1748,7 @@ class Parser {
         continue;
       }
 
-      if (this.peek().kind === "at") {
-        this.consume();
+      if (this.match("at")) {
         const property = this.expectName("Expected link property name after '@'").lexeme;
         expr = {
           kind: "field_access",
@@ -1777,7 +1758,7 @@ class Parser {
         continue;
       }
 
-      if (this.peek().kind === "lbracket") {
+      if (options.typeFilters && this.peek().kind === "lbracket") {
         this.consume();
         if (this.peek().kind === "kw_is") {
           this.consume();
@@ -1857,7 +1838,7 @@ class Parser {
         continue;
       }
 
-      if (this.peek().kind === "lbrace") {
+      if (options.shapeProjections && this.peek().kind === "lbrace") {
         this.consume();
         const shape = this.parseDelimited("rbrace", () => this.parseShapeEntry(), "Expected ',' between shape entries");
         this.expect("rbrace", "Expected '}' after shape projection");
@@ -1872,62 +1853,6 @@ class Parser {
       break;
     }
 
-    return expr;
-  }
-
-  private parsePostfixChain(baseExpr: FreeObjectExpr): FreeObjectExpr {
-    let expr = baseExpr;
-    const backlinkBindingName = "__gel_backlink_item__";
-    while (true) {
-      if (this.peek().kind === "dot" || this.peek().kind === "backward_link" || this.peek().kind === "optional_link") {
-        const op = this.peek().kind;
-        this.consume();
-        if (op === "backward_link" || this.peek().kind === "lt") {
-          if (this.peek().kind === "lt") {
-            this.consume();
-          }
-          const link = this.expectName("Expected backlink name after '.<'").lexeme;
-          let sourceTypeExpr: TypeExpr | undefined;
-          if (this.peek().kind === "lbracket") {
-            sourceTypeExpr = this.parseTypeFilter("backlink type filter");
-          }
-          expr = {
-            kind: "for_expr",
-            variable: backlinkBindingName,
-            iterator: expr,
-            body: {
-              kind: "backlink_path",
-              link,
-              sourceType: simpleTypeName(sourceTypeExpr),
-              sourceTypeExpr,
-              optional: op === "optional_link",
-            },
-          };
-        } else {
-          const field = this.expectName("Expected field name after '.'").lexeme;
-          expr = {
-            kind: "field_access",
-            expr,
-            field,
-            optional: op === "optional_link",
-          };
-        }
-        continue;
-      }
-
-      if (this.peek().kind === "at") {
-        this.consume();
-        const property = this.expectName("Expected link property name after '@'").lexeme;
-        expr = {
-          kind: "field_access",
-          expr,
-          field: `@${property}`,
-        };
-        continue;
-      }
-
-      break;
-    }
     return expr;
   }
 
@@ -2054,45 +1979,49 @@ class Parser {
       expr = this.parseFreeObjectExpr();
     }
 
-    let filter: FreeObjectExpr | undefined;
-    if (this.peek().kind === "kw_filter") {
-      this.consume();
-      filter = this.parseFreeObjectExpr();
-    }
-
-    const orderBy = this.parseExprOrderBy();
-    const { limit, offset } = this.parseExprPagination();
+    const tail = this.parseSelectExprTailParts();
 
     return {
       kind: "select_expr_subquery",
       alias,
       expr,
-      filter,
-      orderBy,
-      limit,
-      offset,
+      ...tail,
     };
+  }
+
+  private parseSelectExprTailParts(): SelectExprTailParts {
+    let filter: FreeObjectExpr | undefined;
+    if (this.match("kw_filter")) {
+      filter = this.parseFreeObjectExpr();
+    }
+    const orderBy = this.parseExprOrderBy();
+    const { limit, offset } = this.parseExprPagination();
+    return { filter, orderBy, limit, offset };
+  }
+
+  private hasSelectExprTailParts(tail: SelectExprTailParts, includeOrderBy = true): boolean {
+    return tail.filter !== undefined
+      || (includeOrderBy && tail.orderBy !== undefined)
+      || tail.limit !== undefined
+      || tail.offset !== undefined;
   }
 
   private parseExprPagination(): { limit?: number; offset?: number } {
     let limit: number | undefined;
     let offset: number | undefined;
-    if (this.peek().kind === "kw_offset") {
-      this.consume();
+    if (this.match("kw_offset")) {
       offset = this.readInteger("Expected integer after 'offset'");
     }
-    if (this.peek().kind === "kw_limit") {
-      this.consume();
+    if (this.match("kw_limit")) {
       limit = this.readInteger("Expected integer after 'limit'");
     }
     return { limit, offset };
   }
 
   private parseExprOrderBy(): OrderExprChain | undefined {
-    if (this.peek().kind !== "kw_order") {
+    if (!this.match("kw_order")) {
       return undefined;
     }
-    this.consume();
     this.expect("kw_by", "Expected 'by' after 'order'");
     return this.parseExprOrderByTerm();
   }
@@ -2100,16 +2029,13 @@ class Parser {
   private parseExprOrderByTerm(): OrderExprChain {
     const expr = this.parseFreeObjectExpr();
     let direction: "asc" | "desc" = "asc";
-    if (this.peek().kind === "kw_asc") {
-      this.consume();
+    if (this.match("kw_asc")) {
       direction = "asc";
-    } else if (this.peek().kind === "kw_desc") {
-      this.consume();
+    } else if (this.match("kw_desc")) {
       direction = "desc";
     }
     let nullsPosition: "first" | "last" | undefined;
-    if (this.peek().kind === "kw_empty") {
-      this.consume();
+    if (this.match("kw_empty")) {
       const nullsPositionToken = this.peek();
       if (this.isNameToken(nullsPositionToken)) {
         const lowered = nullsPositionToken.lexeme.toLowerCase();
@@ -2120,8 +2046,7 @@ class Parser {
       }
     }
     let then: OrderExprChain | undefined;
-    if (this.peek().kind === "kw_then") {
-      this.consume();
+    if (this.match("kw_then")) {
       then = this.parseExprOrderByTerm();
     }
     return { expr, direction, nullsPosition, then };
@@ -3099,21 +3024,12 @@ class Parser {
 
     const parsed = this.attempt(() => {
       let expr = this.parseFreeObjectExpr();
-      let filter: FreeObjectExpr | undefined;
-      if (this.peek().kind === "kw_filter") {
-        this.consume();
-        filter = this.parseFreeObjectExpr();
-      }
-      const orderBy = this.parseExprOrderBy();
-      const { limit, offset } = this.parseExprPagination();
-      if (filter || orderBy || limit !== undefined || offset !== undefined) {
+      const tail = this.parseSelectExprTailParts();
+      if (this.hasSelectExprTailParts(tail)) {
         expr = {
           kind: "select_expr_subquery",
           expr,
-          filter,
-          orderBy,
-          limit,
-          offset,
+          ...tail,
         };
       }
       if (this.peek().kind === "comma" || this.peek().kind === "rparen") {

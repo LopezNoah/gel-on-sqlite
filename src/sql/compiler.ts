@@ -1,6 +1,6 @@
 import { AppError } from "../errors.js";
 import type { FreeObjectExpr } from "../edgeql/ast.js";
-import type { FilterExprIR, IRStatement, LinkRelationIR, PathIdIR, SelectFreeIR, SelectIR, SelectShapeElementIR } from "../ir/model.js";
+import type { FilterExprIR, IRStatement, LinkRelationIR, PathIdIR, ScalarExprIR, SelectFreeIR, SelectIR, SelectShapeElementIR } from "../ir/model.js";
 import type { RuntimeTarget } from "../runtime/target.js";
 import { canLowerStdlibFunctionSql, lowerStdlibFunctionSql } from "./stdlib_lowering.js";
 import type { ComputedLinkPropertyDef, ComputedLinkPropertyExpr, ScalarValue } from "../types.js";
@@ -1279,7 +1279,7 @@ const compileFilterExprSQL = (
   }
 
   if (filter.kind === "expr_compare") {
-    const isNullLiteral = (e: import("../ir/model.js").ScalarExprIR): boolean =>
+    const isNullLiteral = (e: ScalarExprIR): boolean =>
       e.kind === "literal" && e.value === null;
     if ((filter.op === "=" || filter.op === "!=") && (isNullLiteral(filter.left) || isNullLiteral(filter.right))) {
       const nonNullSide = isNullLiteral(filter.left) ? filter.right : filter.left;
@@ -1297,7 +1297,7 @@ const compileFilterExprSQL = (
 };
 
 const compileScalarExprSQL = (
-  expr: import("../ir/model.js").ScalarExprIR,
+  expr: ScalarExprIR,
   sourceAlias: string,
   params: ScalarValue[],
 ): string => {
@@ -1389,7 +1389,7 @@ const collectFieldFilterColumns = (filter: FilterExprIR | undefined): string[] =
   return [...collectFieldFilterColumns(filter.left), ...collectFieldFilterColumns(filter.right)];
 };
 
-const collectScalarExprColumns = (expr: import("../ir/model.js").ScalarExprIR): string[] => {
+const collectScalarExprColumns = (expr: ScalarExprIR): string[] => {
   if (expr.kind === "column") return [expr.column];
   if (expr.kind === "literal") return [];
   if (expr.kind === "neg") return collectScalarExprColumns(expr.expr);

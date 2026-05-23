@@ -1,4 +1,4 @@
-import type { FreeObjectExpr, PathStep, WithBinding } from "../edgeql/ast.js";
+import type { DeleteStatement, FreeObjectExpr, InsertStatement, OrderExprChain, PathStep, SelectExprStatement, SelectStatement, ShapeElement, TypeExpr, UpdateStatement, WithBinding } from "../edgeql/ast.js";
 import type { ComputedLinkPropertyDef, ScalarValue } from "../types.js";
 
 /* ---------------------------------- */
@@ -577,7 +577,7 @@ export type SelectExprIREntry<D extends Depth = 4> =
       kind: "backlink_path";
       link: string;
       sourceType?: string;
-      sourceTypeExpr?: import("../edgeql/ast.js").TypeExpr;
+      sourceTypeExpr?: TypeExpr;
     }
   | {
       kind: "path_steps";
@@ -726,9 +726,9 @@ export type SelectExprIREntry<D extends Depth = 4> =
         })
   | {
       kind: "mutation_expr";
-      statement: import("../edgeql/ast.js").InsertStatement
-        | import("../edgeql/ast.js").UpdateStatement
-        | import("../edgeql/ast.js").DeleteStatement;
+      statement: InsertStatement
+        | UpdateStatement
+        | DeleteStatement;
     }
   | (D extends 0 ? never : FunctionCallIR<SelectExprIREntry<Dec<D>>>)
   | {
@@ -765,8 +765,8 @@ export interface GroupIR {
   // wrapping a `shape_projection` over the binding ref so the parsed runtime
   // recognizes it.
   source:
-    | import("../edgeql/ast.js").SelectStatement
-    | import("../edgeql/ast.js").SelectExprStatement;
+    | SelectStatement
+    | SelectExprStatement;
   // The union of all atom names referenced by any grouping set. Each row's
   // `key` includes every name in this list — for rows produced by a grouping
   // set that doesn't include an atom, that key field is NULL.
@@ -781,9 +781,9 @@ export interface GroupIR {
   hiddenByFields: string[];
   // Post-process the {key, elements, grouping} group rows. These are AST
   // nodes evaluated by the engine against each row as `current_item`.
-  postFilter?: import("../edgeql/ast.js").FreeObjectExpr;
-  postShape?: import("../edgeql/ast.js").ShapeElement[];
-  postOrderBy?: import("../edgeql/ast.js").OrderExprChain;
+  postFilter?: FreeObjectExpr;
+  postShape?: ShapeElement[];
+  postOrderBy?: OrderExprChain;
   postLimit?: number;
   postOffset?: number;
 }
