@@ -30,6 +30,12 @@ export interface HarnessOptions {
   resetDbFile?: boolean;
   reuseExistingDb?: boolean;
   runSetupOnReuse?: boolean;
+  // Additional schemas loaded as named modules alongside `schema`.
+  // Each `{ moduleName: schemaFileBaseName }` wraps the .esdl content in
+  // `module <moduleName> { … }` so its types are addressable as `module::Type`.
+  extraModules?: Record<string, string>;
+  // Optional setup scripts run inside named modules after the primary setup.
+  extraSetups?: Array<{ module: string; setup: string }>;
 }
 
 function inferredModuleNameFromSchema(schemaName: string): string {
@@ -73,7 +79,7 @@ function wrapModule(moduleName: string, source: string): string {
   return `module ${moduleName} {\n${cleanSource}\n}`;
 }
 
-function loadSchemaSource(schemaDir: string, schemaName: string): string {
+function loadSchemaSource(schemaDir: string, schemaName: string, extraModules?: Record<string, string>): string {
   const parts: Array<{ fileName: string; moduleName: string }> = [];
   const primaryModule = inferredModuleNameFromSchema(schemaName);
   const idx = schemaName.lastIndexOf("_");
@@ -90,6 +96,10 @@ function loadSchemaSource(schemaDir: string, schemaName: string): string {
   }
 
   parts.push({ fileName: schemaName, moduleName: primaryModule });
+
+  for (const [moduleName, fileName] of Object.entries(extraModules ?? {})) {
+    parts.push({ fileName, moduleName });
+  }
 
   return parts
     .map(({ fileName, moduleName }) => {
@@ -118,8 +128,15 @@ interface CachedSnapshot {
 
 const snapshotCache = new Map<string, CachedSnapshot>();
 
-function snapshotCacheKey(schema: string | undefined, setup: string | undefined): string {
-  return `${schema ?? "<none>"}|${setup ?? "<none>"}`;
+function snapshotCacheKey(
+  schema: string | undefined,
+  setup: string | undefined,
+  extraModules?: Record<string, string>,
+  extraSetups?: Array<{ module: string; setup: string }>,
+): string {
+  const extras = extraModules ? JSON.stringify(extraModules) : "";
+  const extraSetupsStr = extraSetups ? JSON.stringify(extraSetups) : "";
+  return `${schema ?? "<none>"}|${setup ?? "<none>"}|${extras}|${extraSetupsStr}`;
 }
 
 export class QueryHarness {
@@ -178,7 +195,7 @@ export class QueryHarness {
       let schemaSource = "";
       if (options.schema) {
         const schemaDir = path.join(__dirname, "schemas");
-        schemaSource = loadSchemaSource(schemaDir, options.schema);
+        schemaSource = loadSchemaSource(schemaDir, options.schema, options.extraModules);
       }
 
       const decl = parseDeclarativeSchema(schemaSource, { legacySyntaxCompat: true },);
@@ -203,6 +220,14 @@ export class QueryHarness {
       harness.script(rawSource);
     }
 
+    if (shouldRunSetup && options.extraSetups) {
+      for (const extra of options.extraSetups) {
+        const p = path.join(__dirname, "schemas", `${extra.setup}.edgeql`);
+        const rawSource = fs.readFileSync(p, "utf-8");
+        harness.script(`SET MODULE ${extra.module};\n${rawSource}`);
+      }
+    }
+
     return harness;
   }
 
@@ -212,7 +237,7 @@ export class QueryHarness {
    * back to the slow path.
    */
   private static tryCreateFromSnapshot(options: HarnessOptions): QueryHarness | null {
-    const key = snapshotCacheKey(options.schema, options.setup);
+    const key = snapshotCacheKey(options.schema, options.setup, options.extraModules, options.extraSetups);
     const cached = snapshotCache.get(key);
     const fallbackModule = options.schema
       ? defaultModuleForSchema(path.join(__dirname, "schemas"), options.schema)
@@ -232,7 +257,7 @@ export class QueryHarness {
     let schemaSource = "";
     if (options.schema) {
       const schemaDir = path.join(__dirname, "schemas");
-      schemaSource = loadSchemaSource(schemaDir, options.schema);
+      schemaSource = loadSchemaSource(schemaDir, options.schema, options.extraModules);
     }
     const decl = parseDeclarativeSchema(schemaSource, { legacySyntaxCompat: true });
     const schema = schemaSnapshotFromDeclarative(decl);
@@ -247,6 +272,14 @@ export class QueryHarness {
       const p = path.join(__dirname, "schemas", `${options.setup}.edgeql`);
       const rawSource = fs.readFileSync(p, "utf-8");
       harness.script(rawSource);
+    }
+
+    if (options.extraSetups) {
+      for (const extra of options.extraSetups) {
+        const p = path.join(__dirname, "schemas", `${extra.setup}.edgeql`);
+        const rawSource = fs.readFileSync(p, "utf-8");
+        harness.script(`SET MODULE ${extra.module};\n${rawSource}`);
+      }
     }
 
     snapshotCache.set(key, {

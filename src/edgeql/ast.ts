@@ -604,7 +604,33 @@ export type FreeObjectExpr =
   | {
       kind: "mutation_expr";
       statement: InsertStatement | UpdateStatement | DeleteStatement;
-    };
+    }
+  | GroupExpr;
+
+export interface GroupUsingBinding {
+  alias: string;
+  expr: FreeObjectExpr;
+}
+
+export type GroupByAtom =
+  | { kind: "field_ref"; field: string }
+  | { kind: "name_ref"; name: string };
+
+// Top-level BY entries combine to form one or more "grouping sets" — each set
+// is a list of atom names. Plain `BY a, b` → one set [a, b]; `BY {a, b}` →
+// two sets [[a], [b]]; CUBE / ROLLUP enumerate further subsets.
+export type GroupByElement =
+  | GroupByAtom
+  | { kind: "sets"; sets: GroupByAtom[][] }
+  | { kind: "cube"; atoms: GroupByAtom[] }
+  | { kind: "rollup"; atoms: GroupByAtom[] };
+
+export interface GroupExpr {
+  kind: "group_expr";
+  source: FreeObjectExpr;
+  using?: GroupUsingBinding[];
+  by: GroupByElement[];
+}
 
 export interface SelectFreeStatement {
   kind: "select_free";
@@ -788,12 +814,8 @@ export interface GroupStatement {
   withModule?: string;
   withModuleAliases?: WithModuleAlias[];
   source: FreeObjectExpr;
-  by: FreeObjectExpr[];
-  using?: Array<{
-    alias: string;
-    expr: FreeObjectExpr;
-  }>;
-  shape?: ShapeElement[];
+  using?: GroupUsingBinding[];
+  by: GroupByElement[];
   pos: SourcePos;
 }
 

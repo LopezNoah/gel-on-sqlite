@@ -49,6 +49,10 @@ function canonical(value: unknown): string {
 // template expects unordered matching. Returns a value whose canonical form is
 // directly comparable with the expected side.
 function normalizeAgainstTemplate(actual: unknown, expected: unknown): unknown {
+  // Mirror expectLike's "str" placeholder: any string in actual matches.
+  if (expected === "str" && typeof actual === "string") {
+    return "str";
+  }
   if (isUnorderedBag(expected) || isUnorderedSet(expected)) {
     // The engine sometimes returns set-typed values pre-wrapped as
     // `{__kind: "set", items: [...]}` — unwrap so we don't double-wrap.
@@ -66,9 +70,15 @@ function normalizeAgainstTemplate(actual: unknown, expected: unknown): unknown {
     return actual.map((item, i) => normalizeAgainstTemplate(item, expected[i]));
   }
   if (isPlainObject(expected) && isPlainObject(actual)) {
+    // Match Python's `assert_query_result` semantics: only the keys named in
+    // `expected` are compared, so actual rows with additional fields (e.g.
+    // GROUP's `grouping` field when the test only checks `key`/`elements`)
+    // still match.
     const out: Record<string, unknown> = {};
-    for (const key of Object.keys(actual).sort()) {
-      out[key] = normalizeAgainstTemplate(actual[key], expected[key]);
+    for (const key of Object.keys(expected).sort()) {
+      if (Object.prototype.hasOwnProperty.call(actual, key)) {
+        out[key] = normalizeAgainstTemplate(actual[key], expected[key]);
+      }
     }
     return out;
   }
@@ -97,11 +107,10 @@ export function expectLike(actual: unknown, expected: unknown): void {
     expect(Array.isArray(actual)).toBe(true);
     const actualArray = actual as unknown[];
 
-    // When the expected items are heterogeneous (e.g. a bag of objects whose
-    // fields use unorderedSet wrappers), the actual items must be normalized
-    // against a matching template so their canonical strings line up.
-    const anyTemplateUsesUnordered = expected.items.some(templateContainsUnordered);
-
+    // Always normalize each actual item against the best-matching expected
+    // template before computing the canonical key. This lets template-side
+    // placeholders ("str"), unordered-wrapped fields, and missing-extra-keys
+    // semantics carry through into the bag comparison.
     const expectedCounts = new Map<string, number>();
     for (const item of expected.items) {
       const key = canonical(item);
@@ -110,25 +119,17 @@ export function expectLike(actual: unknown, expected: unknown): void {
 
     const actualCounts = new Map<string, number>();
     for (const item of actualArray) {
-      let key: string;
-      if (anyTemplateUsesUnordered) {
-        // Find the expected template whose canonical matches and normalize
-        // the actual item against it. Fall back to plain canonical when none
-        // matches so we still produce a deterministic, comparable key.
-        let bestKey: string | undefined;
-        for (const tmpl of expected.items) {
-          const normalized = normalizeAgainstTemplate(item, tmpl);
-          const candidate = canonical(normalized);
-          if (expectedCounts.has(candidate)) {
-            bestKey = candidate;
-            break;
-          }
-          if (bestKey === undefined) bestKey = candidate;
+      let bestKey: string | undefined;
+      for (const tmpl of expected.items) {
+        const normalized = normalizeAgainstTemplate(item, tmpl);
+        const candidate = canonical(normalized);
+        if (expectedCounts.has(candidate)) {
+          bestKey = candidate;
+          break;
         }
-        key = bestKey ?? canonical(item);
-      } else {
-        key = canonical(item);
+        if (bestKey === undefined) bestKey = candidate;
       }
+      const key = bestKey ?? canonical(item);
       actualCounts.set(key, (actualCounts.get(key) ?? 0) + 1);
     }
 

@@ -195,7 +195,8 @@ const compileSqlWithStranglerFig = (
   context: CompileContext,
 ): { sql: SQLArtifact; gelIr?: GelIRStatement; usesGelIrSql: boolean } => {
   if (statement.kind === "select" || statement.kind === "select_free"
-    || ir.kind === "select" || ir.kind === "select_free"
+    || statement.kind === "group"
+    || ir.kind === "select" || ir.kind === "select_free" || ir.kind === "group"
     || (statement.kind === "select_expr" && freeExprContainsMutation(statement.expr))) {
     return {
       sql: compileToSQL(ir, { target: context.target ?? "sqlite", parameterValues: context.params, globalValues: context.globals }),

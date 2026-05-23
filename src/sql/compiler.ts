@@ -35,6 +35,16 @@ export const compileToSQL = (ir: IRStatement, options: SQLCompileOptions = {}): 
     };
   }
 
+  if (ir.kind === "group") {
+    // The runtime evaluator runs the source SelectIR's own SQL; this artifact
+    // is a placeholder so the rest of the pipeline (cache/trace) doesn't choke.
+    return {
+      sql: "SELECT 1",
+      params: [],
+      loweringMode: "fallback_multi_query",
+    };
+  }
+
   if (ir.kind === "insert") {
     const keys = Object.keys(ir.values);
     if (keys.length === 0) {
