@@ -161,6 +161,33 @@ export const buildCompileCacheKey = (schema: SchemaSnapshot, statement: Statemen
     .digest("hex");
 };
 
+const makeTypeColumnsResolver = (schema: SchemaSnapshot): (typeName: string) => Set<string> | undefined => {
+  const cache = new Map<string, Set<string>>();
+  const collect = (qualifiedName: string, accumulator: Set<string>, seen: Set<string>): void => {
+    if (seen.has(qualifiedName)) return;
+    seen.add(qualifiedName);
+    const typeDef = schema.getType(qualifiedName);
+    if (!typeDef) return;
+    for (const field of typeDef.fields ?? []) {
+      accumulator.add(field.name);
+    }
+    for (const baseName of typeDef.extends ?? []) {
+      collect(baseName, accumulator, seen);
+    }
+  };
+  return (typeName: string): Set<string> | undefined => {
+    const existing = cache.get(typeName);
+    if (existing) return existing;
+    const columns = new Set<string>(["id"]);
+    collect(typeName, columns, new Set<string>());
+    if (columns.size === 1 && !schema.getType(typeName)) {
+      return undefined;
+    }
+    cache.set(typeName, columns);
+    return columns;
+  };
+};
+
 const compileSqlWithStranglerFig = (
   schema: SchemaSnapshot,
   statement: Statement,
@@ -191,6 +218,7 @@ const compileSqlWithStranglerFig = (
     target: context.target ?? "sqlite",
     parameterValues: context.params,
     globalValues: context.globals,
+    resolveTypeColumns: makeTypeColumnsResolver(schema),
   }) as SQLArtifact & GelIRSQLArtifact;
 
   return {

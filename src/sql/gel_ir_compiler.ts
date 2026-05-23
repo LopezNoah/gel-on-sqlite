@@ -41,6 +41,7 @@ export interface GelIRSQLArtifact {
 
 export interface GelIRCompileOptions {
   resolveTableName?: (typeName: string) => string;
+  resolveTypeColumns?: (typeName: string) => Set<string> | undefined;
   maxShapeDepth?: number;
   target?: RuntimeTarget;
   parameterValues?: Record<string, ScalarValue>;
@@ -443,7 +444,16 @@ const collectScalarPointerSources = (set: Set, sources: Map<string, TypeRef>): v
       sourceExpr = (sourceExpr as SelectExpr).result.expr;
     }
     if (sourceExpr.kind === "type_root") {
-      const typeref = (sourceExpr as TypeRoot).typeref;
+      // If the source set was narrowed by a type intersection (e.g. `[IS T]`),
+      // the outer set's typeref reflects the narrowed type while the inner
+      // type_root still points at the original root. Prefer the narrowed
+      // typeref so the polymorphic FROM clause only enumerates matching
+      // concrete subtypes.
+      const rootTyperef = (sourceExpr as TypeRoot).typeref;
+      const narrowedTyperef = pointer.source.typeref;
+      const typeref = narrowedTyperef && narrowedTyperef.id !== rootTyperef.id
+        ? narrowedTyperef
+        : rootTyperef;
       const id = qualifyTypeName(typeref);
       if (!sources.has(id)) {
         sources.set(id, typeref);
@@ -1537,10 +1547,15 @@ const compilePolymorphicSource = (
   const concrete = candidates.filter((candidate) => !candidate.isAbstract);
   const sources = concrete.length > 0 ? concrete : [typeRef];
 
-  const cols = projectedColumns.map((column) => `${quoteIdent(column)} AS ${quoteIdent(column)}`).join(", ");
   const selects = sources.map((source) => {
     const sourceTypeName = qualifyTypeName(source);
     const sourceTable = resolveTypeTableName(source, options);
+    const available = options.resolveTypeColumns?.(sourceTypeName);
+    const cols = projectedColumns
+      .map((column) => (!available || available.has(column)
+        ? `${quoteIdent(column)} AS ${quoteIdent(column)}`
+        : `NULL AS ${quoteIdent(column)}`))
+      .join(", ");
     return `SELECT ${quoteLiteral(sourceTypeName)} AS ${quoteIdent("__source_type")}, ${cols} FROM ${quoteIdent(sourceTable)}`;
   });
 

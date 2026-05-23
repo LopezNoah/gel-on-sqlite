@@ -83,6 +83,10 @@ export class SchemaSnapshot {
   }
 
   listConcreteTypesAssignableTo(name: string): TypeDef[] {
+    if (isUniversalObjectName(name)) {
+      return this.listTypes().filter((candidate) => !candidate.abstract);
+    }
+
     const target = this.getType(name);
     if (!target) {
       return [];
@@ -155,6 +159,9 @@ export const qualifiedTypeName = (typeDef: TypeDef): string => {
   const module = typeDef.module ?? "default";
   return `${module}::${typeDef.name}`;
 };
+
+const isUniversalObjectName = (name: string): boolean =>
+  name === "default::Object" || name === "std::Object" || name === "Object";
 
 export const functionSignature = (fn: FunctionDef): string => {
   const params = fn.params.map((param) => `${param.variadic ? "variadic " : ""}${param.namedOnly ? "named only " : ""}${param.optional ? "optional " : ""}${param.setOf ? "set of " : ""}${param.type}`).join(",");

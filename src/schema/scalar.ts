@@ -28,6 +28,7 @@ const SCALAR_ALIASES: Record<string, ScalarType> = {
   float32: "float",
   float64: "float",
   decimal: "float",
+  sequence: "int",
   array: "str",
   tuple: "str",
 };

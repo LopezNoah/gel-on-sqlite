@@ -1030,6 +1030,8 @@ class Parser {
         && token.kind !== "lte"
         && token.kind !== "not_distinct_from"
         && token.kind !== "distinct_from"
+        && token.kind !== "kw_like"
+        && token.kind !== "kw_ilike"
       ) {
         break;
       }
@@ -1052,7 +1054,11 @@ class Parser {
                     ? "<="
                     : token.kind === "not_distinct_from"
                       ? "?="
-                      : "?!=",
+                      : token.kind === "distinct_from"
+                        ? "?!="
+                        : token.kind === "kw_like"
+                          ? "like"
+                          : "ilike",
         left,
         right,
       };
@@ -3005,6 +3011,20 @@ class Parser {
   }
 
   private parseInsertValue(): InsertValue {
+    const first = this.parseInsertValueAtom();
+    if (this.peek().kind !== "kw_union") {
+      return first;
+    }
+    const operands: InsertValue[] = [];
+    appendInsertValueOperand(operands, first);
+    while (this.peek().kind === "kw_union") {
+      this.consume();
+      appendInsertValueOperand(operands, this.parseInsertValueAtom());
+    }
+    return { kind: "set", values: operands };
+  }
+
+  private parseInsertValueAtom(): InsertValue {
     if (this.peek().kind === "lt") {
       return this.parseCastInsertValue();
     }
@@ -4577,6 +4597,16 @@ class Parser {
     return this.tokens[this.index + n] ?? this.tokens[this.tokens.length - 1];
   }
 }
+
+const appendInsertValueOperand = (operands: InsertValue[], value: InsertValue): void => {
+  if (typeof value === "object" && value !== null && "kind" in value && (value as { kind: string }).kind === "set") {
+    for (const inner of (value as { kind: "set"; values: InsertValue[] }).values) {
+      appendInsertValueOperand(operands, inner);
+    }
+    return;
+  }
+  operands.push(value);
+};
 
 const parseSetModuleStatement = (input: string): string | undefined => {
   const tokens = tokenize(input).filter((token) => token.kind !== "eof");

@@ -508,7 +508,7 @@ export type FreeObjectExpr =
     }
   | {
       kind: "compare";
-      op: "=" | "!=" | ">" | "<" | ">=" | "<=" | "?=" | "?!=";
+      op: "=" | "!=" | ">" | "<" | ">=" | "<=" | "?=" | "?!=" | "like" | "ilike";
       left: FreeObjectExpr;
       right: FreeObjectExpr;
     }

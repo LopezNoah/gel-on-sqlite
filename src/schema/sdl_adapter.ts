@@ -1776,17 +1776,11 @@ const convertInferredLinkMember = (
     ?? unsupported("Link declaration requires a target type");
 
   const body = node.body;
-  if (
-    body
-    && (
-      body.using
-      || body.default
-      || body.readonly !== null
-      || body.extending.length > 0
-      || body.annotations.length > 0
-    )
-  ) {
-    unsupported("Implicit links with link bodies are not supported by the new SDL adapter yet");
+  if (body?.using) {
+    unsupported("Link using clauses are not supported by the new SDL adapter yet");
+  }
+  if ((body?.extending.length ?? 0) > 0) {
+    unsupported("Link extending clauses are not supported by the new SDL adapter yet");
   }
 
   const multi = node.cardinality === "multi";
@@ -1797,9 +1791,10 @@ const convertInferredLinkMember = (
     required: multi ? false : node.required === true,
     multi,
     overloaded: node.overloaded,
-    hasDefault: false,
-    readonly: false,
-    annotations: [],
+    hasDefault: body?.default !== null && body?.default !== undefined,
+    defaultTargetValues: body?.default ? parseLinkDefaultTargetValues(body.default.text) : undefined,
+    readonly: body?.readonly ?? false,
+    annotations: (body?.annotations ?? []).map((annotation) => convertAnnotation(moduleName, annotation)),
     properties: [],
   };
 };

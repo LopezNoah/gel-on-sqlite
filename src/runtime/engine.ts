@@ -147,6 +147,30 @@ const getRuntimeTypedAliasMap = (schema: SchemaSnapshot): Map<string, RuntimeTyp
 const qualifyRuntimeTypeName = (name: string, moduleName = "default"): string =>
   name.includes("::") ? name : `${moduleName}::${name}`;
 
+const likeMatch = (value: unknown, pattern: unknown, caseInsensitive: boolean): boolean => {
+  if (typeof value !== "string" || typeof pattern !== "string") return false;
+  let regex = "^";
+  for (let i = 0; i < pattern.length; i += 1) {
+    const ch = pattern[i]!;
+    if (ch === "\\" && i + 1 < pattern.length) {
+      regex += pattern[i + 1]!.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      i += 1;
+      continue;
+    }
+    if (ch === "%") {
+      regex += ".*";
+      continue;
+    }
+    if (ch === "_") {
+      regex += ".";
+      continue;
+    }
+    regex += ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+  regex += "$";
+  return new RegExp(regex, caseInsensitive ? "is" : "s").test(value);
+};
+
 const stripRuntimeAliasOuterParens = (input: string): string => {
   const trimmed = input.trim();
   if (!(trimmed.startsWith("(") && trimmed.endsWith(")"))) {
@@ -2222,6 +2246,9 @@ const tryRuntimeSelectExprEvaluation = (
           if (expr.op === "<") return Number(l) < Number(r);
           if (expr.op === ">=") return Number(l) >= Number(r);
           if (expr.op === "<=") return Number(l) <= Number(r);
+          if (expr.op === "like" || expr.op === "ilike") {
+            return likeMatch(l, r, expr.op === "ilike");
+          }
           return false;
         };
         const leftIsSet = Array.isArray(left);
