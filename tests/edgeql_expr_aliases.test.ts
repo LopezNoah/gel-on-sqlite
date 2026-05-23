@@ -12,9 +12,7 @@ describe("TestEdgeQLExprAliases", () => {
   beforeEach(async () => {
     h = await QueryHarness.create({
       schema: "cards",
-      setup: "cards_setup",
-      dbFile: "./tests/.artifacts/expr_aliases.sqlite",
-      resetDbFile: true
+      setup: "cards_setup"
     });
   });
 

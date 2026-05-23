@@ -1,4 +1,5 @@
-import type { ScalarValue } from "../types.js";
+import type { FreeObjectExpr, PathStep, WithBinding } from "../edgeql/ast.js";
+import type { ComputedLinkPropertyDef, ScalarValue } from "../types.js";
 
 /* ---------------------------------- */
 /* Depth control                      */
@@ -16,16 +17,41 @@ type PrevDepth = {
 type Dec<D extends Depth> = PrevDepth[D];
 
 /* ---------------------------------- */
+/* Path identity                      */
+/* ---------------------------------- */
+
+export interface PathStepIR {
+  typeName: string;
+  pointer?: string;
+  direction?: "outbound" | "inbound";
+  optional?: boolean;
+}
+
+export interface PathIdIR {
+  id: string;
+  steps: PathStepIR[];
+  isPointerPath: boolean;
+}
+
+/* ---------------------------------- */
 /* Shared basics                      */
 /* ---------------------------------- */
 
 export interface SchemaTypeRefIR {
   name: string;
   table: string;
+  columns?: string[];
+  module?: string;
+  isAbstract?: boolean;
+  isScalar?: boolean;
+  children?: string[];
+  ancestors?: string[];
+  baseType?: string;
+  materialType?: string;
 }
 
 export interface ScopeTreeIR {
-  pathId: string;
+  pathId: PathIdIR;
   typeName: string;
   children: ScopeTreeIR[];
 }
@@ -34,13 +60,14 @@ export interface OverlayIR {
   table: string;
   sourcePathId: string;
   operation: "union" | "replace" | "exclude";
-  policyPhase: "none";
-  rewritePhase: "none";
+  policyPhase: "none" | "access" | "rewrite";
+  rewritePhase: "none" | "insert" | "update";
 }
 
 export interface OrderByIR<TValue = string> {
   value: TValue;
   direction: "asc" | "desc";
+  nullsPosition?: "first" | "last";
   then?: OrderByIR<TValue>;
 }
 
@@ -49,10 +76,39 @@ export interface PageIR {
   offset?: number;
 }
 
+export type Cardinality = "one" | "many" | "at_most_one" | "at_least_one" | "empty" | "unknown";
+
+export type Multiplicity = "unique" | "duplicate" | "empty" | "unknown";
+
+export type Volatility = "immutable" | "stable" | "volatile" | "modifying";
+
 export interface InferenceResult {
-  cardinality: "empty" | "at_most_one" | "many";
-  multiplicity: "unique" | "duplicate";
-  volatility: "immutable";
+  cardinality: Cardinality;
+  multiplicity: Multiplicity;
+  volatility: Volatility;
+}
+
+/* ---------------------------------- */
+/* Triggers & policies                */
+/* ---------------------------------- */
+
+export interface TriggerEvent {
+  kind: "insert" | "update" | "delete";
+}
+
+export interface TriggerIR {
+  name: string;
+  events: TriggerEvent[];
+  scope: "each" | "all";
+  sourceType: string;
+}
+
+export interface PolicyIR {
+  name: string;
+  effect: "allow" | "deny";
+  operations: string[];
+  condition?: string;
+  errmessage?: string;
 }
 
 /* ---------------------------------- */
@@ -107,6 +163,7 @@ export interface BacklinkSourceIR {
   inlineColumn?: string;
   linkTable?: string;
   propertyColumns?: string[];
+  computedProperties?: ComputedLinkPropertyDef[];
 }
 
 export interface LinkRelationIR {
@@ -115,10 +172,16 @@ export interface LinkRelationIR {
   targetTable: string;
   targetTables: SchemaTypeRefIR[];
   propertyColumns?: string[];
+  computedProperties?: ComputedLinkPropertyDef[];
   multi: boolean;
   storage: "inline" | "table";
   inlineColumn?: string;
   linkTable?: string;
+  /** All concrete-subtype link tables that may carry data for this
+   * relation. Used to UNION ALL across them when a query's row set spans
+   * multiple subtypes (polymorphic link materialization). When undefined
+   * or empty, the SQL compiler falls back to `linkTable`. */
+  linkTables?: Array<{ name: string; table: string }>;
 }
 
 /* ---------------------------------- */
@@ -129,7 +192,7 @@ export type FilterExprIR =
   | {
       kind: "field";
       column: string;
-      op: "=" | "!=" | "like" | "ilike";
+      op: "=" | "!=" | "<" | "<=" | ">" | ">=" | "?=" | "?!=" | "like" | "ilike";
       value: ScalarValue;
     }
   | {
@@ -155,7 +218,7 @@ export type FilterExprIR =
       kind: "field_compare";
       leftColumn: string;
       rightColumn: string;
-      op: "=" | "!=" | "like" | "ilike";
+      op: "=" | "!=" | "<" | "<=" | ">" | ">=" | "?=" | "?!=" | "like" | "ilike";
     }
   | {
       kind: "backlink";
@@ -173,14 +236,21 @@ export type FilterExprIR =
       relation: LinkRelationIR;
       targetColumn: string;
       property: string;
-      op: "=" | "!=" | "like" | "ilike";
+      op: "=" | "!=" | "<" | "<=" | ">" | ">=" | "?=" | "?!=" | "like" | "ilike";
+    }
+  | {
+      kind: "link_target_field_compare";
+      relation: LinkRelationIR;
+      targetColumn: string;
+      value: ScalarValue;
+      op: "=" | "!=" | "<" | "<=" | ">" | ">=" | "?=" | "?!=" | "like" | "ilike";
     }
   | {
       kind: "backlink_property_compare";
       sources: BacklinkSourceIR[];
       column: string;
       property: string;
-      op: "=" | "!=" | "like" | "ilike";
+      op: "=" | "!=" | "<" | "<=" | ">" | ">=" | "?=" | "?!=" | "like" | "ilike";
     }
   | {
       kind: "backlink_property_in";
@@ -188,6 +258,13 @@ export type FilterExprIR =
       column: string;
       property: string;
       op: "in" | "not_in";
+    }
+  | {
+      kind: "backlink_property_value_compare";
+      sources: BacklinkSourceIR[];
+      property: string;
+      value: ScalarValue;
+      op: "=" | "!=" | "<" | "<=" | ">" | ">=" | "?=" | "?!=" | "like" | "ilike";
     }
   | {
       kind: "and";
@@ -202,7 +279,22 @@ export type FilterExprIR =
   | {
       kind: "not";
       expr: FilterExprIR;
+    }
+  | {
+      kind: "expr_compare";
+      left: ScalarExprIR;
+      right: ScalarExprIR;
+      op: "=" | "!=" | "<" | "<=" | ">" | ">=";
     };
+
+/** Scalar expression compiled from filter LHS/RHS — column refs, literals,
+ * and arithmetic/string-concat operators that lower directly to SQL. */
+export type ScalarExprIR =
+  | { kind: "column"; column: string }
+  | { kind: "literal"; value: ScalarValue }
+  | { kind: "binop"; op: "+" | "-" | "*" | "/" | "//" | "%" | "++"; left: ScalarExprIR; right: ScalarExprIR }
+  | { kind: "neg"; expr: ScalarExprIR }
+  | { kind: "index_access"; value: ScalarExprIR; index: number };
 
 /* ---------------------------------- */
 /* Select-shape expressions           */
@@ -219,10 +311,16 @@ export type SelectShapeExprIR =
   | FieldRefIR
   | BindingRefIR
   | LiteralIR
+  | SetLiteralIR
   | {
       kind: "polymorphic_field_ref";
       sourceType: string;
+      concreteSourceTypes?: string[];
       column: string;
+    }
+  | {
+      kind: "is_type";
+      concreteSourceTypes: string[];
     }
   | {
       kind: "type_name";
@@ -246,6 +344,11 @@ export type SelectShapeExprIR =
       functionName: "sum";
       relation: LinkRelationIR;
       column: string;
+    }
+  | {
+      kind: "select_expr";
+      expr: FreeObjectExpr;
+      withBindings?: WithBinding[];
     };
 
 /* ---------------------------------- */
@@ -254,7 +357,7 @@ export type SelectShapeExprIR =
 
 export interface ShapeBaseIR {
   name: string;
-  pathId: string;
+  pathId: PathIdIR;
 }
 
 export type SelectShapeElementIR =
@@ -297,7 +400,7 @@ export type SelectShapeElementIR =
 
 export interface PathStatementIR {
   kind: string;
-  pathId: string;
+  pathId: PathIdIR;
 }
 
 export interface TableStatementIR extends PathStatementIR {
@@ -316,6 +419,9 @@ export interface SelectBaseIR extends TableStatementIR, PageIR {
   filter?: FilterExprIR;
   orderBy?: OrderByIR<string>;
   inference: InferenceResult;
+  triggers?: TriggerIR[];
+  policies?: PolicyIR[];
+  requiredPermissions?: string[];
 }
 
 /* ---------------------------------- */
@@ -332,6 +438,8 @@ export interface SelectIR extends SelectBaseIR {
 export interface InsertIR extends MutationBaseIR {
   kind: "insert";
   values: Record<string, ScalarValue>;
+  triggers?: TriggerIR[];
+  policies?: PolicyIR[];
 }
 
 export interface UpdateIR extends MutationBaseIR {
@@ -341,6 +449,8 @@ export interface UpdateIR extends MutationBaseIR {
     value: ScalarValue;
   };
   values: Record<string, ScalarValue>;
+  triggers?: TriggerIR[];
+  policies?: PolicyIR[];
 }
 
 export interface DeleteIR extends MutationBaseIR {
@@ -349,6 +459,8 @@ export interface DeleteIR extends MutationBaseIR {
     column: string;
     value: ScalarValue;
   };
+  triggers?: TriggerIR[];
+  policies?: PolicyIR[];
 }
 
 /* ---------------------------------- */
@@ -398,6 +510,8 @@ export type SelectFreeIREntry<D extends Depth = 4> =
 export interface SelectFreeIR extends PathStatementIR {
   kind: "select_free";
   entries: SelectFreeIREntry[];
+  triggers?: TriggerIR[];
+  policies?: PolicyIR[];
 }
 
 /* ---------------------------------- */
@@ -406,6 +520,7 @@ export interface SelectFreeIR extends PathStatementIR {
 export type SelectExprIREntry<D extends Depth = 4> =
   | LiteralIR
   | SetLiteralIR
+  | BindingRefIR
   | (D extends 0
       ? never
       : {
@@ -431,6 +546,16 @@ export type SelectExprIREntry<D extends Depth = 4> =
       fieldType: string;
     }
   | {
+      kind: "type_name";
+      sourceType: string;
+    }
+  | {
+      kind: "polymorphic_field_ref";
+      sourceType: string;
+      concreteSourceTypes?: string[];
+      column: string;
+    }
+  | {
       kind: "current_item_field";
       bindingName: string;
       field: string;
@@ -448,6 +573,16 @@ export type SelectExprIREntry<D extends Depth = 4> =
           value: SelectExprIREntry<Dec<D>>;
           field: string;
         })
+  | {
+      kind: "backlink_path";
+      link: string;
+      sourceType?: string;
+      sourceTypeExpr?: import("../edgeql/ast.js").TypeExpr;
+    }
+  | {
+      kind: "path_steps";
+      steps: PathStep[];
+    }
   | (D extends 0
       ? never
       : {
@@ -455,7 +590,17 @@ export type SelectExprIREntry<D extends Depth = 4> =
           value: SelectExprIREntry<Dec<D>>;
           fields: Array<{
             name: string;
-            sourceField: string;
+            sourceField?: string;
+            backlinkLink?: string;
+            backlinkSourceType?: string;
+            expr?: SelectExprIREntry<Dec<D>>;
+            multi?: boolean;
+            itemFields?: Array<{
+              name: string;
+              sourceField?: string;
+              expr?: SelectExprIREntry<Dec<D>>;
+              multi?: boolean;
+            }>;
           }>;
         })
   | (D extends 0
@@ -468,6 +613,18 @@ export type SelectExprIREntry<D extends Depth = 4> =
       ? never
       : {
           kind: "tuple";
+          values: SelectExprIREntry<Dec<D>>[];
+        })
+  | (D extends 0
+      ? never
+      : {
+          kind: "free_object";
+          entries: Array<{ name: string; expr: SelectExprIREntry<Dec<D>> }>;
+        })
+  | (D extends 0
+      ? never
+      : {
+          kind: "array_literal_expr";
           values: SelectExprIREntry<Dec<D>>[];
         })
   | (D extends 0
@@ -487,7 +644,7 @@ export type SelectExprIREntry<D extends Depth = 4> =
       ? never
       : {
           kind: "compare";
-          op: "=" | "!=" | ">" | "<";
+          op: "=" | "!=" | "<" | "<=" | ">" | ">=" | "?=" | "?!=" | "like" | "ilike";
           left: SelectExprIREntry<Dec<D>>;
           right: SelectExprIREntry<Dec<D>>;
         })
@@ -508,7 +665,7 @@ export type SelectExprIREntry<D extends Depth = 4> =
       ? never
       : {
           kind: "math";
-          op: "+";
+          op: "+" | "-" | "*" | "/" | "//" | "%" | "^";
           left: SelectExprIREntry<Dec<D>>;
           right: SelectExprIREntry<Dec<D>>;
         })
@@ -523,10 +680,22 @@ export type SelectExprIREntry<D extends Depth = 4> =
   | (D extends 0
       ? never
       : {
+          kind: "coalesce";
+          left: SelectExprIREntry<Dec<D>>;
+          right: SelectExprIREntry<Dec<D>>;
+        })
+  | (D extends 0
+      ? never
+      : {
           kind: "for_expr";
           variable: string;
           iterator: SelectExprIREntry<Dec<D>>;
           body: SelectExprIREntry<Dec<D>>;
+          optional?: boolean;
+          filter?: SelectExprIREntry;
+          orderBy?: OrderByIR<SelectExprIREntry>;
+          limit?: number;
+          offset?: number;
         })
   | (D extends 0
       ? never
@@ -547,6 +716,7 @@ export type SelectExprIREntry<D extends Depth = 4> =
           kind: "select_expr_subquery";
           alias?: string;
           value: SelectExprIREntry<Dec<D>>;
+          filter?: SelectExprIREntry<Dec<D>>;
           orderBy?: {
             value: SelectExprIREntry<Dec<D>>;
             direction: "asc" | "desc";
@@ -554,6 +724,12 @@ export type SelectExprIREntry<D extends Depth = 4> =
           limit?: number;
           offset?: number;
         })
+  | {
+      kind: "mutation_expr";
+      statement: import("../edgeql/ast.js").InsertStatement
+        | import("../edgeql/ast.js").UpdateStatement
+        | import("../edgeql/ast.js").DeleteStatement;
+    }
   | (D extends 0 ? never : FunctionCallIR<SelectExprIREntry<Dec<D>>>)
   | {
       kind: "current_item";
@@ -567,10 +743,56 @@ export interface SelectExprIR {
   orderBy?: OrderByIR<SelectExprIREntry>;
 }
 
+/* ---------------------------------- */
+/* Group                              */
+/* ---------------------------------- */
+
+// Phase 6: keys are flat name strings used at runtime to read each row's
+// already-materialised value (USING aliases land in the source shape as
+// computed entries, BY-only fields land as plain field entries). Field vs.
+// alias provenance is tracked at compile time and no longer needed at runtime.
+export type GroupByElementIR = never;
+
+export interface GroupIR {
+  kind: "group";
+  // Underlying source query AS AN AST so the runtime can route it through the
+  // existing `tryEvaluateParsedRuntimeSelect` path. That path materialises
+  // computed shape entries (e.g. `count(.owners)` over a backlink) at runtime
+  // — something the strict IR/SQL compile rejects because backlinks aren't in
+  // `knownFields`. BY fields and USING aliases are folded into the shape so
+  // their values come back on each row. When the source typeName is a WITH
+  // binding (free-object, set-literal, path, etc.) we build a `select_expr`
+  // wrapping a `shape_projection` over the binding ref so the parsed runtime
+  // recognizes it.
+  source:
+    | import("../edgeql/ast.js").SelectStatement
+    | import("../edgeql/ast.js").SelectExprStatement;
+  // The union of all atom names referenced by any grouping set. Each row's
+  // `key` includes every name in this list — for rows produced by a grouping
+  // set that doesn't include an atom, that key field is NULL.
+  byAtoms: string[];
+  // Each entry is a list of atom names; the runtime runs one partition pass
+  // per entry. Plain `BY a, b` → `[[a, b]]`; `BY {a, b}` → `[[a], [b]]`;
+  // CUBE / ROLLUP enumerate further subsets; mixing produces the Cartesian
+  // product.
+  groupingSets: string[][];
+  // Field names that the source select materialises but that should be
+  // stripped from `elements`, e.g. BY-only fields or USING aliases.
+  hiddenByFields: string[];
+  // Post-process the {key, elements, grouping} group rows. These are AST
+  // nodes evaluated by the engine against each row as `current_item`.
+  postFilter?: import("../edgeql/ast.js").FreeObjectExpr;
+  postShape?: import("../edgeql/ast.js").ShapeElement[];
+  postOrderBy?: import("../edgeql/ast.js").OrderExprChain;
+  postLimit?: number;
+  postOffset?: number;
+}
+
 export type IRStatement =
   | SelectIR
   | SelectFreeIR
   | SelectExprIR
   | InsertIR
   | UpdateIR
-  | DeleteIR;
+  | DeleteIR
+  | GroupIR;

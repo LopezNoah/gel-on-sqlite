@@ -1,6 +1,6 @@
 import { AppError } from "../errors.js";
 import type { RuntimeDatabaseAdapter } from "../runtime/adapter.js";
-import { parseDeclarativeSchema, type DeclarativeSchema } from "./declarative.js";
+import { type DeclarativeSchema } from "./declarative.js";
 import {
   applyMigrationPlanWithOptions,
   calculateMigrationChecksum,
@@ -9,6 +9,7 @@ import {
   type MigrationPlan,
   type MigrationStep,
 } from "./migrations.js";
+import { parseDeclarativeSchema } from "./sdl_adapter.js";
 
 interface ActiveMigrationDraft {
   migrationId?: string;
@@ -74,10 +75,10 @@ export class MigrationSession {
     },
   ) {
     this.initialSchemaSource = options.initialSchemaSource;
-    this.initialSchema = parseDeclarativeSchema(options.initialSchemaSource);
+    this.initialSchema = parseDeclarativeSchema(options.initialSchemaSource, { legacySyntaxCompat: true});
 
     this.currentSchemaSource = options.currentSchemaSource ?? options.initialSchemaSource;
-    this.currentSchema = parseDeclarativeSchema(this.currentSchemaSource);
+    this.currentSchema = parseDeclarativeSchema(this.currentSchemaSource, { legacySyntaxCompat: true});
   }
 
   getState(): MigrationSessionState {
@@ -92,7 +93,7 @@ export class MigrationSession {
 
   startMigration(params: StartMigrationParams): MigrationPlan {
     this.requireNoActiveMigration("Cannot start migration: another migration is already active");
-    const targetSchema = parseDeclarativeSchema(params.targetSchemaSource);
+    const targetSchema = parseDeclarativeSchema(params.targetSchemaSource, { legacySyntaxCompat: true});
     const plan = planSchemaMigration(this.currentSchema, targetSchema);
     this.activeMigration = {
       migrationId: params.migrationId,

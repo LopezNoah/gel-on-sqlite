@@ -119,10 +119,12 @@ export class ObjectCollection<T extends SchemaObjectLike> {
   }
 
   static create<T extends SchemaObjectLike>(_schema: SchemaLike, values: Iterable<T>): ObjectCollection<T> {
+    void _schema;
     return new ObjectCollection(values);
   }
 
   objects(_schema: SchemaLike): readonly T[] {
+    void _schema;
     return this.values;
   }
 

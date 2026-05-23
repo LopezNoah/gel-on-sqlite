@@ -4,7 +4,6 @@ import type {
   AccessPolicyDef,
   AnnotationDef,
   ComputedDef,
-  ComputedValuePart,
   ConstraintDef,
   FieldDef,
   FunctionBodyDef,
@@ -22,7 +21,6 @@ import type {
 import { GEL_SCHEMA_DDL, GEL_TABLE_NAMES } from "./gel_schema_tables.js";
 import type {
   AccessPolicyMetadata,
-  AnnotationMetadata,
   FunctionMetadata,
   LinkMetadata,
   ObjectTypeMetadata,
@@ -34,6 +32,7 @@ import type {
 import { validateMetadata } from "./gel_metadata_schemas.js";
 import { buildAnnotationsBySubject, insertAnnotationRecord, resolveAnnotations } from "./annos.js";
 import type { AnnotationRow } from "./annos.js";
+import { parseComputedSetLiteralExpr } from "./computed_expr.js";
 
 export const ensureGelSchemaTables = (db: SQLiteDatabase): void => {
   for (const ddl of GEL_SCHEMA_DDL) {
@@ -163,17 +162,10 @@ export const deserializeSchemaFromGelTables = (db: SQLiteDatabase): SchemaSnapsh
   const functionRows = rows.filter((r) => r.kind === "Function");
 
   const idToRow = new Map(rows.map((r) => [r.id, r]));
-  const nameToId = new Map(rows.map((r) => [r.name__internal, r.id]));
 
   const pointers = db.prepare(`SELECT * FROM gel_pointers`).all() as Array<{
     source_id: string;
     pointer_id: string;
-  }>;
-
-  const pointerEndpoints = db.prepare(`SELECT * FROM gel_pointer_endpoints`).all() as Array<{
-    pointer_id: string;
-    source_id: string;
-    target_id: string;
   }>;
 
   const linkProps = db.prepare(`SELECT * FROM gel_link_properties`).all() as Array<{
@@ -218,7 +210,6 @@ export const deserializeSchemaFromGelTables = (db: SQLiteDatabase): SchemaSnapsh
     rewrite_id: string;
   }>;
 
-  const endpointByPointer = new Map(pointerEndpoints.map((e) => [e.pointer_id, e]));
   const pointersBySource = new Map<string, Array<{ pointer_id: string }>>();
   for (const p of pointers) {
     if (!pointersBySource.has(p.source_id)) {
@@ -292,8 +283,6 @@ export const deserializeSchemaFromGelTables = (db: SQLiteDatabase): SchemaSnapsh
 
       if (ptrRow.kind === "Property") {
         const meta = ptrRow.metadata ? (JSON.parse(ptrRow.metadata) as PropertyMetadata) : {} as PropertyMetadata;
-        const endpoint = endpointByPointer.get(ptr.pointer_id);
-
         if (meta.computed_expr) {
           const parsedExpr = parseComputedPropertyExpr(meta.computed_expr);
           const computedDef: ComputedDef = {
@@ -860,7 +849,10 @@ const generateId = (typeDef: TypeDef): string => {
 
 const generateFunctionId = (fn: FunctionDef): string => {
   const qName = `${fn.module}::${fn.name}`;
-  return `fn_${qName.replace(/[^A-Za-z0-9_]/g, "_")}`;
+  const signature = fn.params
+    .map((param) => `${param.type}${param.optional ? "?" : ""}${param.variadic ? "*" : ""}`)
+    .join(",");
+  return `fn_${qName.replace(/[^A-Za-z0-9_]/g, "_")}__${signature.replace(/[^A-Za-z0-9_]/g, "_")}`;
 };
 
 const scalarTypeId = (type: string): string => `scalar_${type}`;
@@ -1101,10 +1093,17 @@ const deserializeFunctionDef = (serialized: SerializedFunctionDef): FunctionDef 
 const serializeComputedExpr = (expr: ComputedDef["expr"]): string => {
   if (expr.kind === "field_ref") return `.${expr.field}`;
   if (expr.kind === "literal") return String(expr.value);
+  if (expr.kind === "set_literal") return `{${expr.values.map(serializeScalarSetValue).join(", ")}}`;
   if (expr.kind === "concat") return expr.parts.map(serializeComputedExprPart).join(" ++ ");
   if (expr.kind === "function_call") return `${expr.name}(${expr.args.map((a) => JSON.stringify(a)).join(", ")})`;
   if (expr.kind === "link_aggregate") return `${expr.functionName}(.${expr.link}.${expr.field})`;
   return "";
+};
+
+const serializeScalarSetValue = (value: ScalarValue): string => {
+  if (typeof value === "string") return JSON.stringify(value);
+  if (value === null) return "null";
+  return String(value);
 };
 
 const serializeComputedExprPart = (part: { kind: string; field?: string; value?: unknown }): string => {
@@ -1113,23 +1112,6 @@ const serializeComputedExprPart = (part: { kind: string; field?: string; value?:
   return "";
 };
 
-const serializeComputedLinkExpr = (expr: ComputedDef["expr"]): string => {
-  if (expr.kind === "link_ref") {
-    let result = `.${expr.link}`;
-    if (expr.filter) {
-      result += ` { select filter .${expr.filter.field} ${expr.filter.op} ${JSON.stringify(expr.filter.value)} }`;
-    }
-    return result;
-  }
-  if (expr.kind === "backlink") {
-    let result = `.<${expr.link}`;
-    if (expr.sourceType) {
-      result += `[is ${expr.sourceType}]`;
-    }
-    return result;
-  }
-  return "";
-};
 
 const serializeRewriteExpr = (expr: NonNullable<MutationRewriteDef["onInsert"]>): string => {
   if (expr.kind === "datetime_of_statement") return "datetime_of_statement()";
@@ -1139,7 +1121,7 @@ const serializeRewriteExpr = (expr: NonNullable<MutationRewriteDef["onInsert"]>)
   return "";
 };
 
-const parseComputedPropertyExpr = (exprStr: string): { kind: "field_ref"; field: string } | { kind: "literal"; value: ScalarValue } | { kind: "concat"; parts: ComputedValuePart[] } | { kind: "function_call"; name: string; args: ScalarValue[] } | { kind: "link_aggregate"; functionName: "sum"; link: string; field: string } => {
+const parseComputedPropertyExpr = (exprStr: string): Extract<ComputedDef, { kind: "property" }>["expr"] => {
   const aggregateMatch = exprStr.match(/^\s*sum\(\.([A-Za-z_][\w]*)\.([A-Za-z_][\w]*)\)\s*$/i);
   if (aggregateMatch) {
     return {
@@ -1148,6 +1130,11 @@ const parseComputedPropertyExpr = (exprStr: string): { kind: "field_ref"; field:
       link: aggregateMatch[1],
       field: aggregateMatch[2],
     };
+  }
+
+  const setLiteral = parseComputedSetLiteralExpr(exprStr);
+  if (setLiteral) {
+    return setLiteral;
   }
 
   if (exprStr.startsWith(".")) {

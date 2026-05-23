@@ -35,6 +35,8 @@ const BASE_SQL_NATIVE_STDLIB_LOWERING = new Set<string>([
   "std::min",
   "std::str_lower",
   "std::str_upper",
+  "std::datetime_get",
+  "std::datetime_truncate",
 ]);
 
 const RUNTIME_TARGET_CAPABILITIES: Record<RuntimeTarget, RuntimeTargetCapabilities> = {

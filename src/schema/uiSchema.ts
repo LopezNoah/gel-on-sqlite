@@ -7,7 +7,9 @@ import type {
   ScalarValue,
   TypeDef,
 } from "../types.js";
-import type { DeclarativeSchema, FunctionDeclaration, LinkMember, PropertyMember, TypeMember } from "./declarative.js";
+import type { FreeObjectExpr, SelectExprStatement, Statement } from "../edgeql/ast.js";
+import { parseEdgeQL } from "../edgeql/parser.js";
+import type { ComputedLinkPropertyExpr, DeclarativeSchema, FunctionDeclaration, LinkMember, LinkProperty, PropertyMember, TypeMember } from "./declarative.js";
 import { AnnotationRegistry, AnnotationResolver, AnnotationSet } from "./annos.js";
 import { SchemaSnapshot } from "./schema.js";
 import { scalarTypeDeclarationToTypeDef } from "./scalar.js";
@@ -21,7 +23,8 @@ const cloneConstraint = (constraint: ConstraintDef): ConstraintDef => ({
 
 const cloneConstraints = (constraints: ConstraintDef[]): ConstraintDef[] => constraints.map(cloneConstraint);
 
-const inheritConstraints = (constraints: ConstraintDef[]): ConstraintDef[] => cloneConstraints(constraints);
+const isStoredLinkProperty = (property: LinkMember["properties"][number]): property is LinkProperty =>
+  property.computed !== true;
 
 const mergeConstraintSets = (base: ConstraintDef[], override: ConstraintDef[]): ConstraintDef[] => {
   const map = new Map<string, ConstraintDef>();
@@ -305,6 +308,18 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
                 value: member.expr.value,
               },
             });
+          } else if (member.expr.kind === "set_literal") {
+            computeds.push({
+              kind: "property",
+              name: member.name,
+              required: member.required,
+              multi: member.multi,
+              annotations: member.annotations.length ? [...member.annotations] : undefined,
+              expr: {
+                kind: "set_literal",
+                values: [...member.expr.values],
+              },
+            });
           } else if (member.expr.kind === "concat") {
             computeds.push({
               kind: "property",
@@ -376,6 +391,19 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
                 filter: member.expr.filter ? { ...member.expr.filter } : undefined,
               },
             });
+          } else if (member.expr.kind === "select_type") {
+            computeds.push({
+              kind: "link",
+              name: member.name,
+              required: member.required,
+              multi: member.multi,
+              annotations: member.annotations.length ? [...member.annotations] : undefined,
+              expr: {
+                kind: "select_type",
+                typeName: normalizeTypeName(member.expr.typeName, typeDecl.module),
+                exprText: member.expr.exprText,
+              },
+            });
           } else {
             throw new Error(`Computed '${member.name}' has invalid link expression kind '${member.expr.kind}'`);
           }
@@ -383,6 +411,8 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
         continue;
       }
 
+      const storedProperties = member.properties.filter(isStoredLinkProperty);
+      const computedProperties = member.properties.filter((property) => property.computed === true);
       links.push({
         name: member.name,
         targetType: normalizeTypeName(member.target, typeDecl.module),
@@ -390,8 +420,8 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
         multi: member.multi,
         readonly: member.readonly,
         onTargetDelete: member.onTargetDelete,
-        properties: member.properties.length
-          ? member.properties.map((property) => ({
+        properties: storedProperties.length
+          ? storedProperties.map((property) => ({
               name: property.name,
               type: property.scalar,
               required: property.required,
@@ -400,16 +430,24 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
               annotations: property.annotations.length ? [...property.annotations] : undefined,
             }))
           : undefined,
+        computedProperties: computedProperties.length
+          ? computedProperties.map((property) => ({
+              name: property.name,
+              exprText: property.exprText,
+              computedExpr: property.computedExpr,
+              annotations: property.annotations.length ? [...property.annotations] : undefined,
+            }))
+          : undefined,
         hasDefault: member.hasDefault,
         defaultTargetValues: member.defaultTargetValues ? [...member.defaultTargetValues] : undefined,
         annotations: (member.annotations ?? []).length ? [...member.annotations] : undefined,
       });
 
-      if (!member.multi && member.properties.length === 0) {
+      if (!member.multi && storedProperties.length === 0) {
         fields.push({
           name: `${member.name}_id`,
           type: "uuid",
-          required: member.required,
+          required: false,
           hasDefault: member.hasDefault,
         });
       }
@@ -504,14 +542,23 @@ export const declarativeSchemaFromTypeDefs = (types: TypeDef[], functions: Funct
                 multi: Boolean(link.multi),
                 overloaded: Boolean(link.overloaded),
                 annotations: [...(link.annotations ?? [])],
-                properties: (link.properties ?? []).map((property) => ({
-                  name: property.name,
-                  scalar: property.type,
-                  required: Boolean(property.required),
-                  collection: property.collection,
-                  readonly: Boolean(property.readonly),
-                  annotations: [...(property.annotations ?? [])],
-                })),
+                properties: [
+                  ...(link.properties ?? []).map((property) => ({
+                    name: property.name,
+                    scalar: property.type,
+                    required: Boolean(property.required),
+                    collection: property.collection,
+                    readonly: Boolean(property.readonly),
+                    annotations: [...(property.annotations ?? [])],
+                  })),
+                  ...(link.computedProperties ?? []).map((property) => ({
+                    name: property.name,
+                    computed: true as const,
+                    exprText: property.exprText,
+                    computedExpr: property.computedExpr,
+                    annotations: [...(property.annotations ?? [])],
+                  })),
+                ],
               };
 
               members.push(linkMember);
@@ -576,7 +623,9 @@ export const declarativeSchemaFromTypeDefs = (types: TypeDef[], functions: Funct
                           link: computed.expr.link,
                           sourceType: computed.expr.sourceType,
                         }
-                      : {
+                      : computed.expr.kind === "select_type"
+                        ? { ...computed.expr }
+                        : {
                           kind: "link_ref",
                           link: computed.expr.link,
                           filter: computed.expr.filter ? { ...computed.expr.filter } : undefined,
@@ -749,6 +798,11 @@ export const renderDeclarativeSchema = (schema: DeclarativeSchema): string => {
           lines.push(`      annotation ${shortTypeName(annotation.name, moduleName)} := ${quoteString(annotation.value)};`);
         }
         for (const linkProperty of member.properties) {
+          if (linkProperty.computed === true) {
+            lines.push(`      ${linkProperty.name} := ${renderComputedLinkPropertyExpr(linkProperty.computedExpr)};`);
+            continue;
+          }
+
           if ((linkProperty.annotations ?? []).length === 0) {
             lines.push(`      ${linkProperty.required ? "required " : ""}${linkProperty.name}: ${linkProperty.scalar};`);
             continue;
@@ -988,6 +1042,10 @@ const renderComputedExpr = (expr: Extract<TypeMember, { kind: "computed" }>['exp
     return renderScalarLiteral(expr.value);
   }
 
+  if (expr.kind === "set_literal") {
+    return `{${expr.values.map((value) => renderScalarLiteral(value)).join(", ")}}`;
+  }
+
   if (expr.kind === "concat") {
     return expr.parts
       .map((part) => (part.kind === "field_ref" ? `.${part.field}` : renderScalarLiteral(part.value)))
@@ -1008,12 +1066,32 @@ const renderComputedExpr = (expr: Extract<TypeMember, { kind: "computed" }>['exp
     return `.<${expr.link}${source}`;
   }
 
+  if (expr.kind === "select_type") {
+    return expr.exprText;
+  }
+
   if (!expr.filter) {
     return `(select .${expr.link})`;
   }
 
   const op = expr.filter.op;
   return `(select .${expr.link} filter .${expr.filter.field} ${op} ${renderScalarLiteral(expr.filter.value)})`;
+};
+
+const renderComputedLinkPropertyExpr = (expr: ComputedLinkPropertyExpr): string => {
+  if (expr.kind === "field_ref") {
+    return `.${expr.name}`;
+  }
+  if (expr.kind === "link_property_ref") {
+    return `@${expr.name}`;
+  }
+  if (expr.kind === "literal") {
+    return renderScalarLiteral(expr.value);
+  }
+
+  const left = expr.left.kind === "binary_op" ? `(${renderComputedLinkPropertyExpr(expr.left)})` : renderComputedLinkPropertyExpr(expr.left);
+  const right = expr.right.kind === "binary_op" ? `(${renderComputedLinkPropertyExpr(expr.right)})` : renderComputedLinkPropertyExpr(expr.right);
+  return `${left} ${expr.op} ${right}`;
 };
 
 const normalizeTypeName = (name: string, moduleName: string): string => {
@@ -1125,8 +1203,16 @@ const renderPolicyCondition = (condition: { kind: string; [key: string]: unknown
 
 const parseFunctionBody = (fn: FunctionDeclaration): FunctionDef["body"] => {
   const trimmed = fn.body.text.trim();
-  const head = trimmed.toLowerCase();
-  if (head.startsWith("select ") || head.startsWith("insert ") || head.startsWith("update ") || head.startsWith("delete ") || head.startsWith("with ")) {
+  const paramNames = new Set(fn.params.map((param) => param.name));
+  const statement = parseFunctionStatement(trimmed);
+  if (statement?.kind === "select_expr" && !statement.with && statement.expr.kind === "concat") {
+    return {
+      kind: "expr",
+      expr: astToFunctionExpr(statement.expr, paramNames),
+    };
+  }
+
+  if (isQueryStatement(statement)) {
     return {
       kind: "query",
       language: fn.body.language,
@@ -1134,43 +1220,108 @@ const parseFunctionBody = (fn: FunctionDeclaration): FunctionDef["body"] => {
     };
   }
 
+  // If the body is a bare expression (e.g. `x ?? -1`), the simple-expr path
+  // only round-trips param_ref/literal/concat — anything else (coalesce,
+  // math, function calls, …) gets degraded to `""` by the AST→FunctionExpr
+  // fallback. Route those through the query path with a `select` prefix so
+  // the full evaluator handles them.
+  const wrappedStatement = parseFunctionStatement(`select ${trimmed}`);
+  if (wrappedStatement?.kind === "select_expr"
+    && !wrappedStatement.with
+    && wrappedStatement.expr.kind !== "concat") {
+    return {
+      kind: "query",
+      language: fn.body.language,
+      query: `select ${trimmed}`,
+    };
+  }
+
   return {
     kind: "expr",
-    expr: parseFunctionExpr(trimmed, new Set(fn.params.map((param) => param.name))),
+    expr: parseFunctionExpr(trimmed, paramNames),
   };
 };
 
 const parseFunctionExpr = (source: string, paramNames: Set<string>): FunctionExprDef => {
-  const parts = source.split("++").map((part) => part.trim()).filter((part) => part.length > 0);
-  if (parts.length === 0) {
-    return { kind: "literal", value: "" };
-  }
-
-  const parsedParts = parts.map((part) => parseFunctionExprPart(part, paramNames));
-  if (parsedParts.length === 1) {
-    return parsedParts[0];
-  }
-
-  return {
-    kind: "concat",
-    parts: parsedParts,
-  };
-};
-
-const parseFunctionExprPart = (
-  source: string,
-  paramNames: Set<string>,
-): Extract<FunctionExprDef, { kind: "param_ref" | "literal" }> => {
-  if (paramNames.has(source)) {
-    return {
-      kind: "param_ref",
-      name: source,
-    };
+  const statement = parseFunctionStatement(`select ${source}`);
+  if (statement?.kind === "select_expr") {
+    return astToFunctionExpr(statement.expr, paramNames);
   }
 
   return {
     kind: "literal",
     value: parseFunctionLiteral(source),
+  };
+};
+
+const parseFunctionStatement = (source: string): Statement | undefined => {
+  try {
+    return parseEdgeQL(source);
+  } catch {
+    return undefined;
+  }
+};
+
+const isQueryStatement = (statement: Statement | undefined): boolean => {
+  return statement?.kind === "select"
+    || statement?.kind === "select_expr"
+    || statement?.kind === "select_free"
+    || statement?.kind === "insert"
+    || statement?.kind === "update"
+    || statement?.kind === "delete"
+    || statement?.kind === "for";
+};
+
+const astToFunctionExpr = (
+  expr: SelectExprStatement["expr"],
+  paramNames: Set<string>,
+): FunctionExprDef => {
+  if (expr.kind === "concat") {
+    return {
+      kind: "concat",
+      parts: expr.parts.flatMap((part) => astToFunctionExprParts(part, paramNames)),
+    };
+  }
+
+  const part = astToFunctionExprPart(expr, paramNames);
+  return part;
+};
+
+const astToFunctionExprParts = (
+  expr: FreeObjectExpr,
+  paramNames: Set<string>,
+): Array<Extract<FunctionExprDef, { kind: "concat" }>["parts"][number]> => {
+  if (expr.kind === "concat") {
+    return expr.parts.flatMap((part) => astToFunctionExprParts(part, paramNames));
+  }
+  return [astToFunctionExprPart(expr, paramNames)];
+};
+
+const astToFunctionExprPart = (
+  expr: FreeObjectExpr,
+  paramNames: Set<string>,
+): Extract<FunctionExprDef, { kind: "param_ref" | "literal" }> => {
+  if (expr.kind === "cast") {
+    return astToFunctionExprPart(expr.expr, paramNames);
+  }
+
+  if (expr.kind === "binding_ref" && paramNames.has(expr.name)) {
+    return {
+      kind: "param_ref",
+      name: expr.name,
+    };
+  }
+
+  if (expr.kind === "literal") {
+    return {
+      kind: "literal",
+      value: expr.value,
+    };
+  }
+
+  return {
+    kind: "literal",
+    value: expr.kind === "binding_ref" ? expr.name : "",
   };
 };
 

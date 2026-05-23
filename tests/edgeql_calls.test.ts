@@ -11,8 +11,6 @@ describe("TestEdgeQLFuncCalls", () => {
 
   beforeEach(async () => {
     h = await QueryHarness.create({
-      dbFile: "./tests/.artifacts/calls.sqlite",
-      resetDbFile: true
     });
   });
 

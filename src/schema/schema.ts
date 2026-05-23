@@ -56,6 +56,14 @@ export class SchemaSnapshot {
     return [...this.functionsBySignature.values()].map(cloneFunctionDef);
   }
 
+  addFunction(fn: FunctionDef): void {
+    this.functionsBySignature.set(functionSignature(fn), cloneFunctionDef(fn));
+  }
+
+  addType(typeDef: TypeDef): void {
+    this.typesByName.set(qualifiedTypeName(typeDef), cloneTypeDef(typeDef));
+  }
+
   getAlias(name: string): AliasDef | undefined {
     const existing = this.aliasesByName.get(name);
     return existing ? cloneAliasDef(existing) : undefined;
@@ -75,6 +83,10 @@ export class SchemaSnapshot {
   }
 
   listConcreteTypesAssignableTo(name: string): TypeDef[] {
+    if (isUniversalObjectName(name)) {
+      return this.listTypes().filter((candidate) => !candidate.abstract);
+    }
+
     const target = this.getType(name);
     if (!target) {
       return [];
@@ -148,6 +160,9 @@ export const qualifiedTypeName = (typeDef: TypeDef): string => {
   return `${module}::${typeDef.name}`;
 };
 
+const isUniversalObjectName = (name: string): boolean =>
+  name === "default::Object" || name === "std::Object" || name === "Object";
+
 export const functionSignature = (fn: FunctionDef): string => {
   const params = fn.params.map((param) => `${param.variadic ? "variadic " : ""}${param.namedOnly ? "named only " : ""}${param.optional ? "optional " : ""}${param.setOf ? "set of " : ""}${param.type}`).join(",");
   return `${fn.module}::${fn.name}(${params})`;
@@ -216,6 +231,17 @@ const cloneComputedDef = (
       };
     }
 
+    if (computed.expr.kind === "set_literal") {
+      return {
+        ...computed,
+        annotations: cloneAnnotations(computed.annotations),
+        expr: {
+          kind: "set_literal",
+          values: [...computed.expr.values],
+        },
+      };
+    }
+
     return {
       ...computed,
       annotations: cloneAnnotations(computed.annotations),
@@ -232,6 +258,14 @@ const cloneComputedDef = (
         link: computed.expr.link,
         filter: computed.expr.filter ? { ...computed.expr.filter } : undefined,
       },
+    };
+  }
+
+  if (computed.expr.kind === "select_type") {
+    return {
+      ...computed,
+      annotations: cloneAnnotations(computed.annotations),
+      expr: { ...computed.expr },
     };
   }
 

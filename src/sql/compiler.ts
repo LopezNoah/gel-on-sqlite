@@ -1,7 +1,9 @@
 import { AppError } from "../errors.js";
-import type { FilterExprIR, IRStatement, LinkRelationIR, SelectIR, SelectShapeElementIR } from "../ir/model.js";
-import { canLowerStdlibFunctionToSql, type RuntimeTarget } from "../runtime/target.js";
-import type { ScalarValue } from "../types.js";
+import type { FreeObjectExpr } from "../edgeql/ast.js";
+import type { FilterExprIR, IRStatement, LinkRelationIR, PathIdIR, SelectFreeIR, SelectIR, SelectShapeElementIR } from "../ir/model.js";
+import type { RuntimeTarget } from "../runtime/target.js";
+import { canLowerStdlibFunctionSql, lowerStdlibFunctionSql } from "./stdlib_lowering.js";
+import type { ComputedLinkPropertyDef, ComputedLinkPropertyExpr, ScalarValue } from "../types.js";
 
 export interface SQLArtifact {
   sql: string;
@@ -11,6 +13,8 @@ export interface SQLArtifact {
 
 export interface SQLCompileOptions {
   target?: RuntimeTarget;
+  parameterValues?: Record<string, ScalarValue>;
+  globalValues?: Record<string, ScalarValue>;
 }
 
 export const compileToSQL = (ir: IRStatement, options: SQLCompileOptions = {}): SQLArtifact => {
@@ -20,6 +24,10 @@ export const compileToSQL = (ir: IRStatement, options: SQLCompileOptions = {}): 
   }
 
   if (ir.kind === "select_free") {
+    return compileSelectFreeToSQL(ir, target);
+  }
+
+  if (ir.kind === "select_expr") {
     return {
       sql: "SELECT 1",
       params: [],
@@ -27,7 +35,9 @@ export const compileToSQL = (ir: IRStatement, options: SQLCompileOptions = {}): 
     };
   }
 
-  if (ir.kind === "select_expr") {
+  if (ir.kind === "group") {
+    // The runtime evaluator runs the source SelectIR's own SQL; this artifact
+    // is a placeholder so the rest of the pipeline (cache/trace) doesn't choke.
     return {
       sql: "SELECT 1",
       params: [],
@@ -85,6 +95,38 @@ export const compileToSQL = (ir: IRStatement, options: SQLCompileOptions = {}): 
   return { sql, params, loweringMode: "single_statement" };
 };
 
+const compileSelectFreeToSQL = (ir: SelectFreeIR, target: RuntimeTarget): SQLArtifact => {
+  const params: ScalarValue[] = [];
+  const projections: string[] = [];
+
+  for (const entry of ir.entries) {
+    const lowered = compileSelectFreeEntrySQL(entry, params, target);
+    if (!lowered) {
+      return {
+        sql: "SELECT 1",
+        params: [],
+        loweringMode: "fallback_multi_query",
+      };
+    }
+
+    projections.push(`${lowered} AS ${quoteIdent(entry.name)}`);
+  }
+
+  if (projections.length === 0) {
+    return {
+      sql: "SELECT 1",
+      params: [],
+      loweringMode: "fallback_multi_query",
+    };
+  }
+
+  return {
+    sql: `SELECT ${projections.join(", ")}`,
+    params,
+    loweringMode: "single_statement",
+  };
+};
+
 const compileSelectToSQL = (ir: SelectIR, target: RuntimeTarget): SQLArtifact => {
   const params: ScalarValue[] = [];
   const rootAlias = "t0";
@@ -97,6 +139,7 @@ const compileSelectToSQL = (ir: SelectIR, target: RuntimeTarget): SQLArtifact =>
     ),
   ];
 
+  const extraShapeColumns: string[] = [];
   for (const element of ir.shape) {
     if (element.kind !== "computed") {
       continue;
@@ -115,6 +158,28 @@ const compileSelectToSQL = (ir: SelectIR, target: RuntimeTarget): SQLArtifact =>
     if (element.expr.kind === "link_aggregate") {
       const lowered = compileLinkAggregateExpr(element.expr, rootAlias);
       projections.push(`${lowered} AS ${quoteIdent(computedValueAlias(element.pathId))}`);
+      continue;
+    }
+
+    if (element.expr.kind === "select_expr") {
+      const referenced = collectShapeScalarValueColumns(element.expr.expr);
+      extraShapeColumns.push(...referenced);
+      const lowered = compileShapeScalarValueSQL(
+        element.expr.expr,
+        rootAlias,
+        undefined,
+        params,
+      );
+      if (lowered) {
+        projections.push(`${lowered} AS ${quoteIdent(computedValueAlias(element.pathId))}`);
+      } else {
+        // When SQL lowering fails for a shape-computed expression, the runtime
+        // falls back to JS evaluation on the row. Project any referenced raw
+        // columns so they're available on the row.
+        for (const column of referenced) {
+          projections.push(`${rootAlias}.${quoteIdent(column)} AS ${quoteIdent(column)}`);
+        }
+      }
     }
   }
 
@@ -128,19 +193,30 @@ const compileSelectToSQL = (ir: SelectIR, target: RuntimeTarget): SQLArtifact =>
       const expr =
         element.kind === "link"
           ? compileLinkArrayExpr(element, rootAlias, params, target)
-          : compileBacklinkArrayExpr(element, rootAlias, params);
+          : compileBacklinkArrayExpr(element, rootAlias, params, target);
       projections.push(`${expr} AS ${quoteIdent(alias)}`);
     }
   }
 
   const sources = ir.sourceTables.length > 0 ? ir.sourceTables : [ir.typeRef];
   const filterColumns = collectFieldFilterColumns(ir.filter);
-  const unionColumns = [...new Set(["id", ...ir.columns, ...filterColumns, ...(ir.orderBy ? [ir.orderBy.value] : [])])]
+  const orderByValues: string[] = [];
+  for (let term: typeof ir.orderBy | undefined = ir.orderBy; term; term = term.then) {
+    orderByValues.push(term.value);
+  }
+  const unionColumns = [...new Set(["id", ...ir.columns, ...filterColumns, ...orderByValues, ...extraShapeColumns])]
     .filter((column) => column !== "__source_type");
-  const sourceSelects = sources.map(
-    (source) =>
-      `SELECT ${quoteLiteral(source.name)} AS ${quoteIdent("__source_type")}, ${unionColumns.map((column) => `${quoteIdent(column)} AS ${quoteIdent(column)}`).join(", ")} FROM ${quoteIdent(source.table)}`,
-  );
+  const sourceSelects = sources.map((source) => {
+    const available = source.columns && source.columns.length > 0 ? new Set(source.columns) : undefined;
+    const projection = unionColumns
+      .map((column) => (
+        !available || available.has(column)
+          ? `${quoteIdent(column)} AS ${quoteIdent(column)}`
+          : `NULL AS ${quoteIdent(column)}`
+      ))
+      .join(", ");
+    return `SELECT ${quoteLiteral(source.name)} AS ${quoteIdent("__source_type")}, ${projection} FROM ${quoteIdent(source.table)}`;
+  });
 
   let sql = `SELECT ${projections.join(", ")} FROM (${sourceSelects.join(" UNION ALL ")}) ${rootAlias}`;
 
@@ -149,7 +225,28 @@ const compileSelectToSQL = (ir: SelectIR, target: RuntimeTarget): SQLArtifact =>
   }
 
   if (ir.orderBy) {
-    sql += ` ORDER BY ${rootAlias}.${quoteIdent(ir.orderBy.value)} ${ir.orderBy.direction.toUpperCase()}`;
+    const computedByPointer = new Map<string, string>();
+    for (const element of ir.shape) {
+      if (element.kind !== "computed") continue;
+      if (!element.name) continue;
+      computedByPointer.set(element.name, computedValueAlias(element.pathId));
+    }
+    const terms: string[] = [];
+    let term: typeof ir.orderBy | undefined = ir.orderBy;
+    while (term) {
+      const nullsClause = term.nullsPosition === "first"
+        ? " NULLS FIRST"
+        : term.nullsPosition === "last"
+          ? " NULLS LAST"
+          : "";
+      const alias = computedByPointer.get(term.value);
+      const ref = alias
+        ? quoteIdent(alias)
+        : `${rootAlias}.${quoteIdent(term.value)}`;
+      terms.push(`${ref} ${term.direction.toUpperCase()}${nullsClause}`);
+      term = term.then;
+    }
+    sql += ` ORDER BY ${terms.join(", ")}`;
   }
 
   if (ir.limit !== undefined) {
@@ -184,20 +281,30 @@ const compileLinkArrayExpr = (
     params,
     target,
     junctionAlias,
+    element.relation.computedProperties,
   );
 
   const linkPropertyColumns = new Set(element.relation.propertyColumns ?? []);
+  const computedLinkPropertyByName = new Map((element.relation.computedProperties ?? []).map((property) => [property.name, property] as const));
+  const requestedComputedLinkProperties = element.shape.flatMap((shapeElement) => {
+    if (shapeElement.kind !== "computed" || shapeElement.expr.kind !== "field_ref" || !shapeElement.expr.column.startsWith("@")) {
+      return [];
+    }
+    const property = computedLinkPropertyByName.get(shapeElement.expr.column.slice(1));
+    return property ? [property] : [];
+  });
   const orderByTargetColumns = element.orderBy && !linkPropertyColumns.has(element.orderBy.value)
     ? [element.orderBy.value]
     : [];
   const requiredTargetColumns = [
     ...element.columns,
+    ...requestedComputedLinkProperties.flatMap((property) => collectComputedLinkPropertyTargetColumns(property.computedExpr)),
     ...orderByTargetColumns,
     ...collectFieldFilterColumns(element.filter).filter((column) => !column.startsWith("@")),
   ];
 
   const whereClauses: string[] = [];
-  let fromClause = `${compilePolymorphicTargetSource(element.relation, targetAlias, requiredTargetColumns)}`;
+  let fromClause: string;
 
   if (element.relation.storage === "inline") {
     fromClause = `${compilePolymorphicTargetSource(element.relation, targetAlias, requiredTargetColumns)}`;
@@ -205,7 +312,7 @@ const compileLinkArrayExpr = (
       `${targetAlias}.${quoteIdent("id")} = ${sourceAlias}.${quoteIdent(requiredInlineColumn(element.relation.inlineColumn))}`,
     );
   } else {
-    fromClause = `${compilePolymorphicTargetSource(element.relation, targetAlias, requiredTargetColumns)} JOIN ${quoteIdent(requiredLinkTable(element.relation.linkTable))} ${junctionAlias} ON ${junctionAlias}.${quoteIdent("target")} = ${targetAlias}.${quoteIdent("id")}`;
+    fromClause = `${compilePolymorphicTargetSource(element.relation, targetAlias, requiredTargetColumns)} JOIN ${linkJunctionFrom(element.relation, junctionAlias!)} ON ${junctionAlias}.${quoteIdent("target")} = ${targetAlias}.${quoteIdent("id")}`;
     whereClauses.push(`${junctionAlias}.${quoteIdent("source")} = ${sourceAlias}.${quoteIdent("id")}`);
   }
 
@@ -226,6 +333,8 @@ const compileLinkArrayExpr = (
     if (element.orderBy.value !== "name" && element.columns.includes("name")) {
       inner += `, ${targetAlias}.${quoteIdent("name")} ASC`;
     }
+  } else if (element.relation.storage === "table" && junctionAlias) {
+    inner += ` ORDER BY ${junctionAlias}.rowid ASC`;
   }
 
   if (element.limit !== undefined) {
@@ -244,16 +353,74 @@ const compileLinkArrayExpr = (
 const compileBacklinkArrayExpr = (
   element: Extract<SelectShapeElementIR, { kind: "backlink" }>,
   sourceAlias: string,
-  params: ScalarValue[],
+  params: ScalarValue[] = [],
+  target: RuntimeTarget = "sqlite",
 ): string => {
+  const shape = element.shape;
+  const hasShape = Array.isArray(shape) && shape.length > 0;
+  const projectedColumns = hasShape
+    ? Array.from(new Set(shape!.flatMap((shapeElement) => {
+        if (shapeElement.kind === "field") return [shapeElement.column];
+        if (shapeElement.kind === "computed" && shapeElement.expr.kind === "field_ref" && !shapeElement.expr.column.startsWith("@")) {
+          return [shapeElement.expr.column];
+        }
+        return [];
+      })))
+    : [];
+  const projectedColumnsSql = projectedColumns.length > 0
+    ? projectedColumns.map((column) => `, ${quoteIdent(column)} AS ${quoteIdent(column)}`).join("")
+    : "";
+
+  const linkPropertyColumns = hasShape
+    ? Array.from(new Set(shape!.flatMap((shapeElement) => {
+        if (shapeElement.kind === "computed") {
+          if (shapeElement.expr.kind === "field_ref" && shapeElement.expr.column.startsWith("@")) {
+            return [shapeElement.expr.column.slice(1)];
+          }
+          if (shapeElement.expr.kind === "literal" && shapeElement.name.startsWith("@")) {
+            return [shapeElement.name.slice(1)];
+          }
+        }
+        return [];
+      })))
+    : [];
+
   const sourceUnions = element.sources.map((source) => {
-    const sourceTableAlias = `b_${source.table}_${Math.abs(hashString(source.sourceType)).toString(16)}`;
+    const sourceTables = source.sourceTables && source.sourceTables.length > 0
+      ? source.sourceTables
+      : [{ name: source.sourceType, table: source.table }];
+    const junctionAlias = `bj_${source.table}_${Math.abs(hashString(source.sourceType)).toString(16)}`;
+    const innerSelections = projectedColumns.length > 0
+      ? projectedColumns.map((column) => `, s.${quoteIdent(column)} AS ${quoteIdent(column)}`).join("")
+      : "";
+    const linkPropertySelections = linkPropertyColumns.length > 0
+      ? linkPropertyColumns.map((column) => `, ${junctionAlias}.${quoteIdent(column)} AS ${quoteIdent(`@${column}`)}`).join("")
+      : "";
+
     if (source.storage === "inline") {
-      return `SELECT ${sourceTableAlias}.${quoteIdent("id")} AS ${quoteIdent("id")}, ${quoteLiteral(source.sourceType)} AS ${quoteIdent("type_name")} FROM ${quoteIdent(source.table)} ${sourceTableAlias} WHERE ${sourceTableAlias}.${quoteIdent(requiredInlineColumn(source.inlineColumn))} = ${sourceAlias}.${quoteIdent("id")}`;
+      const inlineUnion = sourceTables
+        .map((tableRef) => {
+          const stAlias = `b_${tableRef.table}_${Math.abs(hashString(source.sourceType)).toString(16)}`;
+          const tableProjections = projectedColumns.length > 0
+            ? projectedColumns.map((column) => `, ${stAlias}.${quoteIdent(column)} AS ${quoteIdent(column)}`).join("")
+            : "";
+          const linkPropProjections = linkPropertyColumns.length > 0
+            ? linkPropertyColumns.map((column) => `, NULL AS ${quoteIdent(`@${column}`)}`).join("")
+            : "";
+          return `SELECT ${stAlias}.${quoteIdent("id")} AS ${quoteIdent("id")}, ${quoteLiteral(tableRef.name)} AS ${quoteIdent("type_name")}${tableProjections}${linkPropProjections} FROM ${quoteIdent(tableRef.table)} ${stAlias} WHERE ${stAlias}.${quoteIdent(requiredInlineColumn(source.inlineColumn))} = ${sourceAlias}.${quoteIdent("id")}`;
+        })
+        .join(" UNION ALL ");
+      return inlineUnion;
     }
 
-    const junctionAlias = `bj_${source.table}_${Math.abs(hashString(source.sourceType)).toString(16)}`;
-    return `SELECT ${sourceTableAlias}.${quoteIdent("id")} AS ${quoteIdent("id")}, ${quoteLiteral(source.sourceType)} AS ${quoteIdent("type_name")} FROM ${quoteIdent(source.table)} ${sourceTableAlias} JOIN ${quoteIdent(requiredLinkTable(source.linkTable))} ${junctionAlias} ON ${junctionAlias}.${quoteIdent("source")} = ${sourceTableAlias}.${quoteIdent("id")} WHERE ${junctionAlias}.${quoteIdent("target")} = ${sourceAlias}.${quoteIdent("id")}`;
+    const linkTable = requiredLinkTable(source.linkTable);
+    const sourceTableSelect = sourceTables.length === 1
+      ? `SELECT ${quoteLiteral(sourceTables[0].name)} AS ${quoteIdent("__source_type")}, ${quoteIdent("id")} AS ${quoteIdent("id")}${projectedColumnsSql} FROM ${quoteIdent(sourceTables[0].table)}`
+      : sourceTables.map((entry) => `SELECT ${quoteLiteral(entry.name)} AS ${quoteIdent("__source_type")}, ${quoteIdent("id")} AS ${quoteIdent("id")}${projectedColumnsSql} FROM ${quoteIdent(entry.table)}`).join(" UNION ALL ");
+    const fromClause = sourceTables.length === 1
+      ? `(${sourceTableSelect}) s`
+      : `(${sourceTableSelect}) s`;
+    return `SELECT s.${quoteIdent("id")} AS ${quoteIdent("id")}, s.${quoteIdent("__source_type")} AS ${quoteIdent("type_name")}${innerSelections}${linkPropertySelections} FROM ${fromClause} JOIN ${quoteIdent(linkTable)} ${junctionAlias} ON ${junctionAlias}.${quoteIdent("source")} = s.${quoteIdent("id")} WHERE ${junctionAlias}.${quoteIdent("target")} = ${sourceAlias}.${quoteIdent("id")}`;
   });
 
   if (sourceUnions.length === 0) {
@@ -261,8 +428,328 @@ const compileBacklinkArrayExpr = (
   }
 
   const unionSql = sourceUnions.join(" UNION ALL ");
-  const ordered = `SELECT ${quoteIdent("id")}, ${quoteIdent("type_name")} FROM (${unionSql}) ORDER BY ${quoteIdent("type_name")} ASC, ${quoteIdent("id")} ASC`;
-  return `COALESCE((SELECT json_group_array(json_object('id', ${quoteIdent("id")}, '__type__', ${quoteIdent("type_name")})) FROM (${ordered})), '[]')`;
+  const allProjectedCols = [
+    quoteIdent("id"),
+    quoteIdent("type_name"),
+    ...projectedColumns.map((column) => quoteIdent(column)),
+    ...linkPropertyColumns.map((column) => quoteIdent(`@${column}`)),
+  ];
+  const ordered = `SELECT ${allProjectedCols.join(", ")} FROM (${unionSql}) ORDER BY ${quoteIdent("type_name")} ASC, ${quoteIdent("id")} ASC`;
+
+  if (!hasShape) {
+    return `COALESCE((SELECT json_group_array(json_object('id', ${quoteIdent("id")}, '__type__', ${quoteIdent("type_name")})) FROM (${ordered})), '[]')`;
+  }
+
+  const itemPairs: string[] = [];
+  for (const shapeElement of shape!) {
+    itemPairs.push(quoteLiteral(shapeElement.name));
+    if (shapeElement.kind === "field") {
+      itemPairs.push(quoteIdent(shapeElement.column));
+      continue;
+    }
+    if (shapeElement.kind === "computed") {
+      if (shapeElement.expr.kind === "field_ref") {
+        const colName = shapeElement.expr.column.startsWith("@")
+          ? quoteIdent(shapeElement.expr.column)
+          : quoteIdent(shapeElement.expr.column);
+        itemPairs.push(colName);
+        continue;
+      }
+      if (shapeElement.expr.kind === "literal") {
+        if (shapeElement.name.startsWith("@")) {
+          itemPairs.push(quoteIdent(shapeElement.name));
+          continue;
+        }
+        params.push(encodeParam(shapeElement.expr.value));
+        itemPairs.push("?");
+        continue;
+      }
+      if (shapeElement.expr.kind === "type_name") {
+        itemPairs.push(quoteIdent("type_name"));
+        continue;
+      }
+      itemPairs.push("json('[]')");
+      continue;
+    }
+    itemPairs.push("json('[]')");
+  }
+  void target;
+  return `COALESCE((SELECT json_group_array(json_object(${itemPairs.join(", ")})) FROM (${ordered})), '[]')`;
+};
+
+type FreePathTail = { fields: string[]; linkProperty?: string };
+
+const extractFreePathTail = (expr: FreeObjectExpr): FreePathTail | null => {
+  const fields: string[] = [];
+  let linkProperty: string | undefined;
+  let cursor: FreeObjectExpr = expr;
+  while (cursor.kind === "field_access") {
+    const field = cursor.field;
+    if (field.startsWith("@")) {
+      if (linkProperty !== undefined || fields.length > 0) return null;
+      linkProperty = field.slice(1);
+    } else {
+      fields.unshift(field);
+    }
+    cursor = cursor.expr;
+  }
+  if (cursor.kind === "select_expr_subquery") {
+    cursor = cursor.expr;
+  }
+  if (cursor.kind !== "select") return null;
+  return { fields, linkProperty };
+};
+
+const operatorToSqlInfix = (op: string): string | null => {
+  if (op === "=" || op === "!=" || op === ">" || op === "<" || op === ">=" || op === "<=") {
+    return op === "!=" ? "<>" : op;
+  }
+  return null;
+};
+
+const compileShapeComputedFreeExprSQL = (
+  expr: FreeObjectExpr,
+  sourceAlias: string,
+  linkPropertyAlias: string | undefined,
+  params: ScalarValue[],
+): string | null => {
+  const compile = (node: FreeObjectExpr): string | null => {
+    if (node.kind === "literal") {
+      params.push(encodeParam(node.value));
+      return "?";
+    }
+    if (node.kind === "field_access") {
+      const tail = extractFreePathTail(node);
+      if (!tail) return null;
+      if (tail.linkProperty !== undefined) {
+        if (!linkPropertyAlias) return null;
+        return `${linkPropertyAlias}.${quoteIdent(tail.linkProperty)}`;
+      }
+      if (tail.fields.length === 0) return null;
+      const last = tail.fields[tail.fields.length - 1];
+      return `${sourceAlias}.${quoteIdent(last)}`;
+    }
+    if (node.kind === "compare") {
+      const left = compile(node.left);
+      const right = compile(node.right);
+      const op = operatorToSqlInfix(node.op);
+      if (!left || !right || !op) return null;
+      return `(${left} ${op} ${right})`;
+    }
+    if (node.kind === "logical") {
+      const left = compile(node.left);
+      const right = compile(node.right);
+      if (!left || !right) return null;
+      return `(${left} ${node.op === "and" ? "AND" : "OR"} ${right})`;
+    }
+    if (node.kind === "and") {
+      const left = compile(node.left);
+      const right = compile(node.right);
+      if (!left || !right) return null;
+      return `(${left} AND ${right})`;
+    }
+    if (node.kind === "or") {
+      const left = compile(node.left);
+      const right = compile(node.right);
+      if (!left || !right) return null;
+      return `(${left} OR ${right})`;
+    }
+    if (node.kind === "not") {
+      const inner = compile(node.expr);
+      if (!inner) return null;
+      return `(NOT ${inner})`;
+    }
+    if (node.kind === "unary") {
+      const inner = compile(node.expr);
+      if (!inner) return null;
+      if (node.op === "not") return `(NOT ${inner})`;
+      if (node.op === "neg") return `(-${inner})`;
+      return null;
+    }
+    if (node.kind === "math") {
+      const left = compile(node.left);
+      const right = compile(node.right);
+      if (!left || !right) return null;
+      return `(${left} ${node.op} ${right})`;
+    }
+    if (node.kind === "if_else") {
+      const cond = compile(node.condition);
+      const then = compile(node.thenExpr);
+      const other = compile(node.elseExpr);
+      if (!cond || !then || !other) return null;
+      return `(CASE WHEN ${cond} THEN ${then} ELSE ${other} END)`;
+    }
+    if (node.kind === "cast") {
+      return compile(node.expr);
+    }
+    return null;
+  };
+
+  const checkpoint = params.length;
+  const result = compile(expr);
+  if (!result) {
+    params.length = checkpoint;
+    return null;
+  }
+  return `json(CASE WHEN ${result} THEN 'true' ELSE 'false' END)`;
+};
+
+/**
+ * Compile a shape-level computed `FreeObjectExpr` to a *scalar* SQL value
+ * (not a JSON-wrapped boolean cast).
+ *
+ * Field accesses against the implicit subject (e.g. `.cost` via `current_item`
+ * or `Card.cost` via a self-`SELECT Card { id }`) resolve to the row's
+ * column. Field accesses starting with `@` resolve to a link-property column
+ * via `linkPropertyAlias`.
+ *
+ * Returns `null` if any sub-expression can't be lowered.
+ */
+const compileShapeScalarValueSQL = (
+  expr: FreeObjectExpr,
+  sourceAlias: string,
+  linkPropertyAlias: string | undefined,
+  params: ScalarValue[],
+): string | null => {
+  const isCurrentRow = (node: FreeObjectExpr): boolean => {
+    if (node.kind === "current_item") return true;
+    if (node.kind === "select" && node.shape.length <= 1) return true;
+    if (node.kind === "select_expr_subquery") return isCurrentRow(node.expr);
+    return false;
+  };
+
+  const compile = (node: FreeObjectExpr): string | null => {
+    if (node.kind === "literal") {
+      if (node.value === null) {
+        return "NULL";
+      }
+      params.push(encodeParam(node.value));
+      return "?";
+    }
+    if (node.kind === "field_access") {
+      if (node.field.startsWith("@")) {
+        const alias = linkPropertyAlias;
+        if (!alias) return null;
+        return `${alias}.${quoteIdent(node.field.slice(1))}`;
+      }
+      if (isCurrentRow(node.expr)) {
+        return `${sourceAlias}.${quoteIdent(node.field)}`;
+      }
+      return null;
+    }
+    if (node.kind === "math") {
+      const left = compile(node.left);
+      const right = compile(node.right);
+      if (!left || !right) return null;
+      const op = node.op === "//" ? "/" : node.op;
+      return `(${left} ${op} ${right})`;
+    }
+    if (node.kind === "unary") {
+      const inner = compile(node.expr);
+      if (!inner) return null;
+      if (node.op === "neg") return `(-${inner})`;
+      if (node.op === "not") return `(NOT ${inner})`;
+      return null;
+    }
+    if (node.kind === "compare") {
+      const left = compile(node.left);
+      const right = compile(node.right);
+      const op = operatorToSqlInfix(node.op);
+      if (!left || !right || !op) return null;
+      return `(${left} ${op} ${right})`;
+    }
+    if (node.kind === "logical" || node.kind === "and" || node.kind === "or") {
+      const opName = node.kind === "logical" ? node.op : node.kind;
+      const left = compile(node.left);
+      const right = compile(node.right);
+      if (!left || !right) return null;
+      return `(${left} ${opName === "and" ? "AND" : "OR"} ${right})`;
+    }
+    if (node.kind === "not") {
+      const inner = compile(node.expr);
+      if (!inner) return null;
+      return `(NOT ${inner})`;
+    }
+    if (node.kind === "if_else") {
+      const cond = compile(node.condition);
+      const thenSql = compile(node.thenExpr);
+      const elseSql = compile(node.elseExpr);
+      if (!cond || !thenSql || !elseSql) return null;
+      return `(CASE WHEN ${cond} THEN ${thenSql} ELSE ${elseSql} END)`;
+    }
+    if (node.kind === "coalesce") {
+      const left = compile(node.left);
+      const right = compile(node.right);
+      if (!left || !right) return null;
+      return `COALESCE(${left}, ${right})`;
+    }
+    if (node.kind === "concat") {
+      const parts = node.parts.map((p) => compile(p));
+      if (parts.some((p) => p === null)) return null;
+      return `(${(parts as string[]).map((p) => `COALESCE(CAST(${p} AS TEXT), '')`).join(" || ")})`;
+    }
+    if (node.kind === "cast") {
+      return compile(node.expr);
+    }
+    if (node.kind === "select_expr_subquery") {
+      return compile(node.expr);
+    }
+    return null;
+  };
+
+  const checkpoint = params.length;
+  const result = compile(expr);
+  if (!result) {
+    params.length = checkpoint;
+    return null;
+  }
+  return result;
+};
+
+/**
+ * Collect the names of columns on the implicit subject row that a shape-level
+ * scalar expression references (i.e. fields accessed through `current_item` or
+ * a self-`SELECT`). Link-property references (`@x`) are not included — those
+ * come from the junction alias, not the subject row.
+ */
+const collectShapeScalarValueColumns = (expr: FreeObjectExpr): string[] => {
+  const isCurrentRow = (node: FreeObjectExpr): boolean => {
+    if (node.kind === "current_item") return true;
+    if (node.kind === "select" && node.shape.length <= 1) return true;
+    if (node.kind === "select_expr_subquery") return isCurrentRow(node.expr);
+    return false;
+  };
+  const out: string[] = [];
+  const walk = (node: FreeObjectExpr): void => {
+    if (node.kind === "field_access") {
+      if (!node.field.startsWith("@") && isCurrentRow(node.expr)) {
+        out.push(node.field);
+      } else {
+        walk(node.expr);
+      }
+      return;
+    }
+    if (node.kind === "math" || node.kind === "compare" || node.kind === "and" || node.kind === "or" || node.kind === "logical" || node.kind === "coalesce") {
+      walk(node.left);
+      walk(node.right);
+      return;
+    }
+    if (node.kind === "unary" || node.kind === "not" || node.kind === "cast" || node.kind === "select_expr_subquery") {
+      walk(node.expr);
+      return;
+    }
+    if (node.kind === "if_else") {
+      walk(node.condition);
+      walk(node.thenExpr);
+      walk(node.elseExpr);
+      return;
+    }
+    if (node.kind === "concat") {
+      for (const part of node.parts) walk(part);
+    }
+  };
+  walk(expr);
+  return out;
 };
 
 const compileShapeObjectExpr = (
@@ -272,8 +759,10 @@ const compileShapeObjectExpr = (
   params: ScalarValue[],
   target: RuntimeTarget,
   linkPropertyAlias?: string,
+  computedLinkProperties: ComputedLinkPropertyDef[] = [],
 ): string => {
   const pairs: string[] = [];
+  const computedLinkPropertyByName = new Map(computedLinkProperties.map((property) => [property.name, property] as const));
 
   for (const element of shape) {
     pairs.push(quoteLiteral(element.name));
@@ -285,6 +774,12 @@ const compileShapeObjectExpr = (
 
     if (element.kind === "computed") {
       if (element.expr.kind === "field_ref") {
+        const linkPropertyName = element.expr.column.startsWith("@") ? element.expr.column.slice(1) : undefined;
+        const computedLinkProperty = linkPropertyName ? computedLinkPropertyByName.get(linkPropertyName) : undefined;
+        if (computedLinkProperty && linkPropertyAlias) {
+          pairs.push(compileComputedLinkPropertyExprSQL(computedLinkProperty.computedExpr, sourceAlias, linkPropertyAlias, params));
+          continue;
+        }
         pairs.push(filterColumnSql(element.expr.column, sourceAlias, linkPropertyAlias));
       } else if (element.expr.kind === "literal") {
         if (linkPropertyAlias && element.name.startsWith("@")) {
@@ -294,12 +789,29 @@ const compileShapeObjectExpr = (
 
         pairs.push("?");
         params.push(encodeParam(element.expr.value));
+      } else if (element.expr.kind === "set_literal") {
+        const placeholders = element.expr.values.map(() => "?");
+        params.push(...element.expr.values.map(encodeParam));
+        pairs.push(`json_array(${placeholders.join(", ")})`);
       } else if (element.expr.kind === "polymorphic_field_ref") {
+        const concretes = element.expr.concreteSourceTypes && element.expr.concreteSourceTypes.length > 0
+          ? element.expr.concreteSourceTypes
+          : [element.expr.sourceType];
+        const matchCondition = concretes.length === 1
+          ? `${sourceTypeExpr} = ${quoteLiteral(concretes[0])}`
+          : `${sourceTypeExpr} IN (${concretes.map(quoteLiteral).join(", ")})`;
         pairs.push(
-          `CASE WHEN ${sourceTypeExpr} = ${quoteLiteral(element.expr.sourceType)} THEN ${sourceAlias}.${quoteIdent(element.expr.column)} ELSE json('[]') END`,
+          `CASE WHEN ${matchCondition} THEN ${sourceAlias}.${quoteIdent(element.expr.column)} ELSE NULL END`,
         );
       } else if (element.expr.kind === "type_name") {
         pairs.push(sourceTypeExpr);
+      } else if (element.expr.kind === "is_type") {
+        if (element.expr.concreteSourceTypes.length === 0) {
+          pairs.push("0");
+        } else {
+          const list = element.expr.concreteSourceTypes.map(quoteLiteral).join(", ");
+          pairs.push(`CASE WHEN ${sourceTypeExpr} IN (${list}) THEN 1 ELSE 0 END`);
+        }
       } else if (element.expr.kind === "concat") {
         const sqlParts = element.expr.parts.map((part) => {
           if (part.kind === "field_ref") {
@@ -315,6 +827,24 @@ const compileShapeObjectExpr = (
         pairs.push(lowered ?? "json('[]')");
       } else if (element.expr.kind === "link_aggregate") {
         pairs.push(compileLinkAggregateExpr(element.expr, sourceAlias));
+      } else if (element.expr.kind === "select_expr") {
+        const scalar = compileShapeScalarValueSQL(
+          element.expr.expr,
+          sourceAlias,
+          linkPropertyAlias,
+          params,
+        );
+        if (scalar) {
+          pairs.push(scalar);
+        } else {
+          const lowered = compileShapeComputedFreeExprSQL(
+            element.expr.expr,
+            sourceAlias,
+            linkPropertyAlias,
+            params,
+          );
+          pairs.push(lowered ?? "json('[]')");
+        }
       } else {
         pairs.push("json('[]')");
       }
@@ -332,17 +862,66 @@ const compileShapeObjectExpr = (
       continue;
     }
 
-    pairs.push(`json(${compileBacklinkArrayExpr(element, sourceAlias, params)})`);
+    pairs.push(`json(${compileBacklinkArrayExpr(element, sourceAlias, params, target)})`);
   }
 
   return `json_object(${pairs.join(", ")})`;
 };
 
-export const shapePayloadAlias = (pathId: string): string => `__shape_${sanitizePathId(pathId)}`;
+const compileComputedLinkPropertyExprSQL = (
+  expr: ComputedLinkPropertyExpr,
+  targetAlias: string,
+  linkAlias: string,
+  params: ScalarValue[],
+): string => {
+  if (expr.kind === "literal") {
+    params.push(encodeParam(expr.value));
+    return "?";
+  }
 
-export const computedValueAlias = (pathId: string): string => `__computed_${sanitizePathId(pathId)}`;
+  if (expr.kind === "field_ref") {
+    return `${targetAlias}.${quoteIdent(expr.name)}`;
+  }
 
-const sanitizePathId = (pathId: string): string => pathId.replaceAll(".", "_");
+  if (expr.kind === "link_property_ref") {
+    return `${linkAlias}.${quoteIdent(expr.name)}`;
+  }
+
+  const left = compileComputedLinkPropertyExprSQL(expr.left, targetAlias, linkAlias, params);
+  const right = compileComputedLinkPropertyExprSQL(expr.right, targetAlias, linkAlias, params);
+  if (expr.op === "++") {
+    return `(COALESCE(${left}, '') || COALESCE(${right}, ''))`;
+  }
+  if (expr.op === "??") {
+    return `COALESCE(${left}, ${right})`;
+  }
+  return `(${left} ${expr.op} ${right})`;
+};
+
+const collectComputedLinkPropertyTargetColumns = (expr: ComputedLinkPropertyExpr): string[] => {
+  if (expr.kind === "field_ref") {
+    return [expr.name];
+  }
+  if (expr.kind === "binary_op") {
+    return [
+      ...collectComputedLinkPropertyTargetColumns(expr.left),
+      ...collectComputedLinkPropertyTargetColumns(expr.right),
+    ];
+  }
+  return [];
+};
+
+const resolvePathIdStr = (pathId: string | PathIdIR): string =>
+  typeof pathId === "string" ? pathId : pathId.id;
+
+export const shapePayloadAlias = (pathId: string | PathIdIR): string =>
+  `__shape_${sanitizePathId(pathId)}`;
+
+export const computedValueAlias = (pathId: string | PathIdIR): string =>
+  `__computed_${sanitizePathId(pathId)}`;
+
+const sanitizePathId = (pathId: string | PathIdIR): string =>
+  resolvePathIdStr(pathId).replaceAll(".", "_");
 
 const requiredInlineColumn = (value: string | undefined): string => {
   if (!value) {
@@ -358,6 +937,41 @@ const requiredLinkTable = (value: string | undefined): string => {
   }
 
   return value;
+};
+
+/**
+ * Returns a FROM-source fragment for the junction table of a multi-link.
+ *
+ * Polymorphic ownership means a link declared on an abstract or base type
+ * lives in different per-subtype tables (e.g. `default__v__l_a` carries
+ * data for `S.l_a` when only V instances exist). When the relation's
+ * `linkTables` list has more than one entry, this UNION ALLs them so the
+ * query sees the combined junction across every subtype. The result is
+ * aliased so callers can JOIN ... ON `alias.source` / `alias.target` /
+ * link-property columns as if they had a single table.
+ *
+ * `rowid` is projected so callers can preserve insertion order via
+ * `ORDER BY junction.rowid` like they would for a single physical table.
+ */
+const linkJunctionFrom = (
+  relation: LinkRelationIR,
+  alias: string,
+): string => {
+  const tables = relation.linkTables && relation.linkTables.length > 0
+    ? relation.linkTables.map((entry) => entry.table)
+    : relation.linkTable
+      ? [relation.linkTable]
+      : (() => {
+          throw new AppError("E_SQL", "Missing link table metadata");
+        })();
+  if (tables.length === 1) {
+    return `${quoteIdent(tables[0]!)} ${alias}`;
+  }
+  const projection = ["source", "target", ...(relation.propertyColumns ?? [])]
+    .map((column) => quoteIdent(column))
+    .join(", ");
+  const parts = tables.map((table) => `SELECT ${projection}, rowid AS ${quoteIdent("rowid")} FROM ${quoteIdent(table)}`);
+  return `(${parts.join(" UNION ALL ")}) ${alias}`;
 };
 
 const requiredAlias = (value: string | undefined): string => {
@@ -384,7 +998,7 @@ const compileLinkAggregateExpr = (
     whereClause = `${targetAlias}.${quoteIdent("id")} = ${sourceAlias}.${quoteIdent(requiredInlineColumn(relation.inlineColumn))}`;
   } else {
     const junctionAlias = linkAggregateJunctionAlias(relation, sourceAlias);
-    fromClause = `${fromClause} JOIN ${quoteIdent(requiredLinkTable(relation.linkTable))} ${junctionAlias} ON ${junctionAlias}.${quoteIdent("target")} = ${targetAlias}.${quoteIdent("id")}`;
+    fromClause = `${fromClause} JOIN ${linkJunctionFrom(relation, junctionAlias)} ON ${junctionAlias}.${quoteIdent("target")} = ${targetAlias}.${quoteIdent("id")}`;
     whereClause = `${junctionAlias}.${quoteIdent("source")} = ${sourceAlias}.${quoteIdent("id")}`;
     if (aggregateUsesLinkProperty) {
       aggregateColumn = `${junctionAlias}.${quoteIdent(expr.column)}`;
@@ -418,7 +1032,7 @@ const encodeParam = (value: ScalarValue): ScalarValue => {
   return value;
 };
 
-const compileFilterPredicate = (lhsSql: string, op: "=" | "!=" | "like" | "ilike"): string => {
+const compileFilterPredicate = (lhsSql: string, op: "=" | "!=" | "<" | "<=" | ">" | ">=" | "?=" | "?!=" | "like" | "ilike"): string => {
   if (op === "=") {
     return `${lhsSql} = ?`;
   }
@@ -429,6 +1043,18 @@ const compileFilterPredicate = (lhsSql: string, op: "=" | "!=" | "like" | "ilike
 
   if (op === "like") {
     return `${lhsSql} LIKE ?`;
+  }
+
+  if (op === "<" || op === "<=" || op === ">" || op === ">=") {
+    return `${lhsSql} ${op} ?`;
+  }
+
+  if (op === "?=") {
+    return `(${lhsSql} IS NULL OR ${lhsSql} = ?)`;
+  }
+
+  if (op === "?!=") {
+    return `(${lhsSql} IS NULL OR ${lhsSql} != ?)`;
   }
 
   return `LOWER(${lhsSql}) LIKE LOWER(?)`;
@@ -563,7 +1189,7 @@ const compileFilterExprSQL = (
       return "0";
     }
     const alias = `lp_${Math.abs(hashString(`${filter.relation.sourceType}:${filter.relation.linkTable}:${filter.property}`)).toString(16)}`;
-    return `EXISTS (SELECT 1 FROM ${quoteIdent(filter.relation.linkTable)} ${alias} WHERE ${alias}.${quoteIdent("source")} = ${sourceAlias}.${quoteIdent("id")} AND ${alias}.${quoteIdent(filter.property)} IS NOT NULL)`;
+    return `EXISTS (SELECT 1 FROM ${linkJunctionFrom(filter.relation, alias)} WHERE ${alias}.${quoteIdent("source")} = ${sourceAlias}.${quoteIdent("id")} AND ${alias}.${quoteIdent(filter.property)} IS NOT NULL)`;
   }
 
   if (filter.kind === "link_property_compare_exists") {
@@ -582,8 +1208,28 @@ const compileFilterExprSQL = (
           : filter.op === "like"
             ? `${left} LIKE ${right}`
             : `LOWER(${left}) LIKE LOWER(${right})`;
-      return `EXISTS (SELECT 1 FROM ${quoteIdent(filter.relation.linkTable!)} ${relationAlias} JOIN ${quoteIdent(target.table)} ${targetAlias} ON ${targetAlias}.${quoteIdent("id")} = ${relationAlias}.${quoteIdent("target")} WHERE ${relationAlias}.${quoteIdent("source")} = ${sourceAlias}.${quoteIdent("id")} AND ${comparison})`;
+      return `EXISTS (SELECT 1 FROM ${linkJunctionFrom(filter.relation, relationAlias)} JOIN ${quoteIdent(target.table)} ${targetAlias} ON ${targetAlias}.${quoteIdent("id")} = ${relationAlias}.${quoteIdent("target")} WHERE ${relationAlias}.${quoteIdent("source")} = ${sourceAlias}.${quoteIdent("id")} AND ${comparison})`;
     });
+    return clauses.length === 1 ? clauses[0]! : `(${clauses.join(" OR ")})`;
+  }
+
+  if (filter.kind === "link_target_field_compare") {
+    const targets = filter.relation.targetTables.length > 0
+      ? filter.relation.targetTables
+      : [{ name: filter.relation.targetType, table: filter.relation.targetTable }];
+    const relationAlias = `lt_${Math.abs(hashString(`${filter.relation.sourceType}:${filter.relation.targetType}:${filter.targetColumn}`)).toString(16)}`;
+    const clauses = targets.map((target, index) => {
+      const targetAlias = `${relationAlias}_t${index}`;
+      const column = `${targetAlias}.${quoteIdent(filter.targetColumn)}`;
+      params.push(encodeParam(filter.value));
+      const predicate = compileFilterPredicate(column, filter.op);
+      if (filter.relation.storage === "inline") {
+        const inlineColumn = filter.relation.inlineColumn ?? `${filter.relation.targetType.split("::").at(-1)?.toLowerCase()}_id`;
+        return `EXISTS (SELECT 1 FROM ${quoteIdent(target.table)} ${targetAlias} WHERE ${targetAlias}.${quoteIdent("id")} = ${sourceAlias}.${quoteIdent(inlineColumn)} AND ${predicate})`;
+      }
+      return `EXISTS (SELECT 1 FROM ${linkJunctionFrom(filter.relation, relationAlias)} JOIN ${quoteIdent(target.table)} ${targetAlias} ON ${targetAlias}.${quoteIdent("id")} = ${relationAlias}.${quoteIdent("target")} WHERE ${relationAlias}.${quoteIdent("source")} = ${sourceAlias}.${quoteIdent("id")} AND ${predicate})`;
+    });
+    if (clauses.length === 0) return "0";
     return clauses.length === 1 ? clauses[0]! : `(${clauses.join(" OR ")})`;
   }
 
@@ -613,13 +1259,72 @@ const compileFilterExprSQL = (
     return filter.kind === "backlink_property_in" && filter.op === "not_in" ? `(${clauses.join(" AND ")})` : `(${clauses.join(" OR ")})`;
   }
 
+  if (filter.kind === "backlink_property_value_compare") {
+    const clauses = filter.sources
+      .filter((source) => source.storage === "table" && source.linkTable)
+      .map((source, index) => {
+        const alias = `bpv_${index}`;
+        const column = `${alias}.${quoteIdent(filter.property)}`;
+        params.push(encodeParam(filter.value));
+        return `EXISTS (SELECT 1 FROM ${quoteIdent(source.linkTable!)} ${alias} WHERE ${alias}.${quoteIdent("target")} = ${sourceAlias}.${quoteIdent("id")} AND ${compileFilterPredicate(column, filter.op)})`;
+      });
+    if (clauses.length === 0) {
+      return "0";
+    }
+    return `(${clauses.join(" OR ")})`;
+  }
+
   if (filter.kind === "not") {
     return `(NOT ${compileFilterExprSQL(filter.expr, sourceAlias, params, linkPropertyAlias)})`;
+  }
+
+  if (filter.kind === "expr_compare") {
+    const isNullLiteral = (e: import("../ir/model.js").ScalarExprIR): boolean =>
+      e.kind === "literal" && e.value === null;
+    if ((filter.op === "=" || filter.op === "!=") && (isNullLiteral(filter.left) || isNullLiteral(filter.right))) {
+      const nonNullSide = isNullLiteral(filter.left) ? filter.right : filter.left;
+      const sql = compileScalarExprSQL(nonNullSide, sourceAlias, params);
+      return filter.op === "=" ? `(${sql} IS NULL)` : `(${sql} IS NOT NULL)`;
+    }
+    const left = compileScalarExprSQL(filter.left, sourceAlias, params);
+    const right = compileScalarExprSQL(filter.right, sourceAlias, params);
+    return `(${left} ${filter.op} ${right})`;
   }
 
   const left = compileFilterExprSQL(filter.left, sourceAlias, params, linkPropertyAlias);
   const right = compileFilterExprSQL(filter.right, sourceAlias, params, linkPropertyAlias);
   return filter.kind === "and" ? `(${left} AND ${right})` : `(${left} OR ${right})`;
+};
+
+const compileScalarExprSQL = (
+  expr: import("../ir/model.js").ScalarExprIR,
+  sourceAlias: string,
+  params: ScalarValue[],
+): string => {
+  if (expr.kind === "column") {
+    return `${sourceAlias}.${quoteIdent(expr.column)}`;
+  }
+  if (expr.kind === "literal") {
+    params.push(encodeParam(expr.value));
+    return "?";
+  }
+  if (expr.kind === "neg") {
+    return `(-${compileScalarExprSQL(expr.expr, sourceAlias, params)})`;
+  }
+  if (expr.kind === "index_access") {
+    const inner = compileScalarExprSQL(expr.value, sourceAlias, params);
+    return `substr(${inner}, ${expr.index + 1}, 1)`;
+  }
+  const leftSql = compileScalarExprSQL(expr.left, sourceAlias, params);
+  const rightSql = compileScalarExprSQL(expr.right, sourceAlias, params);
+  if (expr.op === "//") {
+    // SQLite has no integer-division operator; emit CAST(left / right AS INTEGER).
+    return `(CAST(${leftSql} / ${rightSql} AS INTEGER))`;
+  }
+  if (expr.op === "++") {
+    return `(${leftSql} || ${rightSql})`;
+  }
+  return `(${leftSql} ${expr.op} ${rightSql})`;
 };
 
 const collectFieldFilterColumns = (filter: FilterExprIR | undefined): string[] => {
@@ -659,15 +1364,37 @@ const collectFieldFilterColumns = (filter: FilterExprIR | undefined): string[] =
     return [];
   }
 
+  if (filter.kind === "link_target_field_compare") {
+    return filter.relation.storage === "inline" && filter.relation.inlineColumn
+      ? [filter.relation.inlineColumn]
+      : [];
+  }
+
   if (filter.kind === "backlink_property_compare" || filter.kind === "backlink_property_in") {
     return [filter.column];
+  }
+
+  if (filter.kind === "backlink_property_value_compare") {
+    return [];
   }
 
   if (filter.kind === "not") {
     return collectFieldFilterColumns(filter.expr);
   }
 
+  if (filter.kind === "expr_compare") {
+    return [...collectScalarExprColumns(filter.left), ...collectScalarExprColumns(filter.right)];
+  }
+
   return [...collectFieldFilterColumns(filter.left), ...collectFieldFilterColumns(filter.right)];
+};
+
+const collectScalarExprColumns = (expr: import("../ir/model.js").ScalarExprIR): string[] => {
+  if (expr.kind === "column") return [expr.column];
+  if (expr.kind === "literal") return [];
+  if (expr.kind === "neg") return collectScalarExprColumns(expr.expr);
+  if (expr.kind === "index_access") return collectScalarExprColumns(expr.value);
+  return [...collectScalarExprColumns(expr.left), ...collectScalarExprColumns(expr.right)];
 };
 
 const shapeRequiresFallbackLowering = (shape: SelectShapeElementIR[], target: RuntimeTarget): boolean => {
@@ -683,9 +1410,6 @@ const shapeRequiresFallbackLowering = (shape: SelectShapeElementIR[], target: Ru
     }
 
     if (element.kind === "link") {
-      if (element.relation.targetType.includes("|")) {
-        return true;
-      }
       if (shapeRequiresFallbackLowering(element.shape, target)) {
         return true;
       }
@@ -697,6 +1421,128 @@ const shapeRequiresFallbackLowering = (shape: SelectShapeElementIR[], target: Ru
 
 type FunctionCallExprIR = Extract<Extract<SelectShapeElementIR, { kind: "computed" }>["expr"], { kind: "function_call" }>;
 type FunctionCallArgIR = FunctionCallExprIR["args"][number];
+type SelectFreeEntryIR = SelectFreeIR["entries"][number];
+type SelectFreeFunctionCallEntryIR = Extract<SelectFreeEntryIR, { kind: "function_call" }>;
+type SelectFreeFunctionArgIR = SelectFreeFunctionCallEntryIR["args"][number];
+
+const compileSelectFreeEntrySQL = (
+  entry: SelectFreeEntryIR,
+  params: ScalarValue[],
+  target: RuntimeTarget,
+): string | null => {
+  if (entry.kind === "literal") {
+    if (typeof entry.value === "boolean") {
+      return null;
+    }
+
+    params.push(encodeParam(entry.value));
+    return "?";
+  }
+
+  if (entry.kind === "enum_path") {
+    params.push(entry.member);
+    return "?";
+  }
+
+  if (entry.kind === "cast") {
+    const valueSql = compileSelectFreeEntrySQL(entry.value, params, target);
+    if (!valueSql) {
+      return null;
+    }
+
+    const sqlType = sqlCastType(entry.castType);
+    return sqlType ? `CAST(${valueSql} AS ${sqlType})` : null;
+  }
+
+  if (entry.kind === "concat") {
+    const parts = entry.parts.map((part) => compileSelectFreeEntrySQL(part, params, target));
+    if (parts.some((part) => part === null)) {
+      return null;
+    }
+
+    return parts.length === 0 ? "''" : `(${(parts as string[]).map((part) => `COALESCE(CAST(${part} AS TEXT), '')`).join(" || ")})`;
+  }
+
+  if (entry.kind === "function_call") {
+    return compileSelectFreeFunctionCallSQL(entry, params, target);
+  }
+
+  return null;
+};
+
+const compileSelectFreeFunctionCallSQL = (
+  expr: SelectFreeFunctionCallEntryIR,
+  params: ScalarValue[],
+  target: RuntimeTarget,
+): string | null => {
+  if (!canLowerSelectFreeFunctionCall(expr, target)) {
+    return null;
+  }
+
+  const args = expr.args.map((arg) => compileSelectFreeFunctionArgSQL(arg, params, target));
+  if (args.some((arg) => arg === null)) {
+    return null;
+  }
+
+  return lowerStdlibFunctionSql(target, expr.functionName, args as string[]);
+};
+
+const canLowerSelectFreeFunctionCall = (expr: SelectFreeFunctionCallEntryIR, target: RuntimeTarget): boolean => {
+  if (!isLowerableStdlibFunctionName(expr.functionName, target)) {
+    return false;
+  }
+
+  return expr.args.every((arg) => canLowerSelectFreeFunctionArg(arg, target));
+};
+
+const canLowerSelectFreeFunctionArg = (arg: SelectFreeFunctionArgIR, target: RuntimeTarget): boolean => {
+  if (arg.kind === "literal") {
+    return typeof arg.value !== "boolean";
+  }
+
+  if (arg.kind === "function_call") {
+    return canLowerSelectFreeFunctionCall(arg as SelectFreeFunctionCallEntryIR, target);
+  }
+
+  return false;
+};
+
+const compileSelectFreeFunctionArgSQL = (
+  arg: SelectFreeFunctionArgIR,
+  params: ScalarValue[],
+  target: RuntimeTarget,
+): string | null => {
+  if (arg.kind === "literal") {
+    if (typeof arg.value === "boolean") {
+      return null;
+    }
+
+    params.push(encodeParam(arg.value));
+    return "?";
+  }
+
+  if (arg.kind === "function_call") {
+    return compileSelectFreeFunctionCallSQL(arg as SelectFreeFunctionCallEntryIR, params, target);
+  }
+
+  return null;
+};
+
+const sqlCastType = (castType: string): string | null => {
+  if (castType === "std::str" || castType === "str") {
+    return "TEXT";
+  }
+
+  if (castType === "std::int" || castType === "int" || castType === "std::int64" || castType === "int64") {
+    return "INTEGER";
+  }
+
+  if (castType === "std::float" || castType === "float" || castType === "std::float64" || castType === "float64") {
+    return "REAL";
+  }
+
+  return null;
+};
 
 const canLowerStdlibFunctionCall = (expr: FunctionCallExprIR, target: RuntimeTarget): boolean => {
   if (!isLowerableStdlibFunctionName(expr.functionName, target)) {
@@ -739,77 +1585,7 @@ const compileStdlibFunctionCallSQL = (
     return null;
   }
 
-  const argSql = args as string[];
-  switch (expr.functionName) {
-    case "math::abs":
-      return `abs(${argSql[0]})`;
-    case "math::ceil":
-      return `ceil(${argSql[0]})`;
-    case "math::floor":
-      return `floor(${argSql[0]})`;
-    case "math::exp":
-      return `exp(${argSql[0]})`;
-    case "math::ln":
-      return `ln(${argSql[0]})`;
-    case "math::lg":
-      return `log(${argSql[0]})`;
-    case "math::log":
-      return `(ln(${argSql[0]}) / ln(${argSql[1]}))`;
-    case "math::pi":
-      return "pi()";
-    case "math::e":
-      return "exp(1.0)";
-    case "math::acos":
-      return `acos(${argSql[0]})`;
-    case "math::asin":
-      return `asin(${argSql[0]})`;
-    case "math::atan":
-      return `atan(${argSql[0]})`;
-    case "math::atan2":
-      return `atan2(${argSql[0]}, ${argSql[1]})`;
-    case "math::cos":
-      return `cos(${argSql[0]})`;
-    case "math::cot":
-      return `(1.0 / tan(${argSql[0]}))`;
-    case "math::sin":
-      return `sin(${argSql[0]})`;
-    case "math::tan":
-      return `tan(${argSql[0]})`;
-    case "std::datetime_current":
-    case "std::datetime_of_transaction":
-    case "std::datetime_of_statement":
-      return `strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`;
-    case "std::to_str":
-      return `CAST(${argSql[0]} AS TEXT)`;
-    case "std::len":
-      return `length(COALESCE(CAST(${argSql[0]} AS TEXT), ''))`;
-    case "std::count":
-      return `count(${argSql[0]})`;
-    case "std::max":
-      return `max(${argSql[0]})`;
-    case "std::min":
-      return `min(${argSql[0]})`;
-    case "std::str_lower":
-      return `lower(COALESCE(CAST(${argSql[0]} AS TEXT), ''))`;
-    case "std::str_upper":
-      return `upper(COALESCE(CAST(${argSql[0]} AS TEXT), ''))`;
-    case "std::datetime_get": {
-      const firstExpr = `LOWER(CAST(${argSql[0]} AS TEXT))`;
-      const secondExpr = `LOWER(CAST(${argSql[1]} AS TEXT))`;
-      const partExpr = `CASE WHEN ${firstExpr} IN ('year', 'month', 'day', 'hour', 'minute', 'second', 'epochseconds') THEN ${firstExpr} ELSE ${secondExpr} END`;
-      const dateExpr = normalizeDateTimeSQLInput(`CASE WHEN ${firstExpr} IN ('year', 'month', 'day', 'hour', 'minute', 'second', 'epochseconds') THEN ${argSql[1]} ELSE ${argSql[0]} END`);
-      return `CASE ${partExpr} WHEN 'year' THEN CAST(strftime('%Y', ${dateExpr}) AS INTEGER) WHEN 'month' THEN CAST(strftime('%m', ${dateExpr}) AS INTEGER) WHEN 'day' THEN CAST(strftime('%d', ${dateExpr}) AS INTEGER) WHEN 'hour' THEN CAST(strftime('%H', ${dateExpr}) AS INTEGER) WHEN 'minute' THEN CAST(strftime('%M', ${dateExpr}) AS INTEGER) WHEN 'second' THEN CAST(strftime('%S', ${dateExpr}) AS INTEGER) WHEN 'epochseconds' THEN CAST(strftime('%s', ${dateExpr}) AS INTEGER) ELSE NULL END`;
-    }
-    case "std::datetime_truncate": {
-      const firstExpr = `LOWER(CAST(${argSql[0]} AS TEXT))`;
-      const secondExpr = `LOWER(CAST(${argSql[1]} AS TEXT))`;
-      const partExpr = `CASE WHEN ${firstExpr} IN ('year', 'month', 'day', 'hour', 'minute', 'second') THEN ${firstExpr} ELSE ${secondExpr} END`;
-      const dateExpr = normalizeDateTimeSQLInput(`CASE WHEN ${firstExpr} IN ('year', 'month', 'day', 'hour', 'minute', 'second') THEN ${argSql[1]} ELSE ${argSql[0]} END`);
-      return `CASE ${partExpr} WHEN 'year' THEN strftime('%Y-01-01T00:00:00.000Z', ${dateExpr}) WHEN 'month' THEN strftime('%Y-%m-01T00:00:00.000Z', ${dateExpr}) WHEN 'day' THEN strftime('%Y-%m-%dT00:00:00.000Z', ${dateExpr}) WHEN 'hour' THEN strftime('%Y-%m-%dT%H:00:00.000Z', ${dateExpr}) WHEN 'minute' THEN strftime('%Y-%m-%dT%H:%M:00.000Z', ${dateExpr}) WHEN 'second' THEN strftime('%Y-%m-%dT%H:%M:%S.000Z', ${dateExpr}) ELSE strftime('%Y-%m-%dT%H:%M:%fZ', ${dateExpr}) END`;
-    }
-    default:
-      return null;
-  }
+  return lowerStdlibFunctionSql(target, expr.functionName, args as string[]);
 };
 
 const compileStdlibFunctionArgSQL = (
@@ -835,10 +1611,7 @@ const compileStdlibFunctionArgSQL = (
 };
 
 const isLowerableStdlibFunctionName = (functionName: string, target: RuntimeTarget): boolean =>
-  canLowerStdlibFunctionToSql(target, functionName);
-
-const normalizeDateTimeSQLInput = (dateExpr: string): string =>
-  `replace(replace(CAST(${dateExpr} AS TEXT), 'T', ' '), 'Z', '')`;
+  canLowerStdlibFunctionSql(target, functionName);
 
 const compilePolymorphicTargetSource = (
   relation: Extract<SelectShapeElementIR, { kind: "link" }>["relation"],
@@ -850,18 +1623,27 @@ const compilePolymorphicTargetSource = (
     : [{ name: relation.targetType, table: relation.targetTable }];
 
   const columns = [...new Set(["id", ...requiredColumns.filter((column) => column !== "__source_type")])];
-  const projected = columns.map((column) => `${quoteIdent(column)} AS ${quoteIdent(column)}`).join(", ");
+  const allTargetsDeclareColumns = targets.every((target) => target.columns && target.columns.length > 0);
+  const projected = (target: (typeof targets)[number]): string => {
+    const available = target.columns ? new Set(target.columns) : undefined;
+    return columns
+      .map((column) =>
+        !allTargetsDeclareColumns || available?.has(column)
+          ? `${quoteIdent(column)} AS ${quoteIdent(column)}`
+          : `NULL AS ${quoteIdent(column)}`)
+      .join(", ");
+  };
 
   if (targets.length === 1) {
     const only = targets[0];
     return `(
-      SELECT ${quoteLiteral(only.name)} AS ${quoteIdent("__source_type")}, ${projected}
+      SELECT ${quoteLiteral(only.name)} AS ${quoteIdent("__source_type")}, ${projected(only)}
       FROM ${quoteIdent(only.table)}
     ) ${alias}`;
   }
 
   const selects = targets.map(
-    (target) => `SELECT ${quoteLiteral(target.name)} AS ${quoteIdent("__source_type")}, ${projected} FROM ${quoteIdent(target.table)}`,
+    (target) => `SELECT ${quoteLiteral(target.name)} AS ${quoteIdent("__source_type")}, ${projected(target)} FROM ${quoteIdent(target.table)}`,
   );
   return `(${selects.join(" UNION ALL ")}) ${alias}`;
 };

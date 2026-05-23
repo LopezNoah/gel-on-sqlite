@@ -13,8 +13,6 @@ describe("TestEdgeQLFilter", () => {
     h = await QueryHarness.create({
       schema: "issues",
       setup: "issues_filter_setup",
-      dbFile: "./tests/.artifacts/filter.sqlite",
-      resetDbFile: true
     });
   });
 
