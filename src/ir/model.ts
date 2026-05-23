@@ -644,7 +644,7 @@ export type SelectExprIREntry<D extends Depth = 4> =
       ? never
       : {
           kind: "compare";
-          op: "=" | "!=" | "<" | "<=" | ">" | ">=" | "?=" | "?!=";
+          op: "=" | "!=" | "<" | "<=" | ">" | ">=" | "?=" | "?!=" | "like" | "ilike";
           left: SelectExprIREntry<Dec<D>>;
           right: SelectExprIREntry<Dec<D>>;
         })

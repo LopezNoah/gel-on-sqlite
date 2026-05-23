@@ -239,7 +239,37 @@ const resolveTypeRef = (ctx: IRCompileContext, name: string): TypeRef => {
   if (typeDef) {
     return typeRefFromTypeDef(ctx, typeDef);
   }
+  if (isUniversalObjectRefName(name)) {
+    return universalObjectTypeRef(ctx, name);
+  }
   return unknownTypeRef(qualifyTypeName(name, ctx.module));
+};
+
+const isUniversalObjectRefName = (name: string): boolean => {
+  const last = name.includes("::") ? name.split("::").at(-1) : name;
+  return last === "Object" || last === "BaseObject";
+};
+
+const universalObjectTypeRef = (ctx: IRCompileContext, name: string): TypeRef => {
+  const last = name.includes("::") ? (name.split("::").at(-1) ?? name) : name;
+  const qualified = name.includes("::") ? name : `std::${last}`;
+  const children = listSchemaTypeDefs(ctx)
+    .filter((candidate) => !candidate.abstract)
+    .map((candidate) => typeRefFromTypeDef(ctx, candidate));
+  const typeRef: TypeRef = {
+    kind: "type_ref",
+    id: qualified,
+    nameHint: qualified,
+    module: qualified.split("::")[0] ?? "std",
+    isView: false,
+    isScalar: false,
+    isAbstract: true,
+    inSchema: true,
+  };
+  if (children.length > 0) {
+    typeRef.children = children;
+  }
+  return typeRef;
 };
 
 const pointerRefFromField = (source: TypeRef, field: FieldDef): PointerRef => ({

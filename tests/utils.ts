@@ -11,8 +11,17 @@ import {
 import { executeQuery, executeScript } from "../src/runtime/engine.js";
 // import { parseDeclarativeSchema } from "../src/schema/declarative.js";
 import { schemaSnapshotFromDeclarative } from "../src/schema/uiSchema.js";
+import { SchemaSnapshot } from "../src/schema/schema.js";
 import { expect } from "vitest";
 import { parseDeclarativeSchema } from "../src/schema/sdl_adapter.js";
+
+const cloneSchemaSnapshot = (schema: SchemaSnapshot): SchemaSnapshot =>
+  new SchemaSnapshot(
+    schema.listTypes(),
+    schema.listFunctions(),
+    schema.listAliases(),
+    schema.listScalarTypes(),
+  );
 
 export interface HarnessOptions {
   schema?: string;      // Name of .esdl file in tests/schemas/
@@ -211,7 +220,7 @@ export class QueryHarness {
 
     if (cached) {
       const { db } = openSQLite(cached.buffer);
-      return new QueryHarness(db, cached.schema, cached.fallbackModule);
+      return new QueryHarness(db, cloneSchemaSnapshot(cached.schema), cached.fallbackModule);
     }
 
     const { db } = openSQLite(":memory:");
