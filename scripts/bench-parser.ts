@@ -11,7 +11,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { tokenize } from "../src/edgeql/tokenizer.js";
-import { parseEdgeQL } from "../src/edgeql/parser.js";
+import { parseEdgeQL, parseEdgeQLScript } from "../src/edgeql/parser.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -253,6 +253,19 @@ const main = (): void => {
   console.log(
     `\n  parse-only delta: ${formatNum(parseOnly, 3)}ms (${formatNum((parseOnly / parseResult.median) * 100, 1)}% of total)`,
   );
+
+  // Script-mode bench: stitch many queries into a single ;-separated input.
+  // Exercises parseEdgeQLScript, which previously re-tokenized each piece.
+  const scriptInputs: string[] = [];
+  const chunkSize = 25;
+  for (let s = 0; s < goodCorpus.length; s += chunkSize) {
+    const chunk = goodCorpus.slice(s, s + chunkSize);
+    // Strip any existing trailing semicolons from pieces so we control termination.
+    scriptInputs.push(chunk.map((q) => q.replace(/;\s*$/, "")).join(";\n") + ";\n");
+  }
+  console.log(`\n  script mode: ${scriptInputs.length} scripts averaging ${formatNum(goodCorpus.length / scriptInputs.length, 1)} stmts each`);
+  const scriptResult = runBench("parseEdgeQLScript", scriptInputs, (s) => { parseEdgeQLScript(s); }, iters, warmup);
+  printResult(scriptResult);
 };
 
 main();

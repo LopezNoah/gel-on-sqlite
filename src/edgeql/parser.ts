@@ -40,7 +40,7 @@ import type {
 } from "./ast.js";
 import { simpleTypeName } from "./ast.js";
 import type { Token, TokenKind } from "./tokenizer.js";
-import { tokenize } from "./tokenizer.js";
+import { tokenize, tokenizeWithStarts, offsetToLineCol } from "./tokenizer.js";
 
 // Token kinds the parser treats as "name-like" (identifier or context-sensitive
 // keyword that can also be used as a name). Using a Set lets isNameToken run as
@@ -213,13 +213,41 @@ interface PostfixChainOptions {
 
 class Parser {
   private readonly tokens: Token[];
+  // `lineStarts` is shared with the tokenizer so we can translate
+  // `token.offset` to a 1-indexed (line, column) pair only when we actually
+  // need it (for errors and AST `pos:` fields). Skipping per-token column
+  // arithmetic in the tokenizer hot loop is the bulk of the win.
+  private readonly lineStarts: readonly number[];
   private index = 0;
   private readonly localBindings: string[] = [];
   private readonly defaultModule?: string;
 
-  constructor(input: string, options: ParseEdgeQLOptions = {}) {
-    this.tokens = tokenize(input);
+  constructor(
+    source: string | { tokens: Token[]; lineStarts: readonly number[] },
+    options: ParseEdgeQLOptions = {},
+  ) {
+    if (typeof source === "string") {
+      const r = tokenizeWithStarts(source);
+      this.tokens = r.tokens;
+      this.lineStarts = r.lineStarts;
+    } else {
+      this.tokens = source.tokens;
+      this.lineStarts = source.lineStarts;
+    }
     this.defaultModule = options.defaultModule;
+  }
+
+  // Resolve a token's byte offset back to a 1-indexed (line, column) record.
+  // Used for AST `pos:` fields.
+  private posOf(token: Token): { line: number; column: number } {
+    return offsetToLineCol(token.offset, this.lineStarts);
+  }
+
+  // Same as posOf but returns a tuple so it can be spread into positional
+  // arg lists like `new AppError(code, msg, line, column)`.
+  private posPair(token: Token): [number, number] {
+    const p = offsetToLineCol(token.offset, this.lineStarts);
+    return [p.line, p.column];
   }
 
   private parseDelimited<T>(
@@ -255,15 +283,15 @@ class Parser {
   }
 
   private attempt<T>(fn: () => T | undefined): T | undefined {
-    const checkpoint = this.checkpoint();
+    const savedIndex = this.index;
     try {
       const result = fn();
       if (result === undefined) {
-        this.restore(checkpoint);
+        this.index = savedIndex;
       }
       return result;
     } catch {
-      this.restore(checkpoint);
+      this.index = savedIndex;
       return undefined;
     }
   }
@@ -279,7 +307,7 @@ class Parser {
   private expectAny(kinds: readonly Token["kind"][], message: string): Token {
     const token = this.peek();
     if (!kinds.includes(token.kind)) {
-      throw new AppError("E_SYNTAX", message, token.line, token.column);
+      throw new AppError("E_SYNTAX", message, ...this.posPair(token));
     }
     return this.consume();
   }
@@ -291,14 +319,14 @@ class Parser {
 
   private matchKeywordLexeme(lexeme: string): Token | undefined {
     const token = this.peek();
-    return this.isKeywordLikeToken(token) && token.lexeme.toLowerCase() === lexeme ? this.consume() : undefined;
+    return this.isKeywordLikeToken(token) && token.lower === lexeme ? this.consume() : undefined;
   }
 
   private parseKeywordChoice<T extends string>(choices: Record<string, T>, message: string): { token: Token; value: T } {
     const token = this.peek();
-    const value = this.isKeywordLikeToken(token) ? choices[token.lexeme.toLowerCase()] : undefined;
+    const value = this.isKeywordLikeToken(token) ? choices[token.lower] : undefined;
     if (!value) {
-      throw new AppError("E_SYNTAX", message, token.line, token.column);
+      throw new AppError("E_SYNTAX", message, ...this.posPair(token));
     }
     this.consume();
     return { token, value };
@@ -353,7 +381,7 @@ class Parser {
   private expectName(message: string): Token {
     const token = this.peek();
     if (!this.isNameToken(token)) {
-      throw new AppError("E_SYNTAX", message, token.line, token.column);
+      throw new AppError("E_SYNTAX", message, ...this.posPair(token));
     }
     this.index += 1;
     return { ...token, lexeme: this.nameTokenLexeme(token) };
@@ -373,7 +401,7 @@ class Parser {
   }
 
   private isExistsToken(token: Token): boolean {
-    return (this.isNameToken(token) || token.kind === "kw_exists") && token.lexeme.toLowerCase() === "exists";
+    return (this.isNameToken(token) || token.kind === "kw_exists") && token.lower === "exists";
   }
 
   private isEnumLikeName(name: string): boolean {
@@ -546,7 +574,7 @@ class Parser {
       orderBy: nested.clauses.orderBy,
       limit: nested.clauses.limit,
       offset: nested.clauses.offset,
-      pos: { line: start.line, column: start.column },
+      pos: this.posOf(start),
     };
   }
 
@@ -597,7 +625,7 @@ class Parser {
         return this.parseDDL();
       }
 
-      throw new AppError("E_SYNTAX", "Expected 'select', 'insert', 'update', 'delete', 'for', 'configure', transaction, or DDL statement", token.line, token.column);
+      throw new AppError("E_SYNTAX", "Expected 'select', 'insert', 'update', 'delete', 'for', 'configure', transaction, or DDL statement", ...this.posPair(token));
     } finally {
       withBindingNames.forEach(() => {
         this.localBindings.pop();
@@ -640,7 +668,7 @@ class Parser {
       operation,
       target,
       value,
-      pos: { line: start.line, column: start.column },
+      pos: this.posOf(start),
     };
   }
 
@@ -657,7 +685,7 @@ class Parser {
       source: body.source,
       using: body.using,
       by: body.by,
-      pos: { line: start.line, column: start.column },
+      pos: this.posOf(start),
     };
   }
 
@@ -709,11 +737,11 @@ class Parser {
     while (true) {
       const aliasToken = this.peek();
       if (!this.isNameToken(aliasToken)) {
-        throw new AppError("E_SYNTAX", "Expected alias name in USING clause", aliasToken.line, aliasToken.column);
+        throw new AppError("E_SYNTAX", "Expected alias name in USING clause", ...this.posPair(aliasToken));
       }
       const alias = this.consume().lexeme;
       if (alias === "id") {
-        throw new AppError("E_SYNTAX", "may not name a grouping alias 'id'", aliasToken.line, aliasToken.column);
+        throw new AppError("E_SYNTAX", "may not name a grouping alias 'id'", ...this.posPair(aliasToken));
       }
       this.expect("assign", "Expected ':=' in USING binding");
       const aliasExpr = this.withLocalBinding(alias, () => this.parseFreeObjectExpr());
@@ -739,7 +767,7 @@ class Parser {
       this.consume();
     }
     if (elements.length === 0) {
-      throw new AppError("E_SYNTAX", "Expected at least one element in BY clause", byKeyword.line, byKeyword.column);
+      throw new AppError("E_SYNTAX", "Expected at least one element in BY clause", ...this.posPair(byKeyword));
     }
     return elements;
   }
@@ -762,13 +790,13 @@ class Parser {
       return { kind: "sets", sets };
     }
 
-    if (this.isNameToken(token) && token.lexeme.toLowerCase() === "cube" && this.peekNext().kind === "lparen") {
+    if (this.isNameToken(token) && token.lower === "cube" && this.peekNext().kind === "lparen") {
       this.consume(); this.consume();
       const atoms = this.parseGroupByAtomList();
       this.expect("rparen", "Expected ')' after CUBE(...)");
       return { kind: "cube", atoms };
     }
-    if (this.isNameToken(token) && token.lexeme.toLowerCase() === "rollup" && this.peekNext().kind === "lparen") {
+    if (this.isNameToken(token) && token.lower === "rollup" && this.peekNext().kind === "lparen") {
       this.consume(); this.consume();
       const atoms = this.parseGroupByAtomList();
       this.expect("rparen", "Expected ')' after ROLLUP(...)");
@@ -781,17 +809,17 @@ class Parser {
   private parseGroupByAtom(): GroupByAtom {
     const token = this.peek();
     if (token.kind === "at") {
-      throw new AppError("E_SYNTAX", "BY clause cannot refer to link properties (parser does not yet support '@<name>' in BY)", token.line, token.column);
+      throw new AppError("E_SYNTAX", "BY clause cannot refer to link properties (parser does not yet support '@<name>' in BY)", ...this.posPair(token));
     }
     if (token.kind === "dot") {
       this.consume();
       const fieldToken = this.peek();
       if (!this.isNameToken(fieldToken)) {
-        throw new AppError("E_SYNTAX", "Expected field name after '.' in BY clause", fieldToken.line, fieldToken.column);
+        throw new AppError("E_SYNTAX", "Expected field name after '.' in BY clause", ...this.posPair(fieldToken));
       }
       const field = this.consume().lexeme;
       if (field === "id") {
-        throw new AppError("E_SYNTAX", "may not group by a field named id", fieldToken.line, fieldToken.column);
+        throw new AppError("E_SYNTAX", "may not group by a field named id", ...this.posPair(fieldToken));
       }
       return { kind: "field_ref", field };
     }
@@ -800,9 +828,9 @@ class Parser {
       return { kind: "name_ref", name: nameToken.lexeme };
     }
     if (token.kind === "kw_by") {
-      throw new AppError("E_SYNTAX", "Expected BY-clause atom", token.line, token.column);
+      throw new AppError("E_SYNTAX", "Expected BY-clause atom", ...this.posPair(token));
     }
-    throw new AppError("E_SYNTAX", "Expected '.field' or USING alias name as BY atom", token.line, token.column);
+    throw new AppError("E_SYNTAX", "Expected '.field' or USING alias name as BY atom", ...this.posPair(token));
   }
 
   private parseGroupByAtomList(): GroupByAtom[] {
@@ -845,14 +873,14 @@ class Parser {
 
     let isolation: TransactionStatement["isolation"];
     if (action === "start" && this.matchKeywordLexeme("isolation")) {
-      const level = this.expectName("Expected transaction isolation level").lexeme.toLowerCase();
+      const level = this.expectName("Expected transaction isolation level").lower;
       if (level === "serializable") {
         isolation = "serializable";
       } else if (level === "repeatable") {
-        const maybeRead = this.expectName("Expected 'read' after 'repeatable'").lexeme.toLowerCase();
+        const maybeRead = this.expectName("Expected 'read' after 'repeatable'").lower;
         if (maybeRead !== "read") {
           const tok = this.peek();
-          throw new AppError("E_SYNTAX", "Expected 'read' after 'repeatable'", tok.line, tok.column);
+          throw new AppError("E_SYNTAX", "Expected 'read' after 'repeatable'", ...this.posPair(tok));
         }
         isolation = "repeatable_read";
       }
@@ -867,7 +895,7 @@ class Parser {
       kind: "transaction",
       action,
       isolation,
-      pos: { line: token.line, column: token.column },
+      pos: this.posOf(token),
     };
   }
 
@@ -884,7 +912,7 @@ class Parser {
 
     const objectToken = this.peek();
     this.consume();
-    const objectLexeme = objectToken.lexeme.toLowerCase();
+    const objectLexeme = objectToken.lower;
     const objectKindMap: Record<string, DDLStatement["objectKind"]> = {
       type: "type",
       scalar: "scalar",
@@ -905,7 +933,7 @@ class Parser {
     };
     const objectKind = objectKindMap[objectLexeme];
     if (!objectKind) {
-      throw new AppError("E_SYNTAX", `Unsupported DDL object kind '${objectToken.lexeme}'`, objectToken.line, objectToken.column);
+      throw new AppError("E_SYNTAX", `Unsupported DDL object kind '${objectToken.lexeme}'`, ...this.posPair(objectToken));
     }
 
     const name = this.parseQualifiedName("Expected DDL object name");
@@ -927,7 +955,7 @@ class Parser {
       objectKind,
       name,
       value,
-      pos: { line: start.line, column: start.column },
+      pos: this.posOf(start),
     };
   }
 
@@ -992,7 +1020,7 @@ class Parser {
       optional,
       iteratorExpr,
       body,
-      pos: { line: start.line, column: start.column },
+      pos: this.posOf(start),
     };
   }
 
@@ -1028,7 +1056,7 @@ class Parser {
 
     if (this.peek().kind === "lbrace") {
       if (this.looksLikeFreeObjectSelect()) {
-        return this.parseFreeObjectSelect(start.line, start.column, ctx);
+        return this.parseFreeObjectSelect(...this.posPair(start), ctx);
       }
       return this.parseSelectExprTail(start, ctx, this.parseFreeObjectExpr(), expectEof);
     }
@@ -1057,7 +1085,7 @@ class Parser {
 
     if (this.isNameToken(this.peek()) && this.peekNext().kind === "at") {
       const atToken = this.peekNext();
-      throw new AppError("E_SYNTAX", "unexpected reference to link property", atToken.line, atToken.column);
+      throw new AppError("E_SYNTAX", "unexpected reference to link property", ...this.posPair(atToken));
     }
 
     const hasNamedBacklink = this.isNameToken(this.peek()) && (
@@ -1161,10 +1189,7 @@ class Parser {
       orderBy: clauses.orderBy,
       limit: clauses.limit,
       offset: clauses.offset,
-      pos: {
-        line: start.line,
-        column: start.column,
-      },
+      pos: this.posOf(start),
     };
   }
 
@@ -1220,7 +1245,7 @@ class Parser {
       orderBy: clauses.orderBy,
       limit: clauses.limit,
       offset: clauses.offset,
-      pos: { line: start.line, column: start.column },
+      pos: this.posOf(start),
     };
   }
 
@@ -1253,7 +1278,7 @@ class Parser {
       kind: "select_expr",
       expr: paginatedExpr,
       orderBy: paginatedExpr === expr ? tail.orderBy : undefined,
-      pos: { line: start.line, column: start.column },
+      pos: this.posOf(start),
     };
   }
 
@@ -1801,8 +1826,7 @@ class Parser {
       throw new AppError(
         "E_SYNTAX",
         "Expected string interpolation continuation or end",
-        token.line,
-        token.column,
+        ...this.posPair(token),
       );
     }
 
@@ -1900,7 +1924,7 @@ class Parser {
           const baseHeadName = this.headNameOfExpr(expr);
           if (baseHeadName && this.isEnumLikeName(baseHeadName) && this.peek().kind === "dot") {
             const dotToken = this.peek();
-            throw new AppError("E_SYNTAX", "an enum member name must follow enum type name in the path", dotToken.line, dotToken.column);
+            throw new AppError("E_SYNTAX", "an enum member name must follow enum type name in the path", ...this.posPair(dotToken));
           }
           const steps = this.exprToPathSteps(expr);
           if (steps) {
@@ -1959,7 +1983,7 @@ class Parser {
         }
 
         if (start === undefined) {
-          throw new AppError("E_SYNTAX", "Expected numeric index or '[is <Type>]' inside brackets", startToken.line, startToken.column);
+          throw new AppError("E_SYNTAX", "Expected numeric index or '[is <Type>]' inside brackets", ...this.posPair(startToken));
         }
         this.expect("rbracket", "Expected ']' after index access");
         expr = {
@@ -2170,7 +2194,7 @@ class Parser {
     if (this.match("kw_empty")) {
       const nullsPositionToken = this.peek();
       if (this.isNameToken(nullsPositionToken)) {
-        const lowered = nullsPositionToken.lexeme.toLowerCase();
+        const lowered = nullsPositionToken.lower;
         if (lowered === "first" || lowered === "last") {
           this.consume();
           nullsPosition = lowered;
@@ -2249,7 +2273,7 @@ class Parser {
         const parsed = this.parseComputedExpr();
         if (this.isBacklinkExpr(parsed)) {
           const token = this.peek();
-          throw new AppError("E_SYNTAX", "Link property expressions do not support backlinks", token.line, token.column);
+          throw new AppError("E_SYNTAX", "Link property expressions do not support backlinks", ...this.posPair(token));
         }
         expr = parsed;
       }
@@ -2305,7 +2329,7 @@ class Parser {
       }
     }
 
-    const isMulti = this.isNameToken(this.peek()) && this.peek().lexeme.toLowerCase() === "multi" && this.isNameToken(this.peekNext());
+    const isMulti = this.isNameToken(this.peek()) && this.peek().lower === "multi" && this.isNameToken(this.peekNext());
     if (isMulti) {
       this.consume();
     }
@@ -2340,7 +2364,7 @@ class Parser {
     if (leadingTypeFilter) {
       if (typeFilter) {
         const token = this.peek();
-        throw new AppError("E_SYNTAX", "Duplicate shape type filter", token.line, token.column);
+        throw new AppError("E_SYNTAX", "Duplicate shape type filter", ...this.posPair(token));
       }
       typeFilter = leadingTypeFilter;
     }
@@ -2401,14 +2425,13 @@ class Parser {
       throw new AppError(
         "E_SYNTAX",
         "Type filters in shapes require a nested link shape",
-        token.line,
-        token.column,
+        ...this.posPair(token),
       );
     }
 
     if (hasLinkShapeColon) {
       const token = this.peek();
-      throw new AppError("E_SYNTAX", "Expected '{' after ':' in link shape", token.line, token.column);
+      throw new AppError("E_SYNTAX", "Expected '{' after ':' in link shape", ...this.posPair(token));
     }
 
     const opToken = this.peek();
@@ -2696,7 +2719,7 @@ class Parser {
         const suffix = this.expectName("Expected 'name' after '__type__.'").lexeme;
         if (suffix !== "name") {
           const token = this.peek();
-          throw new AppError("E_SYNTAX", "Expected '__type__.name'", token.line, token.column);
+          throw new AppError("E_SYNTAX", "Expected '__type__.name'", ...this.posPair(token));
         }
       }
       return {
@@ -2901,7 +2924,7 @@ class Parser {
     const conditionValue = this.readScalarValue();
     if (this.peek().kind !== "kw_else") {
       const token = this.peek();
-      throw new AppError("E_SYNTAX", "Expected 'else' in IF expression", token.line, token.column);
+      throw new AppError("E_SYNTAX", "Expected 'else' in IF expression", ...this.posPair(token));
     }
     this.consume();
 
@@ -3187,7 +3210,7 @@ class Parser {
       }
     }
     if (depth !== 0) {
-      throw new AppError("E_SYNTAX", "Expected '>' after function argument cast type", this.peek().line, this.peek().column);
+      throw new AppError("E_SYNTAX", "Expected '>' after function argument cast type", ...this.posPair(this.peek()));
     }
 
     if (this.peek().kind === "lbrace") {
@@ -3276,10 +3299,7 @@ class Parser {
       typeName,
       values,
       conflict,
-      pos: {
-        line: start.line,
-        column: start.column,
-      },
+      pos: this.posOf(start),
     };
   }
 
@@ -3296,7 +3316,7 @@ class Parser {
     const field = this.expectName("Expected field name").lexeme;
     const opToken = this.peek();
     if (opToken.kind !== "assign" && opToken.kind !== "add_assign" && opToken.kind !== "sub_assign") {
-      throw new AppError("E_SYNTAX", "Expected assignment operator after field name", opToken.line, opToken.column);
+      throw new AppError("E_SYNTAX", "Expected assignment operator after field name", ...this.posPair(opToken));
     }
     this.consume();
     return {
@@ -3485,7 +3505,7 @@ class Parser {
       } else {
         if (hasNamed) {
           const token = this.peek();
-          throw new AppError("E_SYNTAX", "Cannot mix unnamed and named tuple elements", token.line, token.column);
+          throw new AppError("E_SYNTAX", "Cannot mix unnamed and named tuple elements", ...this.posPair(token));
         }
         items.push(this.readTupleLiteralElementValue());
       }
@@ -3569,7 +3589,7 @@ class Parser {
         elseExpr = this.parseInlineUpdateExpr();
       } else {
         const token = this.peek();
-        throw new AppError("E_SYNTAX", "Expected select or update expression in else clause", token.line, token.column);
+        throw new AppError("E_SYNTAX", "Expected select or update expression in else clause", ...this.posPair(token));
       }
       this.expect("rparen", "Expected ')' after else expression");
     }
@@ -3657,10 +3677,7 @@ class Parser {
       filter,
       values,
       operations: Object.keys(operations).length > 0 ? operations : undefined,
-      pos: {
-        line: start.line,
-        column: start.column,
-      },
+      pos: this.posOf(start),
     };
   }
 
@@ -3694,10 +3711,7 @@ class Parser {
       typeName,
       target,
       filter,
-      pos: {
-        line: start.line,
-        column: start.column,
-      },
+      pos: this.posOf(start),
     };
   }
 
@@ -3739,7 +3753,7 @@ class Parser {
       return this.deleteTargetRootTypeName(target.expr);
     }
     const token = this.peek();
-    throw new AppError("E_SYNTAX", "Expected type name in delete target", token.line, token.column);
+    throw new AppError("E_SYNTAX", "Expected type name in delete target", ...this.posPair(token));
   }
 
   private parseFilter(): FilterExpr {
@@ -3831,7 +3845,7 @@ class Parser {
       };
     }
 
-    if (this.isNameToken(this.peek()) && this.peek().lexeme.toLowerCase() === "any" && this.peekNext().kind === "lparen") {
+    if (this.isNameToken(this.peek()) && this.peek().lower === "any" && this.peekNext().kind === "lparen") {
       this.consume();
       this.consume();
       if (this.peek().kind === "lparen" || this.peek().kind === "kw_for") {
@@ -3846,13 +3860,13 @@ class Parser {
       const opToken = this.peek();
       const op = opToken.kind === "kw_like" ? "like" : opToken.kind === "kw_ilike" ? "ilike" : undefined;
       if (!op) {
-        throw new AppError("E_SYNTAX", "Expected LIKE or ILIKE in any() filter", opToken.line, opToken.column);
+        throw new AppError("E_SYNTAX", "Expected LIKE or ILIKE in any() filter", ...this.posPair(opToken));
       }
       this.consume();
       const values = this.parseInPredicateValues();
       this.expect("rparen", "Expected ')' after any() filter");
       if (values.kind !== "set_literal") {
-        throw new AppError("E_SYNTAX", "Expected set literal in any() filter", opToken.line, opToken.column);
+        throw new AppError("E_SYNTAX", "Expected set literal in any() filter", ...this.posPair(opToken));
       }
       return values.values
         .map((value): FilterExpr => ({ kind: "predicate", target, op, value }))
@@ -3949,7 +3963,7 @@ class Parser {
       const expr = this.parseFreeObjectExpr();
       return { kind: "free_expr", expr };
     } else {
-      throw new AppError("E_SYNTAX", "Expected filter operator (=, !=, like, ilike, IN, NOT IN)", token.line, token.column);
+      throw new AppError("E_SYNTAX", "Expected filter operator (=, !=, like, ilike, IN, NOT IN)", ...this.posPair(token));
     }
 
     if (this.peek().kind === "lt" || this.peek().kind === "lparen") {
@@ -4009,7 +4023,7 @@ class Parser {
       return this.parseBacklinkPropertyReference("IN filter");
     }
 
-    throw new AppError("E_SYNTAX", "Expected set literal, identifier, or SELECT subquery in IN filter", token.line, token.column);
+    throw new AppError("E_SYNTAX", "Expected set literal, identifier, or SELECT subquery in IN filter", ...this.posPair(token));
   }
 
   private parseFilterTarget(): { kind: "field"; field: string } | { kind: "backlink"; link: string; sourceType?: string } | { kind: "backlink_property"; link: string; sourceType?: string; property: string } {
@@ -4162,7 +4176,7 @@ class Parser {
         if (this.peek().kind === "kw_module") {
           const moduleToken = this.consume();
           if (withModule) {
-            throw new AppError("E_SYNTAX", "Duplicate module selection in with block", moduleToken.line, moduleToken.column);
+            throw new AppError("E_SYNTAX", "Duplicate module selection in with block", ...this.posPair(moduleToken));
           }
 
           withModule = this.parseQualifiedName("Expected module name after 'module'");
@@ -4170,7 +4184,7 @@ class Parser {
           const aliasToken = this.consume();
           const alias = aliasToken.lexeme;
           if (aliasNames.has(alias)) {
-            throw new AppError("E_SYNTAX", `Duplicate module alias '${alias}'`, aliasToken.line, aliasToken.column);
+            throw new AppError("E_SYNTAX", `Duplicate module alias '${alias}'`, ...this.posPair(aliasToken));
           }
 
           this.expect("kw_as", "Expected 'as' in module alias declaration");
@@ -4182,7 +4196,7 @@ class Parser {
           const name = this.expectName("Expected alias name in with block").lexeme;
           if (names.has(name)) {
             const token = this.peek();
-            throw new AppError("E_SYNTAX", `Duplicate with binding '${name}'`, token.line, token.column);
+            throw new AppError("E_SYNTAX", `Duplicate with binding '${name}'`, ...this.posPair(token));
           }
           names.add(name);
           this.expect("assign", "Expected ':=' in with binding");
@@ -4502,7 +4516,7 @@ class Parser {
         // Check for chained path: x.GREEN.MORE
         if (this.atDotField()) {
           const dotToken = this.peek();
-          throw new AppError("E_SYNTAX", "invalid property reference on an expression of primitive type", dotToken.line, dotToken.column);
+          throw new AppError("E_SYNTAX", "invalid property reference on an expression of primitive type", ...this.posPair(dotToken));
         }
         return { kind: "path", head, tail, steps: this.pathStepsFromParts([head, tail]) };
       }
@@ -4556,7 +4570,7 @@ class Parser {
       this.consume();
       const nullsPositionToken = this.peek();
       if (this.isNameToken(nullsPositionToken)) {
-        const lowered = nullsPositionToken.lexeme.toLowerCase();
+        const lowered = nullsPositionToken.lower;
         if (lowered === "first" || lowered === "last") {
           this.consume();
           nullsPosition = lowered;
@@ -4581,7 +4595,7 @@ class Parser {
       const token = this.peek();
       if (token.kind === "kw_filter") {
         if (stage > 0) {
-          throw new AppError("E_SYNTAX", "'filter' must appear before ordering and pagination", token.line, token.column);
+          throw new AppError("E_SYNTAX", "'filter' must appear before ordering and pagination", ...this.posPair(token));
         }
         clauses.filter = this.parseFilter();
         stage = 1;
@@ -4590,7 +4604,7 @@ class Parser {
 
       if (token.kind === "kw_order") {
         if (stage > 1) {
-          throw new AppError("E_SYNTAX", "'order by' must appear before offset/limit", token.line, token.column);
+          throw new AppError("E_SYNTAX", "'order by' must appear before offset/limit", ...this.posPair(token));
         }
         clauses.orderBy = this.parseOrderBy();
         stage = 2;
@@ -4599,7 +4613,7 @@ class Parser {
 
       if (token.kind === "kw_offset") {
         if (stage > 2) {
-          throw new AppError("E_SYNTAX", "'offset' must appear before 'limit'", token.line, token.column);
+          throw new AppError("E_SYNTAX", "'offset' must appear before 'limit'", ...this.posPair(token));
         }
         this.consume();
         clauses.offset = this.readInteger("Expected integer after 'offset'");
@@ -4786,7 +4800,7 @@ class Parser {
     if (token.kind === "minus") {
       const next = this.peekNext();
       if (next.kind !== "number") {
-        throw new AppError("E_SYNTAX", "Expected a numeric literal after '-'", token.line, token.column);
+        throw new AppError("E_SYNTAX", "Expected a numeric literal after '-'", ...this.posPair(token));
       }
       this.consume();
       this.consume();
@@ -4799,7 +4813,7 @@ class Parser {
     }
 
     if (token.kind === "str_interp_start") {
-      throw new AppError("E_SYNTAX", "String interpolation is not allowed in literal-only context", token.line, token.column);
+      throw new AppError("E_SYNTAX", "String interpolation is not allowed in literal-only context", ...this.posPair(token));
     }
 
     if (token.kind === "bytes_string") {
@@ -4829,7 +4843,7 @@ class Parser {
     }
 
     if (token.kind === "identifier") {
-      const lowered = token.lexeme.toLowerCase();
+      const lowered = token.lower;
       if (lowered === "true") {
         this.consume();
         return true;
@@ -4859,19 +4873,19 @@ class Parser {
       return values;
     }
 
-    throw new AppError("E_SYNTAX", "Expected a literal value", token.line, token.column);
+    throw new AppError("E_SYNTAX", "Expected a literal value", ...this.posPair(token));
   }
 
   private readScalarValue(message = "Expected a literal value"): ScalarValue {
     if (this.peek().kind === "lbracket") {
       const token = this.peek();
-      throw new AppError("E_SYNTAX", message, token.line, token.column);
+      throw new AppError("E_SYNTAX", message, ...this.posPair(token));
     }
 
     const value = this.readValue();
     if (Array.isArray(value)) {
       const token = this.peek();
-      throw new AppError("E_SYNTAX", message, token.line, token.column);
+      throw new AppError("E_SYNTAX", message, ...this.posPair(token));
     }
 
     return value;
@@ -4889,11 +4903,11 @@ class Parser {
   private readInteger(message: string): number {
     const token = this.peek();
     if (token.kind !== "number") {
-      throw new AppError("E_SYNTAX", message, token.line, token.column);
+      throw new AppError("E_SYNTAX", message, ...this.posPair(token));
     }
 
     if (!this.isIntegerLexeme(token.lexeme)) {
-      throw new AppError("E_SYNTAX", message, token.line, token.column);
+      throw new AppError("E_SYNTAX", message, ...this.posPair(token));
     }
 
     this.consume();
@@ -4903,7 +4917,7 @@ class Parser {
   private expect(kind: Token["kind"], message: string): Token {
     const token = this.peek();
     if (token.kind !== kind) {
-      throw new AppError("E_SYNTAX", message, token.line, token.column);
+      throw new AppError("E_SYNTAX", message, ...this.posPair(token));
     }
 
     this.index += 1;
@@ -4939,8 +4953,10 @@ const appendInsertValueOperand = (operands: InsertValue[], value: InsertValue): 
   operands.push(value);
 };
 
-const parseSetModuleStatement = (input: string): string | undefined => {
-  const tokens = tokenize(input).filter((token) => token.kind !== "eof");
+// Try to interpret a sequence of pre-tokenized tokens as a `SET MODULE x[::y]*`
+// statement, optionally followed by a trailing `;` and/or EOF. Returns the
+// fully-qualified module name when matched, otherwise undefined.
+const parseSetModuleStatementFromTokens = (tokens: Token[]): string | undefined => {
   if (tokens[0]?.kind !== "kw_set" || tokens[1]?.kind !== "kw_module") {
     return undefined;
   }
@@ -4976,70 +4992,90 @@ const parseSetModuleStatement = (input: string): string | undefined => {
     break;
   }
 
-  if (tokens[i]?.kind === "semi") {
-    i += 1;
-  }
+  if (tokens[i]?.kind === "semi") i += 1;
+  if (tokens[i]?.kind === "eof") i += 1;
 
   return i === tokens.length ? parts.join("::") : undefined;
 };
+
+const parseSetModuleStatement = (input: string): string | undefined =>
+  parseSetModuleStatementFromTokens(tokenize(input));
 
 export const parseEdgeQL = (input: string, options: ParseEdgeQLOptions = {}): Statement => {
   const parser = new Parser(input, options);
   return parser.parseStatement();
 };
 
+// Parse a single statement out of an already-tokenized stream. The Parser
+// expects the token list to end with an `eof` token; callers slicing tokens
+// out of a larger stream must append a synthetic eof. `lineStarts` must be the
+// table produced by `tokenizeWithStarts` for the original input; it's shared
+// across all statements so error/pos resolution stays correct.
+const parseEdgeQLFromTokens = (
+  tokens: Token[],
+  lineStarts: readonly number[],
+  options: ParseEdgeQLOptions = {},
+): Statement => {
+  const parser = new Parser({ tokens, lineStarts }, options);
+  return parser.parseStatement();
+};
+
 export const parseEdgeQLScript = (input: string, options: ParseEdgeQLOptions = {}): Statement[] => {
   const statements: Statement[] = [];
-  const tokens = tokenize(input);
+  const { tokens, lineStarts } = tokenizeWithStarts(input);
   let activeModule = options.defaultModule;
-
-  const lineStarts: number[] = [0];
-  for (let i = 0; i < input.length; i += 1) {
-    if (input[i] === "\n") {
-      lineStarts.push(i + 1);
-    }
-  }
-
-  const toIndex = (line: number, column: number): number => {
-    const lineStart = lineStarts[line - 1] ?? 0;
-    return lineStart + column - 1;
-  };
-
-  let startIndex = 0;
+  let stmtStart = 0;
   let depth = 0;
 
-  for (const token of tokens) {
-    if (token.kind === "eof") {
-      break;
+  // Synthesize an `eof` token at the boundary between statements. The Parser
+  // class always expects EOF at the end of its token list; we reuse the position
+  // of the terminating semi (or trailing token) so error locations stay
+  // meaningful.
+  const parsePiece = (start: number, end: number, finalPiece: boolean): void => {
+    if (start >= end) return;
+    const piece = tokens.slice(start, end);
+    const refTok = tokens[end] ?? tokens[tokens.length - 1]!;
+    piece.push({
+      kind: "eof",
+      lexeme: "",
+      lower: "",
+      offset: refTok.offset,
+    });
+    const setModule = parseSetModuleStatementFromTokens(piece);
+    if (setModule && !finalPiece) {
+      activeModule = setModule;
+      return;
     }
+    // The original script API has a quirk: for the final (no-trailing-semi)
+    // piece, even a successful SET MODULE parse still drives parseEdgeQL on
+    // the same piece, with defaultModule set to the parsed module name.
+    statements.push(parseEdgeQLFromTokens(piece, lineStarts, {
+      defaultModule: finalPiece ? (setModule ?? activeModule) : activeModule,
+    }));
+  };
+
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = tokens[i]!;
+    if (token.kind === "eof") break;
 
     if (token.kind === "semi" && depth === 0) {
-      const endIndex = toIndex(token.line, token.column) + 1;
-      const piece = input.slice(startIndex, endIndex).trim();
-      if (piece.length > 0) {
-        const setModule = parseSetModuleStatement(piece);
-        if (setModule) {
-          activeModule = setModule;
-        } else {
-          statements.push(parseEdgeQL(piece, { defaultModule: activeModule }));
-        }
-      }
-      startIndex = endIndex;
+      parsePiece(stmtStart, i, false);
+      stmtStart = i + 1;
       continue;
     }
 
-    if (token.kind === "lbrace" || token.kind === "lparen" || token.kind === "lbracket") {
+    const kind = token.kind;
+    if (kind === "lbrace" || kind === "lparen" || kind === "lbracket") {
       depth += 1;
-    } else if (token.kind === "rbrace" || token.kind === "rparen" || token.kind === "rbracket") {
+    } else if (kind === "rbrace" || kind === "rparen" || kind === "rbracket") {
       depth -= 1;
     }
   }
 
-  const piece = input.slice(startIndex).trim();
-  if (piece.length > 0) {
-    const setModule = parseSetModuleStatement(piece);
-    statements.push(parseEdgeQL(piece, { defaultModule: setModule }));
-  }
+  // Final piece (no trailing semi). Find the index just before EOF.
+  let endIdx = tokens.length;
+  if (endIdx > 0 && tokens[endIdx - 1]!.kind === "eof") endIdx -= 1;
+  parsePiece(stmtStart, endIdx, true);
 
   return statements;
 };

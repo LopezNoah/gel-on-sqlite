@@ -188,10 +188,58 @@ export const COMBINED_KEYWORDS = ["named only", "set annotation", "set type", "e
 export interface Token {
   kind: TokenKind;
   lexeme: string;
-  line: number;
-  column: number;
+  // `lower` is the lowercased form of `lexeme`. The tokenizer precomputes this
+  // so parser sites can do case-insensitive matches with `token.lower === 'foo'`
+  // instead of calling `token.lexeme.toLowerCase()` per check. For keyword
+  // tokens (and other tokens whose lexeme is already lowercase or never
+  // compared case-insensitively), `lower` aliases `lexeme` — no extra string
+  // allocation. Always present so V8 keeps a single hidden class for Token.
+  lower: string;
+  // Byte offset of the token within the original input. Line/column are
+  // computed on demand from this offset by `offsetToLineCol`, which lets the
+  // tokenizer skip per-token column math on the hot path.
+  offset: number;
   hint?: string;
 }
+
+export interface TokenizeResult {
+  tokens: Token[];
+  // Offsets within `input` where each line begins. `lineStarts[0]` is 0, and
+  // there is one entry per line. Used by `offsetToLineCol` to translate a
+  // token offset back to a (line, column) pair without rescanning the input.
+  lineStarts: number[];
+}
+
+// Translate a byte offset into the original input to a 1-indexed
+// `{ line, column }` pair. `source` may be either a precomputed lineStarts
+// array (preferred — O(log n) binary search) or the raw input string (O(n)
+// linear scan, used by callers that don't keep the lineStarts table around).
+export const offsetToLineCol = (
+  offset: number,
+  source: string | readonly number[],
+): { line: number; column: number } => {
+  if (typeof source === "string") {
+    let line = 1;
+    let lineStart = 0;
+    const upper = Math.min(offset, source.length);
+    for (let i = 0; i < upper; i += 1) {
+      if (source.charCodeAt(i) === 10) {
+        line += 1;
+        lineStart = i + 1;
+      }
+    }
+    return { line, column: offset - lineStart + 1 };
+  }
+  // Binary search lineStarts for the largest entry <= offset.
+  let lo = 0;
+  let hi = source.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >>> 1;
+    if (source[mid]! <= offset) lo = mid;
+    else hi = mid - 1;
+  }
+  return { line: lo + 1, column: offset - source[lo]! + 1 };
+};
 
 const KEYWORDS: Record<string, TokenKind> = {
   __source__: "kw_current_reserved_source",
@@ -410,29 +458,35 @@ const FIXED_TOKENS_BY_START: Partial<Record<string, readonly FixedToken[]>> = {
   ],
 };
 
-export const tokenize = (input: string): Token[] => {
+// Internal implementation; returns both the token list and the lineStarts table
+// the parser needs for offset → line/column resolution. Public `tokenize` and
+// `tokenizeWithStarts` are thin wrappers below.
+const tokenizeImpl = (input: string): TokenizeResult => {
   const tokens: Token[] = [];
   const len = input.length;
+  // `lineStarts[k]` is the byte offset where line k+1 begins; lineStarts[0] = 0
+  // always (line 1 starts at offset 0). We push a new entry every time the
+  // scanner moves past a `\n`. The current line number is `lineStarts.length`,
+  // so we no longer track it explicitly.
+  const lineStarts: number[] = [0];
 
   let i = 0;
-  let line = 1;
-  let column = 1;
   let openParens = 0;
   const strInterpStack: Array<{ quote: number; parenDepth: number }> = [];
 
-  const syntaxError = (message: string, tokenLine: number, tokenColumn: number): never => {
-    throw new AppError("E_SYNTAX", message, tokenLine, tokenColumn);
+  const syntaxError = (message: string, tokenOffset: number): never => {
+    const p = offsetToLineCol(tokenOffset, lineStarts);
+    throw new AppError("E_SYNTAX", message, p.line, p.column);
   };
 
   // scanEscapeValue: at entry, `i` is just past the leading backslash; the
   // escape character has not been consumed yet. Returns the unescaped char.
-  const scanEscapeValue = (tokenLine: number, tokenColumn: number): string => {
+  const scanEscapeValue = (tokenOffset: number): string => {
     if (i >= len) {
-      syntaxError("Unterminated escape sequence", tokenLine, tokenColumn);
+      syntaxError("Unterminated escape sequence", tokenOffset);
     }
     const esc = input.charCodeAt(i);
     i += 1;
-    column += 1;
     switch (esc) {
       case CC_n: return "\n";
       case CC_r: return "\r";
@@ -442,7 +496,7 @@ export const tokenize = (input: string): Token[] => {
       case CC_SQUOTE: return "'";
       case CC_DQUOTE: return '"';
       default:
-        return syntaxError(`Unsupported escape sequence '\\${input[i - 1]}'`, tokenLine, tokenColumn);
+        return syntaxError(`Unsupported escape sequence '\\${input[i - 1]}'`, tokenOffset);
     }
   };
 
@@ -450,19 +504,14 @@ export const tokenize = (input: string): Token[] => {
   const scanParameterLexeme = (): string => {
     const start = i;
     i += 1;
-    column += 1;
 
     if (i < len && input.charCodeAt(i) === CC_BACKTICK) {
       i += 1;
-      column += 1;
       while (i < len) {
         const cc = input.charCodeAt(i);
         i += 1;
         if (cc === CC_LF) {
-          line += 1;
-          column = 1;
-        } else {
-          column += 1;
+          lineStarts.push(i);
         }
         if (cc === CC_BACKTICK) break;
       }
@@ -473,66 +522,58 @@ export const tokenize = (input: string): Token[] => {
       const cc = input.charCodeAt(i);
       if (!isIdentPartCC(cc)) break;
       i += 1;
-      column += 1;
     }
     return input.slice(start, i);
   };
 
-  const scanBacktickName = (tokenLine: number, tokenColumn: number): void => {
+  const scanBacktickName = (tokenOffset: number): void => {
     i += 1; // opening backtick
-    column += 1;
     let value = "";
     let segStart = i;
 
     while (i < len) {
       const cc = input.charCodeAt(i);
       if (cc === CC_LF) {
-        line += 1;
-        column = 1;
         i += 1;
+        lineStarts.push(i);
         continue;
       }
       if (cc === CC_BACKTICK) {
         // Append any pending segment.
         if (i > segStart) value += input.slice(segStart, i);
         i += 1;
-        column += 1;
         if (i < len && input.charCodeAt(i) === CC_BACKTICK) {
           // escaped backtick
           value += "`";
           i += 1;
-          column += 1;
           segStart = i;
           continue;
         }
         if (value.length === 0) {
-          syntaxError("backtick quotes cannot be empty", tokenLine, tokenColumn);
+          syntaxError("backtick quotes cannot be empty", tokenOffset);
         }
         if (value.charCodeAt(0) === CC_AT || value.charCodeAt(0) === CC_DOLLAR) {
-          syntaxError("backtick-quoted name cannot start with '@' or '$'", tokenLine, tokenColumn);
+          syntaxError("backtick-quoted name cannot start with '@' or '$'", tokenOffset);
         }
         if (value.includes("::")) {
-          syntaxError("backtick-quoted name cannot contain '::'", tokenLine, tokenColumn);
+          syntaxError("backtick-quoted name cannot contain '::'", tokenOffset);
         }
-        tokens.push({ kind: "backtick_name", lexeme: value, line: tokenLine, column: tokenColumn });
+        tokens.push({ kind: "backtick_name", lexeme: value, lower: value.toLowerCase(), offset: tokenOffset });
         return;
       }
       i += 1;
-      column += 1;
     }
 
-    syntaxError("unterminated backtick name", tokenLine, tokenColumn);
+    syntaxError("unterminated backtick name", tokenOffset);
   };
 
   const scanString = (
     quoteCC: number,
-    tokenLine: number,
-    tokenColumn: number,
+    tokenOffset: number,
     kind: "string" | "bytes_string",
     raw: boolean,
   ): void => {
     i += 1; // opening quote
-    column += 1;
 
     let segStart = i;
     let value: string | undefined;
@@ -540,14 +581,13 @@ export const tokenize = (input: string): Token[] => {
     while (i < len) {
       const cc = input.charCodeAt(i);
       if (cc === CC_LF) {
-        syntaxError("Unterminated string literal", tokenLine, tokenColumn);
+        syntaxError("Unterminated string literal", tokenOffset);
       }
       if (cc === quoteCC) {
         const seg = input.slice(segStart, i);
         const out = value === undefined ? seg : value + seg;
         i += 1;
-        column += 1;
-        tokens.push({ kind, lexeme: out, line: tokenLine, column: tokenColumn });
+        tokens.push({ kind, lexeme: out, lower: out, offset: tokenOffset });
         return;
       }
       if (cc === CC_BACKSLASH && !raw) {
@@ -557,32 +597,27 @@ export const tokenize = (input: string): Token[] => {
           value += input.slice(segStart, i);
         }
         i += 1;
-        column += 1;
         if (kind === "string" && i < len && input.charCodeAt(i) === CC_LPAREN) {
           i += 1;
-          column += 1;
-          tokens.push({ kind: "str_interp_start", lexeme: value, line: tokenLine, column: tokenColumn });
+          tokens.push({ kind: "str_interp_start", lexeme: value, lower: value, offset: tokenOffset });
           strInterpStack.push({ quote: quoteCC, parenDepth: openParens });
           return;
         }
-        value += scanEscapeValue(tokenLine, tokenColumn);
+        value += scanEscapeValue(tokenOffset);
         segStart = i;
         continue;
       }
       i += 1;
-      column += 1;
     }
 
-    syntaxError("Unterminated string literal", tokenLine, tokenColumn);
+    syntaxError("Unterminated string literal", tokenOffset);
   };
 
   const scanStringInterpolationCont = (
     quoteCC: number,
-    tokenLine: number,
-    tokenColumn: number,
+    tokenOffset: number,
   ): void => {
     i += 1; // consume ')'
-    column += 1;
     let segStart = i;
     let value: string | undefined;
 
@@ -592,14 +627,12 @@ export const tokenize = (input: string): Token[] => {
         if (value === undefined) value = input.slice(segStart, i);
         else value += input.slice(segStart, i);
         i += 1;
-        column += 1;
         if (i < len && input.charCodeAt(i) === CC_LPAREN) {
           i += 1;
-          column += 1;
-          tokens.push({ kind: "str_interp_cont", lexeme: value, line: tokenLine, column: tokenColumn });
+          tokens.push({ kind: "str_interp_cont", lexeme: value, lower: value, offset: tokenOffset });
           return;
         }
-        value += scanEscapeValue(tokenLine, tokenColumn);
+        value += scanEscapeValue(tokenOffset);
         segStart = i;
         continue;
       }
@@ -607,30 +640,22 @@ export const tokenize = (input: string): Token[] => {
         const seg = input.slice(segStart, i);
         const out = value === undefined ? seg : value + seg;
         i += 1;
-        column += 1;
-        tokens.push({ kind: "str_interp_end", lexeme: out, line: tokenLine, column: tokenColumn });
+        tokens.push({ kind: "str_interp_end", lexeme: out, lower: out, offset: tokenOffset });
         strInterpStack.pop();
         return;
       }
       if (cc === CC_LF) {
-        line += 1;
-        column = 1;
         i += 1;
+        lineStarts.push(i);
         continue;
       }
       i += 1;
-      column += 1;
     }
 
-    syntaxError("Unterminated string interpolation", tokenLine, tokenColumn);
+    syntaxError("Unterminated string interpolation", tokenOffset);
   };
 
-  const advanceColumnFor = (start: number, end: number): void => {
-    // Used after slicing a span we already know contains no newlines.
-    column += end - start;
-  };
-
-  const scanDollarQuotedString = (tokenLine: number, tokenColumn: number): boolean => {
+  const scanDollarQuotedString = (tokenOffset: number): boolean => {
     // First char is '$'.
     if (i + 1 >= len) return false;
     const next = input.charCodeAt(i + 1);
@@ -638,21 +663,19 @@ export const tokenize = (input: string): Token[] => {
       const contentStart = i + 2;
       const close = input.indexOf("$$", contentStart);
       if (close < 0) {
-        syntaxError("Unterminated string started with $$", tokenLine, tokenColumn);
+        syntaxError("Unterminated string started with $$", tokenOffset);
       }
       const value = input.slice(contentStart, close);
-      // Advance through the literal, updating line/column.
       const endIdx = close + 2;
+      // Record any newlines inside the dollar-quoted span so future tokens
+      // resolve to the right line/column.
       for (let k = i; k < endIdx; k += 1) {
         if (input.charCodeAt(k) === CC_LF) {
-          line += 1;
-          column = 1;
-        } else {
-          column += 1;
+          lineStarts.push(k + 1);
         }
       }
       i = endIdx;
-      tokens.push({ kind: "string", lexeme: value, line: tokenLine, column: tokenColumn });
+      tokens.push({ kind: "string", lexeme: value, lower: value, offset: tokenOffset });
       return true;
     }
 
@@ -671,24 +694,21 @@ export const tokenize = (input: string): Token[] => {
     const contentStart = j + 1;
     const close = input.indexOf(marker, contentStart);
     if (close < 0) {
-      syntaxError(`Unterminated string started with ${marker}`, tokenLine, tokenColumn);
+      syntaxError(`Unterminated string started with ${marker}`, tokenOffset);
     }
     const value = input.slice(contentStart, close);
     const endIdx = close + marker.length;
     for (let k = i; k < endIdx; k += 1) {
       if (input.charCodeAt(k) === CC_LF) {
-        line += 1;
-        column = 1;
-      } else {
-        column += 1;
+        lineStarts.push(k + 1);
       }
     }
     i = endIdx;
-    tokens.push({ kind: "string", lexeme: value, line: tokenLine, column: tokenColumn });
+    tokens.push({ kind: "string", lexeme: value, lower: value, offset: tokenOffset });
     return true;
   };
 
-  const scanNumber = (tokenLine: number, tokenColumn: number): void => {
+  const scanNumber = (tokenOffset: number): void => {
     const start = i;
 
     if (
@@ -696,7 +716,7 @@ export const tokenize = (input: string): Token[] => {
       i + 1 < len &&
       isDigitCC(input.charCodeAt(i + 1))
     ) {
-      syntaxError("leading zeros are not allowed in numbers", tokenLine, tokenColumn);
+      syntaxError("leading zeros are not allowed in numbers", tokenOffset);
     }
 
     while (i < len) {
@@ -728,7 +748,7 @@ export const tokenize = (input: string): Token[] => {
           if (sign === CC_PLUS || sign === CC_MINUS) i += 1;
         }
         if (i >= len || !isDigitCC(input.charCodeAt(i))) {
-          syntaxError("expected digit after exponent marker", tokenLine, tokenColumn);
+          syntaxError("expected digit after exponent marker", tokenOffset);
         }
         while (i < len) {
           const dc = input.charCodeAt(i);
@@ -740,13 +760,13 @@ export const tokenize = (input: string): Token[] => {
 
     if (i < len && input.charCodeAt(i) === CC_n) i += 1;
 
-    advanceColumnFor(start, i);
-    tokens.push({ kind: "number", lexeme: input.slice(start, i), line: tokenLine, column: tokenColumn });
+    const numLex = input.slice(start, i);
+    tokens.push({ kind: "number", lexeme: numLex, lower: numLex, offset: tokenOffset });
   };
 
   // Scan an identifier or keyword starting at `i`. Caller has verified the
   // first char is an alpha/underscore. Returns true on success.
-  const scanIdentifierOrKeyword = (tokenLine: number, tokenColumn: number): void => {
+  const scanIdentifierOrKeyword = (tokenOffset: number): void => {
     const start = i;
     let hasUppercase = false;
 
@@ -759,15 +779,17 @@ export const tokenize = (input: string): Token[] => {
       break;
     }
 
-    advanceColumnFor(start, i);
     const value = input.slice(start, i);
     const lowered = hasUppercase ? value.toLowerCase() : value;
     const keyword = KEYWORDS[lowered];
 
     if (keyword !== undefined && !(keyword === "kw_named" && hasUppercase)) {
-      tokens.push({ kind: keyword, lexeme: lowered, line: tokenLine, column: tokenColumn });
+      tokens.push({ kind: keyword, lexeme: lowered, lower: lowered, offset: tokenOffset });
     } else {
-      tokens.push({ kind: "identifier", lexeme: value, line: tokenLine, column: tokenColumn });
+      // For identifiers we keep `lexeme` in its original case but expose a
+      // lowercased form via `lower` so parser case-insensitive comparisons
+      // can avoid the per-call toLowerCase.
+      tokens.push({ kind: "identifier", lexeme: value, lower: lowered, offset: tokenOffset });
     }
   };
 
@@ -778,23 +800,17 @@ export const tokenize = (input: string): Token[] => {
       const cc = input.charCodeAt(i);
       if (cc === CC_SPACE || cc === CC_TAB || cc === CC_CR) {
         i += 1;
-        column += 1;
         continue;
       }
       if (cc === CC_LF) {
         i += 1;
-        line += 1;
-        column = 1;
+        lineStarts.push(i);
         continue;
       }
       if (cc === CC_HASH) {
         i += 1;
-        column += 1;
-        while (i < len) {
-          const cc2 = input.charCodeAt(i);
-          if (cc2 === CC_LF) break;
+        while (i < len && input.charCodeAt(i) !== CC_LF) {
           i += 1;
-          column += 1;
         }
         continue;
       }
@@ -803,8 +819,7 @@ export const tokenize = (input: string): Token[] => {
 
     if (i >= len) break;
 
-    const tokenLine = line;
-    const tokenColumn = column;
+    const tokenOffset = i;
     const cc = input.charCodeAt(i);
 
     // String interpolation continuation: ')' that closes a held interpolation.
@@ -814,7 +829,7 @@ export const tokenize = (input: string): Token[] => {
       strInterpStack[strInterpStack.length - 1]!.parenDepth === openParens
     ) {
       const top = strInterpStack[strInterpStack.length - 1]!;
-      scanStringInterpolationCont(top.quote, tokenLine, tokenColumn);
+      scanStringInterpolationCont(top.quote, tokenOffset);
       continue;
     }
 
@@ -822,82 +837,82 @@ export const tokenize = (input: string): Token[] => {
     // dominate the token stream after whitespace.
     switch (cc) {
       case CC_LBRACE:
-        i += 1; column += 1;
-        tokens.push({ kind: "lbrace", lexeme: "{", line: tokenLine, column: tokenColumn });
+        i += 1;
+        tokens.push({ kind: "lbrace", lexeme: "{", lower: "{", offset: tokenOffset });
         continue;
       case CC_RBRACE:
-        i += 1; column += 1;
-        tokens.push({ kind: "rbrace", lexeme: "}", line: tokenLine, column: tokenColumn });
+        i += 1;
+        tokens.push({ kind: "rbrace", lexeme: "}", lower: "}", offset: tokenOffset });
         continue;
       case CC_LPAREN:
-        i += 1; column += 1;
+        i += 1;
         openParens += 1;
-        tokens.push({ kind: "lparen", lexeme: "(", line: tokenLine, column: tokenColumn });
+        tokens.push({ kind: "lparen", lexeme: "(", lower: "(", offset: tokenOffset });
         continue;
       case CC_RPAREN:
-        i += 1; column += 1;
+        i += 1;
         if (openParens > 0) openParens -= 1;
-        tokens.push({ kind: "rparen", lexeme: ")", line: tokenLine, column: tokenColumn });
+        tokens.push({ kind: "rparen", lexeme: ")", lower: ")", offset: tokenOffset });
         continue;
       case CC_LBRACK:
-        i += 1; column += 1;
-        tokens.push({ kind: "lbracket", lexeme: "[", line: tokenLine, column: tokenColumn });
+        i += 1;
+        tokens.push({ kind: "lbracket", lexeme: "[", lower: "[", offset: tokenOffset });
         continue;
       case CC_RBRACK:
-        i += 1; column += 1;
-        tokens.push({ kind: "rbracket", lexeme: "]", line: tokenLine, column: tokenColumn });
+        i += 1;
+        tokens.push({ kind: "rbracket", lexeme: "]", lower: "]", offset: tokenOffset });
         continue;
       case CC_COMMA:
-        i += 1; column += 1;
-        tokens.push({ kind: "comma", lexeme: ",", line: tokenLine, column: tokenColumn });
+        i += 1;
+        tokens.push({ kind: "comma", lexeme: ",", lower: ",", offset: tokenOffset });
         continue;
       case CC_SEMI:
-        i += 1; column += 1;
-        tokens.push({ kind: "semi", lexeme: ";", line: tokenLine, column: tokenColumn });
+        i += 1;
+        tokens.push({ kind: "semi", lexeme: ";", lower: ";", offset: tokenOffset });
         continue;
       case CC_AT:
-        i += 1; column += 1;
-        tokens.push({ kind: "at", lexeme: "@", line: tokenLine, column: tokenColumn });
+        i += 1;
+        tokens.push({ kind: "at", lexeme: "@", lower: "@", offset: tokenOffset });
         continue;
       case CC_PIPE:
-        i += 1; column += 1;
-        tokens.push({ kind: "pipe", lexeme: "|", line: tokenLine, column: tokenColumn });
+        i += 1;
+        tokens.push({ kind: "pipe", lexeme: "|", lower: "|", offset: tokenOffset });
         continue;
       case CC_AMP:
-        i += 1; column += 1;
-        tokens.push({ kind: "ampersand", lexeme: "&", line: tokenLine, column: tokenColumn });
+        i += 1;
+        tokens.push({ kind: "ampersand", lexeme: "&", lower: "&", offset: tokenOffset });
         continue;
       case CC_PERCENT:
-        i += 1; column += 1;
-        tokens.push({ kind: "modulo", lexeme: "%", line: tokenLine, column: tokenColumn });
+        i += 1;
+        tokens.push({ kind: "modulo", lexeme: "%", lower: "%", offset: tokenOffset });
         continue;
       case CC_CARET:
-        i += 1; column += 1;
-        tokens.push({ kind: "pow", lexeme: "^", line: tokenLine, column: tokenColumn });
+        i += 1;
+        tokens.push({ kind: "pow", lexeme: "^", lower: "^", offset: tokenOffset });
         continue;
       case CC_EQ:
-        i += 1; column += 1;
-        tokens.push({ kind: "equals", lexeme: "=", line: tokenLine, column: tokenColumn });
+        i += 1;
+        tokens.push({ kind: "equals", lexeme: "=", lower: "=", offset: tokenOffset });
         continue;
       case CC_STAR: {
         // '*' or '**'
         if (i + 1 < len && input.charCodeAt(i + 1) === CC_STAR) {
-          i += 2; column += 2;
-          tokens.push({ kind: "double_splat", lexeme: "**", line: tokenLine, column: tokenColumn });
+          i += 2;
+          tokens.push({ kind: "double_splat", lexeme: "**", lower: "**", offset: tokenOffset });
         } else {
-          i += 1; column += 1;
-          tokens.push({ kind: "star", lexeme: "*", line: tokenLine, column: tokenColumn });
+          i += 1;
+          tokens.push({ kind: "star", lexeme: "*", lower: "*", offset: tokenOffset });
         }
         continue;
       }
       case CC_SLASH: {
         // '/' or '//'
         if (i + 1 < len && input.charCodeAt(i + 1) === CC_SLASH) {
-          i += 2; column += 2;
-          tokens.push({ kind: "floor_div", lexeme: "//", line: tokenLine, column: tokenColumn });
+          i += 2;
+          tokens.push({ kind: "floor_div", lexeme: "//", lower: "//", offset: tokenOffset });
         } else {
-          i += 1; column += 1;
-          tokens.push({ kind: "slash", lexeme: "/", line: tokenLine, column: tokenColumn });
+          i += 1;
+          tokens.push({ kind: "slash", lexeme: "/", lower: "/", offset: tokenOffset });
         }
         continue;
       }
@@ -906,18 +921,18 @@ export const tokenize = (input: string): Token[] => {
         if (i + 1 < len) {
           const n = input.charCodeAt(i + 1);
           if (n === CC_PLUS) {
-            i += 2; column += 2;
-            tokens.push({ kind: "concat", lexeme: "++", line: tokenLine, column: tokenColumn });
+            i += 2;
+            tokens.push({ kind: "concat", lexeme: "++", lower: "++", offset: tokenOffset });
             continue;
           }
           if (n === CC_EQ) {
-            i += 2; column += 2;
-            tokens.push({ kind: "add_assign", lexeme: "+=", line: tokenLine, column: tokenColumn });
+            i += 2;
+            tokens.push({ kind: "add_assign", lexeme: "+=", lower: "+=", offset: tokenOffset });
             continue;
           }
         }
-        i += 1; column += 1;
-        tokens.push({ kind: "plus", lexeme: "+", line: tokenLine, column: tokenColumn });
+        i += 1;
+        tokens.push({ kind: "plus", lexeme: "+", lower: "+", offset: tokenOffset });
         continue;
       }
       case CC_MINUS: {
@@ -925,18 +940,18 @@ export const tokenize = (input: string): Token[] => {
         if (i + 1 < len) {
           const n = input.charCodeAt(i + 1);
           if (n === CC_GT) {
-            i += 2; column += 2;
-            tokens.push({ kind: "arrow", lexeme: "->", line: tokenLine, column: tokenColumn });
+            i += 2;
+            tokens.push({ kind: "arrow", lexeme: "->", lower: "->", offset: tokenOffset });
             continue;
           }
           if (n === CC_EQ) {
-            i += 2; column += 2;
-            tokens.push({ kind: "sub_assign", lexeme: "-=", line: tokenLine, column: tokenColumn });
+            i += 2;
+            tokens.push({ kind: "sub_assign", lexeme: "-=", lower: "-=", offset: tokenOffset });
             continue;
           }
         }
-        i += 1; column += 1;
-        tokens.push({ kind: "minus", lexeme: "-", line: tokenLine, column: tokenColumn });
+        i += 1;
+        tokens.push({ kind: "minus", lexeme: "-", lower: "-", offset: tokenOffset });
         continue;
       }
       case CC_COLON: {
@@ -944,18 +959,18 @@ export const tokenize = (input: string): Token[] => {
         if (i + 1 < len) {
           const n = input.charCodeAt(i + 1);
           if (n === CC_EQ) {
-            i += 2; column += 2;
-            tokens.push({ kind: "assign", lexeme: ":=", line: tokenLine, column: tokenColumn });
+            i += 2;
+            tokens.push({ kind: "assign", lexeme: ":=", lower: ":=", offset: tokenOffset });
             continue;
           }
           if (n === CC_COLON) {
-            i += 2; column += 2;
-            tokens.push({ kind: "coloncolon", lexeme: "::", line: tokenLine, column: tokenColumn });
+            i += 2;
+            tokens.push({ kind: "coloncolon", lexeme: "::", lower: "::", offset: tokenOffset });
             continue;
           }
         }
-        i += 1; column += 1;
-        tokens.push({ kind: "colon", lexeme: ":", line: tokenLine, column: tokenColumn });
+        i += 1;
+        tokens.push({ kind: "colon", lexeme: ":", lower: ":", offset: tokenOffset });
         continue;
       }
       case CC_LT: {
@@ -963,17 +978,15 @@ export const tokenize = (input: string): Token[] => {
         if (i + 1 < len) {
           const n = input.charCodeAt(i + 1);
           if (n === CC_EQ) {
-            i += 2; column += 2;
-            tokens.push({ kind: "lte", lexeme: "<=", line: tokenLine, column: tokenColumn });
+            i += 2;
+            tokens.push({ kind: "lte", lexeme: "<=", lower: "<=", offset: tokenOffset });
             continue;
           }
           if (isDigitCC(n)) {
             const start = i;
-            const startLine = line;
-            const startCol = column;
-            i += 1; column += 1;
+            i += 1;
             while (i < len && isDigitCC(input.charCodeAt(i))) {
-              i += 1; column += 1;
+              i += 1;
             }
             if (
               i < len &&
@@ -981,28 +994,28 @@ export const tokenize = (input: string): Token[] => {
               i + 1 < len &&
               input.charCodeAt(i + 1) === CC_DOLLAR
             ) {
-              i += 1; column += 1; // consume '>'
+              i += 1; // consume '>'
               const param = scanParameterLexeme();
               const lex = input.slice(start, i - param.length) + param;
-              tokens.push({ kind: "parameter_and_type", lexeme: lex, line: tokenLine, column: tokenColumn });
+              tokens.push({ kind: "parameter_and_type", lexeme: lex, lower: lex, offset: tokenOffset });
               continue;
             }
+            // Roll back the digit scan. line/lineStart can't have changed since
+            // we only consumed digits and '<'.
             i = start;
-            line = startLine;
-            column = startCol;
           }
         }
-        i += 1; column += 1;
-        tokens.push({ kind: "lt", lexeme: "<", line: tokenLine, column: tokenColumn });
+        i += 1;
+        tokens.push({ kind: "lt", lexeme: "<", lower: "<", offset: tokenOffset });
         continue;
       }
       case CC_GT: {
         if (i + 1 < len && input.charCodeAt(i + 1) === CC_EQ) {
-          i += 2; column += 2;
-          tokens.push({ kind: "gte", lexeme: ">=", line: tokenLine, column: tokenColumn });
+          i += 2;
+          tokens.push({ kind: "gte", lexeme: ">=", lower: ">=", offset: tokenOffset });
         } else {
-          i += 1; column += 1;
-          tokens.push({ kind: "gt", lexeme: ">", line: tokenLine, column: tokenColumn });
+          i += 1;
+          tokens.push({ kind: "gt", lexeme: ">", lower: ">", offset: tokenOffset });
         }
         continue;
       }
@@ -1012,97 +1025,98 @@ export const tokenize = (input: string): Token[] => {
           const n = input.charCodeAt(i + 1);
           if (n === CC_QMARK) {
             if (i + 2 < len && input.charCodeAt(i + 2) === CC_GT) {
-              i += 3; column += 3;
-              tokens.push({ kind: "optional_link", lexeme: ".?>", line: tokenLine, column: tokenColumn });
+              i += 3;
+              tokens.push({ kind: "optional_link", lexeme: ".?>", lower: ".?>", offset: tokenOffset });
               continue;
             }
-            syntaxError(".? is not an operator, did you mean .?> ?", tokenLine, tokenColumn);
+            syntaxError(".? is not an operator, did you mean .?> ?", tokenOffset);
           }
           if (n === CC_LT) {
-            i += 2; column += 2;
-            tokens.push({ kind: "backward_link", lexeme: ".<", line: tokenLine, column: tokenColumn });
+            i += 2;
+            tokens.push({ kind: "backward_link", lexeme: ".<", lower: ".<", offset: tokenOffset });
             continue;
           }
         }
-        i += 1; column += 1;
-        tokens.push({ kind: "dot", lexeme: ".", line: tokenLine, column: tokenColumn });
+        i += 1;
+        tokens.push({ kind: "dot", lexeme: ".", lower: ".", offset: tokenOffset });
         continue;
       }
       case CC_QMARK: {
         if (i + 1 < len) {
           const n = input.charCodeAt(i + 1);
           if (n === CC_QMARK) {
-            i += 2; column += 2;
-            tokens.push({ kind: "coalesce", lexeme: "??", line: tokenLine, column: tokenColumn });
+            i += 2;
+            tokens.push({ kind: "coalesce", lexeme: "??", lower: "??", offset: tokenOffset });
             continue;
           }
           if (n === CC_EQ) {
-            i += 2; column += 2;
-            tokens.push({ kind: "not_distinct_from", lexeme: "?=", line: tokenLine, column: tokenColumn });
+            i += 2;
+            tokens.push({ kind: "not_distinct_from", lexeme: "?=", lower: "?=", offset: tokenOffset });
             continue;
           }
           if (n === CC_EXCL) {
             if (i + 2 < len && input.charCodeAt(i + 2) === CC_EQ) {
-              i += 3; column += 3;
-              tokens.push({ kind: "distinct_from", lexeme: "?!=", line: tokenLine, column: tokenColumn });
+              i += 3;
+              tokens.push({ kind: "distinct_from", lexeme: "?!=", lower: "?!=", offset: tokenOffset });
               continue;
             }
-            syntaxError("?! is not an operator, did you mean ?!= ?", tokenLine, tokenColumn);
+            syntaxError("?! is not an operator, did you mean ?!= ?", tokenOffset);
           }
         }
-        syntaxError("Bare '?' is not an operator, did you mean '?=' or '??'?", tokenLine, tokenColumn);
+        syntaxError("Bare '?' is not an operator, did you mean '?=' or '??'?", tokenOffset);
         continue;
       }
       case CC_EXCL: {
         if (i + 1 < len && input.charCodeAt(i + 1) === CC_EQ) {
-          i += 2; column += 2;
-          tokens.push({ kind: "not_equals", lexeme: "!=", line: tokenLine, column: tokenColumn });
+          i += 2;
+          tokens.push({ kind: "not_equals", lexeme: "!=", lower: "!=", offset: tokenOffset });
           continue;
         }
-        syntaxError("Bare '!' is not an operator, did you mean '!='?", tokenLine, tokenColumn);
+        syntaxError("Bare '!' is not an operator, did you mean '!='?", tokenOffset);
         continue;
       }
       case CC_BACKTICK: {
-        scanBacktickName(tokenLine, tokenColumn);
+        scanBacktickName(tokenOffset);
         continue;
       }
       case CC_SQUOTE:
       case CC_DQUOTE: {
-        scanString(cc, tokenLine, tokenColumn, "string", false);
+        scanString(cc, tokenOffset, "string", false);
         continue;
       }
       case CC_DOLLAR: {
         // dollar-quoted string, parameter, or bare $
-        if (scanDollarQuotedString(tokenLine, tokenColumn)) continue;
+        if (scanDollarQuotedString(tokenOffset)) continue;
         if (i + 1 < len) {
           const n = input.charCodeAt(i + 1);
           if (isAlphaCC(n) || isDigitCC(n) || n === CC_BACKTICK) {
             const value = scanParameterLexeme();
-            tokens.push({ kind: "parameter", lexeme: value, line: tokenLine, column: tokenColumn });
+            tokens.push({ kind: "parameter", lexeme: value, lower: value, offset: tokenOffset });
             continue;
           }
         }
-        i += 1; column += 1;
-        tokens.push({ kind: "dollar", lexeme: "$", line: tokenLine, column: tokenColumn });
+        i += 1;
+        tokens.push({ kind: "dollar", lexeme: "$", lower: "$", offset: tokenOffset });
         continue;
       }
       case CC_BACKSLASH: {
         if (i + 1 < len && input.charCodeAt(i + 1) === CC_LPAREN) {
           const start = i;
-          i += 2; column += 2;
+          i += 2;
           while (i < len) {
             const cc2 = input.charCodeAt(i);
             if (cc2 === CC_RPAREN) break;
             if (!isIdentPartCC(cc2)) {
-              syntaxError("only alphanumerics are allowed in \\(name) token", tokenLine, tokenColumn);
+              syntaxError("only alphanumerics are allowed in \\(name) token", tokenOffset);
             }
-            i += 1; column += 1;
+            i += 1;
           }
           if (i >= len || input.charCodeAt(i) !== CC_RPAREN) {
-            syntaxError("unclosed \\(name) token", tokenLine, tokenColumn);
+            syntaxError("unclosed \\(name) token", tokenOffset);
           }
-          i += 1; column += 1;
-          tokens.push({ kind: "substitution", lexeme: input.slice(start, i), line: tokenLine, column: tokenColumn });
+          i += 1;
+          const subLex = input.slice(start, i);
+          tokens.push({ kind: "substitution", lexeme: subLex, lower: subLex, offset: tokenOffset });
           continue;
         }
         break; // fall through to error
@@ -1115,8 +1129,8 @@ export const tokenize = (input: string): Token[] => {
     if ((cc === CC_b || cc === CC_B_UP) && i + 1 < len) {
       const n = input.charCodeAt(i + 1);
       if (n === CC_SQUOTE || n === CC_DQUOTE) {
-        i += 1; column += 1; // consume 'b'/'B'
-        scanString(n, tokenLine, tokenColumn, "bytes_string", false);
+        i += 1; // consume 'b'/'B'
+        scanString(n, tokenOffset, "bytes_string", false);
         continue;
       }
     }
@@ -1125,27 +1139,30 @@ export const tokenize = (input: string): Token[] => {
     if ((cc === CC_r || cc === CC_R_UP) && i + 1 < len) {
       const n = input.charCodeAt(i + 1);
       if (n === CC_SQUOTE || n === CC_DQUOTE) {
-        i += 1; column += 1;
-        scanString(n, tokenLine, tokenColumn, "string", true);
+        i += 1;
+        scanString(n, tokenOffset, "string", true);
         continue;
       }
     }
 
     // Numbers
     if (isDigitCC(cc)) {
-      scanNumber(tokenLine, tokenColumn);
+      scanNumber(tokenOffset);
       continue;
     }
 
     // Identifiers / keywords
     if (isAlphaCC(cc)) {
-      scanIdentifierOrKeyword(tokenLine, tokenColumn);
+      scanIdentifierOrKeyword(tokenOffset);
       continue;
     }
 
-    syntaxError(`Unexpected token '${input[i]}'`, tokenLine, tokenColumn);
+    syntaxError(`Unexpected token '${input[i]}'`, tokenOffset);
   }
 
-  tokens.push({ kind: "eof", lexeme: "", line, column });
-  return tokens;
+  tokens.push({ kind: "eof", lexeme: "", lower: "", offset: len });
+  return { tokens, lineStarts };
 };
+
+export const tokenize = (input: string): Token[] => tokenizeImpl(input).tokens;
+export const tokenizeWithStarts = (input: string): TokenizeResult => tokenizeImpl(input);

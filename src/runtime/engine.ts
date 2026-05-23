@@ -1,7 +1,7 @@
 import { getCompilerService, type CompilerCacheMeta } from "../compiler/service.js";
 import { AppError, asAppError } from "../errors.js";
 import { parseEdgeQL, parseEdgeQLScript, type ParseEdgeQLOptions } from "../edgeql/parser.js";
-import { tokenize, type Token } from "../edgeql/tokenizer.js";
+import { offsetToLineCol, tokenize, type Token } from "../edgeql/tokenizer.js";
 import type { BacklinkExpr, ComputedExpr, DeleteStatement, FilterExpr, FilterValue, ForStatement, FreeObjectExpr, FunctionCallArgExpr, FunctionCallExpr, InsertStatement, InsertValue, OrderExpr, OrderExprChain, PathStep, SelectExprStatement, SelectStatement, ShapeElement, Statement, TypeExpr, UpdateStatement, WithBinding, WithBindingValue } from "../edgeql/ast.js";
 import type { RuntimeDatabaseAdapter } from "./adapter.js";
 import type { SchemaSnapshot } from "../schema/schema.js";
@@ -5182,7 +5182,10 @@ const validateRestrictedLinkPropertyTokens = (query: string): void => {
     if (!next || (next.kind !== "identifier" && !next.kind.startsWith("kw_"))) continue;
     const message = RESTRICTED_LINK_PROPERTY_NAMES[next.lexeme];
     if (message) {
-      throw new AppError("E_SEMANTIC", message, token.line, token.column);
+      // Resolve line/column from the token's byte offset against the original
+      // query — Token no longer carries line/column directly.
+      const pos = offsetToLineCol(token.offset, query);
+      throw new AppError("E_SEMANTIC", message, pos.line, pos.column);
     }
   }
 };
