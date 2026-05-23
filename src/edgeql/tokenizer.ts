@@ -319,6 +319,37 @@ const isAlphaNumeric = (c: string): boolean => isAlpha(c) || isDigit(c);
 const isIdentStart = (c: string): boolean => isAlpha(c);
 const isIdentPart = (c: string): boolean => isAlphaNumeric(c);
 
+type FixedToken = readonly [lexeme: string, kind: TokenKind];
+
+const FIXED_TOKENS_BY_START: Partial<Record<string, readonly FixedToken[]>> = {
+  ".": [
+    [".?>", "optional_link"],
+    [".<", "backward_link"],
+  ],
+  "-": [
+    ["->", "arrow"],
+    ["-=", "sub_assign"],
+  ],
+  "+": [
+    ["+=", "add_assign"],
+    ["++", "concat"],
+  ],
+  "/": [["//", "floor_div"]],
+  "*": [["**", "double_splat"]],
+  ":": [
+    [":=", "assign"],
+    ["::", "coloncolon"],
+  ],
+  "!": [["!=", "not_equals"]],
+  "<": [["<=", "lte"]],
+  ">": [[">=", "gte"]],
+  "?": [
+    ["??", "coalesce"],
+    ["?=", "not_distinct_from"],
+    ["?!=", "distinct_from"],
+  ],
+};
+
 export const tokenize = (input: string): Token[] => {
   const tokens: Token[] = [];
 
@@ -353,6 +384,72 @@ export const tokenize = (input: string): Token[] => {
 
   const syntaxError = (message: string, tokenLine: number, tokenColumn: number): never => {
     throw new AppError("E_SYNTAX", message, tokenLine, tokenColumn);
+  };
+
+  const scanEscapeValue = (tokenLine: number, tokenColumn: number): string => {
+    if (isAtEnd()) {
+      syntaxError("Unterminated escape sequence", tokenLine, tokenColumn);
+    }
+
+    const esc = advance();
+    switch (esc) {
+      case "n":
+        return "\n";
+      case "r":
+        return "\r";
+      case "t":
+        return "\t";
+      case "\\":
+        return "\\";
+      case "'":
+        return "'";
+      case '"':
+        return '"';
+      default:
+        return syntaxError(`Unsupported escape sequence '\\${esc}'`, tokenLine, tokenColumn);
+    }
+  };
+
+  const scanParameterLexeme = (): string => {
+    advance(); // '$'
+    let value = "$";
+
+    if (peek() === "`") {
+      advance();
+      value += "`";
+      while (!isAtEnd()) {
+        const ch = advance();
+        value += ch;
+        if (ch === "`") {
+          break;
+        }
+      }
+      return value;
+    }
+
+    while (isIdentPart(peek()) || isDigit(peek())) {
+      value += advance();
+    }
+    return value;
+  };
+
+  const scanFixedToken = (tokenLine: number, tokenColumn: number): boolean => {
+    const candidates = FIXED_TOKENS_BY_START[peek()];
+    if (!candidates) {
+      return false;
+    }
+
+    for (const [lexeme, kind] of candidates) {
+      if (!input.startsWith(lexeme, i)) {
+        continue;
+      }
+      for (let j = 0; j < lexeme.length; j += 1) {
+        advance();
+      }
+      push(kind, lexeme, tokenLine, tokenColumn);
+      return true;
+    }
+    return false;
   };
 
   const scanBacktickName = (tokenLine: number, tokenColumn: number): void => {
@@ -432,9 +529,6 @@ export const tokenize = (input: string): Token[] => {
 
       if (c === "\\" && !raw) {
         advance(); // backslash
-        if (isAtEnd()) {
-          syntaxError("Unterminated escape sequence", tokenLine, tokenColumn);
-        }
 
         if (kind === "string" && peek() === "(") {
           advance();
@@ -443,29 +537,7 @@ export const tokenize = (input: string): Token[] => {
           return;
         }
 
-        const esc = advance();
-        switch (esc) {
-          case "n":
-            value += "\n";
-            break;
-          case "r":
-            value += "\r";
-            break;
-          case "t":
-            value += "\t";
-            break;
-          case "\\":
-            value += "\\";
-            break;
-          case "'":
-            value += "'";
-            break;
-          case '"':
-            value += '"';
-            break;
-          default:
-            syntaxError(`Unsupported escape sequence '\\${esc}'`, tokenLine, tokenColumn);
-        }
+        value += scanEscapeValue(tokenLine, tokenColumn);
         continue;
       }
 
@@ -488,37 +560,12 @@ export const tokenize = (input: string): Token[] => {
 
       if (c === "\\") {
         advance();
-        if (isAtEnd()) {
-          syntaxError("Unterminated escape sequence", tokenLine, tokenColumn);
-        }
         if (peek() === "(") {
           advance();
           push("str_interp_cont", value, tokenLine, tokenColumn);
           return;
         }
-        const esc = advance();
-        switch (esc) {
-          case "n":
-            value += "\n";
-            break;
-          case "r":
-            value += "\r";
-            break;
-          case "t":
-            value += "\t";
-            break;
-          case "\\":
-            value += "\\";
-            break;
-          case "'":
-            value += "'";
-            break;
-          case '"':
-            value += '"';
-            break;
-          default:
-            syntaxError(`Unsupported escape sequence '\\${esc}'`, tokenLine, tokenColumn);
-        }
+        value += scanEscapeValue(tokenLine, tokenColumn);
         continue;
       }
 
@@ -541,19 +588,18 @@ export const tokenize = (input: string): Token[] => {
     }
     const next = peekNext();
     if (next === "$") {
-      advance();
-      advance();
-      let value = "";
-      while (!isAtEnd()) {
-        if (peek() === "$" && peekNext() === "$") {
-          advance();
-          advance();
-          push("string", value, tokenLine, tokenColumn);
-          return true;
-        }
-        value += advance();
+      const contentStart = i + 2;
+      const close = input.indexOf("$$", contentStart);
+      if (close < 0) {
+        syntaxError("Unterminated string started with $$", tokenLine, tokenColumn);
       }
-      syntaxError("Unterminated string started with $$", tokenLine, tokenColumn);
+      const value = input.slice(contentStart, close);
+      const totalLen = close + 2 - i;
+      for (let k = 0; k < totalLen; k += 1) {
+        advance();
+      }
+      push("string", value, tokenLine, tokenColumn);
+      return true;
     }
 
     if (!isAlpha(next) && next !== "_") {
@@ -589,54 +635,57 @@ export const tokenize = (input: string): Token[] => {
   };
 
   const scanNumber = (tokenLine: number, tokenColumn: number): void => {
-    let value = "";
+    const start = i;
 
     if (peek() === "0" && isDigit(peekNext())) {
       syntaxError("leading zeros are not allowed in numbers", tokenLine, tokenColumn);
     }
 
     while (isDigit(peek()) || peek() === "_") {
-      value += advance();
+      advance();
     }
 
     if (peek() === "." && isDigit(peekNext())) {
-      value += advance(); // '.'
+      advance(); // '.'
       while (isDigit(peek()) || peek() === "_") {
-        value += advance();
+        advance();
       }
     }
 
-    if (peek().toLowerCase() === "e") {
-      value += advance();
+    if (peek() === "e" || peek() === "E") {
+      advance();
       if (peek() === "+" || peek() === "-") {
-        value += advance();
+        advance();
       }
       if (!isDigit(peek())) {
         syntaxError("expected digit after exponent marker", tokenLine, tokenColumn);
       }
       while (isDigit(peek()) || peek() === "_") {
-        value += advance();
+        advance();
       }
     }
 
     if (peek() === "n") {
-      value += advance();
+      advance();
     }
 
-    push("number", value, tokenLine, tokenColumn);
+    push("number", input.slice(start, i), tokenLine, tokenColumn);
   };
 
   const scanIdentifierOrKeyword = (tokenLine: number, tokenColumn: number): void => {
-    let value = "";
+    const start = i;
+    let hasUppercase = false;
 
     while (isIdentPart(peek())) {
-      value += advance();
+      const c = advance();
+      hasUppercase ||= c >= "A" && c <= "Z";
     }
 
-    const lowered = value.toLowerCase();
+    const value = input.slice(start, i);
+    const lowered = hasUppercase ? value.toLowerCase() : value;
     const keyword = KEYWORDS[lowered];
 
-    if (keyword && !(keyword === "kw_named" && value !== lowered)) {
+    if (keyword && !(keyword === "kw_named" && hasUppercase)) {
       push(keyword, lowered, tokenLine, tokenColumn);
     } else {
       push("identifier", value, tokenLine, tokenColumn);
@@ -689,123 +738,12 @@ export const tokenize = (input: string): Token[] => {
       continue;
     }
 
-    if (c === "." && peekNext() === "?" && input[i + 2] === ">") {
-      advance();
-      advance();
-      advance();
-      push("optional_link", ".?>", tokenLine, tokenColumn);
-      continue;
-    }
-
-    if (c === "." && peekNext() === "<") {
-      advance();
-      advance();
-      push("backward_link", ".<", tokenLine, tokenColumn);
+    if (scanFixedToken(tokenLine, tokenColumn)) {
       continue;
     }
 
     if (c === "." && peekNext() === "?") {
       syntaxError(".? is not an operator, did you mean .?> ?", tokenLine, tokenColumn);
-    }
-
-    if (c === "-" && peekNext() === ">") {
-      advance();
-      advance();
-      push("arrow", "->", tokenLine, tokenColumn);
-      continue;
-    }
-
-    if (c === "-" && peekNext() === "=") {
-      advance();
-      advance();
-      push("sub_assign", "-=", tokenLine, tokenColumn);
-      continue;
-    }
-
-    if (c === "+" && peekNext() === "=") {
-      advance();
-      advance();
-      push("add_assign", "+=", tokenLine, tokenColumn);
-      continue;
-    }
-
-    if (c === "/" && peekNext() === "/") {
-      advance();
-      advance();
-      push("floor_div", "//", tokenLine, tokenColumn);
-      continue;
-    }
-
-    if (c === "*" && peekNext() === "*") {
-      advance();
-      advance();
-      push("double_splat", "**", tokenLine, tokenColumn);
-      continue;
-    }
-
-    // Multi-character operators first
-    if (c === ":" && peekNext() === "=") {
-      advance();
-      advance();
-      push("assign", ":=", tokenLine, tokenColumn);
-      continue;
-    }
-
-    if (c === ":" && peekNext() === ":") {
-      advance();
-      advance();
-      push("coloncolon", "::", tokenLine, tokenColumn);
-      continue;
-    }
-
-    if (c === "!" && peekNext() === "=") {
-      advance();
-      advance();
-      push("not_equals", "!=", tokenLine, tokenColumn);
-      continue;
-    }
-
-    if (c === "<" && peekNext() === "=") {
-      advance();
-      advance();
-      push("lte", "<=", tokenLine, tokenColumn);
-      continue;
-    }
-
-    if (c === ">" && peekNext() === "=") {
-      advance();
-      advance();
-      push("gte", ">=", tokenLine, tokenColumn);
-      continue;
-    }
-
-    if (c === "+" && peekNext() === "+") {
-      advance();
-      advance();
-      push("concat", "++", tokenLine, tokenColumn);
-      continue;
-    }
-
-    if (c === "?" && peekNext() === "?") {
-      advance();
-      advance();
-      push("coalesce", "??", tokenLine, tokenColumn);
-      continue;
-    }
-
-    if (c === "?" && peekNext() === "=") {
-      advance();
-      advance();
-      push("not_distinct_from", "?=", tokenLine, tokenColumn);
-      continue;
-    }
-
-    if (c === "?" && peekNext() === "!" && input[i + 2] === "=") {
-      advance();
-      advance();
-      advance();
-      push("distinct_from", "?!=", tokenLine, tokenColumn);
-      continue;
     }
 
     if (c === "?" && peekNext() === "!") {
@@ -828,23 +766,7 @@ export const tokenize = (input: string): Token[] => {
       }
       if (peek() === ">" && input[i + 1] === "$") {
         advance();
-        advance();
-        let param = "$";
-        if (peek() === "`") {
-          advance();
-          param += "`";
-          while (!isAtEnd()) {
-            const ch = advance();
-            param += ch;
-            if (ch === "`") {
-              break;
-            }
-          }
-        } else {
-          while (isIdentPart(peek()) || isDigit(peek())) {
-            param += advance();
-          }
-        }
+        const param = scanParameterLexeme();
         push("parameter_and_type", `${input.slice(start, i - param.length)}${param}`, tokenLine, tokenColumn);
         continue;
       }
@@ -852,23 +774,7 @@ export const tokenize = (input: string): Token[] => {
     }
 
     if (c === "$" && (isIdentStart(peekNext()) || isDigit(peekNext()) || peekNext() === "`")) {
-      advance();
-      let value = "$";
-      if (peek() === "`") {
-        advance();
-        value += "`";
-        while (!isAtEnd()) {
-          const ch = advance();
-          value += ch;
-          if (ch === "`") {
-            break;
-          }
-        }
-      } else {
-        while (isIdentPart(peek()) || isDigit(peek())) {
-          value += advance();
-        }
-      }
+      const value = scanParameterLexeme();
       push("parameter", value, tokenLine, tokenColumn);
       continue;
     }
