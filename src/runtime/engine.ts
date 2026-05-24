@@ -3485,6 +3485,16 @@ const tryEvaluateParsedRuntimeSelect = (
       // binding; the parsed runtime resolves bindings, the IR/SQL path
       // here doesn't, so route it through the parsed runtime.
       if (inner.kind === "binding_ref") return true;
+      // Field access patterns that the IR/SQL path can't handle without
+      // per-row evaluation:
+      //   * A two-or-more deep chain (`Issue.status.name`) — link traversal.
+      //   * Access on a `select_expr_subquery` source (`(SELECT X).field`).
+      // A simple `current_item.field` / `Issue.field` (depth 1, source is the
+      // subject) stays on the SQL path.
+      if (inner.kind === "field_access") {
+        if (inner.expr.kind === "field_access") return true;
+        if (inner.expr.kind === "select_expr_subquery") return true;
+      }
       if (inner.kind === "tuple" || inner.kind === "set_expr" || inner.kind === "array_literal_expr") {
         return inner.values.some((value) => needsParsedRuntime(value));
       }
@@ -3592,6 +3602,9 @@ const tryEvaluateParsedRuntimeSelect = (
     }
     if (filter.kind === "not") return filterTouchesOptionalPath(filter.expr);
     if (filter.kind === "predicate" && filter.target.kind === "field" && filter.target.field.includes(".")) {
+      return true;
+    }
+    if (filter.kind === "in_predicate" && filter.target.kind === "field" && filter.target.field.includes(".")) {
       return true;
     }
     return false;
@@ -4525,6 +4538,10 @@ const tryEvaluateParsedRuntimeSelect = (
         }
         return (Array.isArray(left) || Array.isArray(right)) ? out : out[0] ?? false;
       }
+      // EdgeQL set semantics: a comparison with an empty operand yields
+      // empty (null in this evaluator).  `?=` / `?!=` above already short-
+      // circuit on emptiness; the regular operators must propagate.
+      if (isEmpty(left) || isEmpty(right)) return null;
       return leftItems.some((leftItem) => rightItems.some((rightItem) => {
         const comparableLeft = comparable(leftItem);
         const comparableRight = comparable(rightItem);
@@ -5135,9 +5152,6 @@ const tryEvaluateParsedRuntimeSelect = (
       return false;
     }
     if (filter.target.kind !== "field") return true;
-    if (filter.kind === "in_predicate") {
-      return true;
-    }
     if (filter.op === "=" && filter.value === true) {
       const value = row[filter.target.field];
       if (Array.isArray(value)) return value.length > 0;
@@ -5208,6 +5222,26 @@ const tryEvaluateParsedRuntimeSelect = (
       }
       return current;
     };
+    if (filter.kind === "in_predicate") {
+      const values = filter.values.kind === "set_literal" ? filter.values.values : undefined;
+      if (!values) return true;
+      const target = filter.target.field;
+      const actualIn = target === "__type__.name"
+        ? rowTypeName(row, typeName)
+        : target.includes(".")
+          ? resolveDottedFieldValue(row, target)
+          : row[target];
+      // EdgeQL set semantics: an empty operand propagates as empty so the
+      // surrounding AND/OR/NOT can short-circuit to "no match" for this row.
+      if (Array.isArray(actualIn)) {
+        if (actualIn.length === 0) return "empty";
+        const anyMatch = actualIn.some((v) => values.includes(v as ScalarValue));
+        return filter.op === "not_in" ? !anyMatch : anyMatch;
+      }
+      if (actualIn === null || actualIn === undefined) return "empty";
+      const hasValue = values.includes(actualIn as ScalarValue);
+      return filter.op === "not_in" ? !hasValue : hasValue;
+    }
     const actual = filter.target.field === "__type__.name"
       ? rowTypeName(row, typeName)
       : filter.target.field.includes(".")
