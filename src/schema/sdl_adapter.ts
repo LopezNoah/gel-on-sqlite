@@ -2215,10 +2215,6 @@ const parseDocuments = (source: string, options: NewSDLAdapterOptions): ParsedMo
     });
   }
 
-  if (parsedDocuments.length === 0) {
-    throw new AppError("E_SYNTAX", "Expected module declaration or top-level schema declaration", 1, 1);
-  }
-
   return parsedDocuments;
 };
 
