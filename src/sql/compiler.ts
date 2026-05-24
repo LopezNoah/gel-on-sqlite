@@ -1238,6 +1238,35 @@ const compileFilterExprSQL = (
     return clauses.length === 1 ? clauses[0]! : `(${clauses.join(" OR ")})`;
   }
 
+  if (filter.kind === "link_target_field_in") {
+    const targets = filter.relation.targetTables.length > 0
+      ? filter.relation.targetTables
+      : [{ name: filter.relation.targetType, table: filter.relation.targetTable }];
+    const relationAlias = `lti_${Math.abs(hashString(`${filter.relation.sourceType}:${filter.relation.targetType}:${filter.targetColumn}`)).toString(16)}`;
+    const op = filter.op === "in" ? "IN" : "NOT IN";
+    if (filter.values.length === 0) {
+      return filter.op === "in" ? "0" : "1";
+    }
+    const clauses = targets.map((target, index) => {
+      const targetAlias = `${relationAlias}_t${index}`;
+      const column = `${targetAlias}.${quoteIdent(filter.targetColumn)}`;
+      // Push placeholders for THIS clause's value list (each clause is an
+      // independent EXISTS subquery, so each consumes its own params).
+      const placeholders = filter.values.map((value) => {
+        params.push(encodeParam(value));
+        return "?";
+      }).join(", ");
+      const predicate = `${column} ${op} (${placeholders})`;
+      if (filter.relation.storage === "inline") {
+        const inlineColumn = filter.relation.inlineColumn ?? `${filter.relation.targetType.split("::").at(-1)?.toLowerCase()}_id`;
+        return `EXISTS (SELECT 1 FROM ${quoteIdent(target.table)} ${targetAlias} WHERE ${targetAlias}.${quoteIdent("id")} = ${sourceAlias}.${quoteIdent(inlineColumn)} AND ${predicate})`;
+      }
+      return `EXISTS (SELECT 1 FROM ${linkJunctionFrom(filter.relation, relationAlias)} JOIN ${quoteIdent(target.table)} ${targetAlias} ON ${targetAlias}.${quoteIdent("id")} = ${relationAlias}.${quoteIdent("target")} WHERE ${relationAlias}.${quoteIdent("source")} = ${sourceAlias}.${quoteIdent("id")} AND ${predicate})`;
+    });
+    if (clauses.length === 0) return "0";
+    return clauses.length === 1 ? clauses[0]! : `(${clauses.join(" OR ")})`;
+  }
+
   if (filter.kind === "backlink_property_compare" || filter.kind === "backlink_property_in") {
     const clauses = filter.sources
       .filter((source) => source.storage === "table" && source.linkTable)
@@ -1369,7 +1398,7 @@ const collectFieldFilterColumns = (filter: FilterExprIR | undefined): string[] =
     return [];
   }
 
-  if (filter.kind === "link_target_field_compare") {
+  if (filter.kind === "link_target_field_compare" || filter.kind === "link_target_field_in") {
     return filter.relation.storage === "inline" && filter.relation.inlineColumn
       ? [filter.relation.inlineColumn]
       : [];

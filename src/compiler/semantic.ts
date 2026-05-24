@@ -1065,6 +1065,43 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       }
 
       if (filter.values.kind === "set_literal") {
+        // Link-traversal IN: `Issue.priority.name IN {'High', 'Low'}` — when
+        // the target is a dotted path through a single forward link, emit a
+        // link_target_field_in IR that joins to the target table.
+        if (!knownFields.has(fieldName) && fieldName.includes(".") && options.subjectType) {
+          const firstDot = fieldName.indexOf(".");
+          const linkName = fieldName.slice(0, firstDot);
+          const linkFieldName = fieldName.slice(firstDot + 1);
+          const link = collectLinks(options.subjectType, true).find((candidate) => candidate.name === linkName);
+          if (link && !linkFieldName.includes(".")) {
+            const ownerQualifiedName = qualifiedTypeName(options.subjectType);
+            const ownerScopeModule = options.subjectType.module ?? options.fallbackModule;
+            const targetTypeNames = linkTargetNames(link.targetType, ownerScopeModule);
+            const targetType = targetTypeNames[0] ?? normalizeTypeName(link.targetType, ownerScopeModule);
+            const targetTableEntries = targetTypeNames.flatMap((targetTypeName) => targetTableRefsForType(targetTypeName));
+            const targetTables = [...new Map(targetTableEntries.map((entry) => [entry.name, entry] as const)).values()];
+            const usesLinkTable = Boolean(link.multi) || (link.properties?.length ?? 0) > 0;
+            return {
+              kind: "link_target_field_in",
+              relation: {
+                sourceType: ownerQualifiedName,
+                targetType,
+                targetTable: tableNameForType(targetType),
+                targetTables,
+                propertyColumns: (link.properties ?? []).map((property) => property.name),
+                computedProperties: (link.computedProperties ?? []).map((property) => ({ ...property })),
+                multi: Boolean(link.multi),
+                storage: usesLinkTable ? "table" : "inline",
+                inlineColumn: usesLinkTable ? undefined : `${link.name}_id`,
+                linkTable: usesLinkTable ? `${tableNameForType(ownerQualifiedName)}__${link.name.toLowerCase()}` : undefined,
+                linkTables: usesLinkTable ? collectLinkTableSources(options.subjectType, link.name) : undefined,
+              },
+              targetColumn: linkFieldName,
+              op: filter.op,
+              values: filter.values.values,
+            };
+          }
+        }
         if (!knownFields.has(fieldName)) {
           fail(`Unknown field '${fieldName}' on '${typeLabel}'`);
         }

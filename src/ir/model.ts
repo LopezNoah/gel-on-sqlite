@@ -246,6 +246,13 @@ export type FilterExprIR =
       op: "=" | "!=" | "<" | "<=" | ">" | ">=" | "?=" | "?!=" | "like" | "ilike";
     }
   | {
+      kind: "link_target_field_in";
+      relation: LinkRelationIR;
+      targetColumn: string;
+      values: ScalarValue[];
+      op: "in" | "not_in";
+    }
+  | {
       kind: "backlink_property_compare";
       sources: BacklinkSourceIR[];
       column: string;

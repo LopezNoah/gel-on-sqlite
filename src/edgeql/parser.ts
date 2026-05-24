@@ -4027,31 +4027,34 @@ class Parser {
     }
 
     if (this.isNameToken(this.peek()) && this.peek().lower === "any" && this.peekNext().kind === "lparen") {
-      this.consume();
-      this.consume();
-      if (this.peek().kind === "lparen" || this.peek().kind === "kw_for") {
-        const expr = this.parseFreeObjectExpr();
+      // Try the syntactic-sugar form `any(target LIKE pattern)` first; fall
+      // back to a generic `any(<bool expr>)` parsed as a free expression so
+      // arbitrary set-of-bool body works (`any(A != B AND C ?= D)`).
+      const likeForm = this.attempt(() => {
+        this.consume();
+        this.consume();
+        if (this.peek().kind === "lparen" || this.peek().kind === "kw_for") {
+          return undefined;
+        }
+        const target = this.parseFilterTarget();
+        const opToken = this.peek();
+        const op = opToken.kind === "kw_like" ? "like" : opToken.kind === "kw_ilike" ? "ilike" : undefined;
+        if (!op) return undefined;
+        this.consume();
+        const values = this.parseInPredicateValues();
         this.expect("rparen", "Expected ')' after any() filter");
-        return {
-          kind: "free_expr",
-          expr,
-        };
-      }
-      const target = this.parseFilterTarget();
-      const opToken = this.peek();
-      const op = opToken.kind === "kw_like" ? "like" : opToken.kind === "kw_ilike" ? "ilike" : undefined;
-      if (!op) {
-        throw new AppError("E_SYNTAX", "Expected LIKE or ILIKE in any() filter", ...this.posPair(opToken));
-      }
+        if (values.kind !== "set_literal") return undefined;
+        return values.values
+          .map((value): FilterExpr => ({ kind: "predicate", target, op, value }))
+          .reduce((left, right): FilterExpr => ({ kind: "or", left, right }));
+      });
+      if (likeForm) return likeForm;
+
       this.consume();
-      const values = this.parseInPredicateValues();
+      this.consume();
+      const expr = this.parseFreeObjectExpr();
       this.expect("rparen", "Expected ')' after any() filter");
-      if (values.kind !== "set_literal") {
-        throw new AppError("E_SYNTAX", "Expected set literal in any() filter", ...this.posPair(opToken));
-      }
-      return values.values
-        .map((value): FilterExpr => ({ kind: "predicate", target, op, value }))
-        .reduce((left, right): FilterExpr => ({ kind: "or", left, right }));
+      return { kind: "free_expr", expr };
     }
 
     // If we see a name token followed by '(' it's a function call (e.g.
@@ -4159,6 +4162,14 @@ class Parser {
       || token.kind === "concat"
       || token.kind === "lbracket"
       || token.kind === "kw_is"
+      // Continuing the LHS via a backlink (`.field.<link[IS Type].subfield op …`)
+      // or dot chain after a path that the field-target parser couldn't fully
+      // consume — rewind and parse as free_expr.
+      || token.kind === "backward_link"
+      || token.kind === "dot"
+      || token.kind === "optional_link"
+      // Coalesce / null-handling continues the LHS too.
+      || token.kind === "coalesce"
     ) {
       // Arithmetic / string-concat / indexing / type-check (IS / IS NOT) continues
       // the LHS expression. Rewind and parse the whole predicate as a
@@ -4550,6 +4561,28 @@ class Parser {
         kind: "subquery_expr" as const,
         expr,
       };
+    }
+
+    // `(for x in S union (...))` and similar — a parenthesized FOR expression
+    // used as the value of a WITH binding.  Parse the inner expression as a
+    // free object expression (which handles for_expr) and wrap in subquery_expr.
+    if (this.peek().kind === "lparen" && this.peekNext().kind === "kw_for") {
+      const wrapped = this.attempt(() => {
+        this.consume();
+        const expr = this.parseFreeObjectExpr();
+        if (this.peek().kind !== "rparen") return undefined;
+        this.consume();
+        return { kind: "subquery_expr" as const, expr };
+      });
+      if (wrapped) {
+        if (this.peek().kind === "dot" || this.peek().kind === "backward_link" || this.peek().kind === "optional_link" || this.peek().kind === "at") {
+          return {
+            kind: "subquery_expr" as const,
+            expr: this.parsePostfixChain(wrapped.expr),
+          };
+        }
+        return wrapped;
+      }
     }
 
     if (this.atParenthesizedSelect()) {
