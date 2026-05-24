@@ -6100,6 +6100,15 @@ export const executeQuery = (
   securityContext: SecurityContext = DEFAULT_SECURITY_CONTEXT,
 ): QueryResult => {
   const dbg = process.env.GEL_DEBUG_RUNTIME === "1";
+  // HACK (not using SQL): the block below short-circuits on a series of
+  // string-matched / AST-shape patterns and returns results without ever
+  // touching the IR/SQL pipeline. Each `tryRuntime*` / `trySchema*` helper
+  // covers a class of query the compiler can't lower yet (typed aliases,
+  // free-object alias subqueries, schema-alias computed properties, inline
+  // computed properties, count-tuples, alias tuple selects, schema-link
+  // introspection, schema pointer/tuple/type/object-type queries). These
+  // should be pushed into ast_to_ir + sql/gel_ir_compiler so a single SQL
+  // path handles them.
   const runtimeTypedAliasResult = tryRuntimeTypedAliasSelect(db, schema, query);
   if (runtimeTypedAliasResult) {
     if (dbg) console.error("HACK: tryRuntimeTypedAliasSelect");
@@ -6170,6 +6179,10 @@ export const executeQuery = (
 
   const parsedQuery = parseEdgeQL(rewrittenQuery);
   validateParsedStatement(parsedQuery, { schema, module: parsedQuery.withModule });
+  // HACK (not using SQL): preEvaluateGroupBindings runs GROUP statements at
+  // the AST stage and inlines their results as synthetic WITH bindings,
+  // because the IR/SQL path can't currently fold a GROUP result into a
+  // surrounding select. GROUP should compile end-to-end through gel_ir.
   const preprocessed = preEvaluateGroupBindings(db, schema, parsedQuery, normalizeSecurityContext(securityContext));
   if (preprocessed !== parsedQuery) {
     // GROUP results were inlined as synthetic WITH bindings. Run the rewritten
@@ -6198,6 +6211,12 @@ export const executeQuery = (
     }
   }
 
+  // HACK (not using SQL): tryEvaluateParsedRuntimeSelect is a ~2k-line AST
+  // interpreter that handles every shape/expression the IR/SQL path can't
+  // express yet (filtered/ordered/limited links in shapes, multi-step
+  // field_access through links, FOR exprs, computed pointers, binding_refs,
+  // etc.). Everything it covers should be lowered through gel_ir_compiler
+  // and removed from here.
   const parsedRuntimeResult = tryEvaluateParsedRuntimeSelect(db, schema, parsedQuery, securityContext);
   if (parsedRuntimeResult) {
     return parsedRuntimeResult;
@@ -6277,6 +6296,16 @@ export const executeQueryWithTrace = (
           : [materializeFreeObjectRow(db, schema, ir.entries, context, sqlTrail)],
       };
     } else if (ir.kind === "select_expr") {
+      // HACK (not using SQL): everything that follows up to the `result = ...`
+      // assignment is a routing table that decides — based on shape sniffing
+      // of the first IR entry — whether the compiled SQL is trustworthy. If
+      // it isn't, we throw the SQL away and call `materializeSelectExprRows`
+      // (the IR interpreter). Each of these conditions
+      // (coalesceNeedsRuntime, compareNeedsRuntimeFromFilter/Empty/Coalesce,
+      // compareDeepLCP, isEmptySetSelect, isShapeOrObject,
+      // selectExprIndexNeedsRuntime) represents a known bug in
+      // gel_ir_compiler / sql/compiler that needs the SQL output to be
+      // correct end-to-end so the bypass can be deleted.
       const firstEntry = ir.entries[0];
       // Coalesce whose RHS is itself a set/union (e.g. `X ?? {X, Y}`)
       // needs per-row LCP iteration to suppress nulls inside the RHS set —
@@ -6442,11 +6471,24 @@ export const executeQueryWithTrace = (
           : materializeSelectExprRows(db, schema, ir, context, sqlTrail),
       };
     } else if (ir.kind === "group") {
+      // HACK (not using SQL): GROUP is executed by runGroupIR, which
+      // re-materializes source rows through the parsed-runtime evaluators
+      // and aggregates in TS. The strict IR/SQL compile rejects shape
+      // entries that touch backlinks (`count(.owners)`), so we never run
+      // the compiled SQL. GROUP should lower to a single SQL statement
+      // with GROUP BY + per-grouping JSON aggregation.
       result = {
         kind: "select",
         rows: runGroupIR(db, schema, ir, context, sqlTrail),
       };
     } else {
+      // HACK (not using SQL): writes go through runWriteWithAccessPolicies
+      // which evaluates access policies row-by-row in TS, expands link
+      // assignments via applyInsertLinkAssignments / applyUpdateLinkAssignments
+      // (multiple hand-rolled SQL statements per assignment), and runs
+      // on-target-delete handlers as separate SELECT/DELETE/UPDATEs. The
+      // compiled `sqlArtifact` for the write is only partly used; policies
+      // and link side effects should be lowered into a single SQL plan.
       const writeResult = runWriteWithAccessPolicies(db, schema, ast, ir, sqlArtifact, subjectType!, context);
 
       result = {
@@ -6648,6 +6690,11 @@ export const executeQueryUnitWithTrace = (
             : [materializeFreeObjectRow(db, schema, ir.entries, context, sqlTrail)],
         };
     } else if (ir.kind === "select_expr") {
+        // HACK (not using SQL): same `runnable vs. materialize` dispatch as
+        // executeQueryWithTrace's select_expr branch — when the IR/SQL path
+        // isn't trusted (selectExprIndexNeedsRuntime, non-single_statement
+        // lowering, !usesGelIrSql), we throw the SQL away and interpret in
+        // TS via materializeSelectExprRows.
         const firstEntry = ir.entries[0];
         const needsRuntimeExpr = selectExprIndexNeedsRuntime(firstEntry);
         const sqlIsRunnable = compiled.usesGelIrSql && sqlArtifact.loweringMode === "single_statement" && !needsRuntimeExpr;
@@ -7682,6 +7729,10 @@ const materializeSelectRow = (
           output[element.name] = row[loweredAlias];
           continue;
         }
+        // HACK (not using SQL): when the IR/SQL compile didn't fold the
+        // aggregate into the outer SELECT, we emit a fresh SQL statement
+        // per row (N+1) below to compute SUM(...) over the link target.
+        // The aggregate should always be lowered into the parent query.
 
         const relation = element.expr.relation;
         const linkPropertyColumns = new Set(relation.propertyColumns ?? []);
@@ -7771,6 +7822,10 @@ const materializeSelectRow = (
         continue;
       }
 
+      // HACK (not using SQL): the compiled SQL didn't carry the nested link
+      // payload, so resolveLinks fires per-row SQL (N+1) to fetch link
+      // targets, then recursively materializeSelectRows them in TS. Every
+      // nested shape should be JSON-aggregated into the parent SQL.
       const links = resolveLinks(db, schema, context, row, element.relation, element.typeFilter, {
         columns: element.columns,
         shape: element.shape,
@@ -7796,6 +7851,10 @@ const materializeSelectRow = (
       continue;
     }
 
+    // HACK (not using SQL): backlinks are resolved by firing per-row SQL
+    // queries via resolveBacklinkObjects / resolveBacklinks. The IR/SQL
+    // path should JSON-aggregate backlinks into the parent SELECT so we
+    // get one statement per query.
     if (element.columns && element.shape) {
       output[element.name] = resolveBacklinkObjects(db, schema, context, element.sources, targetId, {
         columns: element.columns,
@@ -8048,6 +8107,12 @@ const runSelectIR = (
 
   const stmt = db.prepare(sqlArtifact.sql);
   const rows = stmt.all(...sqlArtifact.params);
+  // HACK (not using SQL): access policies are applied as a TS filter on the
+  // SQL result set instead of being compiled into the SQL's WHERE clause.
+  // For each surviving row we then call materializeSelectRow, which fires
+  // additional SQL (resolveLinks/resolveBacklinks/link_aggregate per row) to
+  // assemble nested shapes. Policies + shape assembly should be lowered into
+  // the same compiled SQL statement.
   const visibleRows = subjectType
     ? rows.filter((row) => evaluateSelectPolicies(schema, db, subjectType, row, context))
     : rows;
@@ -8066,6 +8131,11 @@ const runGroupIR = (
   context: SecurityContext,
   sqlTrail: SQLArtifact[],
 ): Record<string, unknown>[] => {
+  // HACK (not using SQL): GROUP source rows are gathered by trying
+  // tryRuntimeSelectExprEvaluationAst → tryEvaluateParsedRuntimeSelect →
+  // compile+runSelectIR/materializeSelectExprRows, then grouped in TS below.
+  // The IR/SQL compile is the last-resort fallback because it rejects shapes
+  // that touch backlinks. GROUP should be a first-class IR/SQL operation.
   // Materialise the source rows by routing through whichever runtime path
   // matches the source AST kind. The strict IR/SQL compile rejects shape
   // entries that touch backlinks (`count(.owners)`), so we prefer the parsed
@@ -8534,6 +8604,11 @@ const materializeFreeObjectRow = (
   return out;
 };
 
+// HACK (not using SQL): evaluateSelectExprEntry is the IR interpreter — a
+// ~2k-line switch over SelectExprIREntry kinds that re-implements EdgeQL
+// semantics (LCP iteration, coalesce, compare, cast, set/tuple/array ops,
+// shape projection, exists/distinct, function calls, …) in TS. Anything we
+// can compile to SQL via sql/gel_ir_compiler should never reach here.
 const evaluateSelectExprEntry = (
   schema: SchemaSnapshot,
   db: SQLiteDatabase,
@@ -10643,6 +10718,10 @@ const materializeSelectExprRows = (
     || indexAccessProducesSingleTuple;
   const rows = !entryProducesSingleValue && Array.isArray(value) ? [...value] : [value];
 
+  // HACK (not using SQL): ORDER BY is applied here by re-evaluating the
+  // sort key per row through evaluateSelectExprEntry and sorting in JS.
+  // The IR's orderBy should be lowered into the SQL `ORDER BY` so we don't
+  // pay JS interp cost for what SQLite already does.
   if (ir.orderBy) {
     // When the entry is a tuple and `ORDER BY` references a path that also
     // appears as one of the tuple's slots, sort by that slot directly —
@@ -12608,6 +12687,11 @@ const resolveInsertTargets = (
   return [];
 };
 
+// HACK (not using SQL): applyInsertLinkAssignments expands INSERT-time link
+// assignments by hand — it computes targets in TS, validates each target
+// id with its own SELECT, then emits INSERT (link table) or UPDATE (inline
+// column) statements per target. The IR compiler should produce a single
+// SQL plan that resolves and writes the links.
 const applyInsertLinkAssignments = (
   db: SQLiteDatabase,
   schema: SchemaSnapshot,
@@ -12761,6 +12845,9 @@ const applyInsertLinkAssignments = (
   }
 };
 
+// HACK (not using SQL): mirrors applyInsertLinkAssignments for UPDATE —
+// resolves targets in TS, then issues per-row DELETE+INSERT (link table)
+// or UPDATE (inline column) statements. Should be a single compiled plan.
 const applyUpdateLinkAssignments = (
   db: SQLiteDatabase,
   schema: SchemaSnapshot,
