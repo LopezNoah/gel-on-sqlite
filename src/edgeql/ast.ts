@@ -800,6 +800,24 @@ export interface TransactionStatement {
   pos: SourcePos;
 }
 
+export interface FunctionParamDecl {
+  name: string;
+  type: string;
+  variadic?: boolean;
+  namedOnly?: boolean;
+  optional?: boolean;
+  setOf?: boolean;
+  defaultExpr?: string;
+}
+
+export interface FunctionDecl {
+  params: FunctionParamDecl[];
+  returnType: string;
+  returnOptional?: boolean;
+  returnSetOf?: boolean;
+  body: { kind: "query"; language: "edgeql"; query: string };
+}
+
 export interface DDLStatement {
   kind: "ddl";
   with?: WithBinding[];
@@ -825,6 +843,7 @@ export interface DDLStatement {
     | "global";
   name: string;
   value?: FreeObjectExpr;
+  functionDecl?: FunctionDecl;
   pos: SourcePos;
 }
 
