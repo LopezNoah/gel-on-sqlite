@@ -487,13 +487,26 @@ const dynamicScalarFromType = (rawType: string): { type: ScalarType; collection?
   return { type: "str" };
 };
 
+const parseDynamicDefaultLiteral = (raw: string): ScalarValue | undefined => {
+  const trimmed = raw.trim().replace(/;$/, "").trim();
+  if (!trimmed) return undefined;
+  if (/^'(.*)'$/s.test(trimmed) || /^"(.*)"$/s.test(trimmed)) {
+    return trimmed.slice(1, -1).replace(/\\(['"\\])/g, "$1");
+  }
+  if (/^-?\d+$/.test(trimmed)) return Number(trimmed);
+  if (/^-?\d+\.\d+(?:e-?\d+)?$/i.test(trimmed)) return Number(trimmed);
+  if (/^true$/i.test(trimmed)) return true;
+  if (/^false$/i.test(trimmed)) return false;
+  return undefined;
+};
+
 const registerDynamicFunctionDDL = (schema: SchemaSnapshot, statement: string, defaultModule = "default"): boolean => {
   const header = /^create\s+function\s+([A-Za-z_][\w]*(?:::[A-Za-z_][\w]*)?)\s*\(([\s\S]*?)\)\s*->\s*([\s\S]*)$/i.exec(statement.trim());
   if (!header) return false;
 
   const [, rawName, rawParams, afterArrow] = header;
   const dollarBody = /\busing\s+(?:edgeql\s+)?\$\$([\s\S]*?)\$\$/i.exec(afterArrow);
-  const bracedBody = /\{\s*using\s*\(([\s\S]*?)\)\s*\}\s*$/i.exec(afterArrow);
+  const bracedBody = /\{\s*using\s*\(([\s\S]*?)\)\s*;?\s*\}\s*$/i.exec(afterArrow);
   const parenBody = /\busing\s*\(([\s\S]*?)\)\s*$/i.exec(afterArrow);
   const bodyMatch = dollarBody ?? bracedBody ?? parenBody;
   if (!bodyMatch || bodyMatch.index === undefined) return false;
@@ -503,14 +516,42 @@ const registerDynamicFunctionDDL = (schema: SchemaSnapshot, statement: string, d
   const returnType = normalizeDynamicTypeName(returnPart, defaultModule);
   const { module, name } = dynamicQualifiedNameParts(rawName, defaultModule);
   const params = splitTopLevelComma(rawParams).map((param) => {
-    const match = /^([A-Za-z_][\w]*)\s*:\s*([\s\S]+)$/.exec(param);
+    let head = param.trim();
+    let variadic = false;
+    let namedOnly = false;
+    let optional = false;
+    let setOf = false;
+    let modifierMatched = true;
+    while (modifierMatched) {
+      modifierMatched = false;
+      const variadicMatch = /^variadic\s+/i.exec(head);
+      if (variadicMatch) { variadic = true; head = head.slice(variadicMatch[0].length); modifierMatched = true; continue; }
+      const namedOnlyMatch = /^named\s+only\s+/i.exec(head);
+      if (namedOnlyMatch) { namedOnly = true; head = head.slice(namedOnlyMatch[0].length); modifierMatched = true; continue; }
+      const optionalMatch = /^optional\s+/i.exec(head);
+      if (optionalMatch) { optional = true; head = head.slice(optionalMatch[0].length); modifierMatched = true; continue; }
+      const setOfMatch = /^set\s+of\s+/i.exec(head);
+      if (setOfMatch) { setOf = true; head = head.slice(setOfMatch[0].length); modifierMatched = true; continue; }
+    }
+    const match = /^([A-Za-z_][\w]*)\s*:\s*([\s\S]+)$/.exec(head);
     if (!match) return undefined;
-    const [, paramName, paramTypeRaw] = match;
-    const optional = /^optional\s+/i.test(paramTypeRaw.trim());
+    const [, paramName, paramTypeRawWithDefault] = match;
+    let paramTypeRaw = paramTypeRawWithDefault;
+    let defaultValue: ScalarValue | undefined;
+    const defaultMatch = /^([\s\S]*?)\s*=\s*([\s\S]+)$/.exec(paramTypeRawWithDefault);
+    if (defaultMatch) {
+      paramTypeRaw = defaultMatch[1];
+      defaultValue = parseDynamicDefaultLiteral(defaultMatch[2].trim());
+    }
+    if (/^optional\s+/i.test(paramTypeRaw.trim())) optional = true;
     return {
       name: paramName,
       type: normalizeDynamicTypeName(paramTypeRaw, defaultModule),
-      optional,
+      optional: optional || namedOnly,
+      variadic: variadic || undefined,
+      namedOnly: namedOnly || undefined,
+      setOf: setOf || undefined,
+      default: defaultValue,
     };
   }).filter((param): param is NonNullable<typeof param> => Boolean(param));
   const bodyText = (bodyMatch[1] ?? "").trim().replace(/;$/, "").trim();
