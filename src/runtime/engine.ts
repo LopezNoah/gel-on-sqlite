@@ -3,7 +3,7 @@ import { validateParsedStatement } from "../compiler/ast_to_ir.js";
 import { AppError, asAppError } from "../errors.js";
 import { parseEdgeQL, parseEdgeQLScript, type ParseEdgeQLOptions } from "../edgeql/parser.js";
 import { offsetToLineCol, tokenize, type Token } from "../edgeql/tokenizer.js";
-import type { BacklinkExpr, ComputedExpr, DeleteStatement, FilterExpr, FilterValue, ForStatement, FreeObjectExpr, FunctionCallArgExpr, FunctionCallExpr, InsertStatement, InsertValue, OrderExpr, OrderExprChain, PathStep, SelectExprStatement, SelectStatement, ShapeElement, Statement, TypeExpr, UpdateStatement, WithBinding, WithBindingValue } from "../edgeql/ast.js";
+import type { BacklinkExpr, ComputedExpr, DDLStatement, DeleteStatement, FilterExpr, FilterValue, ForStatement, FreeObjectExpr, FunctionCallArgExpr, FunctionCallExpr, InsertStatement, InsertValue, OrderExpr, OrderExprChain, PathStep, SelectExprStatement, SelectStatement, ShapeElement, Statement, TypeExpr, UpdateStatement, WithBinding, WithBindingValue } from "../edgeql/ast.js";
 import type { RuntimeDatabaseAdapter } from "./adapter.js";
 import type { SchemaSnapshot } from "../schema/schema.js";
 import { compileToSQL, computedValueAlias, shapePayloadAlias, type SQLArtifact } from "../sql/compiler.js";
@@ -487,10 +487,11 @@ const dynamicScalarFromType = (rawType: string): { type: ScalarType; collection?
   return { type: "str" };
 };
 
-const parseDynamicDefaultLiteral = (raw: string): ScalarValue | undefined => {
-  const trimmed = raw.trim().replace(/;$/, "").trim();
+const evaluateDefaultExprToScalar = (expr: string): ScalarValue | undefined => {
+  const trimmed = expr.trim().replace(/;$/, "").trim();
   if (!trimmed) return undefined;
-  if (/^'(.*)'$/s.test(trimmed) || /^"(.*)"$/s.test(trimmed)) {
+  if ((trimmed.startsWith("'") && trimmed.endsWith("'"))
+      || (trimmed.startsWith('"') && trimmed.endsWith('"'))) {
     return trimmed.slice(1, -1).replace(/\\(['"\\])/g, "$1");
   }
   if (/^-?\d+$/.test(trimmed)) return Number(trimmed);
@@ -500,72 +501,36 @@ const parseDynamicDefaultLiteral = (raw: string): ScalarValue | undefined => {
   return undefined;
 };
 
-const registerDynamicFunctionDDL = (schema: SchemaSnapshot, statement: string, defaultModule = "default"): boolean => {
-  const header = /^create\s+function\s+([A-Za-z_][\w]*(?:::[A-Za-z_][\w]*)?)\s*\(([\s\S]*?)\)\s*->\s*([\s\S]*)$/i.exec(statement.trim());
-  if (!header) return false;
-
-  const [, rawName, rawParams, afterArrow] = header;
-  const dollarBody = /\busing\s+(?:edgeql\s+)?\$\$([\s\S]*?)\$\$/i.exec(afterArrow);
-  const bracedBody = /\{\s*using\s*\(([\s\S]*?)\)\s*;?\s*\}\s*$/i.exec(afterArrow);
-  const parenBody = /\busing\s*\(([\s\S]*?)\)\s*$/i.exec(afterArrow);
-  const bodyMatch = dollarBody ?? bracedBody ?? parenBody;
-  if (!bodyMatch || bodyMatch.index === undefined) return false;
-
-  const returnPart = afterArrow.slice(0, bodyMatch.index).trim().replace(/\{$/, "").trim();
-  const returnOptional = /^optional\s+/i.test(returnPart);
-  const returnType = normalizeDynamicTypeName(returnPart, defaultModule);
-  const { module, name } = dynamicQualifiedNameParts(rawName, defaultModule);
-  const params = splitTopLevelComma(rawParams).map((param) => {
-    let head = param.trim();
-    let variadic = false;
-    let namedOnly = false;
-    let optional = false;
-    let setOf = false;
-    let modifierMatched = true;
-    while (modifierMatched) {
-      modifierMatched = false;
-      const variadicMatch = /^variadic\s+/i.exec(head);
-      if (variadicMatch) { variadic = true; head = head.slice(variadicMatch[0].length); modifierMatched = true; continue; }
-      const namedOnlyMatch = /^named\s+only\s+/i.exec(head);
-      if (namedOnlyMatch) { namedOnly = true; head = head.slice(namedOnlyMatch[0].length); modifierMatched = true; continue; }
-      const optionalMatch = /^optional\s+/i.exec(head);
-      if (optionalMatch) { optional = true; head = head.slice(optionalMatch[0].length); modifierMatched = true; continue; }
-      const setOfMatch = /^set\s+of\s+/i.exec(head);
-      if (setOfMatch) { setOf = true; head = head.slice(setOfMatch[0].length); modifierMatched = true; continue; }
-    }
-    const match = /^([A-Za-z_][\w]*)\s*:\s*([\s\S]+)$/.exec(head);
-    if (!match) return undefined;
-    const [, paramName, paramTypeRawWithDefault] = match;
-    let paramTypeRaw = paramTypeRawWithDefault;
-    let defaultValue: ScalarValue | undefined;
-    const defaultMatch = /^([\s\S]*?)\s*=\s*([\s\S]+)$/.exec(paramTypeRawWithDefault);
-    if (defaultMatch) {
-      paramTypeRaw = defaultMatch[1];
-      defaultValue = parseDynamicDefaultLiteral(defaultMatch[2].trim());
-    }
-    if (/^optional\s+/i.test(paramTypeRaw.trim())) optional = true;
+const applyParsedFunctionDDL = (schema: SchemaSnapshot, ast: DDLStatement, defaultModule = "default"): void => {
+  if (!ast.functionDecl) return;
+  const { module, name } = dynamicQualifiedNameParts(ast.name, defaultModule);
+  const params = ast.functionDecl.params.map((param) => {
+    const defaultValue = param.defaultExpr !== undefined ? evaluateDefaultExprToScalar(param.defaultExpr) : undefined;
+    const hasDefaultExpr = param.defaultExpr !== undefined;
     return {
-      name: paramName,
-      type: normalizeDynamicTypeName(paramTypeRaw, defaultModule),
-      optional: optional || namedOnly,
-      variadic: variadic || undefined,
-      namedOnly: namedOnly || undefined,
-      setOf: setOf || undefined,
+      name: param.name,
+      type: normalizeDynamicTypeName(param.type, defaultModule),
+      optional: Boolean(param.optional) || Boolean(param.namedOnly) || hasDefaultExpr,
+      variadic: param.variadic || undefined,
+      namedOnly: param.namedOnly || undefined,
+      setOf: param.setOf || undefined,
       default: defaultValue,
     };
-  }).filter((param): param is NonNullable<typeof param> => Boolean(param));
-  const bodyText = (bodyMatch[1] ?? "").trim().replace(/;$/, "").trim();
-  const query = /^select\b/i.test(bodyText) ? bodyText : `SELECT ${bodyText}`;
-
+  });
+  const bodyQuery = ast.functionDecl.body.query.trim();
   schema.addFunction({
     module,
     name,
     params,
-    returnType,
-    returnOptional,
-    body: { kind: "query", language: "edgeql", query },
+    returnType: normalizeDynamicTypeName(ast.functionDecl.returnType, defaultModule),
+    returnOptional: ast.functionDecl.returnOptional,
+    returnSetOf: ast.functionDecl.returnSetOf,
+    body: {
+      kind: "query",
+      language: "edgeql",
+      query: /^select\b/i.test(bodyQuery) ? bodyQuery : `SELECT ${bodyQuery}`,
+    },
   });
-  return true;
 };
 
 const registerDynamicTypeDDL = (schema: SchemaSnapshot, statement: string, defaultModule = "default"): boolean => {
@@ -615,20 +580,18 @@ const registerDynamicTypeDDL = (schema: SchemaSnapshot, statement: string, defau
   return true;
 };
 
+// Pre-pass for CREATE TYPE only. CREATE FUNCTION goes through the proper
+// parser → AST → runtime path (see `applyParsedFunctionDDL`).
 const maybeRegisterDynamicDDLScript = (db: SQLiteDatabase, schema: SchemaSnapshot, script: string, defaultModule = "default"): boolean => {
-  let registeredFunction = false;
   let registeredType = false;
   for (const statement of splitTopLevelScriptStatements(script)) {
-    registeredFunction = registerDynamicFunctionDDL(schema, statement, defaultModule) || registeredFunction;
     registeredType = registerDynamicTypeDDL(schema, statement, defaultModule) || registeredType;
   }
   if (registeredType) {
     materializeSchema(db, schema);
-  }
-  if (registeredFunction || registeredType) {
     getCompilerService().clear();
   }
-  return registeredFunction || registeredType;
+  return registeredType;
 };
 
 const maybeHandleAliasDDLScript = (schema: SchemaSnapshot, script: string): boolean => {
@@ -6643,6 +6606,10 @@ export const executeQueryUnitWithTrace = (
         continue;
       }
       if (ast.kind === "ddl") {
+        if (ast.action === "create" && ast.objectKind === "function" && ast.functionDecl) {
+          applyParsedFunctionDDL(schema, ast, parserOptions.defaultModule ?? "default");
+          compilerService.clear();
+        }
         continue;
       }
 

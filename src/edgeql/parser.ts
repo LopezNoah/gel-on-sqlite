@@ -8,6 +8,8 @@ import type {
   DDLStatement,
   ConfigureStatement,
   FilterExpr,
+  FunctionDecl,
+  FunctionParamDecl,
   ForStatement,
   FunctionCallArgExpr,
   FunctionCallExpr,
@@ -220,21 +222,27 @@ class Parser {
   // need it (for errors and AST `pos:` fields). Skipping per-token column
   // arithmetic in the tokenizer hot loop is the bulk of the win.
   private readonly lineStarts: readonly number[];
+  // Original source text. Available when the parser was constructed from a
+  // string, or when callers explicitly pass it alongside a precomputed token
+  // stream. Needed for verbatim capture of `USING (...)` function bodies.
+  private readonly sourceText?: string;
   private index = 0;
   private readonly localBindings: string[] = [];
   private readonly defaultModule?: string;
 
   constructor(
-    source: string | { tokens: Token[]; lineStarts: readonly number[] },
+    source: string | { tokens: Token[]; lineStarts: readonly number[]; source?: string },
     options: ParseEdgeQLOptions = {},
   ) {
     if (typeof source === "string") {
       const r = tokenizeWithStarts(source);
       this.tokens = r.tokens;
       this.lineStarts = r.lineStarts;
+      this.sourceText = source;
     } else {
       this.tokens = source.tokens;
       this.lineStarts = source.lineStarts;
+      this.sourceText = source.source;
     }
     this.defaultModule = options.defaultModule;
   }
@@ -940,9 +948,12 @@ class Parser {
 
     const name = this.parseQualifiedName("Expected DDL object name");
     let value: DDLStatement["value"];
+    let functionDecl: DDLStatement["functionDecl"];
     if (action === "create" && (objectKind === "alias" || objectKind === "global") && this.peek().kind === "assign") {
       this.expect("assign", "Expected ':=' in DDL definition");
       value = this.parseFreeObjectExpr();
+    } else if (action === "create" && objectKind === "function") {
+      functionDecl = this.parseCreateFunctionTail();
     } else {
       this.skipDDLBody();
     }
@@ -957,8 +968,201 @@ class Parser {
       objectKind,
       name,
       value,
+      functionDecl,
       pos: this.posOf(start),
     };
+  }
+
+  private parseCreateFunctionTail(): FunctionDecl {
+    this.expect("lparen", "Expected '(' after function name");
+    const params: FunctionParamDecl[] = [];
+    if (this.peek().kind !== "rparen") {
+      while (true) {
+        params.push(this.parseFunctionParamDecl());
+        if (this.peek().kind === "comma") {
+          this.consume();
+          continue;
+        }
+        break;
+      }
+    }
+    this.expect("rparen", "Expected ')' after function parameters");
+    this.expect("arrow", "Expected '->' before function return type");
+
+    let returnOptional = false;
+    let returnSetOf = false;
+    while (true) {
+      if (this.matchKeywordLexeme("optional")) { returnOptional = true; continue; }
+      if (this.atSetOf()) { this.consume(); this.consume(); returnSetOf = true; continue; }
+      break;
+    }
+    const returnType = this.captureTypeExprText();
+
+    const body = this.parseFunctionBody();
+    return { params, returnType, returnOptional, returnSetOf, body };
+  }
+
+  // Modifier keywords are matched case-insensitively. EdgeQL tokenizes some
+  // keywords (notably NAMED) as identifiers when their case isn't all
+  // lowercase, so direct token-kind checks would miss `NAMED ONLY`.
+  private atNamedOnly(): boolean {
+    const a = this.peek();
+    if (!this.isKeywordLikeToken(a) || a.lower !== "named") return false;
+    const b = this.peekNext();
+    return this.isKeywordLikeToken(b) && b.lower === "only";
+  }
+
+  private atSetOf(): boolean {
+    const a = this.peek();
+    if (!this.isKeywordLikeToken(a) || a.lower !== "set") return false;
+    const b = this.peekNext();
+    return this.isKeywordLikeToken(b) && b.lower === "of";
+  }
+
+  private parseFunctionParamDecl(): FunctionParamDecl {
+    let variadic = false;
+    let namedOnly = false;
+    let optional = false;
+    let setOf = false;
+    while (true) {
+      if (this.matchKeywordLexeme("variadic")) { variadic = true; continue; }
+      if (this.atNamedOnly()) { this.consume(); this.consume(); namedOnly = true; continue; }
+      if (this.matchKeywordLexeme("optional")) { optional = true; continue; }
+      if (this.atSetOf()) { this.consume(); this.consume(); setOf = true; continue; }
+      break;
+    }
+    const name = this.expectName("Expected parameter name").lexeme;
+    this.expect("colon", "Expected ':' after parameter name");
+    const typeText = this.captureTypeExprText();
+    let defaultExpr: string | undefined;
+    if (this.peek().kind === "equals") {
+      this.consume();
+      defaultExpr = this.captureDefaultExprText();
+    }
+    return {
+      name,
+      type: typeText,
+      variadic: variadic || undefined,
+      namedOnly: namedOnly || undefined,
+      optional: optional || undefined,
+      setOf: setOf || undefined,
+      defaultExpr,
+    };
+  }
+
+  // Consume tokens forming a type expression (qualified name, possibly with
+  // angle-bracketed parameters like `array<int64>`) and return the verbatim
+  // source slice covering them.
+  private captureTypeExprText(): string {
+    const startTok = this.peek();
+    const startOffset = startTok.offset;
+    // Allow leading type-level modifiers that may appear after the param
+    // colon (e.g. legacy "OPTIONAL str").
+    while (true) {
+      if (this.matchKeywordLexeme("optional")) continue;
+      if (this.atSetOf()) { this.consume(); this.consume(); continue; }
+      break;
+    }
+    // Consume the qualified-name head. We accept any name-like or keyword-like
+    // token (e.g. `schema::Constraint`) since the result is captured as raw
+    // source text and not interpreted further by this helper.
+    if (!this.isNameToken(this.peek()) && !this.isKeywordLikeToken(this.peek())) {
+      throw new AppError("E_SYNTAX", "Expected type name", ...this.posPair(this.peek()));
+    }
+    this.consume();
+    while (this.peek().kind === "coloncolon"
+        || (this.peek().kind === "colon" && this.peekNext().kind === "colon")) {
+      if (this.peek().kind === "colon") { this.consume(); this.consume(); }
+      else { this.consume(); }
+      if (!this.isNameToken(this.peek()) && !this.isKeywordLikeToken(this.peek())) {
+        throw new AppError("E_SYNTAX", "Expected name after '::'", ...this.posPair(this.peek()));
+      }
+      this.consume();
+    }
+    // Optional `<...>` parameterization.
+    if (this.peek().kind === "lt") {
+      let depth = 1;
+      this.consume();
+      while (depth > 0 && this.peek().kind !== "eof") {
+        const k = this.peek().kind;
+        if (k === "lt") depth += 1;
+        else if (k === "gt") depth -= 1;
+        else if (k === "gte") { depth -= 1; if (depth > 0) depth -= 1; }
+        this.consume();
+        if (depth === 0) break;
+      }
+    }
+    const endTok = this.peek();
+    return this.sliceSource(startOffset, endTok.offset).trim();
+  }
+
+  // The default-value expression runs up to the next ',' or ')' at depth 0.
+  private captureDefaultExprText(): string {
+    const startOffset = this.peek().offset;
+    let depth = 0;
+    while (this.peek().kind !== "eof") {
+      const k = this.peek().kind;
+      if (depth === 0 && (k === "comma" || k === "rparen")) break;
+      if (k === "lparen" || k === "lbracket" || k === "lbrace") depth += 1;
+      else if (k === "rparen" || k === "rbracket" || k === "rbrace") depth -= 1;
+      this.consume();
+    }
+    const endTok = this.peek();
+    return this.sliceSource(startOffset, endTok.offset).trim();
+  }
+
+  private parseFunctionBody(): { kind: "query"; language: "edgeql"; query: string } {
+    let inBrace = false;
+    if (this.peek().kind === "lbrace") {
+      this.consume();
+      inBrace = true;
+    }
+    this.expect("kw_using", "Expected 'USING' in CREATE FUNCTION");
+
+    let query: string;
+    if (this.peek().kind === "lparen") {
+      this.consume();
+      const startOffset = this.peek().offset;
+      let depth = 1;
+      while (this.peek().kind !== "eof" && depth > 0) {
+        const k = this.peek().kind;
+        if (k === "lparen") depth += 1;
+        else if (k === "rparen") {
+          depth -= 1;
+          if (depth === 0) break;
+        }
+        this.consume();
+      }
+      const endTok = this.peek();
+      query = this.sliceSource(startOffset, endTok.offset).trim();
+      this.expect("rparen", "Expected ')' after USING body");
+    } else if (this.isKeywordLikeToken(this.peek()) && this.peek().lower === "edgeql") {
+      this.consume();
+      const strTok = this.expect("string", "Expected $$...$$ body after USING EdgeQL");
+      query = strTok.lexeme.trim();
+    } else {
+      throw new AppError("E_SYNTAX", "Expected '(' or 'EdgeQL' after USING", ...this.posPair(this.peek()));
+    }
+    if (inBrace) {
+      if (this.peek().kind === "semi") this.consume();
+      this.expect("rbrace", "Expected '}' to close function body block");
+    }
+    return { kind: "query", language: "edgeql", query };
+  }
+
+  private sliceSource(startOffset: number, endOffset: number): string {
+    if (this.sourceText !== undefined) {
+      return this.sourceText.slice(startOffset, endOffset);
+    }
+    // Fallback when no source is available: reconstruct from token lexemes
+    // within the offset range. Whitespace is collapsed to a single space.
+    const parts: string[] = [];
+    for (const token of this.tokens) {
+      if (token.offset < startOffset) continue;
+      if (token.offset >= endOffset) break;
+      parts.push(token.lexeme);
+    }
+    return parts.join(" ");
   }
 
   private skipDDLBody(): void {
@@ -5355,8 +5559,9 @@ const parseEdgeQLFromTokens = (
   tokens: Token[],
   lineStarts: readonly number[],
   options: ParseEdgeQLOptions = {},
+  source?: string,
 ): Statement => {
-  const parser = new Parser({ tokens, lineStarts }, options);
+  const parser = new Parser({ tokens, lineStarts, source }, options);
   return parser.parseStatement();
 };
 
@@ -5391,7 +5596,7 @@ export const parseEdgeQLScript = (input: string, options: ParseEdgeQLOptions = {
     // the same piece, with defaultModule set to the parsed module name.
     statements.push(parseEdgeQLFromTokens(piece, lineStarts, {
       defaultModule: finalPiece ? (setModule ?? activeModule) : activeModule,
-    }));
+    }, input));
   };
 
   for (let i = 0; i < tokens.length; i += 1) {
