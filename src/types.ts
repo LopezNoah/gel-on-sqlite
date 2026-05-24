@@ -367,6 +367,7 @@ export interface LinkDef {
   name: string;
   targetType: string;
   overloaded?: boolean;
+  required?: boolean;
   multi?: boolean;
   hasDefault?: boolean;
   readonly?: boolean;

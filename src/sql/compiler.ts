@@ -252,6 +252,9 @@ const compileSelectToSQL = (ir: SelectIR, target: RuntimeTarget): SQLArtifact =>
   if (ir.limit !== undefined) {
     sql += " LIMIT ?";
     params.push(ir.limit);
+  } else if (ir.offset !== undefined) {
+    // SQLite requires LIMIT before OFFSET. Use -1 to mean unlimited.
+    sql += " LIMIT -1";
   }
 
   if (ir.offset !== undefined) {
@@ -340,6 +343,8 @@ const compileLinkArrayExpr = (
   if (element.limit !== undefined) {
     inner += " LIMIT ?";
     params.push(element.limit);
+  } else if (element.offset !== undefined) {
+    inner += " LIMIT -1";
   }
 
   if (element.offset !== undefined) {

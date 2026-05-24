@@ -49,12 +49,18 @@ export interface ShapeElementModifiers {
   orderBy?: OrderExpr[];
   offset?: number;
   limit?: number;
+  offsetExpr?: FreeObjectExpr;
+  limitExpr?: FreeObjectExpr;
 }
 
 export type FilterTarget =
   | {
       kind: "field";
       field: string;
+      // Set when the parser saw a bare unqualified name (no `.` prefix) — in
+      // EdgeQL this is a name reference that must resolve to a binding/type,
+      // so the semantic analyzer flags it for a clearer diagnostic.
+      bareName?: string;
     }
   | {
       kind: "backlink";
@@ -226,6 +232,12 @@ export interface WithModuleAlias {
 
 export interface OrderExpr {
   field: string;
+  /**
+   * Optional expression form. When set, the sort key is computed by evaluating
+   * this expression per row, not by reading `field`. Used for ORDER BY clauses
+   * like `len(.body)` that don't reduce to a single field path.
+   */
+  expr?: FreeObjectExpr;
   direction: "asc" | "desc";
   nullsPosition?: "first" | "last";
   then?: OrderExpr;
@@ -236,6 +248,8 @@ export interface ClauseChain {
   orderBy?: OrderExpr;
   limit?: number;
   offset?: number;
+  limitExpr?: FreeObjectExpr;
+  offsetExpr?: FreeObjectExpr;
   groupBy?: FreeObjectExpr[];
   using?: Record<string, FreeObjectExpr>;
   window?: {
@@ -401,6 +415,8 @@ export interface SelectStatement {
   orderBy?: ClauseChain["orderBy"];
   limit?: ClauseChain["limit"];
   offset?: ClauseChain["offset"];
+  limitExpr?: ClauseChain["limitExpr"];
+  offsetExpr?: ClauseChain["offsetExpr"];
   pos: SourcePos;
 }
 
@@ -562,6 +578,8 @@ export type FreeObjectExpr =
       };
       limit?: number;
       offset?: number;
+      limitExpr?: FreeObjectExpr;
+      offsetExpr?: FreeObjectExpr;
     }
   | {
       kind: "concat";
@@ -600,6 +618,8 @@ export type FreeObjectExpr =
       orderBy?: OrderExprChain;
       limit?: number;
       offset?: number;
+      limitExpr?: FreeObjectExpr;
+      offsetExpr?: FreeObjectExpr;
     }
   | {
       kind: "mutation_expr";

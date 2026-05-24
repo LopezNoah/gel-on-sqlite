@@ -2695,11 +2695,11 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     const resolvedOrderBy = resolveOrderByTerm(clauses.orderBy);
 
     if (clauses.limit !== undefined && clauses.limit < 0) {
-      fail("Limit must be zero or greater");
+      fail("LIMIT must not be negative");
     }
 
     if (clauses.offset !== undefined && clauses.offset < 0) {
-      fail("Offset must be zero or greater");
+      fail("OFFSET must not be negative");
     }
 
     return {
@@ -4498,6 +4498,12 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
   }
 
   try {
+    if (expr.limit !== undefined && expr.limit < 0) {
+      fail("LIMIT must not be negative");
+    }
+    if (expr.offset !== undefined && expr.offset < 0) {
+      fail("OFFSET must not be negative");
+    }
     return {
       kind: "select_expr_subquery",
       alias: expr.alias ?? aliasFromInnerSubquery,

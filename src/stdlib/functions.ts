@@ -78,6 +78,11 @@ const DEFINITIONS: StdlibFunctionDef[] = [
   { name: "std::__gel_subtract", minArgs: 2, maxArgs: 2 },
   { name: "std::__gel_if_eq", minArgs: 4, maxArgs: 4 },
   { name: "std::to_json", minArgs: 1, maxArgs: 1 },
+  { name: "std::random", minArgs: 0, maxArgs: 0 },
+  { name: "std::re_test", minArgs: 2, maxArgs: 2 },
+  { name: "std::re_match", minArgs: 2, maxArgs: 2 },
+  { name: "std::re_match_all", minArgs: 2, maxArgs: 2 },
+  { name: "std::re_replace", minArgs: 3, maxArgs: 4 },
 ];
 
 const BY_NAME = new Map(DEFINITIONS.map((def) => [def.name, def]));
@@ -104,6 +109,20 @@ export const tryResolveStdlibFunction = (name: string, arity: number, activeModu
     }
   }
   return undefined;
+};
+
+// EdgeQL regex flags are embedded as `(?xyz)` at the start of the pattern.
+// JS regex doesn't understand most of these inline groups, so strip them and
+// map known flags (i, m, s, x) into JS flags. Unknown flags are dropped.
+const parseEdgeQLRegex = (pattern: string): { source: string; flags: string } => {
+  const match = /^\(\?([a-zA-Z]+)\)(.*)$/s.exec(pattern);
+  if (!match) return { source: pattern, flags: "" };
+  const flagChars = match[1];
+  let jsFlags = "";
+  if (flagChars.includes("i")) jsFlags += "i";
+  if (flagChars.includes("m")) jsFlags += "m";
+  if (flagChars.includes("s")) jsFlags += "s";
+  return { source: match[2], flags: jsFlags };
 };
 
 export const executeStdlibFunction = (name: string, args: RuntimeFunctionArg[]): unknown => {
@@ -181,7 +200,17 @@ export const executeStdlibFunction = (name: string, args: RuntimeFunctionArg[]):
       const separator = String(extractScalar(args[1]) ?? "");
       return values.join(separator);
     }
-    case "std::assert_exists":
+    case "std::assert_exists": {
+      const raw = args[0];
+      const inner = typeof raw === "object" && raw !== null && "kind" in raw && raw.kind === "set"
+        ? raw.values
+        : raw;
+      const isEmpty = Array.isArray(inner) ? inner.length === 0 : inner == null;
+      if (isEmpty) {
+        throw new Error("assert_exists violation");
+      }
+      return inner;
+    }
     case "std::assert_single":
     case "std::assert_distinct":
       return typeof args[0] === "object" && args[0] !== null && "kind" in args[0] && args[0].kind === "set"
@@ -207,11 +236,56 @@ export const executeStdlibFunction = (name: string, args: RuntimeFunctionArg[]):
       return String(value).length;
     }
     case "std::sum": {
-      const values = toNumberList(args[0]);
+      const rawArg = args[0];
+      if (typeof rawArg === "string") {
+        throw new Error(`function "sum(arg0: std::str)" does not exist`);
+      }
+      if (Array.isArray(rawArg) && rawArg.some((v) => typeof v === "string")) {
+        throw new Error(`function "sum(arg0: std::str)" does not exist`);
+      }
+      const values = toNumberList(rawArg);
       if (values.length === 0) {
         return 0;
       }
       return values.reduce((acc, value) => acc + value, 0);
+    }
+    case "std::random":
+      return Math.random();
+    case "std::re_test": {
+      const pattern = String(args[0] ?? "");
+      const subject = String(args[1] ?? "");
+      const { source, flags } = parseEdgeQLRegex(pattern);
+      return new RegExp(source, flags).test(subject);
+    }
+    case "std::re_match": {
+      const pattern = String(args[0] ?? "");
+      const subject = String(args[1] ?? "");
+      const { source, flags } = parseEdgeQLRegex(pattern);
+      const match = new RegExp(source, flags).exec(subject);
+      if (!match) return [];
+      return match.length === 1 ? [match[0]] : match.slice(1);
+    }
+    case "std::re_match_all": {
+      const pattern = String(args[0] ?? "");
+      const subject = String(args[1] ?? "");
+      const { source, flags } = parseEdgeQLRegex(pattern);
+      const re = new RegExp(source, flags.includes("g") ? flags : flags + "g");
+      const out: unknown[] = [];
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(subject)) !== null) {
+        out.push(m.length === 1 ? m[0] : m.slice(1));
+        if (m.index === re.lastIndex) re.lastIndex += 1;
+      }
+      return out;
+    }
+    case "std::re_replace": {
+      const pattern = String(args[0] ?? "");
+      const replacement = String(args[1] ?? "");
+      const subject = String(args[2] ?? "");
+      const optFlags = args[3] !== undefined ? String(args[3]) : "";
+      const { source, flags } = parseEdgeQLRegex(pattern);
+      const finalFlags = optFlags.includes("g") ? flags + "g" : flags;
+      return subject.replace(new RegExp(source, finalFlags.replace(/(.)(?=.*\1)/g, "")), replacement);
     }
     case "std::max": {
       const values = toNumberList(args[0]);

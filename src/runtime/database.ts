@@ -53,6 +53,9 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
     if (!isMemoryOrBuffer) {
       db.pragma("journal_mode = WAL");
     }
+    // EdgeQL's LIKE is case-sensitive (ILIKE for case-insensitive). SQLite's
+    // default LIKE is case-insensitive for ASCII; flip the pragma to match.
+    db.pragma("case_sensitive_like = 1");
 
     return {
       db: {
@@ -90,6 +93,7 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
     if (target !== ":memory:") {
       rawDb.exec("PRAGMA journal_mode = WAL");
     }
+    rawDb.exec("PRAGMA case_sensitive_like = 1");
 
     const db: SQLiteDatabase = {
       prepare: (sql) => {
