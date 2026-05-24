@@ -1937,13 +1937,34 @@ const tryRuntimeSelectExprEvaluationAst = (
         const indexPath = Number.isInteger(expr.index)
           ? [expr.index]
           : String(expr.index).split(".").map((part) => Number(part)).filter((part) => Number.isInteger(part));
+        // The reference EdgeQL diagnostic uses a category prefix specific to the
+        // source kind: "array index", "string index", or "JSON index".
+        const indexErrorCategory = (item: unknown): string => {
+          if (typeof item === "string") return "string";
+          if (expr.expr.kind === "function_call" && (expr.expr.call.name === "to_json" || expr.expr.call.name.endsWith("::to_json"))) return "JSON";
+          if (Array.isArray(item)) return "array";
+          return "array";
+        };
+        const checkBounds = (item: unknown, index: number): void => {
+          const length = typeof item === "string" || Array.isArray(item) ? item.length : 0;
+          if (index >= length || index < -length) {
+            throw new AppError(
+              "E_RUNTIME",
+              `${indexErrorCategory(item)} index ${index} is out of bounds`,
+              ast.pos?.line ?? 0,
+              ast.pos?.column ?? 0,
+            );
+          }
+        };
         const readIndex = (item: unknown): unknown => {
           let current = item;
           for (const index of indexPath) {
             if (typeof current === "string") {
-              current = current[index] ?? null;
+              checkBounds(current, index);
+              current = current[index < 0 ? current.length + index : index] ?? null;
             } else if (Array.isArray(current)) {
-              current = current[index] ?? null;
+              checkBounds(current, index);
+              current = current[index < 0 ? current.length + index : index] ?? null;
             } else {
               return null;
             }
@@ -2117,7 +2138,11 @@ const tryRuntimeSelectExprEvaluationAst = (
       }
       case "for_expr": {
         const iteratorValue = evalExpr(expr.iterator, env);
-        const iteratorItems = Array.isArray(iteratorValue) ? iteratorValue : [iteratorValue];
+        const iteratorItems = Array.isArray(iteratorValue)
+          ? iteratorValue
+          : iteratorValue === null || iteratorValue === undefined
+            ? []
+            : [iteratorValue];
         const isSetProducing = (body: FreeObjectExpr): boolean => {
           if (body.kind === "select_expr_subquery") return isSetProducing(body.expr);
           if (body.kind === "select") return true;

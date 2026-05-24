@@ -794,6 +794,26 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       if (expr.kind === "literal") {
         return { kind: "literal", value: expr.value };
       }
+      // Unwrap a cast around a literal: `<str>1` → literal "1".  This lets
+      // pre-expanded FOR-bindings (e.g. `FILTER .number = <str>x` where x is
+      // substituted with a number literal) compile through the scalar path.
+      if (expr.kind === "cast" && expr.expr.kind === "literal") {
+        const inner = expr.expr.value;
+        const castTo = expr.castType;
+        if (castTo === "str" || castTo === "std::str") {
+          return { kind: "literal", value: inner === null ? null : String(inner) };
+        }
+        if (castTo === "int64" || castTo === "int32" || castTo === "int16" || castTo === "int") {
+          return { kind: "literal", value: inner === null ? null : Math.trunc(Number(inner)) };
+        }
+        if (castTo === "float64" || castTo === "float32" || castTo === "float") {
+          return { kind: "literal", value: inner === null ? null : Number(inner) };
+        }
+        if (castTo === "bool") {
+          return { kind: "literal", value: inner === null ? null : Boolean(inner) };
+        }
+        return { kind: "literal", value: inner };
+      }
       if (
         expr.kind === "field_access"
         && expr.expr.kind === "current_item"
@@ -803,6 +823,31 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           return undefined;
         }
         return { kind: "column", column: expr.field };
+      }
+      // `T.field` where T is the current select's subject — treat as a column
+      // reference (same as `.field`).  Handles filters that write the source
+      // explicitly: `FILTER Issue.number > ...`.
+      if (
+        expr.kind === "field_access"
+        && expr.expr.kind === "select"
+        && (!expr.expr.clauses || Object.keys(expr.expr.clauses).length === 0)
+        && !expr.field.startsWith("@")
+      ) {
+        const shortTypeLabel = typeLabel.includes("::") ? typeLabel.split("::").at(-1) : typeLabel;
+        if ((expr.expr.typeName === typeLabel || expr.expr.typeName === shortTypeLabel) && knownFields.has(expr.field)) {
+          return { kind: "column", column: expr.field };
+        }
+      }
+      // `T.field` parsed as a path AST node — same case as above.
+      if (
+        expr.kind === "path"
+        && !expr.steps?.length
+        && !expr.tail.startsWith("@")
+      ) {
+        const shortTypeLabel = typeLabel.includes("::") ? typeLabel.split("::").at(-1) : typeLabel;
+        if ((expr.head === typeLabel || expr.head === shortTypeLabel) && knownFields.has(expr.tail)) {
+          return { kind: "column", column: expr.tail };
+        }
       }
       if (expr.kind === "math") {
         const left = tryCompileScalarExpr(expr.left);
@@ -958,6 +1003,22 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
             right: { kind: "literal", value: null },
             op: "!=",
           };
+        }
+        // EXISTS on a single inline link (e.g. `EXISTS Issue.priority`):
+        // map to a null check on the link's inline FK column.
+        if (field && options.subjectType) {
+          const link = collectLinks(options.subjectType, true).find((candidate) => candidate.name === field);
+          if (link) {
+            const usesLinkTable = Boolean(link.multi) || (link.properties?.length ?? 0) > 0;
+            if (!usesLinkTable) {
+              return {
+                kind: "expr_compare",
+                left: { kind: "column", column: `${link.name}_id` },
+                right: { kind: "literal", value: null },
+                op: "!=",
+              };
+            }
+          }
         }
       }
       fail("Unsupported free expression in filter");
@@ -1250,6 +1311,12 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     }
 
     const targetField = filter.target.kind === "field" ? filter.target.field : fail("Unsupported filter target");
+    const targetBareName = filter.target.kind === "field" ? filter.target.bareName : undefined;
+    if (targetBareName !== undefined) {
+      // EdgeQL treats `filter X = ...` as a name reference that must resolve to
+      // an object type / alias (a field would be written `.X`).
+      fail(`object type or alias '${normalizeTypeName(targetBareName, options.fallbackModule)}' does not exist`);
+    }
 
     if (!knownFields.has(targetField) && targetField.includes(".") && options.subjectType) {
       const firstDot = targetField.indexOf(".");
@@ -1304,10 +1371,10 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         };
       }
 
-      fail(`Unknown field '${targetField}' on '${typeLabel}'`);
+      fail(`object type '${typeLabel}' has no link or property '${targetField}'`);
     }
 
-    const field = requireValue(fieldByName.get(targetField), `Unknown field '${targetField}' on '${typeLabel}'`);
+    const field = requireValue(fieldByName.get(targetField), `object type '${typeLabel}' has no link or property '${targetField}'`);
 
     if (filter.op === "like" || filter.op === "ilike") {
       if (field.type !== "str") {
@@ -1796,6 +1863,15 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     }
     let hasBacklink = false;
 
+    // Names of explicit (non-splat) shape entries — splat expansion should
+    // suppress these so an explicit override silently wins (EdgeQL reference
+    // behavior for `Issue { **, name := "X" }`).
+    const explicitShapeNames = new Set<string>(
+      shape
+        .filter((element): element is Extract<ShapeElement, { name: string }> => element.kind !== "splat" && "name" in element)
+        .map((element) => element.name),
+    );
+
     for (const shapeElement of shape) {
       if (shapeElement.kind === "splat") {
         const splatTypeDef = shapeElement.sourceType
@@ -1809,7 +1885,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
 
         const fieldElements = collectFields(splatTypeDef, true).filter((field) => field.name !== "id");
         for (const field of [{ name: "id", type: "uuid" as const }, ...fieldElements]) {
-          if (shapeNames.has(field.name)) {
+          if (shapeNames.has(field.name) || explicitShapeNames.has(field.name)) {
             continue;
           }
 
@@ -1846,7 +1922,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
 
         if (shapeElement.depth === 2) {
           for (const linkDef of collectLinks(splatTypeDef, true)) {
-            if (shapeNames.has(linkDef.name)) {
+            if (shapeNames.has(linkDef.name) || explicitShapeNames.has(linkDef.name)) {
               continue;
             }
 
@@ -2033,6 +2109,49 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
             selectedColumns.add("id");
           }
 
+          shapeElements.push({
+            kind: "link",
+            name: shapeElement.name,
+            pathId: toPathIdIR(linkPathId),
+            relation,
+            typeFilter: undefined,
+            sourceTypeFilter: undefined,
+            columns: nested.columns,
+            shape: nested.shape,
+            filter: nested.filter,
+            orderBy: nested.orderBy,
+            limit: nested.limit,
+            offset: nested.offset,
+            inference: nested.inference,
+          });
+          shapeNames.add(shapeElement.name);
+          scopeChildren.push(nested.scopeTree);
+          continue;
+        }
+
+        // Bare link reference (`User { todo }` with no nested shape) — treat
+        // as `User { todo: { id } }` so the link is included with a default
+        // shape.  Without this, ensureField would reject the name as unknown.
+        const matchingLink = collectLinks(typeDef, true).find((link) => link.name === resolvedFieldName);
+        if (matchingLink) {
+          const linkPathId = createPathId(pathId);
+          const relation = resolveForwardLink(typeDef, matchingLink.name);
+          const linkTargetType = requireValue(
+            schema.getType(relation.targetType),
+            `Unknown link target type '${relation.targetType}' from '${qualifiedName}.${matchingLink.name}'`,
+          );
+          const nested = compileSelectForType(
+            linkTargetType,
+            linkPathId,
+            [{ kind: "field", name: "id", operation: "assign", origin: "default" }],
+            {},
+            { allowBacklinkFilter: false },
+          );
+          if (relation.storage === "inline") {
+            selectedColumns.add(requireValue(relation.inlineColumn, `Missing inline storage metadata for '${matchingLink.name}'`));
+          } else {
+            selectedColumns.add("id");
+          }
           shapeElements.push({
             kind: "link",
             name: shapeElement.name,
@@ -2643,7 +2762,17 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       selectedColumns.add("id");
     }
 
-    ensureUniqueShapeNames(shapeElements, fail);
+    {
+      const seen = new Set<string>();
+      const linkNames = new Set(collectLinks(typeDef, true).map((link) => link.name));
+      for (const element of shapeElements) {
+        if (seen.has(element.name)) {
+          const memberKind = linkNames.has(element.name) ? "link" : "property";
+          fail(`duplicate definition of ${memberKind} '${element.name}' of object type '${qualifiedName}'`);
+        }
+        seen.add(element.name);
+      }
+    }
 
     const resolvedFilter = clauses.filter
         ? compileFilterExpr(fieldByName, knownFields, qualifiedName, clauses.filter, {
@@ -3278,6 +3407,35 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
   }
 
   if (statement.kind === "select_expr") {
+    // Structural validation of parameter usage in the select expression tree:
+    //  * a bare `$N` (no enclosing cast and no inline castType) → "missing a type cast"
+    //  * a shape applied to a parameter (`<T>$0 { id }`) → "cannot apply a shape to the parameter"
+    const isFreeExpr = (value: unknown): value is FreeObjectExpr =>
+      !!value && typeof value === "object" && typeof (value as { kind?: unknown }).kind === "string";
+    const visitParamCheck = (expr: FreeObjectExpr, castWrapped: boolean): void => {
+      if (expr.kind === "shape_projection" && expr.expr.kind === "parameter") {
+        throw new AppError("E_SEMANTIC", "cannot apply a shape to the parameter", statement.pos.line, statement.pos.column);
+      }
+      if (expr.kind === "parameter") {
+        if (!castWrapped && (expr as { castType?: string }).castType === undefined) {
+          throw new AppError("E_SEMANTIC", "missing a type cast before the parameter", statement.pos.line, statement.pos.column);
+        }
+        return;
+      }
+      const childCastWrapped = expr.kind === "cast";
+      for (const key of Object.keys(expr)) {
+        const value = (expr as Record<string, unknown>)[key];
+        if (Array.isArray(value)) {
+          for (const item of value) {
+            if (isFreeExpr(item)) visitParamCheck(item, childCastWrapped);
+          }
+        } else if (isFreeExpr(value)) {
+          visitParamCheck(value, childCastWrapped);
+        }
+      }
+    };
+    visitParamCheck(statement.expr, false);
+
     // Rewrite `SELECT <typed-root> { shape }` (where typed-root is a typed
     // expression like `Ba[IS Bb | Bc]` or `{CBaBb, CBbBc}`) as a narrowed
     // typed select so it flows through the typed-select IR pipeline.
@@ -3494,6 +3652,24 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         };
       }
       if (expr.kind === "field_access") {
+        if (expr.expr.kind === "select" && !expr.field.startsWith("@")) {
+          // Validate the field exists on the source type when the access is
+          // directly on a typed select (`SELECT User.nam`).
+          const sourceTypeName = normalizeTypeName(expr.expr.typeName, activeModule);
+          const sourceTypeDef = schema.getType(sourceTypeName);
+          if (sourceTypeDef) {
+            const knownFieldNames = new Set<string>([
+              "id",
+              "__type__",
+              ...collectFields(sourceTypeDef, true).map((f) => f.name),
+              ...collectLinks(sourceTypeDef, true).map((l) => l.name),
+              ...(sourceTypeDef.computeds ?? []).map((c) => c.name),
+            ]);
+            if (!knownFieldNames.has(expr.field)) {
+              fail(`'${sourceTypeName}' has no link or property '${expr.field}'`);
+            }
+          }
+        }
         const value = asNestedExprEntry(compileExprToIREntry(expr.expr, currentItemBinding));
         if (
           value.kind === "literal"
@@ -3642,6 +3818,86 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         };
       }
       if (expr.kind === "index_access") {
+        // Compile-time bounds check for literal array / string sources.
+        // The reference EdgeQL diagnostic categories: "array", "string", "JSON".
+        const literalIndexBoundsCheck = (): void => {
+          const idx = expr.index;
+          if (!Number.isFinite(idx) || !Number.isInteger(idx)) return;
+          const source = expr.expr;
+          if (source.kind === "array_literal_expr") {
+            const len = source.values.length;
+            if (idx >= len || idx < -len) {
+              fail(`array index ${idx} is out of bounds`);
+            }
+          }
+          if (source.kind === "literal" && typeof source.value === "string") {
+            const len = source.value.length;
+            if (idx >= len || idx < -len) {
+              fail(`string index ${idx} is out of bounds`);
+            }
+          }
+          if (source.kind === "function_call" && (source.call.name === "to_json" || source.call.name.endsWith("::to_json"))) {
+            const arg = source.call.args[0];
+            if (arg && arg.kind === "literal" && typeof arg.value === "string") {
+              try {
+                const parsed = JSON.parse(arg.value);
+                if (Array.isArray(parsed)) {
+                  const len = parsed.length;
+                  if (idx >= len || idx < -len) {
+                    fail(`JSON index ${idx} is out of bounds`);
+                  }
+                } else if (typeof parsed === "string") {
+                  const len = parsed.length;
+                  if (idx >= len || idx < -len) {
+                    fail(`JSON index ${idx} is out of bounds`);
+                  }
+                }
+              } catch { /* not valid JSON — let runtime handle */ }
+            }
+          }
+        };
+        literalIndexBoundsCheck();
+        // Index access requires an indexable source — string, bytes, JSON,
+        // array, or tuple. Numeric / bool / uuid / datetime scalars are not
+        // indexable, so we reject them here (e.g. `<str>1[0]` parses as
+        // `<str>(1[0])` due to precedence and the inner `1[0]` is invalid).
+        const nonIndexableScalarLabel = (typeName: string): string | undefined => {
+          // Heuristic: any scalar that isn't str/bytes/json is non-indexable
+          // for our purposes. The reference EdgeQL diagnostic spells the type
+          // as `std::int64` etc; we approximate from the FieldDef.type string.
+          if (typeName === "str" || typeName === "bytes" || typeName === "json") return undefined;
+          return `std::${typeName === "int" ? "int64" : typeName === "float" ? "float64" : typeName}`;
+        };
+        if (expr.expr.kind === "literal") {
+          const value = expr.expr.value;
+          if (typeof value === "number") {
+            fail(`index indirection cannot be applied to scalar type 'std::int64'`);
+          }
+          if (typeof value === "boolean") {
+            fail(`index indirection cannot be applied to scalar type 'std::bool'`);
+          }
+        }
+        if (expr.expr.kind === "field_access" || expr.expr.kind === "path") {
+          const fieldAccessSource = expr.expr.kind === "field_access"
+            ? (expr.expr.expr.kind === "select_expr_subquery" ? expr.expr.expr.expr : expr.expr.expr)
+            : undefined;
+          const sourceTypeName = expr.expr.kind === "field_access" && fieldAccessSource && fieldAccessSource.kind === "select"
+            ? normalizeTypeName(fieldAccessSource.typeName, activeModule)
+            : expr.expr.kind === "path"
+              ? normalizeTypeName(expr.expr.head, activeModule)
+              : undefined;
+          const fieldName = expr.expr.kind === "field_access" ? expr.expr.field : expr.expr.kind === "path" ? expr.expr.tail : undefined;
+          if (sourceTypeName && fieldName) {
+            const sourceTypeDef = schema.getType(sourceTypeName);
+            const field = sourceTypeDef ? collectFields(sourceTypeDef, true).find((f) => f.name === fieldName) : undefined;
+            if (field && !field.collection) {
+              const label = nonIndexableScalarLabel(field.type);
+              if (label) {
+                fail(`index indirection cannot be applied to scalar type '${label}'`);
+              }
+            }
+          }
+        }
         return {
           kind: "index_access",
           value: asNestedExprEntry(compileExprToIREntry(expr.expr, currentItemBinding)),
@@ -3668,6 +3924,38 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           kind: "array_literal_expr",
           values: expr.values.map((value) => asNestedExprEntry(compileExprToIREntry(value, currentItemBinding))),
         };
+      }
+      if (expr.kind === "slice_access") {
+        // Compile-time slice evaluation for literal sources (`[1,2,3][1:]`,
+        // `"hello"[1:3]`).  EdgeQL slice semantics: out-of-range bounds are
+        // silently clamped; missing start/end mean 0 / length.
+        const sliceClamp = (length: number, value: number | undefined, fallback: number): number => {
+          if (value === undefined) return fallback;
+          if (value < 0) {
+            const adjusted = length + value;
+            return adjusted < 0 ? 0 : adjusted;
+          }
+          return value > length ? length : value;
+        };
+        if (expr.expr.kind === "array_literal_expr") {
+          const source = expr.expr.values;
+          const start = sliceClamp(source.length, expr.start, 0);
+          const end = sliceClamp(source.length, expr.end, source.length);
+          const slice = start >= end ? [] : source.slice(start, end);
+          return {
+            kind: "array_literal_expr",
+            values: slice.map((value) => asNestedExprEntry(compileExprToIREntry(value, currentItemBinding))),
+          };
+        }
+        if (expr.expr.kind === "literal" && typeof expr.expr.value === "string") {
+          const source = expr.expr.value;
+          const start = sliceClamp(source.length, expr.start, 0);
+          const end = sliceClamp(source.length, expr.end, source.length);
+          const slice = start >= end ? "" : source.slice(start, end);
+          return { kind: "literal", value: slice };
+        }
+        // Other sources (paths, casts, function calls) — fall through to the
+        // generic "Unsupported" diagnostic so we don't silently misbehave.
       }
       if (expr.kind === "exists") {
         return {
@@ -3742,6 +4030,41 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       }
       
       if (expr.kind === "for_expr") {
+        // Pre-expansion: if the iterator is a literal set, expand the FOR loop
+        // statically by substituting binding_ref(variable) with each literal
+        // value inside the body and wrapping the copies in a UNION (set_expr).
+        // This avoids needing a binding_ref scalar at SQL-compile time for the
+        // common case of `FOR x IN {a, b, c} UNION (...x...)`.
+        if (
+          expr.iterator.kind === "set_literal"
+          && expr.iterator.values.length > 0
+          && expr.iterator.values.every((v) => v !== undefined && v !== null && (typeof v === "number" || typeof v === "string" || typeof v === "boolean"))
+        ) {
+          const substituteAny = (node: unknown, variable: string, value: number | string | boolean): unknown => {
+            if (!node || typeof node !== "object") return node;
+            if (Array.isArray(node)) return node.map((item) => substituteAny(item, variable, value));
+            const obj = node as Record<string, unknown>;
+            if (obj.kind === "binding_ref" && obj.name === variable) {
+              return { kind: "literal", value };
+            }
+            // Inner FOR with the same variable shadows — leave its body alone.
+            if (obj.kind === "for_expr" && (obj as { variable?: string }).variable === variable) {
+              return node;
+            }
+            const result: Record<string, unknown> = {};
+            for (const key of Object.keys(obj)) {
+              result[key] = substituteAny(obj[key], variable, value);
+            }
+            return result;
+          };
+          const substituteBindingRef = (node: FreeObjectExpr, variable: string, value: number | string | boolean): FreeObjectExpr =>
+            substituteAny(node, variable, value) as FreeObjectExpr;
+          const expandedValues = expr.iterator.values.map((v) =>
+            substituteBindingRef(expr.body, expr.variable, v as number | string | boolean),
+          );
+          const expandedSet: FreeObjectExpr = { kind: "set_expr", values: expandedValues };
+          return compileExprToIREntry(expandedSet, currentItemBinding);
+        }
         if (freeExprReferencesBindingLinkProperty(expr.body, expr.variable) && !forIteratorIsScopedLink(expr.iterator, currentItemBinding)) {
           fail(`unexpected reference to link property on '${expr.variable}'`);
         }
@@ -4392,7 +4715,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
 
         const nestedType = requireValue(
           aliasSourceType ?? schema.getType(normalizeTypeName(expr.typeName, activeModule)),
-          `Unknown type '${normalizeTypeName(expr.typeName, activeModule)}' in select expression`,
+          `object type or alias '${normalizeTypeName(expr.typeName, activeModule)}' does not exist`,
         );
         const aliasFilter = schemaAlias?.filter?.kind === "field_predicate"
           ? {

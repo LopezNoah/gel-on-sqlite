@@ -2425,11 +2425,12 @@ class Parser {
       };
     }
 
-    if (this.peek().kind === "star") {
+    if (this.peek().kind === "star" || this.peek().kind === "double_splat") {
+      const depth = this.parseSplatDepth();
       const clauseModifiers = this.clauseChainToShapeModifiers(this.parseClauseChain());
       return {
         kind: "splat",
-        depth: this.parseSplatDepth(),
+        depth,
         operation: "assign",
         origin: "explicit",
         required,
@@ -4791,11 +4792,19 @@ class Parser {
       // parenthesized: `(...)`
       || this.peek().kind === "lparen"
       // cast: `<int64>...`
-      || this.peek().kind === "lt";
+      || this.peek().kind === "lt"
+      // backlink iteration on a named source: `User.<owner[IS Issue]...`
+      || (this.isNameToken(this.peek()) && this.peekNext().kind === "backward_link")
+      // partial backlink: `.<owner[IS Issue]...`
+      || this.peek().kind === "backward_link";
     let field = "";
     let expr: FreeObjectExpr | undefined;
     if (looksLikeExpression) {
+      const startToken = this.peek();
       expr = this.parseFreeObjectExpr();
+      // ORDER BY is a singleton context — reject backlink iterations and
+      // bare partial backlink paths with the reference EdgeQL diagnostics.
+      this.validateLimitOffsetExprShape(expr, startToken);
       field = "__expr__";
     } else {
       field = this.parseFieldReference("order by");
@@ -4943,6 +4952,10 @@ class Parser {
   }
 
   private parseSplatDepth(): 1 | 2 {
+    if (this.peek().kind === "double_splat") {
+      this.consume();
+      return 2;
+    }
     this.expect("star", "Expected '*' in splat expression");
     if (this.peek().kind === "star") {
       this.consume();
