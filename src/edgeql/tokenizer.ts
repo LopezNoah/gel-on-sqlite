@@ -784,7 +784,13 @@ const tokenizeImpl = (input: string): TokenizeResult => {
     const keyword = KEYWORDS[lowered];
 
     if (keyword !== undefined && !(keyword === "kw_named" && hasUppercase)) {
-      tokens.push({ kind: keyword, lexeme: lowered, lower: lowered, offset: tokenOffset });
+      // Preserve original case in `lexeme` for context-sensitive keywords
+      // (e.g. `Text`, `Number`) that are also valid identifiers. The lowercased
+      // form lives in `lower` for case-insensitive matching.
+      const preserveCase = keyword === "kw_unreserved"
+        || keyword === "kw_partial_reserved"
+        || keyword === "kw_future_reserved";
+      tokens.push({ kind: keyword, lexeme: preserveCase ? value : lowered, lower: lowered, offset: tokenOffset });
     } else {
       // For identifiers we keep `lexeme` in its original case but expose a
       // lowercased form via `lower` so parser case-insensitive comparisons

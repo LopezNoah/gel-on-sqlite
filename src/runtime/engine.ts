@@ -1,4 +1,5 @@
 import { getCompilerService, type CompilerCacheMeta } from "../compiler/service.js";
+import { validateParsedStatement } from "../compiler/ast_to_ir.js";
 import { AppError, asAppError } from "../errors.js";
 import { parseEdgeQL, parseEdgeQLScript, type ParseEdgeQLOptions } from "../edgeql/parser.js";
 import { offsetToLineCol, tokenize, type Token } from "../edgeql/tokenizer.js";
@@ -2051,6 +2052,22 @@ const tryRuntimeSelectExprEvaluationAst = (
             if (Array.isArray(result)) out.push(...result);
             else if (result !== null && result !== undefined) out.push(result);
           }
+          // EdgeQL paths return DISTINCT objects (by id). When the result
+          // items are all id-bearing rows, dedupe so cross-product joins
+          // collapse to set semantics.
+          if (out.length > 1
+            && out.every((item) => item && typeof item === "object" && !Array.isArray(item)
+              && typeof (item as { id?: unknown }).id === "string")) {
+            const seen = new Set<string>();
+            const deduped: unknown[] = [];
+            for (const item of out) {
+              const id = (item as { id: string }).id;
+              if (seen.has(id)) continue;
+              seen.add(id);
+              deduped.push(item);
+            }
+            return deduped;
+          }
           return out;
         }
         return readOne(value);
@@ -2275,6 +2292,11 @@ const tryRuntimeSelectExprEvaluationAst = (
         };
         const leftIsSet = Array.isArray(left);
         const rightIsSet = Array.isArray(right);
+        // EdgeQL: any binary op with an empty-set operand produces empty set.
+        if ((leftIsSet && (left as unknown[]).length === 0)
+          || (rightIsSet && (right as unknown[]).length === 0)) {
+          return [];
+        }
         if (!leftIsSet && !rightIsSet) {
           return compareOne(left, right);
         }
@@ -2498,6 +2520,52 @@ const tryRuntimeSelectExprEvaluationAst = (
         if (enumValues.length === 0) {
           const qualified = qualifyRuntimeTypeName(expr.typeName);
           const items = Array.isArray(value) ? value : [value];
+          // Scalar IS type check: applies when item is a primitive value.
+          const scalarTypeCheck = (item: unknown): boolean | undefined => {
+            if (item === null || item === undefined) return undefined;
+            if (typeof item === "object") return undefined;
+            const last = expr.typeName.split("::").at(-1) ?? expr.typeName;
+            const isInt = typeof item === "number" && Number.isInteger(item);
+            const isFloat = typeof item === "number" && !Number.isInteger(item);
+            const isStr = typeof item === "string";
+            const isBool = typeof item === "boolean";
+            switch (last) {
+              case "anyscalar": return true;
+              case "anytype": return true;
+              case "anyreal": return typeof item === "number";
+              case "anyint": return isInt;
+              case "anyfloat": return isFloat;
+              case "int64":
+                return isInt;
+              case "int16":
+              case "int32":
+                // Without static type info, can't distinguish int16/32 from int64.
+                // EdgeQL `IS int16/int32` checks the static type, which defaults
+                // to int64 for literals and field values.
+                return false;
+              case "float64":
+                return isFloat;
+              case "float32":
+                return false;
+              case "decimal":
+              case "bigint":
+                return false;
+              case "str":
+                return isStr;
+              case "bool":
+                return isBool;
+              case "Object":
+              case "BaseObject":
+                return false;
+              default:
+                return undefined;
+            }
+          };
+          // If all items are primitives, this is a scalar IS check — return boolean(s).
+          if (items.length > 0 && items.every((item) => item !== null && item !== undefined && typeof item !== "object")) {
+            const results = items.map((item) => scalarTypeCheck(item) ?? false);
+            return Array.isArray(value) ? results : results[0];
+          }
           return items.filter((item) => {
             if (!item || typeof item !== "object" || Array.isArray(item)) return false;
             const sourceType = (item as Record<string, unknown>).__source_type;
@@ -2667,7 +2735,24 @@ const tryRuntimeSelectExprEvaluationAst = (
           }
         }
         const value = evalExpr(expr.expr, env);
-        const items = Array.isArray(value) ? value : value === null || value === undefined ? [] : [value];
+        let items = Array.isArray(value) ? value : value === null || value === undefined ? [] : [value];
+        // EdgeQL paths return DISTINCT objects (by id). When the shape source
+        // is a field_access path (e.g. `Issue.owner`), dedupe the items so the
+        // projected shape isn't multiplied by the join's source cardinality.
+        if (expr.expr.kind === "field_access"
+          && items.length > 1
+          && items.every((item) => item && typeof item === "object" && !Array.isArray(item)
+            && typeof (item as { id?: unknown }).id === "string")) {
+          const seen = new Set<string>();
+          const deduped: unknown[] = [];
+          for (const item of items) {
+            const id = (item as { id: string }).id;
+            if (seen.has(id)) continue;
+            seen.add(id);
+            deduped.push(item);
+          }
+          items = deduped;
+        }
         // If the shape source is a WITH binding (e.g. `SELECT X { ... }` with
         // `WITH X := {...}`), rebind that name per row so the computed shape
         // sees the current row through the original binding name. Without this,
@@ -2702,6 +2787,10 @@ const tryRuntimeSelectExprEvaluationAst = (
                 // still unwrapped.
                 if (!element.multi && Array.isArray(computedValue) && computedValue.length <= 1) {
                   out[element.name] = computedValue.length === 0 ? null : computedValue[0];
+                } else if (element.multi && !Array.isArray(computedValue)) {
+                  // Explicit `multi` cardinality wraps a scalar into a singleton
+                  // array (matches `assert_query_result`'s expectation).
+                  out[element.name] = computedValue == null ? [] : [computedValue];
                 } else {
                   out[element.name] = computedValue;
                 }
@@ -3414,8 +3503,33 @@ const tryEvaluateParsedRuntimeSelect = (
     });
   }
 
+  // True when the expression chains through a link (e.g. `Issue.priority.name`).
+  // Such paths can be empty per source row, and EdgeQL semantics require empty
+  // propagation through comparisons / AND / OR / NOT — which the SQL path
+  // can't express, so we route through the parsed runtime evaluator.
+  const accessesOptionalPath = (expr: FreeObjectExpr): boolean => {
+    if (!expr) return false;
+    if (expr.kind === "field_access") {
+      // A chain of two or more dotted accesses (e.g. `.priority.name`) crosses
+      // at least one link boundary, so the result may be empty.
+      let depth = 0;
+      let cursor: FreeObjectExpr = expr;
+      while (cursor.kind === "field_access") {
+        depth += 1;
+        cursor = cursor.expr;
+      }
+      return depth >= 2;
+    }
+    return false;
+  };
   const freeExprNeedsParsedRuntime = (expr: FreeObjectExpr): boolean => {
     if (expr.kind === "for_expr") return true;
+    if (expr.kind === "is_type") return true;
+    if (expr.kind === "function_call") return true;
+    // EdgeQL: comparisons with an optional-path operand return empty when the
+    // path is empty; OR/AND propagate empty too. The SQL path uses NULL/3VL
+    // semantics, so we route through the parsed runtime.
+    if (expr.kind === "compare" && (accessesOptionalPath(expr.left) || accessesOptionalPath(expr.right))) return true;
     if (expr.kind === "exists") return freeExprNeedsParsedRuntime(expr.expr) || expr.expr.kind === "field_access" || expr.expr.kind === "select_expr_subquery" || expr.expr.kind === "path_steps";
     if (expr.kind === "path_steps") {
       return expr.steps.some((step) => step.kind === "ptr" && step.direction === "inbound");
@@ -3442,8 +3556,34 @@ const tryEvaluateParsedRuntimeSelect = (
     }
     return false;
   };
+  // True when at least one branch of this filter targets a path that traverses
+  // a link (i.e. could be empty per-row). Such filters require EdgeQL set
+  // semantics that the SQL path can't express. Combined with AND/OR/NOT
+  // empty-propagation, we route the whole filter through the parsed runtime.
+  const filterTouchesOptionalPath = (filter: SelectStatement["filter"]): boolean => {
+    if (!filter) return false;
+    if (filter.kind === "and" || filter.kind === "or") {
+      return filterTouchesOptionalPath(filter.left) || filterTouchesOptionalPath(filter.right);
+    }
+    if (filter.kind === "not") return filterTouchesOptionalPath(filter.expr);
+    if (filter.kind === "predicate" && filter.target.kind === "field" && filter.target.field.includes(".")) {
+      return true;
+    }
+    return false;
+  };
+  const filterContainsBoolOp = (filter: SelectStatement["filter"]): boolean => {
+    if (!filter) return false;
+    if (filter.kind === "and" || filter.kind === "or" || filter.kind === "not") return true;
+    return false;
+  };
   const filterNeedsParsedRuntime = (filter: SelectStatement["filter"]): boolean => {
     if (!filter) return false;
+    // EdgeQL: a multi-clause filter with dotted-path predicates needs
+    // EdgeQL set semantics (empty propagation) that the SQL path can't
+    // express. Route the whole filter through the parsed runtime.
+    if (filterContainsBoolOp(filter) && filterTouchesOptionalPath(filter)) {
+      return true;
+    }
     if (filter.kind === "and" || filter.kind === "or") {
       return filterNeedsParsedRuntime(filter.left) || filterNeedsParsedRuntime(filter.right);
     }
@@ -3452,11 +3592,20 @@ const tryEvaluateParsedRuntimeSelect = (
     return false;
   };
 
+  // ORDER BY with an expression form (e.g. `len(.body)`) can't be lowered to
+  // SQL — the semantic stage drops it from the IR. Route through the parsed
+  // runtime so we can sort per-row instead.
+  const orderByNeedsParsedRuntime = (orderBy: SelectStatement["orderBy"]): boolean => {
+    if (!orderBy) return false;
+    if (orderBy.expr) return true;
+    return orderByNeedsParsedRuntime(orderBy.then);
+  };
   if (
     !selectedAliasNeedsParsedRuntime
     && !shapeNeedsParsedRuntime(statement.shape)
     && !statement.with?.some((binding) => bindingNeedsParsedRuntime(binding.value))
     && !filterNeedsParsedRuntime(statement.filter)
+    && !orderByNeedsParsedRuntime(statement.orderBy)
   ) {
     return undefined;
   }
@@ -3748,12 +3897,54 @@ const tryEvaluateParsedRuntimeSelect = (
       return evalSelect(value.query.typeName, value.query.shape, value.query.clauses, env);
     }
     if (value.kind === "subquery_expr") {
+      // Collect any clauses (orderBy/filter/limit/offset) carried on the
+      // select_expr_subquery wrapper(s) so we can apply them after evaluating
+      // the underlying SELECT. The parser stores LIMIT/ORDER BY on the
+      // wrapper, not the SELECT statement itself, so naive unwrapping loses
+      // those constraints.
+      type WrapperClauses = {
+        filter?: FreeObjectExpr;
+        orderBy?: { expr: FreeObjectExpr; direction: "asc" | "desc"; nullsPosition?: "first" | "last" };
+        limit?: number;
+        offset?: number;
+        alias?: string;
+      };
       let inner: FreeObjectExpr = value.expr;
+      const wrappers: WrapperClauses[] = [];
       while (inner.kind === "select_expr_subquery") {
+        if (inner.filter || inner.orderBy || inner.limit !== undefined || inner.offset !== undefined) {
+          wrappers.push({
+            filter: inner.filter,
+            orderBy: inner.orderBy as WrapperClauses["orderBy"],
+            limit: inner.limit,
+            offset: inner.offset,
+            alias: inner.alias,
+          });
+        }
         inner = inner.expr;
       }
       if (inner.kind === "select") {
-        return evalSelect(inner.typeName, inner.shape, inner.clauses, env);
+        let rows = evalSelect(inner.typeName, inner.shape, inner.clauses, env);
+        for (let i = wrappers.length - 1; i >= 0; i -= 1) {
+          const w = wrappers[i]!;
+          if (w.filter) {
+            const filter = w.filter;
+            rows = rows.filter((row) => {
+              const itemEnv = withInnerRow(env, row, rowTypeName(row, env.rowType));
+              const fv = evalFreeExpr(filter, itemEnv);
+              return Array.isArray(fv) ? fv.some(Boolean) : Boolean(fv);
+            });
+          }
+          if (w.orderBy) {
+            const orderBy = w.orderBy;
+            rows = [...rows].sort((a, b) => compareByExprOrder(orderBy, a, b, env, w.alias));
+          }
+          const offset = w.offset ?? 0;
+          if (w.limit !== undefined || offset > 0) {
+            rows = w.limit === undefined ? rows.slice(offset) : rows.slice(offset, offset + w.limit);
+          }
+        }
+        return rows;
       }
       const evaluated = evalFreeExpr(value.expr, env);
       if (Array.isArray(evaluated)) {
@@ -4540,7 +4731,24 @@ const tryEvaluateParsedRuntimeSelect = (
         || normalized === "std::assert_exists"
         || normalized === "std::assert_single") {
         const arg = expr.call.args[0];
-        return arg ? evalFunctionArg(arg, env) : [];
+        const value = arg ? evalFunctionArg(arg, env) : [];
+        if (normalized === "std::assert_exists") {
+          const isEmpty = Array.isArray(value) ? value.length === 0 : value == null;
+          if (isEmpty) {
+            throw new AppError("E_SEMANTIC", "assert_exists violation", 1, 1);
+          }
+        }
+        return value;
+      }
+      // Fallback: route to stdlib function dispatch.
+      const stdlibDef = resolveStdlibFunction(name, expr.call.args.length);
+      if (stdlibDef) {
+        const args = expr.call.args.map((arg): RuntimeFunctionArg => {
+          const value = evalFunctionArg(arg, env);
+          if (Array.isArray(value)) return { kind: "set", values: value as ScalarValue[] };
+          return value as ScalarValue;
+        });
+        return executeStdlibFunction(name, args) as unknown;
       }
     }
     return null;
@@ -4629,6 +4837,12 @@ const tryEvaluateParsedRuntimeSelect = (
         || normalizedName === "std::assert_exists"
         || normalizedName === "std::assert_single") {
         const value = expr.call.args[0] ? evalFunctionArg(expr.call.args[0], env) : [];
+        if (normalizedName === "std::assert_exists") {
+          const isEmpty = Array.isArray(value) ? value.length === 0 : value == null;
+          if (isEmpty) {
+            throw new AppError("E_SEMANTIC", "assert_exists violation", 1, 1);
+          }
+        }
         return value;
       }
       // Fall through for user-defined / unhandled functions: evaluate args
@@ -4710,10 +4924,23 @@ const tryEvaluateParsedRuntimeSelect = (
     return null;
   };
 
-  const compareRowsByOrder = (a: ParsedRuntimeRow, b: ParsedRuntimeRow, orderBy: OrderExpr): number => {
-    const field = orderBy.field.replace(/^\./, "").replace(/^@/, "@").split(".").at(-1) ?? orderBy.field;
-    const left = a[field];
-    const right = b[field];
+  const compareRowsByOrder = (a: ParsedRuntimeRow, b: ParsedRuntimeRow, orderBy: OrderExpr, env?: ParsedRuntimeEnv): number => {
+    let left: unknown;
+    let right: unknown;
+    if (orderBy.expr) {
+      // Expression form: evaluate per row (e.g. `len(.body)`).
+      const baseEnv = env ?? { bindings: new Map() };
+      const aEnv: ParsedRuntimeEnv = { ...baseEnv, row: a, rowType: rowTypeName(a) };
+      const bEnv: ParsedRuntimeEnv = { ...baseEnv, row: b, rowType: rowTypeName(b) };
+      const aVal = evalFreeExpr(orderBy.expr, aEnv);
+      const bVal = evalFreeExpr(orderBy.expr, bEnv);
+      left = Array.isArray(aVal) ? aVal[0] : aVal;
+      right = Array.isArray(bVal) ? bVal[0] : bVal;
+    } else {
+      const field = orderBy.field.replace(/^\./, "").replace(/^@/, "@").split(".").at(-1) ?? orderBy.field;
+      left = a[field];
+      right = b[field];
+    }
     const direction = orderBy.direction === "desc" ? -1 : 1;
     const comparison = typeof left === "number" && typeof right === "number"
       ? left === right ? 0 : left < right ? -1 : 1
@@ -4721,18 +4948,62 @@ const tryEvaluateParsedRuntimeSelect = (
     if (comparison !== 0) {
       return comparison * direction;
     }
-    return orderBy.then ? compareRowsByOrder(a, b, orderBy.then) : 0;
+    return orderBy.then ? compareRowsByOrder(a, b, orderBy.then, env) : 0;
   };
 
   const materialize = (row: ParsedRuntimeRow, typeName: string, shape: ShapeElement[], env: ParsedRuntimeEnv): Record<string, unknown> => {
     const out: Record<string, unknown> = {};
+    const fieldTypeName = rowTypeName(row, typeName);
+    const qualifiedFieldType = fieldTypeName.includes("::") ? fieldTypeName : qualifyRuntimeTypeName(fieldTypeName);
+    const fieldTypeDef = schema.getType(qualifiedFieldType);
+    const fieldByName = new Map<string, { multi?: boolean }>();
+    if (fieldTypeDef) {
+      for (const f of fieldTypeDef.fields) fieldByName.set(f.name, f);
+    }
     for (const element of shape) {
       if (element.kind === "field") {
-        out[element.name] = row[element.name] ?? null;
+        let value = row[element.name] ?? null;
+        const fieldDef = fieldByName.get(element.name);
+        // Multi-cardinality scalar properties (`multi tags: str`) are stored
+        // as JSON-encoded strings; decode them into arrays for output.
+        if (fieldDef?.multi && typeof value === "string") {
+          try {
+            const parsed = JSON.parse(value);
+            if (Array.isArray(parsed)) value = parsed;
+          } catch {
+            // leave as-is; falls through to caller
+          }
+        } else if (fieldDef?.multi && value === null) {
+          value = [];
+        }
+        out[element.name] = value;
       } else if (element.kind === "computed") {
         const computedEnv = withInnerRow(env, row, typeName);
         const isMulti = Boolean(element.multi) || element.cardinality === "many";
-        const value = evalComputed(element.expr, computedEnv, isMulti);
+        let value = evalComputed(element.expr, computedEnv, isMulti);
+        // A computed shape whose expression is structurally an empty set
+        // (`<X>{}` or `{}`) should expose `null` in single cardinality, not
+        // the empty array.
+        const isStructurallyEmptyExpr = (e: ComputedExpr | FreeObjectExpr): boolean => {
+          if (e.kind === "set_literal") return e.values.length === 0;
+          if (e.kind === "cast") return isStructurallyEmptyExpr(e.expr);
+          if (e.kind === "select_expr") return isStructurallyEmptyExpr(e.expr);
+          return false;
+        };
+        if (!isMulti && isStructurallyEmptyExpr(element.expr) && Array.isArray(value) && value.length === 0) {
+          value = null;
+        }
+        // Explicit `single` cardinality: unwrap a singleton array. Without an
+        // explicit modifier we leave the value alone — other evaluators rely
+        // on the array shape.
+        if (element.cardinality === "one" && Array.isArray(value) && value.length <= 1) {
+          value = value.length === 0 ? null : value[0];
+        }
+        // Explicit `multi` cardinality: wrap a single scalar into a 1-element
+        // array. Null becomes []; arrays pass through.
+        if (isMulti && !Array.isArray(value)) {
+          value = value == null ? [] : [value];
+        }
         out[element.name] = Array.isArray(value) && computedReferencesUnorderedBinding(element.expr, computedEnv)
           ? { __kind: "set", items: value }
           : value;
@@ -4778,17 +5049,47 @@ const tryEvaluateParsedRuntimeSelect = (
     return out;
   };
 
-  const evalFilter = (row: ParsedRuntimeRow, typeName: string, filter: SelectStatement["filter"] | undefined, env: ParsedRuntimeEnv): boolean => {
+  // EdgeQL evaluates filters as set-of-booleans with cross-product semantics:
+  // empty propagates through AND/OR/NOT, so e.g. `{} OR true` is empty (not
+  // true). To preserve that, evalFilterTri returns "empty" alongside the
+  // booleans; the top-level `evalFilter` wraps it and treats "empty" as
+  // no-match.
+  const evalFilterTri = (row: ParsedRuntimeRow, typeName: string, filter: SelectStatement["filter"] | undefined, env: ParsedRuntimeEnv): true | false | "empty" => {
     if (!filter) {
       return true;
     }
-    if (filter.kind === "and") return evalFilter(row, typeName, filter.left, env) && evalFilter(row, typeName, filter.right, env);
-    if (filter.kind === "or") return evalFilter(row, typeName, filter.left, env) || evalFilter(row, typeName, filter.right, env);
-    if (filter.kind === "not") return !evalFilter(row, typeName, filter.expr, env);
+    if (filter.kind === "and") {
+      const l = evalFilterTri(row, typeName, filter.left, env);
+      const r = evalFilterTri(row, typeName, filter.right, env);
+      if (l === "empty" || r === "empty") return "empty";
+      return l && r;
+    }
+    if (filter.kind === "or") {
+      const l = evalFilterTri(row, typeName, filter.left, env);
+      const r = evalFilterTri(row, typeName, filter.right, env);
+      if (l === "empty" || r === "empty") return "empty";
+      return l || r;
+    }
+    if (filter.kind === "not") {
+      const inner = evalFilterTri(row, typeName, filter.expr, env);
+      if (inner === "empty") return "empty";
+      return !inner;
+    }
     if (filter.kind === "free_expr") {
       const filterEnv = env.row === row ? env : withInnerRow(env, row, typeName);
       const value = evalFreeExpr(filter.expr, filterEnv);
-      return Array.isArray(value) ? value.some(Boolean) : Boolean(value);
+      if (Array.isArray(value)) {
+        // For EXISTS-style free expressions the answer is a boolean about
+        // cardinality, not a value. Only treat empty as "empty" when the
+        // expression itself is a value comparison (= != etc.) that should
+        // propagate empties.
+        if (value.length === 0) {
+          if (filter.expr.kind === "compare") return "empty";
+          return false;
+        }
+        return value.some(Boolean);
+      }
+      return Boolean(value);
     }
     if (filter.target.kind === "backlink_property") {
       if (filter.kind === "in_predicate") {
@@ -4832,13 +5133,76 @@ const tryEvaluateParsedRuntimeSelect = (
             ? filter.value.values
             : filter.value
       : filter.value;
+    // Resolve dotted path targets like `priority.name` by walking links.
+    const resolveDottedFieldValue = (target: ParsedRuntimeRow, path: string): unknown => {
+      if (path === "__type__.name") return rowTypeName(target, typeName);
+      const parts = path.split(".");
+      let current: unknown = target;
+      let currentTypeName: string = rowTypeName(target, typeName);
+      for (let i = 0; i < parts.length; i += 1) {
+        const segment = parts[i];
+        if (current === null || current === undefined) return [];
+        if (Array.isArray(current)) {
+          // Flat-map remaining segments per element.
+          const tail = parts.slice(i).join(".");
+          const collected: unknown[] = [];
+          for (const item of current) {
+            if (item === null || item === undefined) continue;
+            const value = resolveDottedFieldValue(item as ParsedRuntimeRow, tail);
+            if (Array.isArray(value)) collected.push(...value);
+            else if (value !== null && value !== undefined) collected.push(value);
+          }
+          return collected;
+        }
+        if (typeof current !== "object") return null;
+        const row = current as ParsedRuntimeRow;
+        if (Object.prototype.hasOwnProperty.call(row, segment)) {
+          const value = row[segment];
+          if (i === parts.length - 1) return value ?? null;
+          current = value;
+          continue;
+        }
+        // Try as a link.
+        const linked = readForwardLink(row, currentTypeName, segment);
+        if (linked.length === 0) return [];
+        if (i === parts.length - 1) return linked;
+        if (linked.length === 1) {
+          current = linked[0];
+          currentTypeName = rowTypeName(linked[0] as ParsedRuntimeRow, currentTypeName);
+          continue;
+        }
+        // Multi: flat-map.
+        const tail = parts.slice(i + 1).join(".");
+        const collected: unknown[] = [];
+        for (const item of linked) {
+          const value = resolveDottedFieldValue(item as ParsedRuntimeRow, tail);
+          if (Array.isArray(value)) collected.push(...value);
+          else if (value !== null && value !== undefined) collected.push(value);
+        }
+        return collected;
+      }
+      return current;
+    };
     const actual = filter.target.field === "__type__.name"
       ? rowTypeName(row, typeName)
-      : row[filter.target.field];
+      : filter.target.field.includes(".")
+        ? resolveDottedFieldValue(row, filter.target.field)
+        : row[filter.target.field];
     if (Array.isArray(expected)) {
       return filter.op === "=" ? expected.includes(actual as ScalarValue) : !expected.includes(actual as ScalarValue);
     }
+    // EdgeQL: comparison with an empty operand yields empty (i.e. no match).
+    if (Array.isArray(actual)) {
+      if (actual.length === 0) return "empty";
+      return actual.some((v) => runtimeAliasPredicateMatches(v, filter.op, expected as ScalarValue));
+    }
     return runtimeAliasPredicateMatches(actual, filter.op, expected as ScalarValue);
+  };
+
+  // Top-level wrapper: empty result counts as "no match" (false) for filters.
+  const evalFilter = (row: ParsedRuntimeRow, typeName: string, filter: SelectStatement["filter"] | undefined, env: ParsedRuntimeEnv): boolean => {
+    const result = evalFilterTri(row, typeName, filter, env);
+    return result === true;
   };
 
   const evalSelect = (typeName: string, shape: ShapeElement[], clauses: SelectStatement["filter"] extends never ? never : { filter?: SelectStatement["filter"]; orderBy?: SelectStatement["orderBy"]; limit?: SelectStatement["limit"]; offset?: SelectStatement["offset"]; _withBindings?: WithBinding[] }, env: ParsedRuntimeEnv): ParsedRuntimeRow[] => {
@@ -4855,7 +5219,11 @@ const tryEvaluateParsedRuntimeSelect = (
     const qualified = schema.getType(qualifyType(typeName)) ? qualifyType(typeName) : typeName;
     let rows = source.filter((row) => evalFilter(row, rowTypeName(row, qualified), clauses.filter, { ...env, bindings }));
     if (clauses.orderBy?.field) {
-      rows = [...rows].sort((a, b) => compareRowsByOrder(a, b, clauses.orderBy!));
+      // Tag the env with an iteration path so a free expression like
+      // `len(Text.body)` resolves `Text.body` against the current row, not
+      // the global Text set.
+      const sortEnv: ParsedRuntimeEnv = { ...env, bindings, iterationPath: { typeName, steps: [] } };
+      rows = [...rows].sort((a, b) => compareRowsByOrder(a, b, clauses.orderBy!, sortEnv));
     }
     if (clauses.offset !== undefined) rows = rows.slice(clauses.offset);
     if (clauses.limit !== undefined) rows = rows.slice(0, clauses.limit);
@@ -5738,6 +6106,7 @@ export const executeQuery = (
   }
 
   const parsedQuery = parseEdgeQL(rewrittenQuery);
+  validateParsedStatement(parsedQuery, { schema, module: parsedQuery.withModule });
   const preprocessed = preEvaluateGroupBindings(db, schema, parsedQuery, normalizeSecurityContext(securityContext));
   if (preprocessed !== parsedQuery) {
     // GROUP results were inlined as synthetic WITH bindings. Run the rewritten
@@ -5815,6 +6184,7 @@ export const executeQueryWithTrace = (
     const runtimeTarget = resolvedRuntimeTarget(context, db);
     const compilerService = getCompilerService();
     const ast = parseEdgeQL(query);
+    validateParsedStatement(ast, { schema, module: ast.withModule });
     const statementType = statementTypeOf(ast);
     enforceBuiltinPermissions(context, statementType, ast.pos.line, ast.pos.column);
     const compiled = compilerService.compile(schema, ast, { globals: context.globals, target: runtimeTarget });
@@ -5881,6 +6251,20 @@ export const executeQueryWithTrace = (
       const compareNeedsRuntimeFromFilter = (firstEntry?.kind === "compare")
         && (firstEntry.op === "?=" || firstEntry.op === "?!=")
         && (containsFilteredSubquery(firstEntry.left) || containsFilteredSubquery(firstEntry.right));
+
+      // EdgeQL: `X op Y` with empty-set on either side yields empty set.
+      // The SQL path produces NULLs that get materialised as `false` booleans
+      // instead of zero rows; route through the runtime evaluator instead.
+      const isStructurallyEmpty = (e: SelectExprIREntry | undefined): boolean => {
+        if (!e) return false;
+        if (e.kind === "set_literal" && (e as { values?: unknown[] }).values?.length === 0) return true;
+        if (e.kind === "cast") {
+          return isStructurallyEmpty((e as { value?: SelectExprIREntry }).value);
+        }
+        return false;
+      };
+      const compareNeedsRuntimeFromEmpty = (firstEntry?.kind === "compare")
+        && (isStructurallyEmpty(firstEntry.left) || isStructurallyEmpty(firstEntry.right));
 
       // `?=` / `?!=` with a `coalesce` inside either side needs the runtime
       // LCP evaluator: the compiled SQL flattens `X ?? Y` to a SQL COALESCE
@@ -5961,6 +6345,18 @@ export const executeQueryWithTrace = (
           };
           return containsExpr(firstEntry.right, firstEntry.left);
         })();
+      // An empty set literal (or a cast thereof) at the top of a SELECT
+      // should yield zero rows, not a single NULL row that SQL "SELECT NULL"
+      // would produce. Route through the runtime evaluator so [] is preserved.
+      const checkEmptySet = (entry: SelectExprIREntry): boolean => {
+        if (entry.kind === "set_literal" && (entry as { values?: unknown[] }).values?.length === 0) return true;
+        if (entry.kind === "cast") {
+          const inner = (entry as { value?: SelectExprIREntry }).value;
+          return inner ? checkEmptySet(inner) : false;
+        }
+        return false;
+      };
+      const isEmptySetSelect = checkEmptySet(firstEntry);
       const isShapeOrObject = firstEntry
         && (firstEntry.kind === "shape_projection"
           || firstEntry.kind === "select"
@@ -5968,9 +6364,11 @@ export const executeQueryWithTrace = (
           || firstEntry.kind === "field_access"
           || firstEntry.kind === "select_expr_subquery"
           || firstEntry.kind === "array_literal_expr"
+          || isEmptySetSelect
           || coalesceNeedsRuntime
           || compareDeepLCP
           || compareNeedsRuntimeFromFilter
+          || compareNeedsRuntimeFromEmpty
           || compareNeedsRuntimeFromCoalesce
           || selectExprIndexNeedsRuntime(firstEntry));
       const sqlIsRunnable = compiled.usesGelIrSql && sqlArtifact.loweringMode === "single_statement";
@@ -6148,6 +6546,7 @@ export const executeQueryUnitWithTrace = (
         continue;
       }
 
+      validateParsedStatement(ast, { schema, module: ast.withModule });
       const statementType = statementTypeOf(ast);
       enforceBuiltinPermissions(context, statementType, ast.pos.line, ast.pos.column);
       const astSubjectType = ast.kind === "insert" || ast.kind === "update" || ast.kind === "delete"
@@ -7154,7 +7553,10 @@ const materializeSelectRow = (
       } else if (element.expr.kind === "literal") {
         output[element.name] = element.expr.value;
       } else if (element.expr.kind === "set_literal") {
-        output[element.name] = [...element.expr.values];
+        // EdgeQL exposes an empty set in a single-cardinality computed shape
+        // slot as `null`, not as an empty array. The IR doesn't carry
+        // cardinality here so we use the simpler heuristic: empty → null.
+        output[element.name] = element.expr.values.length === 0 ? null : [...element.expr.values];
       } else if (element.expr.kind === "polymorphic_field_ref") {
         const concretes = element.expr.concreteSourceTypes && element.expr.concreteSourceTypes.length > 0
           ? element.expr.concreteSourceTypes
@@ -7276,6 +7678,10 @@ const materializeSelectRow = (
           output[element.name] = [evaluated];
         } else if (Array.isArray(evaluated) && evaluated.length === 1 && !exprMulti) {
           output[element.name] = evaluated[0];
+        } else if (Array.isArray(evaluated) && evaluated.length === 0 && !exprMulti) {
+          // EdgeQL: a single-cardinality computed shape exposes an empty set
+          // as null, not as an empty array.
+          output[element.name] = null;
         } else {
           output[element.name] = evaluated;
         }
@@ -7897,7 +8303,14 @@ const evalGroupRowFunctionCall = (
     return 1;
   }
   if (name === "sum") {
-    const list = asNumericList(args[0]);
+    const rawArg = args[0];
+    if (typeof rawArg === "string") {
+      throw new AppError("E_SEMANTIC", `function "sum(arg0: std::str)" does not exist`, 1, 1);
+    }
+    if (Array.isArray(rawArg) && rawArg.some((v) => typeof v === "string")) {
+      throw new AppError("E_SEMANTIC", `function "sum(arg0: std::str)" does not exist`, 1, 1);
+    }
+    const list = asNumericList(rawArg);
     return list.reduce((acc, v) => acc + v, 0);
   }
   if (name === "min") {
@@ -9823,7 +10236,49 @@ const evaluateSelectExprEntry = (
         const sourceType = (item as Record<string, unknown>).__source_type;
         return typeof sourceType === "string" && rowMatchesTypeName(sourceType, entry.typeName);
       };
+      const scalarTypeCheck = (item: unknown): boolean | undefined => {
+        if (item === null || item === undefined) return undefined;
+        if (typeof item === "object") return undefined;
+        const last = entry.typeName.split("::").at(-1) ?? entry.typeName;
+        const isInt = typeof item === "number" && Number.isInteger(item);
+        const isFloat = typeof item === "number" && !Number.isInteger(item);
+        const isStr = typeof item === "string";
+        const isBool = typeof item === "boolean";
+        switch (last) {
+          case "anyscalar": return true;
+          case "anytype": return true;
+          case "anyreal": return typeof item === "number";
+          case "anyint": return isInt;
+          case "anyfloat": return isFloat;
+          case "int64":
+            return isInt;
+          case "int16":
+          case "int32":
+            return false;
+          case "float64":
+            return isFloat;
+          case "float32":
+            return false;
+          case "decimal":
+          case "bigint":
+            return false;
+          case "str":
+            return isStr;
+          case "bool":
+            return isBool;
+          case "Object":
+          case "BaseObject":
+            return false;
+          default:
+            return undefined;
+        }
+      };
       if (enumValues.length === 0) {
+        const items = Array.isArray(value) ? value : [value];
+        if (items.length > 0 && items.every((item) => item !== null && item !== undefined && typeof item !== "object")) {
+          const results = items.map((item) => scalarTypeCheck(item) ?? false);
+          return Array.isArray(value) ? results : results[0];
+        }
         if (Array.isArray(value)) {
           return value.filter(objectMatches);
         }

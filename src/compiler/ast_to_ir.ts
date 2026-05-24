@@ -990,7 +990,14 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
           result: root,
           where,
           orderBy: clauses?.orderBy
-            ? [{ kind: "sort_expr", path: compileFreeObjectExpr({ kind: "field_access", expr: { kind: "binding_ref", name: "__current__" }, field: clauses.orderBy.field, optional: false }, ctx), direction: clauses.orderBy.direction, nonesOrder: "last" }]
+            ? [{
+              kind: "sort_expr",
+              path: clauses.orderBy.expr
+                ? compileFreeObjectExpr(clauses.orderBy.expr, ctx)
+                : compileFreeObjectExpr({ kind: "field_access", expr: { kind: "binding_ref", name: "__current__" }, field: clauses.orderBy.field, optional: false }, ctx),
+              direction: clauses.orderBy.direction,
+              nonesOrder: "last",
+            }]
             : undefined,
           offset: clauses?.offset === undefined ? undefined : literalToSet(clauses.offset),
           limit: clauses?.limit === undefined ? undefined : literalToSet(clauses.limit),
@@ -2004,6 +2011,470 @@ const compileFilterToSet = (
   return compileFilterExpr(filter, subject, ctx);
 };
 
+type ComputedExprCard = {
+  upper: "one" | "many" | "unknown";
+  lower: "zero" | "one" | "unknown";
+};
+
+type ComputedExprType =
+  | { kind: "scalar"; typeName: string }
+  | { kind: "object"; typeName: string }
+  | { kind: "empty" }
+  | { kind: "unknown" };
+
+const scalarToQualified = (name: string): string => {
+  if (name.includes("::")) return name;
+  switch (name.toLowerCase()) {
+    case "str": return "std::str";
+    case "int16": return "std::int16";
+    case "int32": return "std::int32";
+    case "int64": return "std::int64";
+    case "int": return "std::int64";
+    case "float32": return "std::float32";
+    case "float64": return "std::float64";
+    case "decimal": return "std::decimal";
+    case "bigint": return "std::bigint";
+    case "bool": return "std::bool";
+    case "uuid": return "std::uuid";
+    case "json": return "std::json";
+    case "datetime": return "std::datetime";
+    case "duration": return "std::duration";
+    case "bytes": return "std::bytes";
+    default: return `std::${name}`;
+  }
+};
+
+const literalScalarTypeName = (value: unknown): string => {
+  if (typeof value === "string") return "std::str";
+  if (typeof value === "boolean") return "std::bool";
+  if (typeof value === "number") {
+    return Number.isInteger(value) ? "std::int64" : "std::float64";
+  }
+  if (typeof value === "bigint") return "std::int64";
+  return "std::anyscalar";
+};
+
+const ScalarBindingNames = new globalThis.Set<string>([
+  "__subject__", "__current__", "__source__",
+]);
+
+const inferFreeExprCard = (
+  expr: FreeObjectExpr,
+  ctx: IRCompileContext,
+  subjectTypeRef: TypeRef,
+): ComputedExprCard => {
+  switch (expr.kind) {
+    case "literal":
+      return { upper: "one", lower: "one" };
+    case "set_literal":
+      if (expr.values.length === 0) return { upper: "one", lower: "zero" };
+      if (expr.values.length === 1) return { upper: "one", lower: "one" };
+      return { upper: "many", lower: "one" };
+    case "cast":
+      return inferFreeExprCard(expr.expr, ctx, subjectTypeRef);
+    case "current_item":
+      return { upper: "one", lower: "one" };
+    case "binding_ref": {
+      if (ScalarBindingNames.has(expr.name)) return { upper: "one", lower: "one" };
+      const bound = resolveBinding(ctx, expr.name);
+      if (bound) {
+        return { upper: "unknown", lower: "unknown" };
+      }
+      const typeDef = getSchemaType(ctx, expr.name);
+      if (typeDef) {
+        return { upper: "many", lower: "zero" };
+      }
+      return { upper: "unknown", lower: "unknown" };
+    }
+    case "field_access": {
+      const baseCard = inferFreeExprCard(expr.expr, ctx, subjectTypeRef);
+      const baseType = inferFreeExprType(expr.expr, ctx, subjectTypeRef);
+      if (baseType.kind === "object") {
+        const objectType = getSchemaType(ctx, baseType.typeName);
+        const fieldDef = objectType?.fields.find((candidate) => candidate.name === expr.field);
+        const linkDef = objectType?.links?.find((candidate) => candidate.name === expr.field);
+        if (fieldDef) {
+          return combineCard(baseCard, {
+            upper: fieldDef.multi ? "many" : "one",
+            lower: fieldDef.required ? "one" : "zero",
+          });
+        }
+        if (linkDef) {
+          return combineCard(baseCard, {
+            upper: linkDef.multi ? "many" : "one",
+            lower: linkDef.required ? "one" : "zero",
+          });
+        }
+      }
+      return { upper: "unknown", lower: "unknown" };
+    }
+    case "path":
+    case "path_chain":
+    case "path_steps":
+      return { upper: "unknown", lower: "unknown" };
+    case "select_expr_subquery": {
+      if (expr.limit === 1) return { upper: "one", lower: "zero" };
+      return { upper: "unknown", lower: "zero" };
+    }
+    case "select":
+      if (expr.clauses?.limit === 1) return { upper: "one", lower: "zero" };
+      return { upper: "many", lower: "zero" };
+    case "tuple":
+      return { upper: "one", lower: "one" };
+    case "function_call":
+      return { upper: "unknown", lower: "unknown" };
+    case "math":
+    case "compare":
+    case "and":
+    case "or":
+    case "not":
+    case "unary":
+    case "logical":
+    case "concat":
+      return { upper: "unknown", lower: "unknown" };
+    case "coalesce":
+      return { upper: "unknown", lower: "unknown" };
+    case "if_else":
+      return { upper: "unknown", lower: "unknown" };
+    case "for_expr":
+      return { upper: "many", lower: "zero" };
+    case "exists":
+      return { upper: "one", lower: "one" };
+    default:
+      return { upper: "unknown", lower: "unknown" };
+  }
+};
+
+const combineCard = (a: ComputedExprCard, b: ComputedExprCard): ComputedExprCard => {
+  const upper: ComputedExprCard["upper"] =
+    a.upper === "many" || b.upper === "many" ? "many"
+      : a.upper === "unknown" || b.upper === "unknown" ? "unknown"
+      : "one";
+  const lower: ComputedExprCard["lower"] =
+    a.lower === "zero" || b.lower === "zero" ? "zero"
+      : a.lower === "unknown" || b.lower === "unknown" ? "unknown"
+      : "one";
+  return { upper, lower };
+};
+
+const inferComputedExprCard = (
+  expr: ComputedExpr,
+  ctx: IRCompileContext,
+  subjectTypeRef: TypeRef,
+): ComputedExprCard => {
+  switch (expr.kind) {
+    case "literal":
+      return { upper: "one", lower: "one" };
+    case "field_ref": {
+      const ptrref = resolvePointerRef(ctx, subjectTypeRef, expr.field);
+      if (!ptrref) return { upper: "unknown", lower: "unknown" };
+      const upper: ComputedExprCard["upper"] = ptrref.outCardinality === "many" ? "many" : "one";
+      const lower: ComputedExprCard["lower"] = ptrref.outCardinality === "one" ? "one" : "zero";
+      return { upper, lower };
+    }
+    case "select_expr":
+      return inferFreeExprCard(expr.expr, ctx, subjectTypeRef);
+    case "binding_ref": {
+      if (ScalarBindingNames.has(expr.name)) return { upper: "one", lower: "one" };
+      const bound = resolveBinding(ctx, expr.name);
+      if (bound) return { upper: "unknown", lower: "unknown" };
+      const typeDef = getSchemaType(ctx, expr.name);
+      if (typeDef) return { upper: "many", lower: "zero" };
+      return { upper: "unknown", lower: "unknown" };
+    }
+    case "function_call":
+      return { upper: "unknown", lower: "unknown" };
+    default:
+      return { upper: "unknown", lower: "unknown" };
+  }
+};
+
+const inferFreeExprType = (
+  expr: FreeObjectExpr,
+  ctx: IRCompileContext,
+  subjectTypeRef: TypeRef,
+): ComputedExprType => {
+  switch (expr.kind) {
+    case "literal":
+      return { kind: "scalar", typeName: literalScalarTypeName(expr.value) };
+    case "set_literal":
+      if (expr.values.length === 0) return { kind: "empty" };
+      return { kind: "scalar", typeName: literalScalarTypeName(expr.values[0]) };
+    case "cast":
+      return { kind: "scalar", typeName: scalarToQualified(expr.castType) };
+    case "current_item":
+      return { kind: "object", typeName: subjectTypeRef.id };
+    case "binding_ref": {
+      if (ScalarBindingNames.has(expr.name)) return { kind: "object", typeName: subjectTypeRef.id };
+      const typeDef = getSchemaType(ctx, expr.name);
+      if (typeDef) {
+        return { kind: "object", typeName: qualifyTypeName(typeDef.name, typeDef.module ?? "default") };
+      }
+      return { kind: "unknown" };
+    }
+    case "field_access": {
+      const baseType = inferFreeExprType(expr.expr, ctx, subjectTypeRef);
+      if (baseType.kind === "object") {
+        const objectType = getSchemaType(ctx, baseType.typeName);
+        const fieldDef = objectType?.fields.find((candidate) => candidate.name === expr.field);
+        const linkDef = objectType?.links?.find((candidate) => candidate.name === expr.field);
+        if (fieldDef) {
+          const target = fieldDef.targetTypeName;
+          return { kind: "scalar", typeName: target ?? scalarToStdName(fieldDef.type) };
+        }
+        if (linkDef) return { kind: "object", typeName: linkDef.targetType };
+      }
+      return { kind: "unknown" };
+    }
+    case "select":
+      return { kind: "object", typeName: resolveTypeRef(ctx, expr.typeName).id };
+    case "select_expr_subquery":
+      return inferFreeExprType(expr.expr, ctx, subjectTypeRef);
+    case "if_else":
+      return inferFreeExprType(expr.thenExpr, ctx, subjectTypeRef);
+    case "coalesce":
+      return inferFreeExprType(expr.left, ctx, subjectTypeRef);
+    default:
+      return { kind: "unknown" };
+  }
+};
+
+const isScalarSubtypeOf = (childName: string, parentName: string): boolean => {
+  if (childName === parentName) return true;
+  if (parentName === "std::anyscalar") return true;
+  if (parentName === "std::number" && (
+    childName === "std::int16" || childName === "std::int32" || childName === "std::int64"
+    || childName === "std::float32" || childName === "std::float64"
+    || childName === "std::decimal" || childName === "std::bigint"
+  )) return true;
+  return false;
+};
+
+const validateOperatorTypes = (
+  expr: FreeObjectExpr,
+  ctx: IRCompileContext,
+  subjectTypeRef: TypeRef,
+): void => {
+  if (expr.kind === "if_else") {
+    const thenType = inferFreeExprType(expr.thenExpr, ctx, subjectTypeRef);
+    const elseType = inferFreeExprType(expr.elseExpr, ctx, subjectTypeRef);
+    if (thenType.kind === "scalar" && elseType.kind === "scalar"
+      && thenType.typeName !== elseType.typeName
+      && !isScalarSubtypeOf(thenType.typeName, elseType.typeName)
+      && !isScalarSubtypeOf(elseType.typeName, thenType.typeName)
+    ) {
+      throw new AppError(
+        "E_SEMANTIC",
+        `operator 'IF' cannot be applied to operands of type '${thenType.typeName}' and '${elseType.typeName}'`,
+        1, 1,
+      );
+    }
+    validateOperatorTypes(expr.thenExpr, ctx, subjectTypeRef);
+    validateOperatorTypes(expr.elseExpr, ctx, subjectTypeRef);
+    validateOperatorTypes(expr.condition, ctx, subjectTypeRef);
+    return;
+  }
+  if (expr.kind === "coalesce") {
+    const leftType = inferFreeExprType(expr.left, ctx, subjectTypeRef);
+    const rightType = inferFreeExprType(expr.right, ctx, subjectTypeRef);
+    if (leftType.kind === "scalar" && rightType.kind === "scalar"
+      && leftType.typeName !== rightType.typeName
+      && !isScalarSubtypeOf(leftType.typeName, rightType.typeName)
+      && !isScalarSubtypeOf(rightType.typeName, leftType.typeName)
+    ) {
+      throw new AppError(
+        "E_SEMANTIC",
+        `operator '??' cannot be applied to operands of type '${leftType.typeName}' and '${rightType.typeName}'`,
+        1, 1,
+      );
+    }
+    validateOperatorTypes(expr.left, ctx, subjectTypeRef);
+    validateOperatorTypes(expr.right, ctx, subjectTypeRef);
+    return;
+  }
+  if (expr.kind === "cast") {
+    validateOperatorTypes(expr.expr, ctx, subjectTypeRef);
+    return;
+  }
+  if (expr.kind === "select_expr_subquery") {
+    validateOperatorTypes(expr.expr, ctx, subjectTypeRef);
+    return;
+  }
+  if (expr.kind === "field_access") {
+    validateOperatorTypes(expr.expr, ctx, subjectTypeRef);
+    return;
+  }
+};
+
+const inferComputedExprType = (
+  expr: ComputedExpr,
+  ctx: IRCompileContext,
+  subjectTypeRef: TypeRef,
+): ComputedExprType => {
+  switch (expr.kind) {
+    case "literal":
+      return { kind: "scalar", typeName: literalScalarTypeName(expr.value) };
+    case "field_ref": {
+      const ptrref = resolvePointerRef(ctx, subjectTypeRef, expr.field);
+      if (!ptrref) return { kind: "unknown" };
+      if (ptrref.outTarget.isScalar) return { kind: "scalar", typeName: ptrref.outTarget.id };
+      return { kind: "object", typeName: ptrref.outTarget.id };
+    }
+    case "select_expr":
+      return inferFreeExprType(expr.expr, ctx, subjectTypeRef);
+    case "binding_ref": {
+      if (ScalarBindingNames.has(expr.name)) return { kind: "object", typeName: subjectTypeRef.id };
+      const typeDef = getSchemaType(ctx, expr.name);
+      if (typeDef) {
+        return { kind: "object", typeName: qualifyTypeName(typeDef.name, typeDef.module ?? "default") };
+      }
+      return { kind: "unknown" };
+    }
+    default:
+      return { kind: "unknown" };
+  }
+};
+
+const findInheritedFieldOwner = (
+  ctx: IRCompileContext,
+  typeId: string,
+  fieldName: string,
+  seen = new globalThis.Set<string>(),
+): { kind: "field"; owner: string; field: FieldDef } | { kind: "link"; owner: string; link: LinkDef } | undefined => {
+  if (seen.has(typeId)) return undefined;
+  seen.add(typeId);
+  const typeDef = getSchemaTypeByQualifiedName(ctx, typeId);
+  if (!typeDef) return undefined;
+  const directField = typeDef.fields.find((c) => c.name === fieldName);
+  if (directField) return { kind: "field", owner: typeId, field: directField };
+  const directLink = (typeDef.links ?? []).find((c) => c.name === fieldName);
+  if (directLink) return { kind: "link", owner: typeId, link: directLink };
+  for (const baseName of typeDef.extends ?? []) {
+    const inherited = findInheritedFieldOwner(ctx, qualifyTypeName(baseName, typeDef.module ?? "default"), fieldName, seen);
+    if (inherited) return inherited;
+  }
+  return undefined;
+};
+
+const isSubtypeOf = (ctx: IRCompileContext, childId: string, parentId: string): boolean => {
+  if (childId === parentId) return true;
+  const seen = new globalThis.Set<string>();
+  const walk = (typeId: string): boolean => {
+    if (seen.has(typeId)) return false;
+    seen.add(typeId);
+    const typeDef = getSchemaTypeByQualifiedName(ctx, typeId);
+    if (!typeDef) return false;
+    for (const baseName of typeDef.extends ?? []) {
+      const qualified = qualifyTypeName(baseName, typeDef.module ?? "default");
+      if (qualified === parentId) return true;
+      if (walk(qualified)) return true;
+    }
+    return false;
+  };
+  return walk(childId);
+};
+
+const validateComputedShapeElement = (
+  el: Extract<EdgeQLShapeElement, { kind: "computed" }>,
+  subject: Set,
+  ctx: IRCompileContext,
+): void => {
+  if (el.name.startsWith("@")) return;
+  const subjectTypeId = subject.typeref.id;
+  const inherited = findInheritedFieldOwner(ctx, subjectTypeId, el.name);
+  const inferredType = inferComputedExprType(el.expr, ctx, subject.typeref);
+  const inferredCard = inferComputedExprCard(el.expr, ctx, subject.typeref);
+
+  if (inherited) {
+    const ownerName = inherited.owner;
+    const memberKind = inherited.kind;
+    const expectedRequired = memberKind === "field" ? inherited.field.required === true : inherited.link.required === true;
+    const expectedMulti = memberKind === "field" ? inherited.field.multi === true : inherited.link.multi === true;
+
+    if (memberKind === "field") {
+      const expectedScalar = scalarToStdName(inherited.field.type);
+      if (inferredType.kind === "object") {
+        throw new AppError(
+          "E_SEMANTIC",
+          `cannot redefine property '${el.name}' of object type '${ownerName}' as object type '${inferredType.typeName}'`,
+          1, 1,
+        );
+      }
+      if (inferredType.kind === "scalar" && inferredType.typeName !== expectedScalar && inferredType.typeName !== "std::anyscalar") {
+        throw new AppError(
+          "E_SEMANTIC",
+          `cannot redefine property '${el.name}' of object type '${ownerName}' as scalar type '${inferredType.typeName}'`,
+          1, 1,
+        );
+      }
+    } else {
+      const expectedTargetId = inherited.link.targetType;
+      if (inferredType.kind === "scalar") {
+        throw new AppError(
+          "E_SEMANTIC",
+          `cannot redefine link '${el.name}' of object type '${ownerName}' as scalar type '${inferredType.typeName}'`,
+          1, 1,
+        );
+      }
+      if (inferredType.kind === "object" && !isSubtypeOf(ctx, inferredType.typeName, expectedTargetId) && inferredType.typeName !== expectedTargetId) {
+        throw new AppError(
+          "E_SEMANTIC",
+          `cannot redefine link '${el.name}' of object type '${ownerName}' as object type '${inferredType.typeName}'`,
+          1, 1,
+        );
+      }
+    }
+
+    if (el.cardinality === "many" && !expectedMulti) {
+      throw new AppError(
+        "E_SEMANTIC",
+        `cannot redefine the cardinality of ${memberKind} '${el.name}': it is defined as 'single' in the base object type '${ownerName}'`,
+        1, 1,
+      );
+    }
+    if (el.cardinality === "one" && expectedMulti) {
+      throw new AppError(
+        "E_SEMANTIC",
+        `cannot redefine the cardinality of ${memberKind} '${el.name}': it is defined as 'multi' in the base object type '${ownerName}'`,
+        1, 1,
+      );
+    }
+    if (el.required === false && expectedRequired) {
+      throw new AppError(
+        "E_SEMANTIC",
+        `cannot redefine ${memberKind} '${el.name}' as optional: it is defined as required in the base object type '${ownerName}'`,
+        1, 1,
+      );
+    }
+  }
+
+  const memberKindForMsg = inherited ? inherited.kind : (inferredType.kind === "object" ? "link" : "property");
+
+  const inheritedMulti = inherited && (inherited.kind === "field" ? inherited.field.multi : inherited.link.multi) === true;
+  const inheritedRequired = inherited && (inherited.kind === "field" ? inherited.field.required : inherited.link.required) === true;
+  const declaredSingle = el.cardinality === "one" || (inherited && !inheritedMulti && el.cardinality !== "many");
+  const declaredRequired = el.required === true || (inheritedRequired && el.required !== false);
+
+  if (declaredSingle && inferredCard.upper === "many") {
+    throw new AppError(
+      "E_SEMANTIC",
+      `possibly more than one element returned by an expression for a computed ${memberKindForMsg} '${el.name}' declared as 'single'`,
+      1, 1,
+    );
+  }
+  if (declaredRequired && inferredCard.lower === "zero") {
+    throw new AppError(
+      "E_SEMANTIC",
+      `possibly an empty set returned by an expression for a computed ${memberKindForMsg} '${el.name}' declared as 'required'`,
+      1, 1,
+    );
+  }
+
+  if (el.expr.kind === "select_expr") {
+    validateOperatorTypes(el.expr.expr, ctx, subject.typeref);
+  }
+};
+
 const compileShape = (
   subject: Set,
   shape: EdgeQLShapeElement[],
@@ -2300,6 +2771,7 @@ const compileShape = (
         }
         continue;
       }
+      validateComputedShapeElement(el, subject, ctx);
       if (el.expr.kind === "field_ref") {
         const ptrref = resolvePointerRef(ctx, subject.typeref, el.expr.field);
         if (!ptrref) {
@@ -2727,3 +3199,64 @@ export const isGelIRCompatibleStatement = (statement: EdgeQLStatement): boolean 
 };
 
 export type GelIRCompileResult = Statement;
+
+const exprIsLiteralFalse = (expr: FreeObjectExpr): boolean => {
+  return expr.kind === "literal" && expr.value === false;
+};
+
+const walkAndValidateShapes = (
+  shape: EdgeQLShapeElement[],
+  subject: Set,
+  ctx: IRCompileContext,
+): void => {
+  for (const el of shape) {
+    if (el.kind === "computed" && !el.name.startsWith("@")) {
+      validateComputedShapeElement(el, subject, ctx);
+    }
+    if (el.kind === "link") {
+      const ptrref = resolvePointerRef(ctx, subject.typeref, el.name);
+      if (ptrref) {
+        const inherited = findInheritedFieldOwner(ctx, subject.typeref.id, el.name);
+        const inheritedRequired = inherited?.kind === "link" && inherited.link.required === true;
+        const filterIsFalse = el.where ? exprIsLiteralFalse(el.where as FreeObjectExpr) : false;
+        if (inheritedRequired && filterIsFalse) {
+          throw new AppError(
+            "E_SEMANTIC",
+            `possibly an empty set returned by an expression for a computed link '${el.name}' declared as 'required'`,
+            1, 1,
+          );
+        }
+        const childSubject = extendPathSet(subject, ptrref);
+        walkAndValidateShapes(el.shape, childSubject, ctx);
+      }
+    }
+  }
+};
+
+const collectStatementShapesForValidation = (
+  statement: EdgeQLStatement,
+  ctx: IRCompileContext,
+): void => {
+  if (statement.kind === "select" && statement.typeName) {
+    const typeref = resolveTypeRef(ctx, statement.typeName);
+    const subject = setFromTypeRoot(typeref);
+    walkAndValidateShapes(statement.shape, subject, ctx);
+  }
+};
+
+export const validateParsedStatement = (
+  statement: EdgeQLStatement,
+  options: IRCompileOptions = {},
+): void => {
+  const schemaModel = resolveSchemaModelForCompile(options);
+  const ctx: IRCompileContext = {
+    module: options.module ?? (statement as { withModule?: string }).withModule ?? "default",
+    schema: options.schema,
+    schemaModel,
+    nextScopeId: 2,
+    params: new Map(),
+    globals: new Map(),
+    bindingScopes: [new Map()],
+  };
+  collectStatementShapesForValidation(statement, ctx);
+};

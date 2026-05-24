@@ -417,6 +417,7 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
         name: member.name,
         targetType: normalizeTypeName(member.target, typeDecl.module),
         overloaded: member.overloaded,
+        required: member.required,
         multi: member.multi,
         readonly: member.readonly,
         onTargetDelete: member.onTargetDelete,
