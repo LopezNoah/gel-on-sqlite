@@ -1,4 +1,5 @@
 import { AppError } from "../errors.js";
+import { parseEdgeQL } from "../edgeql/parser.js";
 import type {
   Statement as EdgeQLStatement,
   ComputedExpr,
@@ -66,6 +67,10 @@ export interface IRCompileContext {
   params: Map<string, Param>;
   globals: Map<string, Global>;
   bindingScopes: Map<string, Set>[];
+  // Stack of schema aliases currently being inlined. Used to detect cycles
+  // (e.g. alias A := SELECT B; alias B := SELECT A) and to skip alias
+  // resolution within an alias's own body.
+  aliasResolutionStack?: globalThis.Set<string>;
 }
 
 const defaultCardinality: Cardinality = "unknown";
@@ -896,8 +901,90 @@ const inferAstExprTypeName = (expr: FreeObjectExpr, ctx: IRCompileContext): stri
   }
 };
 
+// EdgeQL schema aliases (e.g. `alias FireCard := SELECT Card FILTER .element = 'Fire'`)
+// are stored on the schema as a body of EdgeQL text. When a query refers to
+// such an alias by name we want the gel_ir to carry the alias's expanded body
+// — same as if the user had inlined `(SELECT Card FILTER .element = 'Fire')`
+// at that position — so downstream SQL lowering treats it as a real set
+// expression and not an unresolved type. Returns undefined when the name is
+// not an alias, when the alias body cannot be parsed as a SELECT, or when
+// resolving the alias would cycle.
+const tryResolveSchemaAliasSet = (ctx: IRCompileContext, name: string): Set | undefined => {
+  if (!ctx.schema) {
+    return undefined;
+  }
+  const qualified = qualifyTypeName(name, ctx.module);
+  const alias = ctx.schema.getAlias(qualified);
+  if (!alias?.exprText) {
+    return undefined;
+  }
+  if (ctx.aliasResolutionStack?.has(qualified)) {
+    return undefined;
+  }
+
+  let body = alias.exprText.trim();
+  if (body.endsWith(";")) {
+    body = body.slice(0, -1).trim();
+  }
+  while (body.startsWith("(") && body.endsWith(")")) {
+    const inner = body.slice(1, -1).trim();
+    let depth = 0;
+    let balanced = true;
+    for (const ch of inner) {
+      if (ch === "(") depth += 1;
+      else if (ch === ")") {
+        depth -= 1;
+        if (depth < 0) { balanced = false; break; }
+      }
+    }
+    if (!balanced || depth !== 0) break;
+    body = inner;
+  }
+
+  let ast: EdgeQLStatement;
+  try {
+    ast = parseEdgeQL(body);
+  } catch {
+    return undefined;
+  }
+  if (ast.kind !== "select") {
+    return undefined;
+  }
+
+  if (!ctx.aliasResolutionStack) {
+    ctx.aliasResolutionStack = new globalThis.Set<string>();
+  }
+  ctx.aliasResolutionStack.add(qualified);
+  try {
+    return compileFreeObjectExpr(
+      {
+        kind: "select",
+        typeName: ast.typeName,
+        shape: ast.shape,
+        clauses: {
+          filter: ast.filter,
+          orderBy: ast.orderBy,
+          limit: ast.limit,
+          offset: ast.offset,
+          limitExpr: ast.limitExpr,
+          offsetExpr: ast.offsetExpr,
+        },
+      },
+      ctx,
+    );
+  } finally {
+    ctx.aliasResolutionStack.delete(qualified);
+  }
+};
+
 const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompileContext): Set => {
-  const resolveHeadSet = (name: string): Set => resolveBinding(ctx, name) ?? setFromTypeRoot(resolveTypeRef(ctx, name));
+  const resolveHeadSet = (name: string): Set => {
+    const bound = resolveBinding(ctx, name);
+    if (bound) return bound;
+    const aliasSet = tryResolveSchemaAliasSet(ctx, name);
+    if (aliasSet) return aliasSet;
+    return setFromTypeRoot(resolveTypeRef(ctx, name));
+  };
 
   switch (expr.kind) {
     case "set_literal": {
@@ -941,6 +1028,8 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
       if (enumType) {
         failSemantic(`enum path expression lacks an enum member name, as in '${expr.name}.${enumType.members[0]}'`);
       }
+      const aliasSet = tryResolveSchemaAliasSet(ctx, expr.name);
+      if (aliasSet) return aliasSet;
       const typeref = resolveTypeRef(ctx, expr.name);
       return setFromTypeRoot(typeref);
     }
@@ -970,8 +1059,9 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
     }
 
     case "select": {
-      const typeref = resolveTypeRef(ctx, expr.typeName);
-      const root = setFromTypeRoot(typeref);
+      const aliasSet = tryResolveSchemaAliasSet(ctx, expr.typeName);
+      const typeref = aliasSet ? aliasSet.typeref : resolveTypeRef(ctx, expr.typeName);
+      const root = aliasSet ?? setFromTypeRoot(typeref);
       const clauses = expr.clauses;
       const hasClauses = clauses && (
         clauses.filter !== undefined

@@ -3098,60 +3098,6 @@ const tryRuntimeInlineComputedPropertySelect = (
   };
 };
 
-const countRuntimeTypeOrAliasRows = (db: SQLiteDatabase, schema: SchemaSnapshot, name: string): number | undefined => {
-  const alias = schema.getAlias(name.includes("::") ? name : `default::${name}`);
-  if (alias?.sourceType) {
-    const orValues = [...(alias.exprText ?? "").matchAll(/\.([A-Za-z_][\w]*)\s*=\s*'([^']+)'/g)];
-    if (orValues.length > 1) {
-      const sourceAlias = runtimeTypedAliasFromSchemaAlias({ ...alias, filter: undefined });
-      if (!sourceAlias) {
-        return undefined;
-      }
-      const field = orValues[0][1];
-      const values = new Set(orValues.filter((match) => match[1] === field).map((match) => match[2]));
-      return readRuntimeTypedAliasSourceRows(db, schema, sourceAlias).filter((row) => values.has(String(row[field]))).length;
-    }
-    const typedAlias = runtimeTypedAliasFromSchemaAlias(alias);
-    return typedAlias ? readRuntimeTypedAliasSourceRows(db, schema, typedAlias).length : undefined;
-  }
-  const type = schema.getType(name.includes("::") ? name : `default::${name}`);
-  if (!type) {
-    return undefined;
-  }
-  return readRuntimeTypedAliasSourceRows(db, schema, {
-    aliasName: "__count__",
-    moduleName: type.module ?? "default",
-    sourceType: qualifiedTypeName(type),
-    linkOverrides: [],
-  }).length;
-};
-
-const tryRuntimeCountTupleSelect = (
-  db: SQLiteDatabase,
-  schema: SchemaSnapshot,
-  query: string,
-): QueryResult | undefined => {
-  const compact = query.trim().replace(/;\s*$/, "").replace(/\s+/g, " ");
-  const match = /^select\s+count\s*\(\s*\(\s*(?:\(?\s*(?:select\s+)?(?:detached\s+)?([A-Za-z_][\w:]*)(?:\.[A-Za-z_][\w]*)?\s*\)?\s*,\s*)+\(?\s*(?:select\s+)?(?:detached\s+)?([A-Za-z_][\w:]*)(?:\.[A-Za-z_][\w]*)?\s*\)?\s*\)\s*\)$/i.exec(compact);
-  if (!match) {
-    return undefined;
-  }
-  const names = [...compact.matchAll(/(?:select\s+)?(?:detached\s+)?([A-Za-z_][\w:]*)(?:\.[A-Za-z_][\w]*)?/gi)]
-    .map((item) => item[1])
-    .filter((name) => !["select", "count"].includes(name.toLowerCase()));
-  if (names.length < 2) {
-    return undefined;
-  }
-  const counts = names.map((name) => countRuntimeTypeOrAliasRows(db, schema, name));
-  if (counts.some((count) => count === undefined)) {
-    return undefined;
-  }
-  return {
-    kind: "select",
-    rows: [(counts as number[]).reduce((acc, count) => acc * count, 1)],
-  };
-};
-
 const tryRuntimeTypedAliasSchemaLinkIntrospection = (
   schema: SchemaSnapshot,
   query: string,
@@ -6105,14 +6051,15 @@ export const executeQuery = (
   // touching the IR/SQL pipeline. Each `tryRuntime*` / `trySchema*` helper
   // covers a class of query the compiler can't lower yet (typed aliases,
   // free-object alias subqueries, schema-alias computed properties, inline
-  // computed properties, count-tuples, alias tuple selects, schema-link
-  // introspection, schema pointer/tuple/type/object-type queries). These
-  // should be pushed into ast_to_ir + sql/gel_ir_compiler so a single SQL
-  // path handles them.
-  const runtimeTypedAliasResult = tryRuntimeTypedAliasSelect(db, schema, query);
-  if (runtimeTypedAliasResult) {
-    if (dbg) console.error("HACK: tryRuntimeTypedAliasSelect");
-    return runtimeTypedAliasResult;
+  // computed properties, alias tuple selects, schema-link introspection,
+  // schema pointer/tuple/type/object-type queries). These should be pushed
+  // into ast_to_ir + sql/gel_ir_compiler so a single SQL path handles them.
+  if (process.env.GEL_ENABLE_TYPED_ALIAS_HACK === "1") {
+    const runtimeTypedAliasResult = tryRuntimeTypedAliasSelect(db, schema, query);
+    if (runtimeTypedAliasResult) {
+      if (dbg) console.error("HACK: tryRuntimeTypedAliasSelect");
+      return runtimeTypedAliasResult;
+    }
   }
 
   const runtimeFreeObjectAliasSubqueryResult = tryRuntimeFreeObjectAliasSubquery(db, schema, query);
@@ -6131,12 +6078,6 @@ export const executeQuery = (
   if (runtimeInlineComputedPropertyResult) {
     if (dbg) console.error("HACK: tryRuntimeInlineComputedPropertySelect");
     return runtimeInlineComputedPropertyResult;
-  }
-
-  const runtimeCountTupleResult = tryRuntimeCountTupleSelect(db, schema, query);
-  if (runtimeCountTupleResult) {
-    if (dbg) console.error("HACK: tryRuntimeCountTupleSelect");
-    return runtimeCountTupleResult;
   }
 
   const runtimeSelectExprEvaluationResult = tryRuntimeSelectExprEvaluation(db, schema, query, securityContext);

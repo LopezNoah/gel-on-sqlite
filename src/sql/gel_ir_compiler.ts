@@ -466,6 +466,20 @@ const collectScalarPointerSources = (set: Set, sources: Map<string, TypeRef>): v
     return;
   }
   if (expr.kind === "operator_call" || expr.kind === "function_call") {
+    // Aggregates absorb their argument's cardinality (count(X) returns a
+    // single value regardless of |X|), so pointer sources nested inside the
+    // aggregate must not propagate to the outer query as if they were the
+    // outer source. Otherwise we'd compile `count(X)` as
+    // `SELECT count(...) FROM <X's source>` and emit one row per X-row
+    // instead of a single scalar.
+    if (expr.kind === "function_call") {
+      const fcall = expr as FunctionCall;
+      const shortName = (fcall.functionName ?? "").split("::").pop() ?? "";
+      const isAggregate = ["count", "sum", "min", "max", "avg", "all", "any", "array_agg", "enumerate"].includes(shortName);
+      if (isAggregate) {
+        return;
+      }
+    }
     const call = expr as { args: Record<string, CallArg> };
     for (const arg of orderedCallArgs(call.args)) {
       collectScalarPointerSources(arg.expr, sources);
@@ -534,6 +548,17 @@ const collectInnerWhereClauses = (set: Set): Set[] => {
       return;
     }
     if (e.kind === "operator_call" || e.kind === "function_call") {
+      // Same reasoning as collectScalarPointerSources: an aggregate consumes
+      // its argument's row set, so any inner WHERE clauses inside the
+      // argument belong to that consumption, not the outer query.
+      if (e.kind === "function_call") {
+        const fcall = e as FunctionCall;
+        const shortName = (fcall.functionName ?? "").split("::").pop() ?? "";
+        const isAggregate = ["count", "sum", "min", "max", "avg", "all", "any", "array_agg", "enumerate"].includes(shortName);
+        if (isAggregate) {
+          return;
+        }
+      }
       for (const arg of orderedCallArgs((e as { args: Record<string, CallArg> }).args)) {
         visit(arg.expr);
       }
@@ -2178,6 +2203,109 @@ const compileOperatorValueSQL = (
   return null;
 };
 
+// EdgeQL `count(X)` returns the cardinality of set X. Compile directly for
+// shapes of X where the SQL is unambiguous: a type root counts the type's
+// table; a tuple constructor counts the Cartesian product cardinality (the
+// product of element cardinalities); a select_expr counts its result; a
+// pointer chain wraps compileScalarSelectSQL with `SELECT count(*) FROM (...)`.
+// Anything else returns null so the caller can fall back. Notably we do not
+// wrap arbitrary value expressions (constants, binding_refs, operator_calls
+// over scalars) — those evaluate to a single scalar value in compileScalarSelectSQL,
+// which would incorrectly count as 1 instead of preserving EdgeQL's set
+// semantics for the operand.
+const compileCountOfSetSQL = (
+  set: Set,
+  params: ScalarValue[],
+  target: RuntimeTarget,
+  options: GelIRCompileOptions,
+): string | null => {
+  const expr = set.expr;
+
+  if (expr.kind === "type_root") {
+    const root = expr as TypeRoot;
+    const fromSql = compilePolymorphicSource(root.typeref, root.skipSubtypes, "g_agg", ["id"], options);
+    return `(SELECT count(*) FROM ${fromSql})`;
+  }
+
+  if (expr.kind === "tuple") {
+    const tuple = expr as Tuple;
+    if (tuple.elements.length === 0) {
+      return "0";
+    }
+    const checkpoint = params.length;
+    const factors: string[] = [];
+    for (const element of tuple.elements) {
+      const factor = compileCountOfSetSQL(element.val, params, target, options);
+      if (!factor) {
+        params.length = checkpoint;
+        return null;
+      }
+      factors.push(factor);
+    }
+    return `(${factors.join(" * ")})`;
+  }
+
+  if (expr.kind === "select_expr") {
+    const selectExpr = expr as SelectExpr;
+    if (!selectExpr.where && !selectExpr.limit && !selectExpr.offset) {
+      return compileCountOfSetSQL(selectExpr.result, params, target, options);
+    }
+    const checkpoint = params.length;
+    const compiledSource = compileSelectSource(selectExpr.result, selectExpr.where, selectExpr.orderBy, options);
+    if (compiledSource) {
+      let sql = `SELECT count(*) AS ${quoteIdent("value")} FROM ${compiledSource.sql}`;
+      if (selectExpr.where) {
+        const whereSql = compileWhereClause(selectExpr.where, compiledSource.alias, params, target, options);
+        if (!whereSql) {
+          params.length = checkpoint;
+          return null;
+        }
+        sql += ` WHERE ${whereSql}`;
+      }
+      // LIMIT/OFFSET clamp the source's cardinality before the count.
+      // Wrap in a subquery so they apply to the row set, not to count(*).
+      if (selectExpr.limit || selectExpr.offset) {
+        const limitSql = selectExpr.limit
+          ? compileValueSetSQL(selectExpr.limit, compiledSource.alias, params, target, options)
+          : null;
+        const offsetSql = selectExpr.offset
+          ? compileValueSetSQL(selectExpr.offset, compiledSource.alias, params, target, options)
+          : null;
+        if ((selectExpr.limit && !limitSql) || (selectExpr.offset && !offsetSql)) {
+          params.length = checkpoint;
+          return null;
+        }
+        let inner = `SELECT 1 FROM ${compiledSource.sql}`;
+        if (selectExpr.where) {
+          const innerWhereSql = compileWhereClause(selectExpr.where, compiledSource.alias, params, target, options);
+          if (!innerWhereSql) {
+            params.length = checkpoint;
+            return null;
+          }
+          inner += ` WHERE ${innerWhereSql}`;
+        }
+        if (limitSql) inner += ` LIMIT ${limitSql}`;
+        if (offsetSql) inner += ` OFFSET ${offsetSql}`;
+        return `(SELECT count(*) FROM (${inner}))`;
+      }
+      return `(${sql})`;
+    }
+    params.length = checkpoint;
+    return null;
+  }
+
+  if (expr.kind === "pointer") {
+    const checkpoint = params.length;
+    const scalarSql = compileScalarSelectSQL(set, params, target, options);
+    if (scalarSql) {
+      return `(SELECT count(*) FROM (${scalarSql}))`;
+    }
+    params.length = checkpoint;
+  }
+
+  return null;
+};
+
 const compileFunctionCallSQL = (
   call: FunctionCall,
   sourceAlias: string,
@@ -2193,6 +2321,13 @@ const compileFunctionCallSQL = (
   const aggregateOfType = ["count", "min", "max", "sum", "avg"].includes(shortName);
   if (aggregateOfType) {
     const argList = orderedCallArgs(call.args);
+    if (shortName === "count" && argList.length === 1) {
+      const countSql = compileCountOfSetSQL(argList[0].expr, params, target, options);
+      if (countSql) {
+        return countSql;
+      }
+      params.length = checkpoint;
+    }
     if (argList.length === 1 && argList[0].expr.expr.kind === "type_root") {
       const root = argList[0].expr.expr as TypeRoot;
       const fromSql = compilePolymorphicSource(root.typeref, root.skipSubtypes, "g_agg", ["id"], options);
