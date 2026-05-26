@@ -376,6 +376,7 @@ export interface LinkDef {
   properties?: LinkPropertyDef[];
   computedProperties?: ComputedLinkPropertyDef[];
   annotations?: AnnotationDef[];
+  constraints?: ConstraintDef[];
 }
 
 export interface TypeDef {

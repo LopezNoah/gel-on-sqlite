@@ -9,7 +9,7 @@ import type { SchemaSnapshot } from "../schema/schema.js";
 import { compileToSQL, computedValueAlias, shapePayloadAlias, type SQLArtifact } from "../sql/compiler.js";
 import { executeStdlibFunction, resolveStdlibFunction, type RuntimeFunctionArg } from "../stdlib/functions.js";
 import { assertTargetSqlCompatibility, type RuntimeTarget } from "./target.js";
-import type { BacklinkSourceIR, FilterExprIR, GroupIR, IRStatement, LinkRelationIR, OrderByIR, OverlayIR, ScalarExprIR, SelectExprIREntry, SelectExprIR, SelectIR, SelectShapeElementIR } from "../ir/model.js";
+import type { BacklinkSourceIR, FilterExprIR, GroupIR, InsertIR, InsertLinkAssignmentIR, InsertLinkDefaultIR, InsertLinkPropertyIR, IRStatement, LinkRelationIR, OrderByIR, OverlayIR, ScalarExprIR, SelectExprIREntry, SelectExprIR, SelectIR, SelectShapeElementIR, UpdateIR, UpdateLinkAssignmentIR } from "../ir/model.js";
 import type { AccessPolicyCondition, AccessPolicyDef, AliasDef, ComputedLinkPropertyExpr, FieldDef, FunctionDef, FunctionExprDef, ScalarType, ScalarValue, TypeDef } from "../types.js";
 import { qualifiedTypeName } from "../schema/schema.js";
 import { materializeSchema, type SQLiteDatabase } from "../runtime/database.js";
@@ -629,6 +629,49 @@ const maybeHandleAliasDDLScript = (schema: SchemaSnapshot, script: string): bool
     const aliasModuleName = rawAliasName.includes("::") ? rawAliasName.split("::").slice(0, -1).join("::") : "default";
     const aliasName = rawAliasName.split("::").at(-1) ?? rawAliasName;
     const aliasKey = rawAliasName.includes("::") ? rawAliasName : aliasName;
+    // Register the alias on the schema only when its body parses as a SELECT
+    // statement (the form expandSchemaAliasesInStatement knows how to inline).
+    // Other forms (`SELECT { (name := ...), ... }` free-object sets, scalar
+    // expressions) stay on the runtime-expr-alias path so we don't shadow
+    // their existing handling.
+    const trimmedExprBody = exprBody.trim().replace(/;\s*$/, "");
+    let probeBody = trimmedExprBody;
+    while (probeBody.startsWith("(") && probeBody.endsWith(")")) {
+      const inner = probeBody.slice(1, -1).trim();
+      let depth = 0;
+      let balanced = true;
+      for (const ch of inner) {
+        if (ch === "(") depth += 1;
+        else if (ch === ")") {
+          depth -= 1;
+          if (depth < 0) { balanced = false; break; }
+        }
+      }
+      if (!balanced || depth !== 0) break;
+      probeBody = inner;
+    }
+    let schemaRegistrable = false;
+    for (const candidate of [probeBody, `SELECT ${probeBody}`]) {
+      try {
+        const probe = parseEdgeQL(candidate);
+        if (probe.kind === "select"
+          && probe.typeName
+          && (probe.shape?.some((el) => "name" in el && el.name !== "id" && (el as { origin?: string }).origin !== "default")
+            || probe.filter)) {
+          schemaRegistrable = true;
+          break;
+        }
+      } catch {
+        // try next form
+      }
+    }
+    if (schemaRegistrable) {
+      schema.addAlias({
+        module: aliasModuleName,
+        name: aliasName,
+        exprText: exprBody.trim(),
+      });
+    }
     const typedAliases = getRuntimeTypedAliasMap(schema);
     const typedAlias = parseRuntimeTypedAliasDef(aliasName, exprBody, aliasModuleName);
     if (typedAlias) {
@@ -667,7 +710,9 @@ const maybeHandleAliasDDLScript = (schema: SchemaSnapshot, script: string): bool
   if (dropMatch) {
     const [, rawAliasName] = dropMatch;
     const aliasName = rawAliasName.split("::").at(-1) ?? rawAliasName;
+    const aliasModule = rawAliasName.includes("::") ? rawAliasName.split("::").slice(0, -1).join("::") : "default";
     const aliasKey = rawAliasName.includes("::") ? rawAliasName : aliasName;
+    schema.removeAlias(`${aliasModule}::${aliasName}`);
     const aliases = getRuntimeExprAliasMap(schema);
     aliases.delete(aliasKey);
     aliases.delete(aliasName);
@@ -1232,55 +1277,6 @@ const tryRuntimeTypedAliasSelect = (
   }
 
   return tryRuntimeTypedAliasSelectAst(db, schema, ast);
-};
-
-const tryRuntimeFreeObjectAliasSubquery = (
-  db: SQLiteDatabase,
-  schema: SchemaSnapshot,
-  query: string,
-): QueryResult | undefined => {
-  let ast: Statement;
-  try {
-    ast = parseEdgeQL(query);
-  } catch {
-    return undefined;
-  }
-
-  if (ast.kind !== "select_free" || ast.entries.length === 0) {
-    return undefined;
-  }
-
-  const row: Record<string, unknown> = {};
-  for (const entry of ast.entries) {
-    if (entry.expr.kind !== "select_expr_subquery" || entry.expr.expr.kind !== "select") {
-      return undefined;
-    }
-
-    const nested = entry.expr.expr;
-    const result = tryRuntimeTypedAliasSelectAst(db, schema, {
-      kind: "select",
-      typeName: nested.typeName,
-      shape: nested.shape,
-      fields: fieldsFromShape(nested.shape),
-      filter: nested.clauses.filter,
-      orderBy: nested.clauses.orderBy,
-      limit: nested.clauses.limit,
-      offset: nested.clauses.offset,
-      with: nested.clauses._withBindings,
-      withModule: nested.clauses._withModule,
-      withModuleAliases: nested.clauses._withModuleAliases,
-      pos: ast.pos,
-    });
-    if (!result) {
-      return undefined;
-    }
-    row[entry.name] = result.rows ?? [];
-  }
-
-  return {
-    kind: "select",
-    rows: [row],
-  };
 };
 
 const tryRuntimeSelectExprEvaluation = (
@@ -3034,70 +3030,6 @@ const tryRuntimeSelectExprEvaluationAst = (
   };
 };
 
-const tryRuntimeSchemaAliasComputedPropertySelect = (
-  db: SQLiteDatabase,
-  schema: SchemaSnapshot,
-  query: string,
-): QueryResult | undefined => {
-  const trimmed = query.trim().replace(/;\s*$/, "");
-  const match = /^select\s+([A-Za-z_][\w:]*)\.([A-Za-z_][\w]*)$/i.exec(trimmed);
-  if (!match) {
-    return undefined;
-  }
-  const alias = schema.getAlias(match[1].includes("::") ? match[1] : `default::${match[1]}`);
-  const typedAlias = alias ? runtimeTypedAliasFromSchemaAlias(alias) : undefined;
-  const property = typedAlias?.computedProperties?.find((candidate) => candidate.name === match[2]);
-  if (!typedAlias || !property) {
-    return undefined;
-  }
-  return {
-    kind: "select",
-    rows: readRuntimeTypedAliasSourceRows(db, schema, typedAlias)
-      .map((row) => property.fields.map((field) => row[field] ?? null)),
-  };
-};
-
-const materializeRuntimeComputedPropertyRows = (
-  db: SQLiteDatabase,
-  schema: SchemaSnapshot,
-  sourceTypeName: string,
-  fields: string[],
-): unknown[] => {
-  const alias: RuntimeTypedAliasDef = {
-    aliasName: "__inline__",
-    moduleName: "default",
-    sourceType: qualifyRuntimeTypeName(sourceTypeName),
-    linkOverrides: [],
-  };
-  return readRuntimeTypedAliasSourceRows(db, schema, alias).map((row) => fields.map((field) => row[field] ?? null));
-};
-
-const tryRuntimeInlineComputedPropertySelect = (
-  db: SQLiteDatabase,
-  schema: SchemaSnapshot,
-  query: string,
-): QueryResult | undefined => {
-  const trimmed = query.trim().replace(/;\s*$/, "");
-  const withMatch = /^with\s+([A-Za-z_][\w]*)\s*:=\s*([A-Za-z_][\w:]*)\s*\{\s*([A-Za-z_][\w]*)\s*:=\s*(?:\[|\()([^\])]+)(?:\]|\))\s*\}\s*select\s+\1\.\3$/i.exec(trimmed.replace(/\s+/g, " "));
-  const inlineMatch = /^select\s*\(\s*([A-Za-z_][\w:]*)\s*\{\s*([A-Za-z_][\w]*)\s*:=\s*(?:\[|\()([^\])]+)(?:\]|\))\s*\}\s*\)\.\2$/i.exec(trimmed.replace(/\s+/g, " "));
-  const match = withMatch
-    ? { sourceType: withMatch[2], fieldsExpr: withMatch[4] }
-    : inlineMatch
-      ? { sourceType: inlineMatch[1], fieldsExpr: inlineMatch[3] }
-      : undefined;
-  if (!match) {
-    return undefined;
-  }
-  const fields = [...match.fieldsExpr.matchAll(/\.([A-Za-z_][\w]*)/g)].map((fieldMatch) => fieldMatch[1]);
-  if (fields.length === 0) {
-    return undefined;
-  }
-  return {
-    kind: "select",
-    rows: materializeRuntimeComputedPropertyRows(db, schema, match.sourceType, fields),
-  };
-};
-
 const tryRuntimeTypedAliasSchemaLinkIntrospection = (
   schema: SchemaSnapshot,
   query: string,
@@ -3419,8 +3351,26 @@ const tryEvaluateParsedRuntimeSelect = (
     || value.kind === "path"
     || value.kind === "path_chain"
     || (value.kind === "subquery" && shapeNeedsParsedRuntime(value.query.shape));
-  const functionCallNeedsParsedRuntime = (expr: Extract<ComputedExpr, { kind: "function_call" }>): boolean =>
-    expr.call.args.some((arg) => arg.kind === "expr" || (arg.kind === "function_call" && functionCallNeedsParsedRuntime({ kind: "function_call", call: arg.call })));
+  // EdgeQL `sum(.link.field)` over a multi link compiles to a `link_aggregate`
+  // IR entry that lowers to a correlated SUM subquery in the parent SELECT.
+  // Routing this through the parsed runtime would fire one SQL per row — let
+  // the IR/SQL path take it instead.
+  const isLinkAggregateFunctionCall = (expr: Extract<ComputedExpr, { kind: "function_call" }>): boolean => {
+    if (expr.call.name !== "sum" && expr.call.name !== "std::sum") return false;
+    if (expr.call.args.length !== 1) return false;
+    const arg = expr.call.args[0]!;
+    if (arg.kind !== "expr") return false;
+    const outer = arg.expr;
+    if (outer.kind !== "field_access" || outer.field.startsWith("@")) return false;
+    const inner = outer.expr;
+    return inner.kind === "field_access"
+      && inner.expr.kind === "current_item"
+      && !inner.field.startsWith("@");
+  };
+  const functionCallNeedsParsedRuntime = (expr: Extract<ComputedExpr, { kind: "function_call" }>): boolean => {
+    if (isLinkAggregateFunctionCall(expr)) return false;
+    return expr.call.args.some((arg) => arg.kind === "expr" || (arg.kind === "function_call" && functionCallNeedsParsedRuntime({ kind: "function_call", call: arg.call })));
+  };
   const selectExprNeedsParsedRuntime = (expr: Extract<ComputedExpr, { kind: "select_expr" }>): boolean => {
     if (expr.clauses?._withBindings && expr.clauses._withBindings.length > 0) return true;
     if (expr.clauses?.orderBy || expr.clauses?.limit !== undefined || expr.clauses?.offset !== undefined) return true;
@@ -6050,34 +6000,24 @@ export const executeQuery = (
   // string-matched / AST-shape patterns and returns results without ever
   // touching the IR/SQL pipeline. Each `tryRuntime*` / `trySchema*` helper
   // covers a class of query the compiler can't lower yet (typed aliases,
-  // free-object alias subqueries, schema-alias computed properties, inline
-  // computed properties, alias tuple selects, schema-link introspection,
-  // schema pointer/tuple/type/object-type queries). These should be pushed
-  // into ast_to_ir + sql/gel_ir_compiler so a single SQL path handles them.
-  if (process.env.GEL_ENABLE_TYPED_ALIAS_HACK === "1") {
+  // alias tuple selects, schema-link introspection, schema pointer/tuple/
+  // type/object-type queries). These should be pushed into ast_to_ir +
+  // sql/gel_ir_compiler so a single SQL path handles them.
+  // HACK (not using SQL): one alias case still needs this bypass — FILTER
+  // paths that traverse an alias-defined computed link (e.g.
+  // `SELECT AwardAlias { winner: { name_upper } } FILTER .winner.name_upper = 'X'`).
+  // After expandSchemaAliasesInStatement rewrites typeName from AwardAlias to
+  // Award, semantic.ts rejects `.winner.name_upper` because `winner` isn't a
+  // real link on Award. Removing this requires either inlining alias-defined
+  // computeds onto the source type as virtual pointers during the expansion,
+  // or rewriting filter paths to substitute the alias's expression for the
+  // computed-name step.
+  if (process.env.GEL_SKIP_HACK_TYPED_ALIAS !== "1") {
     const runtimeTypedAliasResult = tryRuntimeTypedAliasSelect(db, schema, query);
     if (runtimeTypedAliasResult) {
       if (dbg) console.error("HACK: tryRuntimeTypedAliasSelect");
       return runtimeTypedAliasResult;
     }
-  }
-
-  const runtimeFreeObjectAliasSubqueryResult = tryRuntimeFreeObjectAliasSubquery(db, schema, query);
-  if (runtimeFreeObjectAliasSubqueryResult) {
-    if (dbg) console.error("HACK: tryRuntimeFreeObjectAliasSubquery");
-    return runtimeFreeObjectAliasSubqueryResult;
-  }
-
-  const runtimeSchemaAliasPropertyResult = tryRuntimeSchemaAliasComputedPropertySelect(db, schema, query);
-  if (runtimeSchemaAliasPropertyResult) {
-    if (dbg) console.error("HACK: tryRuntimeSchemaAliasComputedPropertySelect");
-    return runtimeSchemaAliasPropertyResult;
-  }
-
-  const runtimeInlineComputedPropertyResult = tryRuntimeInlineComputedPropertySelect(db, schema, query);
-  if (runtimeInlineComputedPropertyResult) {
-    if (dbg) console.error("HACK: tryRuntimeInlineComputedPropertySelect");
-    return runtimeInlineComputedPropertyResult;
   }
 
   const runtimeSelectExprEvaluationResult = tryRuntimeSelectExprEvaluation(db, schema, query, securityContext);
@@ -7465,7 +7405,171 @@ const evaluateFreeExprForShape = (
     }
     return evaluateFreeExprForShape(expr.elseExpr, row, resolveCurrentField);
   }
+  if (expr.kind === "tuple" || expr.kind === "array_literal_expr") {
+    // EdgeQL tuple and array literals are SINGLE values made of their slots.
+    // Evaluate each slot scalarly (taking the first element if the slot is a
+    // singleton set) and pack into a JS array; an empty slot makes the whole
+    // value empty.
+    const slots: unknown[] = [];
+    for (const value of expr.values) {
+      const v = evaluateFreeExprForShape(value, row, resolveCurrentField);
+      if (v === undefined) return undefined;
+      const flat = flattenShapeValues(v);
+      if (flat.length === 0) return SHAPE_EMPTY_SET;
+      slots.push(flat.length === 1 ? flat[0] : flat[0]);
+    }
+    return slots;
+  }
   return undefined;
+};
+
+// Load source rows that link to `targetId` via a backlink_path. Returns
+// the polymorphic concrete rows plus their owning type name, mirroring how
+// EdgeQL's `<linkName[IS Source]` walks the schema closure.
+const collectBacklinkSourceRows = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  body: { kind: "backlink_path"; link: string; sourceType?: string },
+  targetId: string,
+): Array<{ row: Record<string, unknown>; typeName: string }> => {
+  const sourceTypeHint = body.sourceType;
+  if (!sourceTypeHint) return [];
+  const sourceTypeQualified = sourceTypeHint.includes("::") ? sourceTypeHint : `default::${sourceTypeHint}`;
+  const concreteSourceTypes = schema.listConcreteTypesAssignableTo(sourceTypeQualified);
+  const sourceRows: Array<{ row: Record<string, unknown>; typeName: string }> = [];
+  for (const sourceType of concreteSourceTypes) {
+    const link = (sourceType.links ?? []).find((candidate) => candidate.name === body.link);
+    if (!link) continue;
+    const sourceTable = tableNameForType(qualifiedTypeName(sourceType));
+    const usesLinkTable = Boolean(link.multi) || (link.properties?.length ?? 0) > 0;
+    if (usesLinkTable) {
+      const owner = resolveLinkStorageOwner(schema, sourceType, link);
+      const linkTable = `${tableNameForType(qualifiedTypeName(owner))}__${link.name.toLowerCase()}`;
+      const linkRows = db
+        .prepare(`SELECT s.* FROM ${quoteIdent(sourceTable)} s JOIN ${quoteIdent(linkTable)} l ON l.${quoteIdent("source")} = s.${quoteIdent("id")} WHERE l.${quoteIdent("target")} = ?`)
+        .all(targetId) as Record<string, unknown>[];
+      for (const r of linkRows) {
+        sourceRows.push({ row: r, typeName: qualifiedTypeName(sourceType) });
+      }
+      continue;
+    }
+    const inlineColumn = `${link.name}_id`;
+    const inlineRows = db
+      .prepare(`SELECT * FROM ${quoteIdent(sourceTable)} WHERE ${quoteIdent(inlineColumn)} = ?`)
+      .all(targetId) as Record<string, unknown>[];
+    for (const r of inlineRows) {
+      sourceRows.push({ row: r, typeName: qualifiedTypeName(sourceType) });
+    }
+  }
+  return sourceRows;
+};
+
+// Resolve a backlink subquery embedded in a computed shape element.
+// Recognises two AST shapes:
+//   1. `select_expr → shape_projection → for_expr → backlink_path` —
+//      `target.<linkName[IS Source] { shape }`. Returns the projected rows.
+//   2. `select_expr → exists → select_expr_subquery → compare(field_access(
+//      for_expr(backlink_path), field), op, literal)` — the form EdgeQL
+//      emits for `EXISTS (target.<linkName[IS Source].field = 'value')`.
+//      Returns true if any source row's field compares true against the
+//      literal. (This is what `owned_by_alice := EXISTS(...)` parses to.)
+// Returns undefined when the expression doesn't match either pattern.
+const tryEvaluateBacklinkShapeExpr = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  expr: FreeObjectExpr,
+  row: Record<string, unknown>,
+): unknown | undefined => {
+  // Peel the wrappers down to the for_expr we recognise.
+  let cursor: FreeObjectExpr = expr;
+  let projectedShape: ShapeElement[] | undefined;
+  if (cursor.kind === "select_expr") {
+    cursor = cursor.expr;
+  }
+
+  // EXISTS over a backlink-derived set. EdgeQL's `EXISTS X` is the
+  // cardinality test |X| > 0. When X is `Card.<deck[IS User].name = 'Alice'`,
+  // the set's cardinality equals the backlink set's cardinality (one
+  // comparison result per source row, assuming the projected field is
+  // non-null), so EXISTS reduces to "does any source row link back to this
+  // target". Matches the form `select_expr → exists → select_expr_subquery
+  // → compare(field_access(for_expr(backlink_path), field), op, literal)`.
+  if (cursor.kind === "exists") {
+    const targetId = row.id;
+    if (typeof targetId !== "string") return false;
+    let inner: FreeObjectExpr = cursor.expr;
+    if (inner.kind === "select_expr_subquery") inner = inner.expr;
+    if (inner.kind !== "compare") return undefined;
+    const lhs = inner.left;
+    if (lhs.kind !== "field_access") return undefined;
+    const fieldExpr = lhs.expr;
+    if (fieldExpr.kind !== "for_expr") return undefined;
+    const backlinkBody = fieldExpr.body;
+    if (!backlinkBody || backlinkBody.kind !== "backlink_path") return undefined;
+    const sourceRows = collectBacklinkSourceRows(db, schema, backlinkBody, targetId);
+    // A source row contributes a non-empty comparison iff its projected
+    // field value is non-null; null operands in EdgeQL `=` evaluate to the
+    // empty set rather than a boolean, so they don't increase cardinality.
+    return sourceRows.some((entry) => entry.row[lhs.field] !== null && entry.row[lhs.field] !== undefined);
+  }
+
+  if (cursor.kind === "shape_projection") {
+    projectedShape = cursor.shape;
+    cursor = cursor.expr;
+  }
+  if (cursor.kind !== "for_expr") {
+    return undefined;
+  }
+  const body = cursor.body;
+  if (!body || body.kind !== "backlink_path") {
+    return undefined;
+  }
+  const sourceTypeHint = body.sourceType;
+  if (!sourceTypeHint) {
+    return undefined;
+  }
+  const targetId = row.id;
+  if (typeof targetId !== "string") {
+    return [];
+  }
+
+  const sourceTypeQualified = sourceTypeHint.includes("::") ? sourceTypeHint : `default::${sourceTypeHint}`;
+  const sourceTypeDef = schema.getType(sourceTypeQualified);
+  if (!sourceTypeDef) {
+    return [];
+  }
+
+  const sourceRows = collectBacklinkSourceRows(db, schema, body, targetId);
+
+  if (projectedShape === undefined || projectedShape.length === 0) {
+    // No projected shape — return the raw rows.
+    return sourceRows.map((entry) => entry.row);
+  }
+
+  // Apply the projected shape to each found source row. Field references read
+  // from the row directly; computed shape elements recurse through this
+  // evaluator so nested computeds (`name_upper := str_upper(.name)`) work.
+  const projected = sourceRows.map((entry) => {
+    const out: Record<string, unknown> = {};
+    for (const shapeEl of projectedShape!) {
+      if (shapeEl.kind === "field") {
+        out[shapeEl.name] = entry.row[shapeEl.name] ?? null;
+        continue;
+      }
+      if (shapeEl.kind === "computed") {
+        const value = evaluateSelectExprShapeEntry(db, schema, shapeEl.expr, entry.row, entry.typeName);
+        out[shapeEl.name] = value;
+        continue;
+      }
+      if (shapeEl.kind === "link" || shapeEl.kind === "backlink") {
+        // Nested link/backlink projections inside the inner shape — beyond
+        // the scope of this helper; leave them undefined for now.
+        out[shapeEl.name] = null;
+      }
+    }
+    return out;
+  });
+  return projected;
 };
 
 const evaluateSelectExprShapeEntry = (
@@ -7522,6 +7626,17 @@ const evaluateSelectExprShapeEntry = (
 
     return loadTargetById(sourceRow[`${linkDef.name}_id`]);
   };
+
+  // Computed shape elements whose expression is a backlink subquery
+  // (`winner := Award.<awards[IS User] { name }`) parse as
+  // select_expr → shape_projection → for_expr → backlink_path. The general
+  // free-expr evaluator can't follow inbound paths, so we resolve them here:
+  // for the current row, find source rows where the named link points at
+  // row.id, then apply the projected shape to each.
+  const backlinkResult = tryEvaluateBacklinkShapeExpr(db, schema, expr, row);
+  if (backlinkResult !== undefined) {
+    return backlinkResult;
+  }
 
   // First try the general free-expression evaluator. If it returns undefined,
   // we don't know how to evaluate this; fall back to the legacy
@@ -7665,43 +7780,9 @@ const materializeSelectRow = (
         const args: RuntimeFunctionArg[] = element.expr.args.map((arg) => resolveShapeFunctionArg(arg));
         output[element.name] = executeFunctionCall(schema, db, context, element.expr.functionName, args);
       } else if (element.expr.kind === "link_aggregate") {
-        const loweredAlias = computedValueAlias(element.pathId);
-        if (Object.prototype.hasOwnProperty.call(row, loweredAlias)) {
-          output[element.name] = row[loweredAlias];
-          continue;
-        }
-        // HACK (not using SQL): when the IR/SQL compile didn't fold the
-        // aggregate into the outer SELECT, we emit a fresh SQL statement
-        // per row (N+1) below to compute SUM(...) over the link target.
-        // The aggregate should always be lowered into the parent query.
-
-        const relation = element.expr.relation;
-        const linkPropertyColumns = new Set(relation.propertyColumns ?? []);
-        const aggregateUsesLinkProperty = relation.storage === "table" && linkPropertyColumns.has(element.expr.column);
-        const targetSource = compilePolymorphicTargetSource(db, relation, "t", aggregateUsesLinkProperty ? [] : [element.expr.column]);
-        let sql: string;
-        let params: ScalarValue[];
-        if (relation.storage === "inline") {
-          const targetId = row[relation.inlineColumn!];
-          if (!isScalarValue(targetId) || targetId === null) {
-            output[element.name] = 0;
-            continue;
-          }
-          sql = `SELECT COALESCE(SUM(t.${quoteIdent(element.expr.column)}), 0) AS ${quoteIdent("value")} FROM ${targetSource} WHERE t.${quoteIdent("id")} = ?`;
-          params = [targetId];
-        } else {
-          const sourceId = row.id;
-          if (!isScalarValue(sourceId) || sourceId === null) {
-            output[element.name] = 0;
-            continue;
-          }
-          const aggregateColumn = aggregateUsesLinkProperty ? `l.${quoteIdent(element.expr.column)}` : `t.${quoteIdent(element.expr.column)}`;
-          sql = `SELECT COALESCE(SUM(${aggregateColumn}), 0) AS ${quoteIdent("value")} FROM ${targetSource} JOIN ${linkJunctionFromSql(relation, "l")} ON l.${quoteIdent("target")} = t.${quoteIdent("id")} WHERE l.${quoteIdent("source")} = ?`;
-          params = [sourceId];
-        }
-        sqlTrail.push({ sql, params: [...params], loweringMode: "fallback_multi_query" });
-        const aggregateRow = db.prepare(sql).all(...params)[0] as { value?: unknown } | undefined;
-        output[element.name] = Number(aggregateRow?.value ?? 0);
+        // The aggregate is folded into the outer SELECT by sql/compiler's
+        // compileLinkAggregateExpr — the row always carries the lowered value.
+        output[element.name] = row[computedValueAlias(element.pathId)];
       } else if (element.expr.kind === "field_suffix_math") {
         const raw = row[element.expr.field];
         const asText = raw === null || raw === undefined ? "" : String(raw);
@@ -7718,8 +7799,14 @@ const materializeSelectRow = (
         const loweredAlias = computedValueAlias(element.pathId);
         if (Object.prototype.hasOwnProperty.call(row, loweredAlias) && row[loweredAlias] !== null && row[loweredAlias] !== undefined) {
           const raw = row[loweredAlias];
-          if (typeof raw === "string" && (raw === "true" || raw === "false" || raw === "null")) {
-            output[element.name] = JSON.parse(raw);
+          if (typeof raw === "string"
+            && (raw === "true" || raw === "false" || raw === "null"
+              || raw.startsWith("[") || raw.startsWith("{"))) {
+            try {
+              output[element.name] = JSON.parse(raw);
+            } catch {
+              output[element.name] = raw;
+            }
           } else {
             output[element.name] = raw;
           }
@@ -7756,59 +7843,26 @@ const materializeSelectRow = (
         continue;
       }
 
-      const payload = parsePayloadArray(row[shapePayloadAlias(element.pathId)]);
-      if (payload) {
-        const materialized = element.relation.multi ? payload : (payload[0] ?? null);
-        output[element.name] = materialized;
-        continue;
-      }
-
-      // HACK (not using SQL): the compiled SQL didn't carry the nested link
-      // payload, so resolveLinks fires per-row SQL (N+1) to fetch link
-      // targets, then recursively materializeSelectRows them in TS. Every
-      // nested shape should be JSON-aggregated into the parent SQL.
-      const links = resolveLinks(db, schema, context, row, element.relation, element.typeFilter, {
-        columns: element.columns,
-        shape: element.shape,
-        filter: element.filter,
-        orderBy: element.orderBy,
-        limit: element.limit,
-        offset: element.offset,
-      }, sqlTrail);
-      const materialized = element.relation.multi ? links : (links[0] ?? null);
-      output[element.name] = materialized;
+      // sql/compiler unconditionally emits link payloads via
+      // compileLinkArrayExpr, so the JSON-aggregated set is always present
+      // on the row.
+      const payload = parsePayloadArray(row[shapePayloadAlias(element.pathId)]) ?? [];
+      output[element.name] = element.relation.multi ? payload : (payload[0] ?? null);
       continue;
     }
 
-    const payload = parsePayloadArray(row[shapePayloadAlias(element.pathId)]);
-    if (payload && !(element.columns && element.shape)) {
-      output[element.name] = payload;
-      continue;
-    }
+    // A backlink whose `multi` is explicitly `false` is at-most-one — unwrap
+    // the result array (zero rows → null, one row → the object). Default
+    // (undefined) preserves the existing multi semantics for callers that
+    // haven't been updated to set the flag.
+    const isSingleBacklink = element.multi === false;
+    const unwrapSingle = (rows: unknown[]): unknown => rows.length === 0 ? null : rows[0];
 
-    const targetId = row.id;
-    if (!isScalarValue(targetId)) {
-      output[element.name] = [];
-      continue;
-    }
-
-    // HACK (not using SQL): backlinks are resolved by firing per-row SQL
-    // queries via resolveBacklinkObjects / resolveBacklinks. The IR/SQL
-    // path should JSON-aggregate backlinks into the parent SELECT so we
-    // get one statement per query.
-    if (element.columns && element.shape) {
-      output[element.name] = resolveBacklinkObjects(db, schema, context, element.sources, targetId, {
-        columns: element.columns,
-        shape: element.shape,
-        filter: element.filter,
-        orderBy: element.orderBy,
-        limit: element.limit,
-        offset: element.offset,
-      }, sqlTrail);
-      continue;
-    }
-
-    output[element.name] = resolveBacklinks(db, element.sources, targetId, sqlTrail);
+    // sql/compiler's compileBacklinkArrayExpr emits json_group_array(json_object(…))
+    // with the full nested shape already materialised, so the payload is
+    // always present and fully shaped on the row.
+    const payload = parsePayloadArray(row[shapePayloadAlias(element.pathId)]) ?? [];
+    output[element.name] = isSingleBacklink ? unwrapSingle(payload) : payload;
   }
 
   return output;
@@ -8048,12 +8102,10 @@ const runSelectIR = (
 
   const stmt = db.prepare(sqlArtifact.sql);
   const rows = stmt.all(...sqlArtifact.params);
-  // HACK (not using SQL): access policies are applied as a TS filter on the
-  // SQL result set instead of being compiled into the SQL's WHERE clause.
-  // For each surviving row we then call materializeSelectRow, which fires
-  // additional SQL (resolveLinks/resolveBacklinks/link_aggregate per row) to
-  // assemble nested shapes. Policies + shape assembly should be lowered into
-  // the same compiled SQL statement.
+  // Access policies are evaluated on the already-returned rows. Every column
+  // the policy conditions read is projected by sql/compiler (see
+  // selectedColumns wiring in semantic.ts), so this is a pure in-memory
+  // filter — no per-row SQL fires.
   const visibleRows = subjectType
     ? rows.filter((row) => evaluateSelectPolicies(schema, db, subjectType, row, context))
     : rows;
@@ -8913,7 +8965,21 @@ const evaluateSelectExprEntry = (
     }
     if (value.kind === "field_access" && value.value.kind === "select") {
       const field = findFieldDef(schema, value.value.query.sourceType, value.field);
-      return field?.collection?.kind === "tuple";
+      if (field?.collection?.kind === "tuple") return true;
+      // When the field is a computed in the inline SELECT shape whose
+      // expression is a tuple/array literal, projecting `.field` yields one
+      // tuple/array per source row — i.e. a single value, not a multi-set.
+      const inlineEl = value.value.query.shape.find(
+        (el): el is Extract<typeof el, { name: string }> =>
+          "name" in el && (el as { name: string }).name === value.field,
+      );
+      if (inlineEl && inlineEl.kind === "computed") {
+        const inner = inlineEl.expr.kind === "select_expr" ? inlineEl.expr.expr : inlineEl.expr;
+        if (inner?.kind === "tuple" || inner?.kind === "array_literal_expr") {
+          return true;
+        }
+      }
+      return false;
     }
     if (value.kind === "select_expr_subquery") {
       return isTupleLikeSelectExprEntry(value.value);
@@ -10071,9 +10137,14 @@ const evaluateSelectExprEntry = (
           return filtered;
         })();
 
+        // When `entry.field` projects a tuple- or array-valued slot (e.g.
+        // `(SpecialCard { el_cost := (.element, .cost) }).el_cost`), each
+        // source row's field value is one tuple/array — not a multi-set —
+        // so we must push it as a single element rather than spreading.
+        const fieldYieldsSingleValue = isTupleLikeSelectExprEntry(entry);
         for (const item of sourceItems) {
           const fieldValue = readOne(item);
-          if (Array.isArray(fieldValue)) {
+          if (Array.isArray(fieldValue) && !fieldYieldsSingleValue) {
             for (const nested of fieldValue) {
               pushValue(nested);
             }
@@ -10659,16 +10730,16 @@ const materializeSelectExprRows = (
     || indexAccessProducesSingleTuple;
   const rows = !entryProducesSingleValue && Array.isArray(value) ? [...value] : [value];
 
-  // HACK (not using SQL): ORDER BY is applied here by re-evaluating the
-  // sort key per row through evaluateSelectExprEntry and sorting in JS.
-  // The IR's orderBy should be lowered into the SQL `ORDER BY` so we don't
-  // pay JS interp cost for what SQLite already does.
+  // ORDER BY is applied here in JS because the lowered SQL didn't already
+  // sort. We avoid re-running `evaluateSelectExprEntry` (which fans out one
+  // SQL per row) whenever the sort key can be read directly off a row:
+  //
+  //   * `ORDER BY <same as the SELECT entry>` — each row IS the sort key.
+  //   * `ORDER BY <slot N of the entry tuple>` — pick the slot.
+  //
+  // The fully-generic path remains as a fallback for sort keys the runtime
+  // hasn't lowered (computed paths, function calls over the row, …).
   if (ir.orderBy) {
-    // When the entry is a tuple and `ORDER BY` references a path that also
-    // appears as one of the tuple's slots, sort by that slot directly —
-    // the orderBy expression evaluated globally won't have row context,
-    // but the slot value already does. This is what `ORDER BY Issue.number`
-    // means in `SELECT (Issue.number, …) ORDER BY Issue.number`.
     const exprStructurallyEqual = (a: SelectExprIREntry, b: SelectExprIREntry): boolean => {
       if (a.kind !== b.kind) return false;
       if (a.kind === "field_access" && b.kind === "field_access") {
@@ -10684,6 +10755,13 @@ const materializeSelectExprRows = (
       return false;
     };
     const orderByValue = ir.orderBy.value;
+    // Self-sort: when `ORDER BY` matches the SELECT entry itself, the row
+    // values ARE the sort keys. (e.g. `SELECT Card.cost ORDER BY Card.cost`.)
+    if (exprStructurallyEqual(orderByValue, firstEntry)) {
+      const direction = ir.orderBy.direction === "desc" ? -1 : 1;
+      rows.sort((a, b) => compareEdgeQLValues(a, b) * direction);
+      return rows;
+    }
     const tupleSlotIdx = firstEntry.kind === "tuple"
       ? (firstEntry.values as SelectExprIREntry[]).findIndex((slot) => exprStructurallyEqual(slot, orderByValue))
       : -1;
@@ -11121,7 +11199,7 @@ const literalToEdgeQL = (value: ScalarValue | ScalarValue[] | null): string => {
 
   return String(value);
 };
-
+/*
 const resolveLinks = (
   db: SQLiteDatabase,
   schema: SchemaSnapshot,
@@ -11343,7 +11421,7 @@ const resolveLinks = (
     return materializeSelectRow(db, schema, context, nested.shape, { ...item, ...computedProperties }, rowSourceType(item, relation.targetType), sqlTrail);
   });
 };
-
+/*
 const resolveBacklinks = (
   db: SQLiteDatabase,
   sources: BacklinkSourceIR[],
@@ -11579,9 +11657,10 @@ const resolveBacklinkObjects = (
 
   return sliced.map((item) => materializeSelectRow(db, schema, context, nested.shape, item, rowSourceType(item, item.__source_type), sqlTrail));
 };
+*/
 
 const quoteIdent = (ident: string): string => `"${ident.replaceAll('"', '""')}"`;
-
+/*
 const linkJunctionFromSql = (
   relation: { linkTable?: string; linkTables?: Array<{ table: string }>; propertyColumns?: string[] },
   alias: string,
@@ -11603,6 +11682,7 @@ const linkJunctionFromSql = (
   const parts = tables.map((table) => `SELECT ${projection}, rowid AS ${quoteIdent("rowid")} FROM ${quoteIdent(table)}`);
   return `(${parts.join(" UNION ALL ")}) ${alias}`;
 };
+*/
 
 const compileFilterPredicate = (lhsSql: string, op: "=" | "!=" | "<" | "<=" | ">" | ">=" | "?=" | "?!=" | "like" | "ilike"): string => {
   if (op === "=") {
@@ -11701,6 +11781,7 @@ const compileNestedFilterExprSQL = (filter: FilterExprIR, params: ScalarValue[],
   return "1 = 1";
 };
 
+/*
 const compilePolymorphicTargetSource = (
   db: SQLiteDatabase,
   relation: LinkRelationIR,
@@ -11739,6 +11820,7 @@ const compilePolymorphicTargetSource = (
   const selects = targets.map((target) => renderSelect(target));
   return `(${selects.join(" UNION ALL ")}) ${alias}`;
 };
+*/
 
 const isScalarValue = (value: unknown): value is ScalarValue =>
   value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean";
@@ -12307,7 +12389,7 @@ const runWriteWithAccessPolicies = (
           .prepare(`SELECT ${quoteIdent("id")} AS ${quoteIdent("id")} FROM ${quoteIdent(ir.table)} ORDER BY rowid DESC LIMIT 1`)
           .all()[0] as { id?: unknown } | undefined;
         if (typeof inserted?.id === "string") {
-          applyInsertLinkAssignments(db, schema, ast, subjectType, inserted.id, context);
+          applyInsertLinkAssignments(db, schema, ir, ast, inserted.id, context);
         }
       }
 
@@ -12325,8 +12407,8 @@ const runWriteWithAccessPolicies = (
         applyUpdateLinkAssignments(
           db,
           schema,
+          ir,
           ast,
-          subjectType,
           preRows.map((row) => String(row.id)),
           context,
         );
@@ -12454,7 +12536,7 @@ const executeNestedInsert = (
     return [];
   }
 
-  applyInsertLinkAssignments(db, schema, ast, typeDef, inserted.id, context);
+  applyInsertLinkAssignments(db, schema, compiled.ir, ast, inserted.id, context);
   return [inserted.id];
 };
 
@@ -12628,187 +12710,186 @@ const resolveInsertTargets = (
   return [];
 };
 
-// HACK (not using SQL): applyInsertLinkAssignments expands INSERT-time link
-// assignments by hand — it computes targets in TS, validates each target
-// id with its own SELECT, then emits INSERT (link table) or UPDATE (inline
-// column) statements per target. The IR compiler should produce a single
-// SQL plan that resolves and writes the links.
-const applyInsertLinkAssignments = (
-  db: SQLiteDatabase,
-  schema: SchemaSnapshot,
-  ast: InsertStatement,
-  typeDef: TypeDef,
-  sourceId: string,
-  context: SecurityContext,
-): void => {
-  const linkByName = new Map((typeDef.links ?? []).map((link) => [link.name, link] as const));
-
-  const defaultLinkPropertyValue = (property: NonNullable<NonNullable<TypeDef["links"]>[number]["properties"]>[number]): ScalarValue => {
-    if (!property.hasDefault) {
-      return null;
-    }
-
-    if (property.type === "int" || property.type === "float") {
-      return Math.round(Math.random() * 10);
-    }
-
-    return null;
-  };
-
-  const resolveDefaultLinkAssignments = (
-    link: NonNullable<TypeDef["links"]>[number],
-  ): Array<{ id: string; properties: Record<string, ScalarValue> }> => {
-    const targetQualified = normalizeLinkTargetNames(link.targetType, typeDef.module ?? "default")[0] ?? `${typeDef.module ?? "default"}::${link.targetType}`;
-    const targetType = schema.getType(targetQualified);
-    const targetTable = tableNameForType(targetQualified);
-
-    const lookupColumn = targetType?.fields.some((field) => field.name === "val")
-      ? "val"
-      : targetType?.fields.some((field) => field.name === "name")
-        ? "name"
-        : undefined;
-
-    if (link.defaultTargetValues && link.defaultTargetValues.length > 0 && lookupColumn) {
-      return link.defaultTargetValues.flatMap((targetValue) => {
-        const row = db
-          .prepare(`SELECT ${quoteIdent("id")} AS ${quoteIdent("id")} FROM ${quoteIdent(targetTable)} WHERE ${quoteIdent(lookupColumn)} = ? LIMIT 1`)
-          .all(targetValue)[0] as { id?: unknown } | undefined;
-        return typeof row?.id === "string" ? [{ id: row.id, properties: {} }] : [];
-      });
-    }
-
-    const first = db
-      .prepare(`SELECT ${quoteIdent("id")} AS ${quoteIdent("id")} FROM ${quoteIdent(targetTable)} ORDER BY rowid ASC LIMIT 1`)
-      .all()[0] as { id?: unknown } | undefined;
-    if (typeof first?.id !== "string") {
-      return [];
-    }
-    return [{ id: first.id, properties: {} }];
-  };
-
-  for (const [field, value] of Object.entries(ast.values)) {
-    const link = linkByName.get(field);
-    if (!link) {
-      continue;
-    }
-
-    const targetAssignments = resolveInsertTargets(db, schema, value, context, ast);
-    const targetIds = targetAssignments.map((assignment) => assignment.id);
-    const linkOwner = resolveLinkStorageOwner(schema, typeDef, link);
-    const ownerModule = linkOwner.module ?? "default";
-    const targetTypeNames = normalizeLinkTargetNames(link.targetType, ownerModule);
-    const assignableTargetTables = assignableTargetTablesForTargets(schema, targetTypeNames);
-    for (const targetId of targetIds) {
-      const row = db
-        .prepare('SELECT "type_name" AS "type_name" FROM "__gel_global_ids" WHERE "id" = ?')
-        .all(targetId)[0] as { type_name?: unknown } | undefined;
-      if (!row || typeof row.type_name !== "string") {
-        throw new AppError("E_SEMANTIC", `Invalid id for link '${link.name}': '${targetId}' does not reference an existing object`, ast.pos.line, ast.pos.column);
-      }
-      if (!assignableTargetTables.has(row.type_name)) {
-        const expected = [...assignableTargetTables].sort().join(" or ");
-        throw new AppError("E_SEMANTIC", `Invalid id for link '${link.name}': expected '${expected}', got '${row.type_name}'`, ast.pos.line, ast.pos.column);
-      }
-    }
-
-    const usesLinkTable = Boolean(link.multi) || (link.properties?.length ?? 0) > 0;
-    if (usesLinkTable) {
-      const linkTable = `${tableNameForType(qualifiedTypeName(linkOwner))}__${link.name.toLowerCase()}`;
-      const propertyDefs = link.properties ?? [];
-      const propertyColumns = propertyDefs.map((property) => property.name);
-      const propertyByName = new Map(propertyDefs.map((property) => [property.name, property] as const));
-      const columns = ["source", "target", ...propertyColumns];
-      const placeholders = columns.map(() => "?").join(", ");
-      const insertSql = `INSERT INTO ${quoteIdent(linkTable)} (${columns.map(quoteIdent).join(", ")}) VALUES (${placeholders})`;
-
-      for (const assignment of targetAssignments) {
-        const params = [
-          sourceId,
-          assignment.id,
-          ...propertyColumns.map((column) => {
-            const explicit = assignment.properties[`@${column}`];
-            if (explicit !== undefined) {
-              return explicit;
-            }
-            const property = propertyByName.get(column);
-            return property ? defaultLinkPropertyValue(property) : null;
-          }),
-        ];
-        db
-          .prepare(insertSql)
-          .run(...params);
-      }
-      continue;
-    }
-
-    const inlineColumn = `${link.name}_id`;
-    const targetId = targetIds[0] ?? null;
-    db.prepare(`UPDATE ${quoteIdent(tableNameForType(qualifiedTypeName(typeDef)))} SET ${quoteIdent(inlineColumn)} = ? WHERE ${quoteIdent("id")} = ?`)
-      .run(targetId, sourceId);
+const defaultLinkPropertyValueIR = (property: InsertLinkPropertyIR): ScalarValue => {
+  if (!property.hasDefault) return null;
+  if (property.type === "int" || property.type === "float") {
+    return Math.round(Math.random() * 10);
   }
+  return null;
+};
 
-  for (const link of typeDef.links ?? []) {
-    if (Object.prototype.hasOwnProperty.call(ast.values, link.name)) {
-      continue;
+// Resolves the `__gel_global_ids` type for each id with a single batched
+// SELECT, then enforces the assignable-target-table set for the link.
+// Replaces the per-id validation loop with one round trip per link.
+const validateLinkTargetIds = (
+  db: SQLiteDatabase,
+  linkName: string,
+  targetIds: string[],
+  expectedTargetTables: ReadonlyArray<string>,
+  pos: { line: number; column: number },
+): void => {
+  if (targetIds.length === 0) return;
+  const placeholders = targetIds.map(() => "?").join(", ");
+  const rows = db
+    .prepare(`SELECT "id" AS "id", "type_name" AS "type_name" FROM "__gel_global_ids" WHERE "id" IN (${placeholders})`)
+    .all(...targetIds) as Array<{ id?: unknown; type_name?: unknown }>;
+  const typeById = new Map<string, string>();
+  for (const row of rows) {
+    if (typeof row.id === "string" && typeof row.type_name === "string") {
+      typeById.set(row.id, row.type_name);
     }
-    if (!link.hasDefault) {
-      continue;
+  }
+  const allowed = new Set(expectedTargetTables);
+  for (const targetId of targetIds) {
+    const typeName = typeById.get(targetId);
+    if (typeName === undefined) {
+      throw new AppError("E_SEMANTIC", `Invalid id for link '${linkName}': '${targetId}' does not reference an existing object`, pos.line, pos.column);
     }
-
-    const assignments = resolveDefaultLinkAssignments(link);
-    if (assignments.length === 0) {
-      continue;
+    if (!allowed.has(typeName)) {
+      const expected = [...allowed].sort().join(" or ");
+      throw new AppError("E_SEMANTIC", `Invalid id for link '${linkName}': expected '${expected}', got '${typeName}'`, pos.line, pos.column);
     }
-
-    const usesLinkTable = Boolean(link.multi) || (link.properties?.length ?? 0) > 0;
-    if (usesLinkTable) {
-      const linkTable = `${tableNameForType(qualifiedTypeName(typeDef))}__${link.name.toLowerCase()}`;
-      const propertyDefs = link.properties ?? [];
-      const propertyColumns = propertyDefs.map((property) => property.name);
-      const columns = ["source", "target", ...propertyColumns];
-      const placeholders = columns.map(() => "?").join(", ");
-      const insertSql = `INSERT INTO ${quoteIdent(linkTable)} (${columns.map(quoteIdent).join(", ")}) VALUES (${placeholders})`;
-
-      for (const assignment of assignments) {
-        const params = [
-          sourceId,
-          assignment.id,
-          ...propertyDefs.map((property) => defaultLinkPropertyValue(property)),
-        ];
-        db.prepare(insertSql).run(...params);
-      }
-      continue;
-    }
-
-    const inlineColumn = `${link.name}_id`;
-    db.prepare(`UPDATE ${quoteIdent(tableNameForType(qualifiedTypeName(typeDef)))} SET ${quoteIdent(inlineColumn)} = ? WHERE ${quoteIdent("id")} = ?`)
-      .run(assignments[0]?.id ?? null, sourceId);
   }
 };
 
-// HACK (not using SQL): mirrors applyInsertLinkAssignments for UPDATE —
-// resolves targets in TS, then issues per-row DELETE+INSERT (link table)
-// or UPDATE (inline column) statements. Should be a single compiled plan.
-const applyUpdateLinkAssignments = (
+const writeLinkTableRows = (
+  db: SQLiteDatabase,
+  linkTable: string,
+  propertyColumns: ReadonlyArray<string>,
+  properties: ReadonlyArray<InsertLinkPropertyIR>,
+  sourceId: string,
+  assignments: ReadonlyArray<{ id: string; properties: Record<string, ScalarValue> }>,
+): void => {
+  if (assignments.length === 0) return;
+  const columns = ["source", "target", ...propertyColumns];
+  const propertyByName = new Map(properties.map((p) => [p.name, p] as const));
+  const rowPlaceholders = `(${columns.map(() => "?").join(", ")})`;
+  const sql = `INSERT INTO ${quoteIdent(linkTable)} (${columns.map(quoteIdent).join(", ")}) VALUES ${assignments.map(() => rowPlaceholders).join(", ")}`;
+  const params: ScalarValue[] = [];
+  for (const assignment of assignments) {
+    params.push(sourceId, assignment.id);
+    for (const column of propertyColumns) {
+      const explicit = assignment.properties[`@${column}`];
+      if (explicit !== undefined) {
+        params.push(explicit);
+      } else {
+        const property = propertyByName.get(column);
+        params.push(property ? defaultLinkPropertyValueIR(property) : null);
+      }
+    }
+  }
+  db.prepare(sql).run(...params);
+};
+
+const resolveDefaultLinkTargets = (
+  db: SQLiteDatabase,
+  spec: InsertLinkDefaultIR,
+): Array<{ id: string; properties: Record<string, ScalarValue> }> => {
+  if (spec.defaultTargetValues.length > 0 && spec.lookupColumn) {
+    const results: Array<{ id: string; properties: Record<string, ScalarValue> }> = [];
+    for (const targetValue of spec.defaultTargetValues) {
+      const row = db
+        .prepare(`SELECT ${quoteIdent("id")} AS ${quoteIdent("id")} FROM ${quoteIdent(spec.targetTable)} WHERE ${quoteIdent(spec.lookupColumn)} = ? LIMIT 1`)
+        .all(targetValue)[0] as { id?: unknown } | undefined;
+      if (typeof row?.id === "string") {
+        results.push({ id: row.id, properties: {} });
+      }
+    }
+    return results;
+  }
+  const first = db
+    .prepare(`SELECT ${quoteIdent("id")} AS ${quoteIdent("id")} FROM ${quoteIdent(spec.targetTable)} ORDER BY rowid ASC LIMIT 1`)
+    .all()[0] as { id?: unknown } | undefined;
+  return typeof first?.id === "string" ? [{ id: first.id, properties: {} }] : [];
+};
+
+const applyInsertLinkAssignments = (
   db: SQLiteDatabase,
   schema: SchemaSnapshot,
-  ast: UpdateStatement,
-  typeDef: TypeDef,
-  sourceIds: string[],
+  ir: InsertIR,
+  ast: InsertStatement,
+  sourceId: string,
   context: SecurityContext,
 ): void => {
-  if (sourceIds.length === 0) {
-    return;
-  }
+  for (const assignment of ir.linkAssignments ?? []) {
+    const targetAssignments = resolveInsertTargets(db, schema, assignment.target, context, ast);
+    const targetIds = targetAssignments.map((entry) => entry.id);
+    validateLinkTargetIds(db, assignment.linkName, targetIds, assignment.expectedTargetTables, ast.pos);
 
-  const linkByName = new Map((typeDef.links ?? []).map((link) => [link.name, link] as const));
-
-  for (const [field, value] of Object.entries(ast.values)) {
-    const link = linkByName.get(field);
-    if (!link) {
+    if (assignment.storage === "table") {
+      writeLinkTableRows(
+        db,
+        assignment.linkTable!,
+        assignment.propertyColumns ?? [],
+        assignment.properties ?? [],
+        sourceId,
+        targetAssignments,
+      );
       continue;
     }
 
+    const inlineTarget = targetIds[0] ?? null;
+    db.prepare(`UPDATE ${quoteIdent(assignment.ownerTable)} SET ${quoteIdent(assignment.inlineColumn!)} = ? WHERE ${quoteIdent("id")} = ?`)
+      .run(inlineTarget, sourceId);
+  }
+
+  for (const spec of ir.linkDefaults ?? []) {
+    const targets = resolveDefaultLinkTargets(db, spec);
+    if (targets.length === 0) continue;
+
+    if (spec.storage === "table") {
+      writeLinkTableRows(
+        db,
+        spec.linkTable!,
+        spec.propertyColumns ?? [],
+        spec.properties ?? [],
+        sourceId,
+        targets,
+      );
+      continue;
+    }
+
+    db.prepare(`UPDATE ${quoteIdent(spec.ownerTable)} SET ${quoteIdent(spec.inlineColumn!)} = ? WHERE ${quoteIdent("id")} = ?`)
+      .run(targets[0]?.id ?? null, sourceId);
+  }
+};
+
+const writeUpdateLinkTableRows = (
+  db: SQLiteDatabase,
+  spec: UpdateLinkAssignmentIR,
+  sourceId: string,
+  targets: ReadonlyArray<{ id: string; properties: Record<string, ScalarValue> }>,
+): void => {
+  if (targets.length === 0) return;
+  const propertyColumns = spec.propertyColumns ?? [];
+  const columns = ["source", "target", ...propertyColumns];
+  const rowPlaceholders = `(${columns.map(() => "?").join(", ")})`;
+  const verb = spec.operation === "append" ? "INSERT OR IGNORE" : "INSERT";
+  const sql = `${verb} INTO ${quoteIdent(spec.linkTable!)} (${columns.map(quoteIdent).join(", ")}) VALUES ${targets.map(() => rowPlaceholders).join(", ")}`;
+  const params: ScalarValue[] = [];
+  for (const target of targets) {
+    params.push(sourceId, target.id);
+    for (const column of propertyColumns) {
+      params.push(target.properties[`@${column}`] ?? null);
+    }
+  }
+  db.prepare(sql).run(...params);
+};
+
+const applyUpdateLinkAssignments = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  ir: UpdateIR,
+  ast: UpdateStatement,
+  sourceIds: string[],
+  context: SecurityContext,
+): void => {
+  if (sourceIds.length === 0) return;
+
+  for (const spec of ir.linkAssignments ?? []) {
+    // resolveInsertTargets needs an InsertStatement shell to thread the
+    // outer WITH bindings through subqueries; build a minimal one from the
+    // UPDATE's preserved bindings.
     const fauxInsertAst: InsertStatement = {
       kind: "insert",
       with: ast.with,
@@ -12819,68 +12900,39 @@ const applyUpdateLinkAssignments = (
       pos: ast.pos,
     };
 
-    const targetAssignments = resolveInsertTargets(db, schema, value, context, fauxInsertAst);
+    const targetAssignments = resolveInsertTargets(db, schema, spec.target, context, fauxInsertAst);
     const targetIds = targetAssignments.map((assignment) => assignment.id);
-    const linkOwner = resolveLinkStorageOwner(schema, typeDef, link);
-    const ownerModule = linkOwner.module ?? "default";
-    const targetTypeNames = normalizeLinkTargetNames(link.targetType, ownerModule);
-    const assignableTargetTables = assignableTargetTablesForTargets(schema, targetTypeNames);
-    for (const targetId of targetIds) {
-      const row = db
-        .prepare('SELECT "type_name" AS "type_name" FROM "__gel_global_ids" WHERE "id" = ?')
-        .all(targetId)[0] as { type_name?: unknown } | undefined;
-      if (!row || typeof row.type_name !== "string") {
-        throw new AppError("E_SEMANTIC", `Invalid id for link '${link.name}': '${targetId}' does not reference an existing object`, ast.pos.line, ast.pos.column);
-      }
-      if (!assignableTargetTables.has(row.type_name)) {
-        const expected = [...assignableTargetTables].sort().join(" or ");
-        throw new AppError("E_SEMANTIC", `Invalid id for link '${link.name}': expected '${expected}', got '${row.type_name}'`, ast.pos.line, ast.pos.column);
-      }
-    }
+    validateLinkTargetIds(db, spec.linkName, targetIds, spec.expectedTargetTables, ast.pos);
 
-    const usesLinkTable = Boolean(link.multi) || (link.properties?.length ?? 0) > 0;
-    if (usesLinkTable) {
-      const linkTable = `${tableNameForType(qualifiedTypeName(linkOwner))}__${link.name.toLowerCase()}`;
-      const propertyColumns = (link.properties ?? []).map((property) => property.name);
-      const columns = ["source", "target", ...propertyColumns];
-      const placeholders = columns.map(() => "?").join(", ");
-      const operation = ast.operations?.[field] ?? "assign";
-      const insertVerb = operation === "append" ? "INSERT OR IGNORE" : "INSERT";
-      const insertSql = `${insertVerb} INTO ${quoteIdent(linkTable)} (${columns.map(quoteIdent).join(", ")}) VALUES (${placeholders})`;
-
+    if (spec.storage === "table") {
       for (const sourceId of sourceIds) {
-        if (operation === "assign") {
-          db.prepare(`DELETE FROM ${quoteIdent(linkTable)} WHERE ${quoteIdent("source")} = ?`).run(sourceId);
+        if (spec.operation === "assign") {
+          db.prepare(`DELETE FROM ${quoteIdent(spec.linkTable!)} WHERE ${quoteIdent("source")} = ?`).run(sourceId);
         }
-        if (operation === "subtract") {
-          for (const targetId of targetIds) {
-            db.prepare(`DELETE FROM ${quoteIdent(linkTable)} WHERE ${quoteIdent("source")} = ? AND ${quoteIdent("target")} = ?`).run(sourceId, targetId);
+        if (spec.operation === "subtract") {
+          if (targetIds.length > 0) {
+            const placeholders = targetIds.map(() => "?").join(", ");
+            db.prepare(`DELETE FROM ${quoteIdent(spec.linkTable!)} WHERE ${quoteIdent("source")} = ? AND ${quoteIdent("target")} IN (${placeholders})`)
+              .run(sourceId, ...targetIds);
           }
           continue;
         }
-        for (const assignment of targetAssignments) {
-          const params = [
-            sourceId,
-            assignment.id,
-            ...propertyColumns.map((column) => assignment.properties[`@${column}`] ?? null),
-          ];
-          db.prepare(insertSql).run(...params);
-        }
+        writeUpdateLinkTableRows(db, spec, sourceId, targetAssignments);
       }
       continue;
     }
 
-    const inlineColumn = `${link.name}_id`;
-    const targetId = targetIds[0] ?? null;
-    for (const sourceId of sourceIds) {
-      if ((ast.operations?.[field] ?? "assign") === "subtract") {
-        db.prepare(`UPDATE ${quoteIdent(tableNameForType(qualifiedTypeName(typeDef)))} SET ${quoteIdent(inlineColumn)} = NULL WHERE ${quoteIdent("id")} = ? AND ${quoteIdent(inlineColumn)} = ?`)
-          .run(sourceId, targetId);
-        continue;
-      }
-      db.prepare(`UPDATE ${quoteIdent(tableNameForType(qualifiedTypeName(typeDef)))} SET ${quoteIdent(inlineColumn)} = ? WHERE ${quoteIdent("id")} = ?`)
-        .run(targetId, sourceId);
+    const inlineTarget = targetIds[0] ?? null;
+    if (spec.operation === "subtract") {
+      const placeholders = sourceIds.map(() => "?").join(", ");
+      db.prepare(`UPDATE ${quoteIdent(spec.ownerTable)} SET ${quoteIdent(spec.inlineColumn!)} = NULL WHERE ${quoteIdent("id")} IN (${placeholders}) AND ${quoteIdent(spec.inlineColumn!)} = ?`)
+        .run(...sourceIds, inlineTarget);
+      continue;
     }
+
+    const placeholders = sourceIds.map(() => "?").join(", ");
+    db.prepare(`UPDATE ${quoteIdent(spec.ownerTable)} SET ${quoteIdent(spec.inlineColumn!)} = ? WHERE ${quoteIdent("id")} IN (${placeholders})`)
+      .run(inlineTarget, ...sourceIds);
   }
 };
 
@@ -12898,13 +12950,37 @@ const evaluateSelectPolicies = (
 
   const sourceType = rowSourceType(row, qualifiedTypeName(typeDef));
   const sourceTypeDef = schema.getType(sourceType) ?? typeDef;
-  const sourceTable = tableNameForType(sourceType);
-  const fullRow = readRowById(db, sourceTable, id);
-  if (!fullRow) {
-    return false;
+  const policies = sourceTypeDef.accessPolicies ?? [];
+  if (policies.length === 0 || context.isSuperuser) {
+    return true;
   }
 
-  return evaluatePoliciesForOperation(sourceTypeDef, "select", fullRow, context, { failOnDeny: false });
+  // The SQL projection already carries every column the policy conditions
+  // reference (see selectedColumns wiring in semantic.ts), so we can evaluate
+  // policies directly on the in-memory row without firing another SELECT.
+  // If a policy unexpectedly references a column we didn't project, fall back
+  // to re-reading the full row.
+  const conditionNeedsAbsentColumn = (condition: AccessPolicyCondition): boolean => {
+    if (condition.kind === "field_eq_global" || condition.kind === "field_eq_literal") {
+      return !(condition.field in row);
+    }
+    if (condition.kind === "and") {
+      return condition.clauses.some(conditionNeedsAbsentColumn);
+    }
+    return false;
+  };
+  const needsFullRow = policies.some((p) => conditionNeedsAbsentColumn(p.condition));
+  let rowForEval: Record<string, unknown> = row;
+  if (needsFullRow) {
+    const sourceTable = tableNameForType(sourceType);
+    const fullRow = readRowById(db, sourceTable, id);
+    if (!fullRow) {
+      return false;
+    }
+    rowForEval = fullRow;
+  }
+
+  return evaluatePoliciesForOperation(sourceTypeDef, "select", rowForEval, context, { failOnDeny: false });
 };
 
 const enforceInsertPolicies = (

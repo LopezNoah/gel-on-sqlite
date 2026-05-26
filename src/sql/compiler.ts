@@ -130,11 +130,17 @@ const compileSelectFreeToSQL = (ir: SelectFreeIR, target: RuntimeTarget): SQLArt
 const compileSelectToSQL = (ir: SelectIR, target: RuntimeTarget): SQLArtifact => {
   const params: ScalarValue[] = [];
   const rootAlias = "t0";
+  // `requiresFallback` tells the harness this query needs the runtime's
+  // post-processing for some unlowerable shape entry (a `subquery` computed,
+  // an unsupported function call, …). We still want to fold link/backlink
+  // payloads into the SQL so `materializeSelectRow` reads them off the row
+  // instead of firing N+1 SQL per link.
   const requiresFallback = shapeRequiresFallbackLowering(ir.shape, target);
-  const includePayloads = !requiresFallback;
+  const includePayloads = true;
+  const projectedColumns = ir.columns.includes("id") ? ir.columns : ["id", ...ir.columns];
   const projections: string[] = [
     `${rootAlias}.${quoteIdent("__source_type")} AS ${quoteIdent("__source_type")}`,
-    ...ir.columns.map(
+    ...projectedColumns.map(
     (column) => `${rootAlias}.${quoteIdent(column)} AS ${quoteIdent(column)}`,
     ),
   ];
@@ -265,7 +271,7 @@ const compileSelectToSQL = (ir: SelectIR, target: RuntimeTarget): SQLArtifact =>
   return {
     sql,
     params,
-    loweringMode: includePayloads ? "single_statement" : "fallback_multi_query",
+    loweringMode: requiresFallback ? "fallback_multi_query" : "single_statement",
   };
 };
 
@@ -699,6 +705,11 @@ const compileShapeScalarValueSQL = (
     if (node.kind === "select_expr_subquery") {
       return compile(node.expr);
     }
+    if (node.kind === "tuple" || node.kind === "array_literal_expr") {
+      const parts = node.values.map(compile);
+      if (parts.some((part) => part === null)) return null;
+      return `json_array(${(parts as string[]).join(", ")})`;
+    }
     return null;
   };
 
@@ -751,6 +762,9 @@ const collectShapeScalarValueColumns = (expr: FreeObjectExpr): string[] => {
     }
     if (node.kind === "concat") {
       for (const part of node.parts) walk(part);
+    }
+    if (node.kind === "tuple" || node.kind === "array_literal_expr") {
+      for (const value of node.values) walk(value);
     }
   };
   walk(expr);
@@ -1225,7 +1239,8 @@ const compileFilterExprSQL = (
     const relationAlias = `lt_${Math.abs(hashString(`${filter.relation.sourceType}:${filter.relation.targetType}:${filter.targetColumn}`)).toString(16)}`;
     const clauses = targets.map((target, index) => {
       const targetAlias = `${relationAlias}_t${index}`;
-      const column = `${targetAlias}.${quoteIdent(filter.targetColumn)}`;
+      const rawColumn = `${targetAlias}.${quoteIdent(filter.targetColumn)}`;
+      const column = filter.targetFn ? wrapScalarFn(filter.targetFn, rawColumn) : rawColumn;
       params.push(encodeParam(filter.value));
       const predicate = compileFilterPredicate(column, filter.op);
       if (filter.relation.storage === "inline") {
@@ -1234,6 +1249,25 @@ const compileFilterExprSQL = (
       }
       return `EXISTS (SELECT 1 FROM ${linkJunctionFrom(filter.relation, relationAlias)} JOIN ${quoteIdent(target.table)} ${targetAlias} ON ${targetAlias}.${quoteIdent("id")} = ${relationAlias}.${quoteIdent("target")} WHERE ${relationAlias}.${quoteIdent("source")} = ${sourceAlias}.${quoteIdent("id")} AND ${predicate})`;
     });
+    if (clauses.length === 0) return "0";
+    return clauses.length === 1 ? clauses[0]! : `(${clauses.join(" OR ")})`;
+  }
+
+  if (filter.kind === "backlink_target_field_compare") {
+    // Same EXISTS shape as `backlink_property_value_compare` (which compares a
+    // backlink link-property), but the comparison is on a column of the
+    // source-row table — optionally wrapped in a stdlib scalar fn — instead.
+    const clauses = filter.sources
+      .filter((source) => source.storage === "table" && source.linkTable)
+      .map((source, index) => {
+        const linkAlias = `bf_${index}_l`;
+        const srcAlias = `bf_${index}_s`;
+        const rawColumn = `${srcAlias}.${quoteIdent(filter.targetColumn)}`;
+        const column = filter.targetFn ? wrapScalarFn(filter.targetFn, rawColumn) : rawColumn;
+        params.push(encodeParam(filter.value));
+        const predicate = compileFilterPredicate(column, filter.op);
+        return `EXISTS (SELECT 1 FROM ${quoteIdent(source.linkTable!)} ${linkAlias} JOIN ${quoteIdent(source.table)} ${srcAlias} ON ${srcAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("source")} WHERE ${linkAlias}.${quoteIdent("target")} = ${sourceAlias}.${quoteIdent("id")} AND ${predicate})`;
+      });
     if (clauses.length === 0) return "0";
     return clauses.length === 1 ? clauses[0]! : `(${clauses.join(" OR ")})`;
   }
@@ -1330,6 +1364,18 @@ const compileFilterExprSQL = (
   return filter.kind === "and" ? `(${left} AND ${right})` : `(${left} OR ${right})`;
 };
 
+// Map a whitelisted ScalarFnName to the SQLite expression that implements it.
+// Shared between `link_target_field_compare`'s optional fn-wrapping and the
+// scalar-expression `fn_call` path.
+const wrapScalarFn = (
+  name: "str_upper" | "str_lower" | "len",
+  inner: string,
+): string => {
+  if (name === "str_upper") return `UPPER(${inner})`;
+  if (name === "str_lower") return `LOWER(${inner})`;
+  return `LENGTH(${inner})`;
+};
+
 const compileScalarExprSQL = (
   expr: ScalarExprIR,
   sourceAlias: string,
@@ -1348,6 +1394,10 @@ const compileScalarExprSQL = (
   if (expr.kind === "index_access") {
     const inner = compileScalarExprSQL(expr.value, sourceAlias, params);
     return `substr(${inner}, ${expr.index + 1}, 1)`;
+  }
+  if (expr.kind === "fn_call") {
+    const args = expr.args.map((arg) => compileScalarExprSQL(arg, sourceAlias, params));
+    return wrapScalarFn(expr.name, args.join(", "));
   }
   const leftSql = compileScalarExprSQL(expr.left, sourceAlias, params);
   const rightSql = compileScalarExprSQL(expr.right, sourceAlias, params);
@@ -1412,6 +1462,10 @@ const collectFieldFilterColumns = (filter: FilterExprIR | undefined): string[] =
     return [];
   }
 
+  if (filter.kind === "backlink_target_field_compare") {
+    return [];
+  }
+
   if (filter.kind === "not") {
     return collectFieldFilterColumns(filter.expr);
   }
@@ -1428,6 +1482,7 @@ const collectScalarExprColumns = (expr: ScalarExprIR): string[] => {
   if (expr.kind === "literal") return [];
   if (expr.kind === "neg") return collectScalarExprColumns(expr.expr);
   if (expr.kind === "index_access") return collectScalarExprColumns(expr.value);
+  if (expr.kind === "fn_call") return expr.args.flatMap(collectScalarExprColumns);
   return [...collectScalarExprColumns(expr.left), ...collectScalarExprColumns(expr.right)];
 };
 

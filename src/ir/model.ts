@@ -1,5 +1,5 @@
-import type { DeleteStatement, FreeObjectExpr, InsertStatement, OrderExprChain, PathStep, SelectExprStatement, SelectStatement, ShapeElement, TypeExpr, UpdateStatement, WithBinding } from "../edgeql/ast.js";
-import type { ComputedLinkPropertyDef, ScalarValue } from "../types.js";
+import type { DeleteStatement, FreeObjectExpr, InsertStatement, InsertValue, OrderExprChain, PathStep, SelectExprStatement, SelectStatement, ShapeElement, TypeExpr, UpdateStatement, WithBinding } from "../edgeql/ast.js";
+import type { ComputedLinkPropertyDef, ScalarType, ScalarValue } from "../types.js";
 
 /* ---------------------------------- */
 /* Depth control                      */
@@ -244,6 +244,10 @@ export type FilterExprIR =
       targetColumn: string;
       value: ScalarValue;
       op: "=" | "!=" | "<" | "<=" | ">" | ">=" | "?=" | "?!=" | "like" | "ilike";
+      // Optional scalar function wrapper applied to the target column before
+      // comparison. Lets the SQL path lower forms like
+      // `str_upper(.link.col) = 'X'` to `UPPER(target.col) = ?`.
+      targetFn?: ScalarFnName;
     }
   | {
       kind: "link_target_field_in";
@@ -273,6 +277,20 @@ export type FilterExprIR =
       value: ScalarValue;
       op: "=" | "!=" | "<" | "<=" | ">" | ">=" | "?=" | "?!=" | "like" | "ilike";
     }
+  // `<scalar fn>(.<computed-backlink>.<col>) <op> <value>` — a FILTER expression
+  // that compares a (possibly scalar-fn-wrapped) column on the backlink source
+  // type against a literal. Lower to `EXISTS (... AND <fn>(src.col) <op> ?)`
+  // joined through each backlink source. This lets aliases-with-FILTER paths
+  // like `FILTER str_upper(.winner.name) = 'ALICE'` lower to a single SQL
+  // statement instead of the runtime typed-alias bypass.
+  | {
+      kind: "backlink_target_field_compare";
+      sources: BacklinkSourceIR[];
+      targetColumn: string;
+      targetFn?: ScalarFnName;
+      value: ScalarValue;
+      op: "=" | "!=" | "<" | "<=" | ">" | ">=" | "like" | "ilike";
+    }
   | {
       kind: "and";
       left: FilterExprIR;
@@ -294,6 +312,11 @@ export type FilterExprIR =
       op: "=" | "!=" | "<" | "<=" | ">" | ">=";
     };
 
+/** Scalar stdlib functions the SQL filter path can lower directly. Whitelisted
+ * so the compiler doesn't accept arbitrary names (they'd need overload-aware
+ * lowering through gel_ir, not a plain SQLite function). */
+export type ScalarFnName = "str_upper" | "str_lower" | "len";
+
 /** Scalar expression compiled from filter LHS/RHS — column refs, literals,
  * and arithmetic/string-concat operators that lower directly to SQL. */
 export type ScalarExprIR =
@@ -301,7 +324,8 @@ export type ScalarExprIR =
   | { kind: "literal"; value: ScalarValue }
   | { kind: "binop"; op: "+" | "-" | "*" | "/" | "//" | "%" | "++"; left: ScalarExprIR; right: ScalarExprIR }
   | { kind: "neg"; expr: ScalarExprIR }
-  | { kind: "index_access"; value: ScalarExprIR; index: number };
+  | { kind: "index_access"; value: ScalarExprIR; index: number }
+  | { kind: "fn_call"; name: ScalarFnName; args: ScalarExprIR[] };
 
 /* ---------------------------------- */
 /* Select-shape expressions           */
@@ -379,6 +403,11 @@ export type SelectShapeElementIR =
   | (ShapeBaseIR & {
       kind: "backlink";
       sources: BacklinkSourceIR[];
+      // True when the backlink may yield multiple source rows; false when
+      // EdgeQL's cardinality inference proves it's at-most-one (e.g., the
+      // forward link is `constraint exclusive`). Defaults to true at the
+      // call site so existing callers keep multi semantics.
+      multi?: boolean;
       columns?: string[];
       shape?: SelectShapeElementIR[];
       filter?: FilterExprIR;
@@ -442,11 +471,57 @@ export interface SelectIR extends SelectBaseIR {
   appliedOverlays: OverlayIR[];
 }
 
+export interface InsertLinkPropertyIR {
+  name: string;
+  type: ScalarType;
+  hasDefault: boolean;
+}
+
+export interface InsertLinkAssignmentIR {
+  linkName: string;
+  storage: "inline" | "table";
+  inlineColumn?: string;
+  ownerTable: string;
+  linkTable?: string;
+  propertyColumns?: string[];
+  properties?: InsertLinkPropertyIR[];
+  expectedTargetTables: string[];
+  target: InsertValue;
+}
+
+export interface InsertLinkDefaultIR {
+  linkName: string;
+  storage: "inline" | "table";
+  inlineColumn?: string;
+  ownerTable: string;
+  linkTable?: string;
+  propertyColumns?: string[];
+  properties?: InsertLinkPropertyIR[];
+  targetTable: string;
+  defaultTargetValues: ScalarValue[];
+  lookupColumn?: string;
+}
+
 export interface InsertIR extends MutationBaseIR {
   kind: "insert";
   values: Record<string, ScalarValue>;
+  linkAssignments?: InsertLinkAssignmentIR[];
+  linkDefaults?: InsertLinkDefaultIR[];
   triggers?: TriggerIR[];
   policies?: PolicyIR[];
+}
+
+export interface UpdateLinkAssignmentIR {
+  linkName: string;
+  storage: "inline" | "table";
+  inlineColumn?: string;
+  ownerTable: string;
+  linkTable?: string;
+  propertyColumns?: string[];
+  properties?: InsertLinkPropertyIR[];
+  expectedTargetTables: string[];
+  operation: "assign" | "append" | "subtract";
+  target: InsertValue;
 }
 
 export interface UpdateIR extends MutationBaseIR {
@@ -456,6 +531,7 @@ export interface UpdateIR extends MutationBaseIR {
     value: ScalarValue;
   };
   values: Record<string, ScalarValue>;
+  linkAssignments?: UpdateLinkAssignmentIR[];
   triggers?: TriggerIR[];
   policies?: PolicyIR[];
 }

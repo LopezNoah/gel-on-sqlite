@@ -292,20 +292,28 @@ const pointerRefFromField = (source: TypeRef, field: FieldDef): PointerRef => ({
   hasProperties: false,
 });
 
-const pointerRefFromLink = (source: TypeRef, target: TypeRef, link: LinkDef): PointerRef => ({
-  kind: "pointer_ref",
-  id: `${source.id}.link::${link.name}`,
-  name: link.name,
-  shortName: link.name,
-  outSource: source,
-  outTarget: target,
-  outCardinality: link.multi ? "many" : "at_most_one",
-  inCardinality: "many",
-  isComputed: false,
-  isIdPointer: false,
-  isLinkProperty: false,
-  hasProperties: (link.properties?.length ?? 0) > 0,
-});
+const pointerRefFromLink = (source: TypeRef, target: TypeRef, link: LinkDef): PointerRef => {
+  // EdgeQL: when the forward link is `constraint exclusive`, each target
+  // is referenced by at most one source row, so the inbound (backlink)
+  // cardinality is at-most-one rather than many.
+  const isExclusive = (link.constraints ?? []).some(
+    (constraint) => constraint.name === "std::exclusive" || constraint.name === "exclusive",
+  );
+  return {
+    kind: "pointer_ref",
+    id: `${source.id}.link::${link.name}`,
+    name: link.name,
+    shortName: link.name,
+    outSource: source,
+    outTarget: target,
+    outCardinality: link.multi ? "many" : "at_most_one",
+    inCardinality: isExclusive ? "at_most_one" : "many",
+    isComputed: false,
+    isIdPointer: false,
+    isLinkProperty: false,
+    hasProperties: (link.properties?.length ?? 0) > 0,
+  };
+};
 
 const mkCallArg = (expr: Set): CallArg => ({
   kind: "call_arg",
@@ -941,13 +949,19 @@ const tryResolveSchemaAliasSet = (ctx: IRCompileContext, name: string): Set | un
     body = inner;
   }
 
-  let ast: EdgeQLStatement;
-  try {
-    ast = parseEdgeQL(body);
-  } catch {
-    return undefined;
+  let ast: EdgeQLStatement | undefined;
+  for (const candidate of [body, `SELECT ${body}`]) {
+    try {
+      const parsed = parseEdgeQL(candidate);
+      if (parsed.kind === "select") {
+        ast = parsed;
+        break;
+      }
+    } catch {
+      // try next candidate
+    }
   }
-  if (ast.kind !== "select") {
+  if (!ast) {
     return undefined;
   }
 
@@ -3063,7 +3077,481 @@ const compileSelectExprStatement = (statement: Extract<EdgeQLStatement, { kind: 
   };
 };
 
-const compileSelectStatement = (statement: SelectStatement, ctx: IRCompileContext): SelectStmt => {
+// EdgeQL semantics treat `SELECT AliasName { shape } FILTER outer` as if
+// `AliasName` were textually replaced by its body. We perform that expansion
+// once at the AST level so the rest of compilation never has to know that
+// `AliasName` was an alias: typeName becomes the alias's source type, the
+// alias body's filter is AND'd with the outer filter, the alias body's
+// computed/link shape elements replace outer field references of the same
+// name (so the outer can project an alias-defined field by name), and any
+// outer-unset orderBy/limit/offset is inherited from the alias body.
+// Recursive aliases are detected via the `visited` set.
+export const expandSchemaAliasesInStatement = (
+  statement: EdgeQLStatement,
+  schema: SchemaSnapshot,
+  defaultModule = "default",
+): EdgeQLStatement => {
+  const ctx: IRCompileContext = {
+    module: (statement as { withModule?: string }).withModule ?? defaultModule,
+    schema,
+    nextScopeId: 1,
+    params: new Map(),
+    globals: new Map(),
+    bindingScopes: [new Map()],
+  };
+  if (statement.kind === "select") {
+    return expandAliasInSelectStatement(statement, ctx, new globalThis.Set<string>());
+  }
+  if (statement.kind === "select_free") {
+    return {
+      ...statement,
+      entries: statement.entries.map((entry) => ({
+        ...entry,
+        expr: expandAliasInFreeObjectExpr(entry.expr, ctx),
+      })),
+    };
+  }
+  if (statement.kind === "select_expr") {
+    return {
+      ...statement,
+      expr: expandAliasInFreeObjectExpr(statement.expr, ctx),
+    };
+  }
+  return statement;
+};
+
+const expandAliasInFreeObjectExpr = (
+  expr: FreeObjectExpr,
+  ctx: IRCompileContext,
+): FreeObjectExpr => {
+  if (expr.kind === "select_expr_subquery") {
+    return { ...expr, expr: expandAliasInFreeObjectExpr(expr.expr, ctx) };
+  }
+  if (expr.kind === "field_access") {
+    return { ...expr, expr: expandAliasInFreeObjectExpr(expr.expr, ctx) };
+  }
+  if (expr.kind === "select") {
+    const synthetic: SelectStatement = {
+      kind: "select",
+      with: expr.clauses._withBindings,
+      withModule: expr.clauses._withModule,
+      withModuleAliases: expr.clauses._withModuleAliases,
+      typeName: expr.typeName,
+      shape: expr.shape,
+      fields: [],
+      filter: expr.clauses.filter,
+      orderBy: expr.clauses.orderBy,
+      limit: expr.clauses.limit,
+      offset: expr.clauses.offset,
+      limitExpr: expr.clauses.limitExpr,
+      offsetExpr: expr.clauses.offsetExpr,
+      pos: { line: 0, column: 0 },
+    };
+    const expanded = expandAliasInSelectStatement(synthetic, ctx, new globalThis.Set<string>());
+    return {
+      kind: "select",
+      typeName: expanded.typeName,
+      shape: expanded.shape,
+      clauses: {
+        ...expr.clauses,
+        filter: expanded.filter,
+        orderBy: expanded.orderBy,
+        limit: expanded.limit,
+        offset: expanded.offset,
+        limitExpr: expanded.limitExpr,
+        offsetExpr: expanded.offsetExpr,
+        _withBindings: expanded.with ?? expr.clauses._withBindings,
+        _withModule: expanded.withModule ?? expr.clauses._withModule,
+        _withModuleAliases: expanded.withModuleAliases ?? expr.clauses._withModuleAliases,
+      },
+    };
+  }
+  return expr;
+};
+
+// Walk a FreeObjectExpr, replacing each `current_item` node with `newRoot`.
+// Used when inlining a shape-defined computed expression into a FILTER path: a
+// computed like `name_upper := str_upper(.name)` is written against the
+// computed link's target (`.name` is relative to a winner row), so when we lift
+// it into the outer FILTER scope (`.winner.name_upper = ...`) we have to
+// rebind `.name` to `.winner.name`.
+const substituteCurrentItemInFreeExpr = (
+  expr: FreeObjectExpr,
+  newRoot: FreeObjectExpr,
+): FreeObjectExpr => {
+  const rec = (e: FreeObjectExpr): FreeObjectExpr => substituteCurrentItemInFreeExpr(e, newRoot);
+  switch (expr.kind) {
+    case "current_item":
+      return newRoot;
+    case "field_access":
+      return { ...expr, expr: rec(expr.expr) };
+    case "function_call":
+      return {
+        ...expr,
+        call: {
+          ...expr.call,
+          args: expr.call.args.map((arg) => {
+            if (arg.kind === "expr") return { ...arg, expr: rec(arg.expr) };
+            if (arg.kind === "function_call") {
+              const innerCall = substituteCurrentItemInFreeExpr({ kind: "function_call", call: arg.call }, newRoot);
+              return innerCall.kind === "function_call" ? { kind: "function_call", call: innerCall.call } : arg;
+            }
+            return arg;
+          }),
+        },
+      };
+    case "compare":
+    case "math":
+    case "and":
+    case "or":
+    case "coalesce":
+      return { ...expr, left: rec(expr.left), right: rec(expr.right) };
+    case "not":
+    case "exists":
+    case "distinct":
+    case "cast":
+    case "unary":
+      return { ...expr, expr: rec(expr.expr) };
+    case "if_else":
+      return { ...expr, condition: rec(expr.condition), thenExpr: rec(expr.thenExpr), elseExpr: rec(expr.elseExpr) };
+    case "concat":
+      return { ...expr, parts: expr.parts.map(rec) };
+    case "tuple":
+    case "set_expr":
+    case "array_literal_expr":
+      return { ...expr, values: expr.values.map(rec) };
+    case "index_access":
+    case "slice_access":
+    case "shape_projection":
+    case "is_type":
+      return { ...expr, expr: rec(expr.expr) };
+    default:
+      // Other kinds (literal, binding_ref, path, etc.) carry no current_item
+      // references in well-formed shape-computed bodies.
+      return expr;
+  }
+};
+
+// Convert a parser FilterValue into the FreeObjectExpr form `compare` accepts.
+// Returns undefined for value shapes we can't inline (set literals, sub-selects
+// inside the comparison RHS — the existing predicate path handles those).
+const filterValueToFreeObjectExpr = (value: FilterValue): FreeObjectExpr | undefined => {
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean" || value === null) {
+    return { kind: "literal", value };
+  }
+  if (Array.isArray(value)) {
+    return undefined;
+  }
+  if (typeof value === "object" && value !== null && "kind" in value) {
+    if (value.kind === "binding_ref") {
+      return { kind: "binding_ref", name: value.name };
+    }
+  }
+  return undefined;
+};
+
+// Pull the inner shape from a `winner := <expr> { ... }` style computed body.
+const innerShapeOfComputedBody = (
+  body: ComputedExpr | FreeObjectExpr,
+): EdgeQLShapeElement[] | undefined => {
+  if ((body as { kind?: string }).kind === "select_expr") {
+    return innerShapeOfComputedBody((body as { expr: FreeObjectExpr }).expr);
+  }
+  if ((body as { kind?: string }).kind === "shape_projection") {
+    return (body as { shape: EdgeQLShapeElement[] }).shape;
+  }
+  return undefined;
+};
+
+// Substitute alias-defined shape computeds into a FILTER expression so the
+// rewritten filter compiles through the standard SQL path. Specifically: a
+// FILTER target like `linkName.fieldName` where `linkName` is a computed shape
+// element on the surrounding select and `fieldName` is a computed property in
+// its inner shape gets lifted into the equivalent free-expression form
+// (`<inner-computed-expr-with-current_item→linkName>` `op` `value`).
+export const rewriteFilterThroughShapeComputeds = (
+  filter: FilterExpr,
+  shape: EdgeQLShapeElement[],
+): FilterExpr => {
+  if (filter.kind === "and" || filter.kind === "or") {
+    return {
+      ...filter,
+      left: rewriteFilterThroughShapeComputeds(filter.left, shape),
+      right: rewriteFilterThroughShapeComputeds(filter.right, shape),
+    };
+  }
+  if (filter.kind === "not") {
+    return { ...filter, expr: rewriteFilterThroughShapeComputeds(filter.expr, shape) };
+  }
+  if (filter.kind !== "predicate" || filter.target.kind !== "field") {
+    return filter;
+  }
+  const parts = filter.target.field.split(".");
+  if (parts.length !== 2) return filter;
+  const [linkName, propName] = parts;
+  const shapeEl = shape.find((el) => "name" in el && el.name === linkName);
+  if (!shapeEl || shapeEl.kind !== "computed") return filter;
+  const innerShape = innerShapeOfComputedBody(shapeEl.expr);
+  if (!innerShape) return filter;
+  const innerEl = innerShape.find((el) => "name" in el && el.name === propName);
+  if (!innerEl || innerEl.kind !== "computed") return filter;
+  const valueExpr = filterValueToFreeObjectExpr(filter.value);
+  if (!valueExpr) return filter;
+  // Only inline computed bodies whose AST is already a FreeObjectExpr — i.e.
+  // ComputedExpr shapes that overlap with FreeObjectExpr (function_call,
+  // literal). Other ComputedExpr-only kinds (field_ref, polymorphic_field_ref,
+  // …) would need translation, which the runtime bypass already handles.
+  const innerExpr = innerEl.expr;
+  if (innerExpr.kind !== "function_call" && innerExpr.kind !== "literal") {
+    return filter;
+  }
+  const newRoot: FreeObjectExpr = {
+    kind: "field_access",
+    expr: { kind: "current_item" },
+    field: linkName,
+    optional: false,
+  };
+  const substituted = substituteCurrentItemInFreeExpr(innerExpr as FreeObjectExpr, newRoot);
+  return {
+    kind: "free_expr",
+    expr: {
+      kind: "compare",
+      op: filter.op,
+      left: substituted,
+      right: valueExpr,
+    },
+  };
+};
+
+// Eagerly applies the alias-shape FILTER rewrite to a parsed SELECT so the
+// downstream pipeline (in particular the AST interpreter `tryEvaluateParsed
+// RuntimeSelect`, which gates on FILTER shape) sees the inlined free
+// expression form. Mirrors what `expandAliasInSelectStatement` does for the
+// SQL path. Idempotent: returns the input unchanged when nothing can be
+// rewritten.
+export const rewriteAliasFilterEagerly = (
+  statement: SelectStatement,
+  schema: SchemaSnapshot,
+  defaultModule = "default",
+): SelectStatement => {
+  if (!statement.filter) return statement;
+  const aliasName = qualifyTypeName(statement.typeName, statement.withModule ?? defaultModule);
+  const alias = schema.getAlias(aliasName);
+  if (!alias?.exprText) return statement;
+  let body = alias.exprText.trim();
+  if (body.endsWith(";")) body = body.slice(0, -1).trim();
+  while (body.startsWith("(") && body.endsWith(")")) {
+    const inner = body.slice(1, -1).trim();
+    let depth = 0;
+    let balanced = true;
+    for (const ch of inner) {
+      if (ch === "(") depth += 1;
+      else if (ch === ")") {
+        depth -= 1;
+        if (depth < 0) { balanced = false; break; }
+      }
+    }
+    if (!balanced || depth !== 0) break;
+    body = inner;
+  }
+  let aliasAst: EdgeQLStatement | undefined;
+  for (const candidate of [body, `SELECT ${body}`]) {
+    try {
+      const parsed = parseEdgeQL(candidate);
+      if (parsed.kind === "select") { aliasAst = parsed; break; }
+    } catch {
+      // try next
+    }
+  }
+  if (!aliasAst || aliasAst.kind !== "select") return statement;
+  const aliasBodyShape = aliasAst.shape;
+  const rewritten = rewriteFilterThroughShapeComputeds(statement.filter, aliasBodyShape);
+  if (rewritten === statement.filter) return statement;
+  return { ...statement, filter: rewritten };
+};
+
+const expandAliasInSelectStatement = (
+  statement: SelectStatement,
+  ctx: IRCompileContext,
+  visited: globalThis.Set<string>,
+): SelectStatement => {
+  if (!ctx.schema) return statement;
+  const qualified = qualifyTypeName(statement.typeName, statement.withModule ?? ctx.module);
+  if (visited.has(qualified)) return statement;
+  const alias = ctx.schema.getAlias(qualified);
+  if (!alias?.exprText) return statement;
+
+  let body = alias.exprText.trim();
+  if (body.endsWith(";")) {
+    body = body.slice(0, -1).trim();
+  }
+  while (body.startsWith("(") && body.endsWith(")")) {
+    const inner = body.slice(1, -1).trim();
+    let depth = 0;
+    let balanced = true;
+    for (const ch of inner) {
+      if (ch === "(") depth += 1;
+      else if (ch === ")") {
+        depth -= 1;
+        if (depth < 0) { balanced = false; break; }
+      }
+    }
+    if (!balanced || depth !== 0) break;
+    body = inner;
+  }
+
+  // Alias bodies in the SDL can omit the leading `SELECT` keyword
+  // (`alias SpecialCardAlias := SpecialCard { ... }`, `alias AwardAlias := (Award { ... })`).
+  // Try parsing the body as-is first, then with `SELECT ` prepended.
+  let aliasAst: EdgeQLStatement | undefined;
+  for (const candidate of [body, `SELECT ${body}`]) {
+    try {
+      const parsed = parseEdgeQL(candidate);
+      if (parsed.kind === "select") {
+        aliasAst = parsed;
+        break;
+      }
+    } catch {
+      // try next candidate
+    }
+  }
+  if (!aliasAst) return statement;
+
+  visited.add(qualified);
+  const expandedAlias = expandAliasInSelectStatement(aliasAst as SelectStatement, ctx, visited);
+
+  const aliasShapeByName = new Map<string, EdgeQLShapeElement>();
+  for (const element of expandedAlias.shape) {
+    if ("name" in element) {
+      aliasShapeByName.set(element.name, element);
+    }
+  }
+
+  // When outer's link `winner: { outerShape }` matches an alias-defined
+  // `winner := <expr> { aliasInnerShape }`, the result needs to use the
+  // alias's expression (so winner's source is the alias-defined backlink/
+  // computed) but project the outer's requested shape. Recursively merge
+  // outerShape with aliasInnerShape so any outer field-ref that names an
+  // alias-defined computed inside the inner shape is swapped for its
+  // definition.
+  const mergeNestedShape = (
+    outerInnerShape: EdgeQLShapeElement[],
+    aliasInnerShape: EdgeQLShapeElement[],
+  ): EdgeQLShapeElement[] => {
+    const innerByName = new Map<string, EdgeQLShapeElement>();
+    for (const el of aliasInnerShape) {
+      if ("name" in el) innerByName.set(el.name, el);
+    }
+    return outerInnerShape.map((outerInner) => {
+      if (!("name" in outerInner) || outerInner.kind !== "field") return outerInner;
+      const aliasInner = innerByName.get(outerInner.name);
+      if (aliasInner && (aliasInner.kind === "computed" || aliasInner.kind === "link" || aliasInner.kind === "backlink")) {
+        return aliasInner;
+      }
+      return outerInner;
+    });
+  };
+
+  // Locate the inner shape inside an alias's computed expression
+  // (`select_expr → shape_projection { shape: [...] }`). Returns null if the
+  // expression isn't a shape-bearing form we know how to merge into.
+  const computedInnerShape = (expr: ComputedExpr | FreeObjectExpr): EdgeQLShapeElement[] | null => {
+    if (expr.kind === "select_expr") {
+      return computedInnerShape(expr.expr);
+    }
+    if (expr.kind === "shape_projection") {
+      return expr.shape;
+    }
+    return null;
+  };
+
+  const rewriteComputedInnerShape = (
+    expr: ComputedExpr | FreeObjectExpr,
+    nextShape: EdgeQLShapeElement[],
+  ): ComputedExpr | FreeObjectExpr => {
+    if (expr.kind === "select_expr") {
+      return { ...expr, expr: rewriteComputedInnerShape(expr.expr, nextShape) as FreeObjectExpr };
+    }
+    if (expr.kind === "shape_projection") {
+      return { ...expr, shape: nextShape };
+    }
+    return expr;
+  };
+
+  // When the outer query has no explicit shape (parser-default `[{id, origin:
+  // "default"}]`), `SELECT Alias` means "select the alias body" — adopt the
+  // alias's body shape verbatim so alias-defined computeds (e.g.
+  // `SpecialCardAlias.el_cost`) are projected onto each row.
+  const outerShapeIsImplicit = statement.shape.length > 0
+    && statement.shape.every((el) =>
+      "name" in el && (el as { origin?: string }).origin === "default",
+    );
+
+  const mergedShape: EdgeQLShapeElement[] = [];
+  if (outerShapeIsImplicit) {
+    mergedShape.push(...expandedAlias.shape);
+  } else {
+    for (const outerEl of statement.shape) {
+      if (!("name" in outerEl)) {
+        mergedShape.push(outerEl);
+        continue;
+      }
+      const aliasEl = aliasShapeByName.get(outerEl.name);
+      // A plain `field` reference in the outer shape that names a computed or
+      // link defined on the alias body should use the alias's definition,
+      // since the outer query is asking to project that named value.
+      if (outerEl.kind === "field"
+        && aliasEl
+        && (aliasEl.kind === "computed" || aliasEl.kind === "link" || aliasEl.kind === "backlink")) {
+        mergedShape.push(aliasEl);
+        continue;
+      }
+      // An outer link/backlink with nested shape matched against an alias-
+      // defined computed: keep the alias's expression but merge the outer's
+      // nested projections into the alias's inner shape so the outer's
+      // explicit projection (`winner: { name }`) wins over the alias's
+      // default inner shape (`{ name_upper := ... }`).
+      if ((outerEl.kind === "link" || outerEl.kind === "backlink") && aliasEl?.kind === "computed") {
+        const outerInner = (outerEl as { shape?: EdgeQLShapeElement[] }).shape ?? [];
+        const aliasInner = computedInnerShape(aliasEl.expr);
+        if (aliasInner) {
+          const merged = mergeNestedShape(outerInner, aliasInner);
+          mergedShape.push({
+            ...aliasEl,
+            expr: rewriteComputedInnerShape(aliasEl.expr, merged) as ComputedExpr,
+          });
+          continue;
+        }
+        mergedShape.push(aliasEl);
+        continue;
+      }
+      mergedShape.push(outerEl);
+    }
+  }
+
+  const mergedFilterRaw = statement.filter && expandedAlias.filter
+    ? { kind: "and" as const, left: expandedAlias.filter, right: statement.filter }
+    : statement.filter ?? expandedAlias.filter;
+  const mergedFilter = mergedFilterRaw
+    ? rewriteFilterThroughShapeComputeds(mergedFilterRaw, mergedShape)
+    : mergedFilterRaw;
+
+  return {
+    ...statement,
+    typeName: expandedAlias.typeName,
+    shape: mergedShape,
+    fields: [...new globalThis.Set([...(expandedAlias.fields ?? []), ...statement.fields])],
+    filter: mergedFilter,
+    orderBy: statement.orderBy ?? expandedAlias.orderBy,
+    limit: statement.limit ?? expandedAlias.limit,
+    offset: statement.offset ?? expandedAlias.offset,
+    limitExpr: statement.limitExpr ?? expandedAlias.limitExpr,
+    offsetExpr: statement.offsetExpr ?? expandedAlias.offsetExpr,
+  };
+};
+
+const compileSelectStatement = (rawStatement: SelectStatement, ctx: IRCompileContext): SelectStmt => {
+  const statement = expandAliasInSelectStatement(rawStatement, ctx, new globalThis.Set<string>());
   const scoped = withBindings(ctx, statement.with);
   const subject = setFromTypeRoot(resolveTypeRef(scoped, statement.typeName));
   bindValue(scoped, "__subject__", subject);

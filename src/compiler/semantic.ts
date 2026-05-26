@@ -8,12 +8,16 @@ import type {
   FilterExprIR,
   GroupIR,
   InferenceResult,
+  InsertLinkAssignmentIR,
+  InsertLinkDefaultIR,
+  InsertLinkPropertyIR,
   IRStatement,
   LinkRelationIR,
   OrderByIR,
   OverlayIR,
   PathIdIR,
   ScalarExprIR,
+  ScalarFnName,
   ScopeTreeIR,
   SchemaTypeRefIR,
   SelectExprIREntry,
@@ -21,13 +25,222 @@ import type {
   SelectShapeElementIR,
   SelectShapeExprIR,
   TriggerIR,
+  UpdateLinkAssignmentIR,
   PolicyIR,
 } from "../ir/model.js";
 import { qualifiedTypeName, SchemaSnapshot } from "../schema/schema.js";
-import type { ScalarType, ScalarValue, TypeDef } from "../types.js";
+import type { AccessPolicyCondition, ScalarType, ScalarValue, TypeDef } from "../types.js";
 import { tryResolveStdlibFunction } from "../stdlib/functions.js";
 
 const tableNameForType = (qualifiedName: string): string => qualifiedName.replaceAll("::", "__").toLowerCase();
+
+const normalizeLinkTargetNames = (targetType: string, moduleName: string): string[] =>
+  targetType
+    .split("|")
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0)
+    .map((part) => (part.includes("::") ? part : `${moduleName}::${part}`));
+
+const linkDefsEquivalent = (
+  a: NonNullable<TypeDef["links"]>[number],
+  b: NonNullable<TypeDef["links"]>[number],
+): boolean => {
+  if (a.name !== b.name) return false;
+  if ((a.targetType ?? "") !== (b.targetType ?? "")) return false;
+  if (Boolean(a.multi) !== Boolean(b.multi)) return false;
+  const aProps = a.properties ?? [];
+  const bProps = b.properties ?? [];
+  if (aProps.length !== bProps.length) return false;
+  for (let i = 0; i < aProps.length; i += 1) {
+    const ap = aProps[i];
+    const bp = bProps[i];
+    if (!bp || ap.name !== bp.name || ap.type !== bp.type) return false;
+  }
+  return true;
+};
+
+const resolveLinkStorageOwner = (
+  schema: SchemaSnapshot,
+  typeDef: TypeDef,
+  link: NonNullable<TypeDef["links"]>[number],
+): TypeDef => {
+  if (link.overloaded) return typeDef;
+  let owner = typeDef;
+  let current = typeDef;
+  while ((current.extends ?? []).length > 0) {
+    const baseName = current.extends?.[0];
+    if (!baseName) break;
+    const baseType = schema.getType(baseName);
+    if (!baseType) break;
+    const baseLink = (baseType.links ?? []).find((candidate) => candidate.name === link.name);
+    if (!baseLink || baseLink.overloaded || !linkDefsEquivalent(link, baseLink)) break;
+    owner = baseType;
+    current = baseType;
+  }
+  return owner;
+};
+
+const expectedTargetTablesForLink = (
+  schema: SchemaSnapshot,
+  ownerModule: string,
+  link: NonNullable<TypeDef["links"]>[number],
+): string[] => {
+  const targetTypeNames = normalizeLinkTargetNames(link.targetType, ownerModule);
+  const tables = new Set<string>();
+  for (const targetTypeName of targetTypeNames) {
+    const assignable = schema.listConcreteTypesAssignableTo(targetTypeName);
+    if (assignable.length > 0) {
+      for (const candidate of assignable) {
+        tables.add(tableNameForType(qualifiedTypeName(candidate)));
+      }
+    } else {
+      tables.add(tableNameForType(targetTypeName));
+    }
+  }
+  return [...tables].sort();
+};
+
+const linkPropertyIR = (
+  property: NonNullable<NonNullable<TypeDef["links"]>[number]["properties"]>[number],
+): InsertLinkPropertyIR => ({
+  name: property.name,
+  type: property.type as ScalarType,
+  hasDefault: Boolean(property.hasDefault),
+});
+
+const buildInsertLinkAssignments = (
+  schema: SchemaSnapshot,
+  typeDef: TypeDef,
+  values: Record<string, InsertValue>,
+  linkByName: Map<string, NonNullable<TypeDef["links"]>[number]>,
+): InsertLinkAssignmentIR[] => {
+  const assignments: InsertLinkAssignmentIR[] = [];
+  for (const [field, value] of Object.entries(values)) {
+    const link = linkByName.get(field);
+    if (!link) continue;
+    const linkOwner = resolveLinkStorageOwner(schema, typeDef, link);
+    const ownerModule = linkOwner.module ?? "default";
+    const ownerTable = tableNameForType(qualifiedTypeName(typeDef));
+    const usesLinkTable = Boolean(link.multi) || (link.properties?.length ?? 0) > 0;
+    const expectedTargetTables = expectedTargetTablesForLink(schema, ownerModule, link);
+    if (usesLinkTable) {
+      const properties = (link.properties ?? []).map(linkPropertyIR);
+      assignments.push({
+        linkName: link.name,
+        storage: "table",
+        ownerTable,
+        linkTable: `${tableNameForType(qualifiedTypeName(linkOwner))}__${link.name.toLowerCase()}`,
+        propertyColumns: properties.map((p) => p.name),
+        properties,
+        expectedTargetTables,
+        target: value,
+      });
+    } else {
+      assignments.push({
+        linkName: link.name,
+        storage: "inline",
+        ownerTable,
+        inlineColumn: `${link.name}_id`,
+        expectedTargetTables,
+        target: value,
+      });
+    }
+  }
+  return assignments;
+};
+
+const buildUpdateLinkAssignments = (
+  schema: SchemaSnapshot,
+  typeDef: TypeDef,
+  values: Record<string, InsertValue>,
+  operations: Record<string, "assign" | "append" | "subtract"> | undefined,
+  linkByName: Map<string, NonNullable<TypeDef["links"]>[number]>,
+): UpdateLinkAssignmentIR[] => {
+  const assignments: UpdateLinkAssignmentIR[] = [];
+  for (const [field, value] of Object.entries(values)) {
+    const link = linkByName.get(field);
+    if (!link) continue;
+    const linkOwner = resolveLinkStorageOwner(schema, typeDef, link);
+    const ownerModule = linkOwner.module ?? "default";
+    const ownerTable = tableNameForType(qualifiedTypeName(typeDef));
+    const usesLinkTable = Boolean(link.multi) || (link.properties?.length ?? 0) > 0;
+    const expectedTargetTables = expectedTargetTablesForLink(schema, ownerModule, link);
+    const operation = operations?.[field] ?? "assign";
+    if (usesLinkTable) {
+      const properties = (link.properties ?? []).map(linkPropertyIR);
+      assignments.push({
+        linkName: link.name,
+        storage: "table",
+        ownerTable,
+        linkTable: `${tableNameForType(qualifiedTypeName(linkOwner))}__${link.name.toLowerCase()}`,
+        propertyColumns: properties.map((p) => p.name),
+        properties,
+        expectedTargetTables,
+        operation,
+        target: value,
+      });
+    } else {
+      assignments.push({
+        linkName: link.name,
+        storage: "inline",
+        ownerTable,
+        inlineColumn: `${link.name}_id`,
+        expectedTargetTables,
+        operation,
+        target: value,
+      });
+    }
+  }
+  return assignments;
+};
+
+const buildInsertLinkDefaults = (
+  schema: SchemaSnapshot,
+  typeDef: TypeDef,
+  values: Record<string, InsertValue>,
+): InsertLinkDefaultIR[] => {
+  const defaults: InsertLinkDefaultIR[] = [];
+  for (const link of typeDef.links ?? []) {
+    if (Object.prototype.hasOwnProperty.call(values, link.name)) continue;
+    if (!link.hasDefault) continue;
+
+    const targetQualified = normalizeLinkTargetNames(link.targetType, typeDef.module ?? "default")[0]
+      ?? `${typeDef.module ?? "default"}::${link.targetType}`;
+    const targetType = schema.getType(targetQualified);
+    const lookupColumn = targetType?.fields.some((field) => field.name === "val")
+      ? "val"
+      : targetType?.fields.some((field) => field.name === "name")
+        ? "name"
+        : undefined;
+
+    const usesLinkTable = Boolean(link.multi) || (link.properties?.length ?? 0) > 0;
+    const properties = (link.properties ?? []).map(linkPropertyIR);
+    const ownerTable = tableNameForType(qualifiedTypeName(typeDef));
+    const base = {
+      linkName: link.name,
+      ownerTable,
+      targetTable: tableNameForType(targetQualified),
+      defaultTargetValues: [...(link.defaultTargetValues ?? [])],
+      lookupColumn,
+    };
+    if (usesLinkTable) {
+      defaults.push({
+        ...base,
+        storage: "table",
+        linkTable: `${tableNameForType(qualifiedTypeName(typeDef))}__${link.name.toLowerCase()}`,
+        propertyColumns: properties.map((p) => p.name),
+        properties,
+      });
+    } else {
+      defaults.push({
+        ...base,
+        storage: "inline",
+        inlineColumn: `${link.name}_id`,
+      });
+    }
+  }
+  return defaults;
+};
 
 export interface CompileContext {
   overlays?: OverlayIR[];
@@ -785,6 +998,16 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       };
     };
 
+    // Mapping for the small whitelist of stdlib scalar functions the filter
+    // SQL path can lower directly. Anything else falls through to the runtime.
+    const scalarFnNameFor = (name: string): ScalarFnName | undefined => {
+      const stripped = name.startsWith("std::") ? name.slice(5) : name;
+      if (stripped === "str_upper" || stripped === "str_lower" || stripped === "len") {
+        return stripped;
+      }
+      return undefined;
+    };
+
     // Recursive lowering of a FreeObjectExpr to a ScalarExprIR. Returns
     // undefined when the expression contains constructs that aren't
     // scalar-expressible (paths through links, function calls, etc.).
@@ -877,6 +1100,18 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         if (!inner) return undefined;
         return { kind: "index_access", value: inner, index: expr.index };
       }
+      if (expr.kind === "function_call") {
+        const fn = scalarFnNameFor(expr.call.name);
+        if (!fn) return undefined;
+        const args: ScalarExprIR[] = [];
+        for (const arg of expr.call.args) {
+          if (arg.kind !== "expr") return undefined;
+          const compiled = tryCompileScalarExpr(arg.expr);
+          if (!compiled) return undefined;
+          args.push(compiled);
+        }
+        return { kind: "fn_call", name: fn, args };
+      }
       return undefined;
     };
 
@@ -965,6 +1200,113 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         const right = tryCompileScalarExpr(expr.right);
         if (left && right) {
           return { kind: "expr_compare", left, right, op: expr.op };
+        }
+      }
+      // `<scalar-fn?>(.linkName.columnName) <op> <literal>` — pattern produced
+      // by alias-FILTER rewrites such as `FILTER .winner.name_upper = 'ALICE'`
+      // (rewritten to `str_upper(.winner.name) = 'ALICE'` when `winner` is a
+      // computed link with a `name_upper := str_upper(.name)` body). Lower to
+      // `link_target_field_compare` (forward link) or
+      // `backlink_target_field_compare` (computed backlink) so the SQL path
+      // handles it end-to-end instead of bouncing to the runtime bypass.
+      if (
+        expr.kind === "compare"
+        && options.subjectType
+        && (expr.op === "=" || expr.op === "!=" || expr.op === "<" || expr.op === "<="
+          || expr.op === ">" || expr.op === ">=" || expr.op === "like" || expr.op === "ilike")
+      ) {
+        const compareOp = expr.op;
+        // Strip an optional scalar-function wrapper (str_upper, etc.) and
+        // return the (function-name, inner-expression) pair. When no wrapper,
+        // returns the expression with an undefined function.
+        const peelFn = (e: FreeObjectExpr): { fn?: ScalarFnName; inner: FreeObjectExpr } => {
+          if (e.kind === "function_call") {
+            const fnName = scalarFnNameFor(e.call.name);
+            if (fnName && e.call.args.length === 1 && e.call.args[0].kind === "expr") {
+              return { fn: fnName, inner: e.call.args[0].expr };
+            }
+          }
+          return { inner: e };
+        };
+        // A `.link.column` path against the current item: `field_access(field_access(current_item, linkName), columnName)`.
+        const readLinkColumnPath = (e: FreeObjectExpr): { linkName: string; columnName: string } | undefined => {
+          if (e.kind === "field_access" && e.expr.kind === "field_access" && e.expr.expr.kind === "current_item"
+            && !e.field.startsWith("@") && !e.expr.field.startsWith("@")) {
+            return { linkName: e.expr.field, columnName: e.field };
+          }
+          return undefined;
+        };
+        const readLiteral = (e: FreeObjectExpr): ScalarValue | undefined => {
+          if (e.kind === "literal") return e.value;
+          if (e.kind === "cast" && e.expr.kind === "literal") return e.expr.value;
+          return undefined;
+        };
+        const leftPeel = peelFn(expr.left);
+        const rightPeel = peelFn(expr.right);
+        const leftPath = readLinkColumnPath(leftPeel.inner);
+        const rightPath = readLinkColumnPath(rightPeel.inner);
+        const leftLiteral = readLiteral(expr.left);
+        const rightLiteral = readLiteral(expr.right);
+        const pathSide = leftPath ? { path: leftPath, fn: leftPeel.fn, literal: rightLiteral }
+          : rightPath ? { path: rightPath, fn: rightPeel.fn, literal: leftLiteral }
+            : undefined;
+        if (pathSide && pathSide.literal !== undefined) {
+          const { linkName, columnName } = pathSide.path;
+          // Forward link on the subject type → reuse link_target_field_compare.
+          const fwdLink = collectLinks(options.subjectType, true).find((cand) => cand.name === linkName);
+          if (fwdLink) {
+            const ownerQualifiedName = qualifiedTypeName(options.subjectType);
+            const ownerScopeModule = options.subjectType.module ?? options.fallbackModule;
+            const targetTypeNames = linkTargetNames(fwdLink.targetType, ownerScopeModule);
+            const targetType = targetTypeNames[0] ?? normalizeTypeName(fwdLink.targetType, ownerScopeModule);
+            const targetTableEntries = targetTypeNames.flatMap((typeName) => targetTableRefsForType(typeName));
+            const targetTables = [...new Map(targetTableEntries.map((entry) => [entry.name, entry] as const)).values()];
+            const usesLinkTable = Boolean(fwdLink.multi) || (fwdLink.properties?.length ?? 0) > 0;
+            return {
+              kind: "link_target_field_compare",
+              relation: {
+                sourceType: ownerQualifiedName,
+                targetType,
+                targetTable: tableNameForType(targetType),
+                targetTables,
+                propertyColumns: (fwdLink.properties ?? []).map((p) => p.name),
+                computedProperties: (fwdLink.computedProperties ?? []).map((p) => ({ ...p })),
+                multi: Boolean(fwdLink.multi),
+                storage: usesLinkTable ? "table" : "inline",
+                inlineColumn: usesLinkTable ? undefined : `${fwdLink.name}_id`,
+                linkTable: usesLinkTable ? `${tableNameForType(ownerQualifiedName)}__${fwdLink.name.toLowerCase()}` : undefined,
+                linkTables: usesLinkTable ? collectLinkTableSources(options.subjectType, fwdLink.name) : undefined,
+              },
+              targetColumn: columnName,
+              value: pathSide.literal,
+              op: compareOp,
+              targetFn: pathSide.fn,
+            };
+          }
+          // Computed link with backlink expression (e.g. Award.winner := .<awards[is User]).
+          const computedLink = collectComputeds(options.subjectType, true).find((cand) =>
+            cand.name === linkName && cand.kind === "link" && cand.expr.kind === "backlink");
+          if (computedLink && computedLink.kind === "link" && computedLink.expr.kind === "backlink"
+            && (compareOp === "=" || compareOp === "!=" || compareOp === "<" || compareOp === "<="
+              || compareOp === ">" || compareOp === ">=" || compareOp === "like" || compareOp === "ilike")) {
+            const typeLabelQualified = qualifiedTypeName(options.subjectType);
+            const sources = resolveBacklinkSources(
+              typeLabelQualified,
+              options.fallbackModule,
+              computedLink.expr.link,
+              computedLink.expr.sourceType,
+            );
+            if (sources.length > 0) {
+              return {
+                kind: "backlink_target_field_compare",
+                sources,
+                targetColumn: columnName,
+                targetFn: pathSide.fn,
+                value: pathSide.literal,
+                op: compareOp,
+              };
+            }
+          }
         }
       }
       if (expr.kind === "exists") {
@@ -1611,6 +1953,40 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     return parent ? `${parent}.${current}` : current;
   };
 
+  // A backlink `Target.<linkName[IS Source]` is at-most-one when every
+  // matching forward link carries a `constraint exclusive`. If even one
+  // matching forward link permits multiple sources per target, the backlink
+  // is multi.
+  const isBacklinkSingle = (
+    targetTypeQualifiedName: string,
+    fallbackModule: string,
+    linkName: string,
+    sourceTypeName?: string,
+  ): boolean => {
+    const requestedSourceType = sourceTypeName ? normalizeTypeName(sourceTypeName, fallbackModule) : undefined;
+    let anyMatched = false;
+    for (const candidate of schema.listTypes()) {
+      const candidateQualifiedName = qualifiedTypeName(candidate);
+      if (requestedSourceType && !isAssignableTo(candidateQualifiedName, requestedSourceType)) {
+        continue;
+      }
+      for (const link of collectLinks(candidate, true)) {
+        const targets = linkTargetNames(link.targetType, candidate.module ?? "default");
+        if (link.name !== linkName || !targets.some((target) => isAssignableTo(targetTypeQualifiedName, target))) {
+          continue;
+        }
+        anyMatched = true;
+        const isExclusive = (link.constraints ?? []).some(
+          (c) => c.name === "std::exclusive" || c.name === "exclusive",
+        );
+        if (!isExclusive) {
+          return false;
+        }
+      }
+    }
+    return anyMatched;
+  };
+
   const resolveBacklinkSources = (
     targetTypeQualifiedName: string,
     fallbackModule: string,
@@ -1897,6 +2273,21 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     const selectedColumns = new Set<string>();
     if ((typeDef.accessPolicies ?? []).length > 0) {
       selectedColumns.add("id");
+      // Project every column the policy conditions read so the runtime can
+      // evaluate the predicate directly off the SELECT result, without
+      // firing one `readRowById` per row.
+      const collectPolicyConditionFields = (condition: AccessPolicyCondition, into: Set<string>): void => {
+        if (condition.kind === "field_eq_global" || condition.kind === "field_eq_literal") {
+          into.add(condition.field);
+          return;
+        }
+        if (condition.kind === "and") {
+          for (const clause of condition.clauses) collectPolicyConditionFields(clause, into);
+        }
+      };
+      for (const policy of typeDef.accessPolicies ?? []) {
+        collectPolicyConditionFields(policy.condition, selectedColumns);
+      }
     }
     let hasBacklink = false;
 
@@ -2099,11 +2490,13 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
             const elementPathId = createPathId(pathId);
             hasBacklink = true;
             const sources = resolveBacklinkSources(qualifiedName, scopeModule, computed.expr.link, computed.expr.sourceType);
+            const single = isBacklinkSingle(qualifiedName, scopeModule, computed.expr.link, computed.expr.sourceType);
             shapeElements.push({
               kind: "backlink",
               name: shapeElement.name,
               pathId: toPathIdIR(elementPathId),
               sources,
+              multi: !single,
             });
             shapeNames.add(shapeElement.name);
             scopeChildren.push({ pathId: toPathIdIR(elementPathId), typeName: qualifiedName, children: [] });
@@ -2382,6 +2775,56 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
 
         if (shapeElement.expr.kind === "function_call") {
           const resolved = resolveFunctionOrFail(shapeElement.expr.call.name, shapeElement.expr.call.args.length);
+          // EdgeQL `sum(.link.field)` over a multi link aggregates the target
+          // column across the linked rows. Recognise it here and emit a
+          // `link_aggregate` IR entry so sql/compiler can lower it to a
+          // correlated SUM subquery — otherwise the per-row N+1 fallback in
+          // materializeSelectRow has to fire one SQL per outer row.
+          const aggregateLinkExpr = (() => {
+            if (resolved.qualifiedName !== "std::sum") return undefined;
+            const args = shapeElement.expr.call.args;
+            if (args.length !== 1) return undefined;
+            const arg = args[0]!;
+            if (arg.kind !== "expr") return undefined;
+            // Match `field_access(field_access(current_item, link), field)`.
+            const outer = arg.expr;
+            if (outer.kind !== "field_access" || outer.field.startsWith("@")) return undefined;
+            const inner = outer.expr;
+            if (inner.kind !== "field_access" || inner.expr.kind !== "current_item" || inner.field.startsWith("@")) return undefined;
+            const linkName = inner.field;
+            const fieldName = outer.field;
+            const link = collectLinks(typeDef, true).find((candidate) => candidate.name === linkName);
+            if (!link) return undefined;
+            const relation = resolveForwardLink(typeDef, linkName);
+            const targetTypeDef = schema.getType(relation.targetType);
+            if (!targetTypeDef) return undefined;
+            const targetFields = new Set([
+              "id",
+              ...collectFields(targetTypeDef, true).map((f) => f.name),
+            ]);
+            if (!targetFields.has(fieldName)) return undefined;
+            return { relation, fieldName };
+          })();
+          if (aggregateLinkExpr) {
+            shapeElements.push({
+              kind: "computed",
+              name: shapeElement.name,
+              pathId: toPathIdIR(elementPathId),
+              expr: {
+                kind: "link_aggregate",
+                functionName: "sum",
+                relation: aggregateLinkExpr.relation,
+                column: aggregateLinkExpr.fieldName,
+              },
+            });
+            shapeNames.add(shapeElement.name);
+            scopeChildren.push({
+              pathId: toPathIdIR(elementPathId),
+              typeName: qualifiedName,
+              children: [],
+            });
+            continue;
+          }
           shapeElements.push({
             kind: "computed",
             name: shapeElement.name,
@@ -2679,6 +3122,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
             nestedColumns = nested.columns;
           }
         }
+        const singleBacklink = isBacklinkSingle(qualifiedName, scopeModule, shapeElement.expr.link, shapeElement.expr.sourceType);
         shapeElements.push({
           kind: "backlink",
           name: shapeElement.name,
@@ -2686,6 +3130,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           sources,
           shape: nestedShape,
           columns: nestedColumns,
+          multi: !singleBacklink,
         });
         shapeNames.add(shapeElement.name);
         scopeChildren.push({
@@ -3355,6 +3800,22 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           args: expr.call.args.map((arg) => compileFunctionArgInFreeObject(arg)) as never,
         };
       }
+      if (expr.kind === "select_expr_subquery" && expr.expr.kind === "select") {
+        // The wrapper carries optional extra tail clauses (filter/orderBy/limit/
+        // offset) that apply *outside* the inner SELECT's own clauses. When any
+        // wrapper-level clause is present we can't faithfully fold it into the
+        // inner SELECT here (semantics: outer FILTER applies to the inner set,
+        // not to its rows pre-aggregation), so fall through to the more general
+        // error handling. The common case (`(SELECT T { ... } ORDER BY .x)`)
+        // parses the tail into `inner.clauses`, leaving the wrapper bare.
+        const hasOuterTail = expr.filter !== undefined
+          || expr.orderBy !== undefined
+          || expr.limit !== undefined
+          || expr.offset !== undefined;
+        if (!hasOuterTail) {
+          return compileFreeObjectExprToSelectFreeEntry(expr.expr, name);
+        }
+      }
       if (expr.kind === "select") {
         const nestedType = requireValue(
           schema.getType(normalizeTypeName(expr.typeName, activeModule)),
@@ -3695,12 +4156,16 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           const sourceTypeName = normalizeTypeName(expr.expr.typeName, activeModule);
           const sourceTypeDef = schema.getType(sourceTypeName);
           if (sourceTypeDef) {
+            const inlineShapeNames = (expr.expr.shape ?? [])
+              .filter((el): el is Extract<ShapeElement, { name: string }> => "name" in el)
+              .map((el) => el.name);
             const knownFieldNames = new Set<string>([
               "id",
               "__type__",
               ...collectFields(sourceTypeDef, true).map((f) => f.name),
               ...collectLinks(sourceTypeDef, true).map((l) => l.name),
               ...(sourceTypeDef.computeds ?? []).map((c) => c.name),
+              ...inlineShapeNames,
             ]);
             if (!knownFieldNames.has(expr.field)) {
               fail(`'${sourceTypeName}' has no link or property '${expr.field}'`);
@@ -5167,11 +5632,16 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       }
     }
 
+    const linkAssignments = buildInsertLinkAssignments(schema, typeDef, statement.values, linkByName);
+    const linkDefaults = buildInsertLinkDefaults(schema, typeDef, statement.values);
+
     return {
       kind: "insert",
       pathId: toPathIdIR(pathId),
       table,
       values: scalarValues,
+      linkAssignments: linkAssignments.length > 0 ? linkAssignments : undefined,
+      linkDefaults: linkDefaults.length > 0 ? linkDefaults : undefined,
       overlays: [
         {
           table,
@@ -5271,6 +5741,8 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       fail(`Unknown field '${field}' on '${statement.typeName}'`);
     }
 
+    const updateLinkAssignments = buildUpdateLinkAssignments(schema, typeDef, statement.values, statement.operations, linkByName);
+
     return {
       kind: "update",
       pathId: toPathIdIR(pathId),
@@ -5282,6 +5754,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           }
         : undefined,
       values: scalarValues,
+      linkAssignments: updateLinkAssignments.length > 0 ? updateLinkAssignments : undefined,
       overlays: [
         {
           table,

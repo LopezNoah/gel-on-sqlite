@@ -442,6 +442,7 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
         hasDefault: member.hasDefault,
         defaultTargetValues: member.defaultTargetValues ? [...member.defaultTargetValues] : undefined,
         annotations: (member.annotations ?? []).length ? [...member.annotations] : undefined,
+        constraints: (member.constraints ?? []).length ? [...(member.constraints ?? [])] : undefined,
       });
 
       if (!member.multi && storedProperties.length === 0) {
