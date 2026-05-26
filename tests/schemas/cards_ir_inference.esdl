@@ -63,7 +63,7 @@ type Card extending Named {
 type SpecialCard extending Card;
 
 type Award extending Named {
-    link rec := .<awards[IS User]
+    link rec := .<awards[IS User];
 }
 
 
