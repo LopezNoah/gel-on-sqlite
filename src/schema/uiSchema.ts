@@ -13,6 +13,7 @@ import type { ComputedLinkPropertyExpr, DeclarativeSchema, FunctionDeclaration, 
 import { AnnotationRegistry, AnnotationResolver, AnnotationSet } from "./annos.js";
 import { SchemaSnapshot } from "./schema.js";
 import { scalarTypeDeclarationToTypeDef } from "./scalar.js";
+import { schemaIntrospectionTypeDefs } from "./schema_introspection.js";
 
 const cloneConstraint = (constraint: ConstraintDef): ConstraintDef => ({
   name: constraint.name,
@@ -41,7 +42,7 @@ export const schemaSnapshotFromDeclarative = (schema: DeclarativeSchema): Schema
   const typeDefs = typeDefsFromDeclarative(schema);
   const scalarTypeDefs = scalarTypeDefsFromDeclarative(schema);
   return new SchemaSnapshot(
-    [...typeDefs, ...scalarTypeDefs],
+    [...typeDefs, ...scalarTypeDefs, ...schemaIntrospectionTypeDefs()],
     functionDefsFromDeclarative(schema),
     aliasDefsFromDeclarative(schema),
     schema.scalarTypes ?? [],

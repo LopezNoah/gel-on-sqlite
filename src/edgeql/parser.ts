@@ -67,6 +67,23 @@ const NAME_TOKEN_KINDS: ReadonlySet<TokenKind> = new Set<TokenKind>([
   "kw_current_reserved_old",
   "kw_current_reserved_specified",
   "kw_current_reserved_default",
+  // `schema` is an EdgeDB module name (`WITH MODULE schema`, `schema::Type`)
+  // even though `kw_schema` is reserved for SDL `CREATE SCHEMA`-style DDL.
+  // Allowing it in name position lets schema-introspection queries parse.
+  "kw_schema",
+  // The `schema::*` introspection module's type names overlap with reserved
+  // SDL/DDL keywords. EdgeDB itself uses these as type names; we follow
+  // the same convention so `schema::Type`, `schema::Property`, etc. parse.
+  // DDL parsing paths still consume these as keywords first via dedicated
+  // peek checks before falling back to name resolution.
+  "kw_type",
+  "kw_property",
+  "kw_link",
+  "kw_function",
+  "kw_constraint",
+  "kw_index",
+  "kw_annotation",
+  "kw_global",
 ]);
 
 // Set of token kinds whose string name begins with "kw_". Used by
@@ -385,7 +402,25 @@ class Parser {
   }
 
   private nameTokenLexeme(token: Token): string {
-    return token.kind === "kw_object" ? "Object" : token.lexeme;
+    // The tokenizer lower-cases keyword lexemes by default (so `if (kind ===
+    // "kw_type" && lexeme === "type")` patterns work). When a reserved
+    // keyword is used as an identifier — like `schema::Type`,
+    // `schema::Property`, `schema::ObjectType` — we need to recover the
+    // canonical type-name capitalization since the schema is keyed
+    // case-sensitively (`schema::Type`, not `schema::type`).
+    switch (token.kind) {
+      case "kw_object": return "Object";
+      case "kw_type": return "Type";
+      case "kw_property": return "Property";
+      case "kw_link": return "Link";
+      case "kw_function": return "Function";
+      case "kw_constraint": return "Constraint";
+      case "kw_index": return "Index";
+      case "kw_annotation": return "Annotation";
+      case "kw_global": return "Global";
+      case "kw_schema": return "schema";
+      default: return token.lexeme;
+    }
   }
 
   private expectName(message: string): Token {
@@ -489,18 +524,31 @@ class Parser {
   }
 
   // Parses a (possibly parametric) type used in cast position: handles
-  // `str`, `std::int64`, `array<str>`, `tuple<int64, str>`, `tuple<tuple<...>, ...>`.
+  // `str`, `std::int64`, `array<str>`, `tuple<int64, str>`, `tuple<tuple<...>, ...>`,
+  // and named-field tuples `tuple<name: str, points: int64>`.
   private parseCastTypeName(message: string): string {
     const head = this.parseQualifiedName(message);
     if (this.peek().kind !== "lt") {
       return head;
     }
     this.consume();
+    const isTuple = head === "tuple" || head === "std::tuple";
+    const parseArg = (): string => {
+      if (isTuple
+        && this.isNameToken(this.peek())
+        && this.peekNext().kind === "colon"
+        && this.peekNth(2).kind !== "colon") {
+        const fieldName = this.consume().lexeme;
+        this.consume();
+        return `${fieldName}: ${this.parseCastTypeName("Expected type after named tuple element")}`;
+      }
+      return this.parseCastTypeName("Expected type argument");
+    };
     const args: string[] = [];
-    args.push(this.parseCastTypeName("Expected type argument"));
+    args.push(parseArg());
     while (this.peek().kind === "comma") {
       this.consume();
-      args.push(this.parseCastTypeName("Expected type argument"));
+      args.push(parseArg());
     }
     this.expect("gt", `Expected '>' to close ${head}<...>`);
     return `${head}<${args.join(", ")}>`;
@@ -2554,6 +2602,8 @@ class Parser {
     }
 
     let depth = 0;
+    let parens = 0;
+    let brackets = 0;
     for (let i = this.index; i < this.tokens.length; i += 1) {
       const token = this.tokens[i];
       if (token.kind === "lbrace") {
@@ -2567,8 +2617,28 @@ class Parser {
         }
         continue;
       }
+      if (token.kind === "lparen") {
+        parens += 1;
+        continue;
+      }
+      if (token.kind === "rparen") {
+        parens -= 1;
+        continue;
+      }
+      if (token.kind === "lbracket") {
+        brackets += 1;
+        continue;
+      }
+      if (token.kind === "rbracket") {
+        brackets -= 1;
+        continue;
+      }
 
-      if (depth === 1 && token.kind === "assign") {
+      // Only count `:=` as a free-object marker when it appears directly at
+      // brace-depth 1 (not nested inside a tuple `(name := ...)` or array
+      // index expression), which is the only place a free-object field
+      // assignment can occur.
+      if (depth === 1 && parens === 0 && brackets === 0 && token.kind === "assign") {
         return true;
       }
     }

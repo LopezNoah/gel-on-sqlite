@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 
 import type { SchemaSnapshot } from "../schema/schema.js";
 import { qualifiedTypeName } from "../schema/schema.js";
+import { populateSchemaIntrospection } from "../schema/schema_introspection.js";
 import type { AsyncRuntimeInstance, RuntimeDatabaseAdapter, RuntimeInstance } from "./adapter.js";
 import { toAsyncAdapter } from "./adapter.js";
 import type {
@@ -190,6 +191,11 @@ export const materializeSchema = (db: SQLiteDatabase, schema: SchemaSnapshot): v
       }
     }
   }
+
+  // Populate `schema::*` introspection rows once the tables for user types
+  // exist. Subsequent DDL (CREATE/DROP ALIAS) re-runs the populator from
+  // the alias handler so introspection tracks the live schema state.
+  populateSchemaIntrospection(db, schema);
 };
 
 const compileCustomTriggerSQL = (
