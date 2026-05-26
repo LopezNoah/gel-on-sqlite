@@ -2032,6 +2032,22 @@ class Parser {
       }
     }
 
+    if (this.isNameToken(this.peek()) && (this.peekNext().kind === "coloncolon" || (this.peekNext().kind === "colon" && this.peekNth(2).kind === "colon"))) {
+      const name = this.parseQualifiedName("Expected qualified name in free object expression");
+      if (this.isTypeLikeName(name)) {
+        return {
+          kind: "select",
+          typeName: name,
+          shape: [{ kind: "field", name: "id", operation: "assign", origin: "default" }],
+          clauses: {},
+        };
+      }
+      return {
+        kind: "binding_ref",
+        name,
+      };
+    }
+
     if (this.isNameToken(this.peek())) {
       const identifier = this.nameTokenLexeme(this.peek());
       if (this.localBindings.includes(identifier)) {
@@ -3723,8 +3739,23 @@ class Parser {
     this.expect("assign", "Expected ':=' after field name");
     return {
       field,
-      value: this.parseInsertValue(),
+      value: this.parseInsertAssignmentValue(),
     };
+  }
+
+  private parseInsertAssignmentValue(): InsertValue {
+    const insertAttempt = this.attempt<InsertValue>(() => {
+      const value = this.parseInsertValue();
+      const next = this.peek().kind;
+      if (next === "comma" || next === "rbrace") {
+        return value;
+      }
+      return undefined;
+    });
+    if (insertAttempt !== undefined) {
+      return insertAttempt;
+    }
+    return { kind: "expr", expr: this.parseFreeObjectExpr() };
   }
 
   private parseUpdateAssignment(): { field: string; operation: "assign" | "append" | "subtract"; value: InsertValue } {
@@ -4100,17 +4131,20 @@ class Parser {
     const start = this.expect("kw_delete", "Expected 'delete'");
     let target: FreeObjectExpr | undefined;
     let typeName: string;
-    if (this.peek().kind === "lbrace" || this.peek().kind === "lparen" || (this.isNameToken(this.peek()) && this.peekNext().kind === "lbracket")) {
+    if (
+      this.peek().kind === "lbrace"
+      || this.peek().kind === "lparen"
+      || ["kw_true", "kw_false", "kw_null", "number", "string", "bytes_string", "lbracket", "lt"].includes(this.peek().kind)
+      || (this.isNameToken(this.peek()) && this.localBindings.includes(this.nameTokenLexeme(this.peek())))
+      || (this.isNameToken(this.peek()) && this.peekNext().kind === "lbracket")
+    ) {
       target = this.parseFreeObjectExpr();
       typeName = this.deleteTargetRootTypeName(target);
     } else {
       typeName = this.parseQualifiedName("Expected type name");
     }
 
-    let filter: DeleteStatement["filter"];
-    if (this.peek().kind === "kw_filter") {
-      filter = this.parseFilter();
-    }
+    const clauses = this.parseClauseChain();
 
     if (this.peek().kind === "semi") {
       this.consume();
@@ -4125,7 +4159,12 @@ class Parser {
       kind: "delete",
       typeName,
       target,
-      filter,
+      filter: clauses.filter,
+      orderBy: clauses.orderBy,
+      limit: clauses.limit,
+      offset: clauses.offset,
+      limitExpr: clauses.limitExpr,
+      offsetExpr: clauses.offsetExpr,
       pos: this.posOf(start),
     };
   }
@@ -4140,6 +4179,9 @@ class Parser {
     if (target.kind === "select") {
       return target.typeName;
     }
+    if (target.kind === "select_expr_subquery") {
+      return this.deleteTargetRootTypeName(target.expr);
+    }
     if (target.kind === "shape_projection") {
       return this.deleteTargetRootTypeName(target.expr);
     }
@@ -4153,7 +4195,7 @@ class Parser {
       return target.parts[0];
     }
     if (target.kind === "binding_ref") {
-      return target.name;
+      return this.localBindings.includes(target.name) ? "Object" : target.name;
     }
     if (target.kind === "is_type") {
       return this.deleteTargetRootTypeName(target.expr);
@@ -4167,8 +4209,7 @@ class Parser {
     if (target.kind === "field_access") {
       return this.deleteTargetRootTypeName(target.expr);
     }
-    const token = this.peek();
-    throw new AppError("E_SYNTAX", "Expected type name in delete target", ...this.posPair(token));
+    return "Object";
   }
 
   private parseFilter(): FilterExpr {
@@ -4221,7 +4262,7 @@ class Parser {
       // `(FOR ...)`, `(SELECT ...)`, and `(WITH ...)` are full free
       // expressions, not boolean filter sub-expressions; route to
       // parseFreeObjectExpr so they're consumed as a single expression.
-      if (this.peekNext().kind === "kw_for" || this.peekNext().kind === "kw_select" || this.peekNext().kind === "kw_with") {
+      if (this.peekNext().kind === "kw_for" || this.peekNext().kind === "kw_select" || this.peekNext().kind === "kw_with" || this.peekNext().kind === "kw_insert" || this.peekNext().kind === "kw_update" || this.peekNext().kind === "kw_delete") {
         const expr = this.parseFreeObjectExpr();
         return { kind: "free_expr", expr };
       }

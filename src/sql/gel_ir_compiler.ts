@@ -105,7 +105,7 @@ export const compileGelIRToSQL = (
       return { sql, params, loweringMode: "single_statement" };
     }
   }
-  const compiledSource = sourceSet ? compileSelectSource(sourceSet, statement.where, statement.orderBy, options) : null;
+  const compiledSource = sourceSet ? compileSelectSource(sourceSet, statement.where, statement.orderBy, options, params, target) : null;
   if (!compiledSource) {
     if (sourceSet) {
       const scalarSql = compileScalarSelectSQL(sourceSet, params, target, options);
@@ -247,19 +247,58 @@ const compileDeleteStmtToSQL = (statement: DeleteStmt, options: GelIRCompileOpti
   const target = options.target ?? "sqlite";
   const params: ScalarValue[] = [];
   const table = resolveTypeTableName(statement.subject, options);
-  let sql = `DELETE FROM ${quoteIdent(table)}`;
-  if (statement.where) {
-    const where = compileWhereClause(statement.where, "g0", params, target, options);
-    if (!where) {
-      sql += " AS g0 WHERE 0";
-      return {
-        sql,
-        params,
-        loweringMode: "single_statement",
-      };
-    }
-    sql += ` AS g0 WHERE ${where}`;
+  const qualifiedType = qualifyTypeName(statement.subject);
+  const targetExpr = unwrapSelectExprSet(statement.expr);
+  const sourceSet = unwrapSelectResultSet(targetExpr.result) ?? targetExpr.result;
+  const whereSet = statement.where ?? targetExpr.selectExpr?.where;
+  const orderBy = statement.orderBy ?? targetExpr.selectExpr?.orderBy;
+  const limitSet = statement.limit ?? targetExpr.selectExpr?.limit;
+  const offsetSet = statement.offset ?? targetExpr.selectExpr?.offset;
+  const compiledSource = compileSelectSource(sourceSet, whereSet, orderBy, options, params, target);
+
+  if (!compiledSource) {
+    return {
+      sql: `DELETE FROM ${quoteIdent(table)} WHERE 0 RETURNING *, ${quoteIdent("id")} AS ${quoteIdent("__tid__")}, ${quoteLiteral(qualifiedType)} AS ${quoteIdent("__tname__")}, ${quoteLiteral(qualifiedType)} AS ${quoteIdent("__source_type")}`,
+      params,
+      loweringMode: "single_statement",
+    };
   }
+
+  let idSelect = `SELECT ${compiledSource.alias}.${quoteIdent("id")} FROM ${compiledSource.sql}`;
+  if (whereSet) {
+    const where = compileWhereClause(whereSet, compiledSource.alias, params, target, options);
+    if (!where) {
+      idSelect += " WHERE 0";
+    } else {
+      idSelect += ` WHERE ${where}`;
+    }
+  }
+  if (orderBy && orderBy.length > 0) {
+    const orders = orderBy.map((order) => {
+      const orderColumn = compileSetColumnRef(order.path);
+      if (!orderColumn) {
+        return "";
+      }
+      return `${compiledSource.alias}.${quoteIdent(orderColumn)} ${order.direction.toUpperCase()}`;
+    }).filter((entry) => entry.length > 0);
+    if (orders.length > 0) {
+      idSelect += ` ORDER BY ${orders.join(", ")}`;
+    }
+  }
+  if (limitSet) {
+    const limitSql = compileValueSetSQL(limitSet, compiledSource.alias, params, target, options);
+    if (limitSql) {
+      idSelect += ` LIMIT ${limitSql}`;
+    }
+  }
+  if (offsetSet) {
+    const offsetSql = compileValueSetSQL(offsetSet, compiledSource.alias, params, target, options);
+    if (offsetSql) {
+      idSelect += ` OFFSET ${offsetSql}`;
+    }
+  }
+
+  const sql = `DELETE FROM ${quoteIdent(table)} WHERE ${quoteIdent("id")} IN (${idSelect}) RETURNING *, ${quoteIdent("id")} AS ${quoteIdent("__tid__")}, ${quoteLiteral(qualifiedType)} AS ${quoteIdent("__tname__")}, ${quoteLiteral(qualifiedType)} AS ${quoteIdent("__source_type")}`;
   return {
     sql,
     params,
@@ -1075,9 +1114,43 @@ const compileSelectSource = (
   where: Set | undefined,
   orderBy: SortExpr[] | undefined,
   options: GelIRCompileOptions,
+  params: ScalarValue[] = [],
+  target: RuntimeTarget = options.target ?? "sqlite",
 ): { sql: string; alias: string } | null => {
   const alias = "g0";
   const projectedColumns = collectProjectedColumns(sourceSet.shape, where, orderBy);
+  if (sourceSet.expr.kind === "select_expr") {
+    const selectExpr = sourceSet.expr as SelectExpr;
+    const inner = compileSelectSource(selectExpr.result, selectExpr.where, selectExpr.orderBy, options, params, target);
+    if (!inner) return null;
+    let sql = `SELECT ${inner.alias}.* FROM ${inner.sql}`;
+    if (selectExpr.where) {
+      const whereSql = compileWhereClause(selectExpr.where, inner.alias, params, target, options);
+      if (!whereSql) return null;
+      sql += ` WHERE ${whereSql}`;
+    }
+    if (selectExpr.orderBy && selectExpr.orderBy.length > 0) {
+      const orders = selectExpr.orderBy.map((order) => {
+        const orderColumn = compileSetColumnRef(order.path);
+        return orderColumn ? `${inner.alias}.${quoteIdent(orderColumn)} ${order.direction.toUpperCase()}` : "";
+      }).filter((entry) => entry.length > 0);
+      if (orders.length > 0) sql += ` ORDER BY ${orders.join(", ")}`;
+    }
+    const limit = selectExpr.limit ? extractNumericLiteral(selectExpr.limit) : undefined;
+    const offset = selectExpr.offset ? extractNumericLiteral(selectExpr.offset) : undefined;
+    if (limit !== undefined) sql += ` LIMIT ${limit}`;
+    if (offset !== undefined) sql += ` OFFSET ${offset}`;
+    return { sql: `(${sql}) ${alias}`, alias };
+  }
+  if (sourceSet.expr.kind === "operator_call" && (sourceSet.expr as OperatorCall).operator === "union") {
+    const args = orderedCallArgs((sourceSet.expr as OperatorCall).args);
+    const selects = args.map((arg) => {
+      const source = compileSelectSource(arg.expr, undefined, undefined, options, params, target);
+      return source ? `SELECT ${source.alias}.* FROM ${source.sql}` : null;
+    });
+    if (selects.some((entry) => !entry)) return null;
+    return { sql: `(${(selects as string[]).join(" UNION ALL ")}) ${alias}`, alias };
+  }
   if (sourceSet.expr.kind === "type_root") {
     const root = sourceSet.expr.typeref;
     return { sql: compilePolymorphicSource(root, sourceSet.expr.skipSubtypes, alias, projectedColumns, options), alias };
@@ -2025,6 +2098,11 @@ const compileValueSetSQL = (
   if (expr.kind === "index_expr") {
     const indexExpr = expr as IndexExpr;
     const base = compileValueSetSQL(indexExpr.expr, sourceAlias, params, target, options, linkPropertyAlias);
+    const numericIndex = extractNumericLiteral(indexExpr.index);
+    const baseType = qualifyTypeName(indexExpr.expr.typeref);
+    if (base && numericIndex !== undefined && (baseType === "std::str" || baseType === "std::bytes")) {
+      return `substr(${base}, ${numericIndex >= 0 ? numericIndex + 1 : numericIndex}, 1)`;
+    }
     const index = compileValueSetSQL(indexExpr.index, sourceAlias, params, target, options, linkPropertyAlias);
     if (!base || !index) {
       params.length = checkpoint;
@@ -2260,7 +2338,7 @@ const compileCountOfSetSQL = (
       return compileCountOfSetSQL(selectExpr.result, params, target, options);
     }
     const checkpoint = params.length;
-    const compiledSource = compileSelectSource(selectExpr.result, selectExpr.where, selectExpr.orderBy, options);
+    const compiledSource = compileSelectSource(selectExpr.result, selectExpr.where, selectExpr.orderBy, options, params, target);
     if (compiledSource) {
       let sql = `SELECT count(*) AS ${quoteIdent("value")} FROM ${compiledSource.sql}`;
       if (selectExpr.where) {

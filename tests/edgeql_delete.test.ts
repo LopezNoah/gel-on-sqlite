@@ -13,6 +13,7 @@ describe("TestDelete", () => {
 
   beforeEach(async () => {
     h = await QueryHarness.create({
+      schema: "delete",
     });
   });
 

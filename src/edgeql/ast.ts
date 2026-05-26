@@ -763,6 +763,11 @@ export interface DeleteStatement {
   typeName: string;
   target?: FreeObjectExpr;
   filter?: FilterExpr;
+  orderBy?: ClauseChain["orderBy"];
+  limit?: ClauseChain["limit"];
+  offset?: ClauseChain["offset"];
+  limitExpr?: ClauseChain["limitExpr"];
+  offsetExpr?: ClauseChain["offsetExpr"];
   pos: SourcePos;
 }
 
