@@ -909,6 +909,22 @@ const tryRuntimeSelectExprEvaluation = (
     return undefined;
   }
 
+  const exprContainsMutation = (expr: FreeObjectExpr): boolean => {
+    if (expr.kind === "mutation_expr") return true;
+    if (expr.kind === "set_expr" || expr.kind === "tuple" || expr.kind === "array_literal_expr") return expr.values.some(exprContainsMutation);
+    if (expr.kind === "free_object_constructor") return expr.entries.some((entry) => exprContainsMutation(entry.expr));
+    if (expr.kind === "shape_projection" || expr.kind === "distinct" || expr.kind === "cast" || expr.kind === "exists" || expr.kind === "field_access" || expr.kind === "index_access" || expr.kind === "slice_access" || expr.kind === "is_type" || expr.kind === "unary" || expr.kind === "select_expr_subquery") return exprContainsMutation((expr as { expr: FreeObjectExpr }).expr);
+    if (expr.kind === "compare" || expr.kind === "math" || expr.kind === "logical" || expr.kind === "coalesce" || expr.kind === "and" || expr.kind === "or") return exprContainsMutation(expr.left) || exprContainsMutation(expr.right);
+    if (expr.kind === "if_else") return exprContainsMutation(expr.condition) || exprContainsMutation(expr.thenExpr) || exprContainsMutation(expr.elseExpr);
+    if (expr.kind === "concat") return expr.parts.some(exprContainsMutation);
+    if (expr.kind === "function_call") return expr.call.args.some((arg) => arg.kind === "expr" && exprContainsMutation(arg.expr));
+    return false;
+  };
+
+  if (exprContainsMutation(ast.expr)) {
+    return undefined;
+  }
+
   // Defer to the GROUP-aware preprocessing in `executeQuery` when any WITH
   // binding holds a GROUP — the parsed-runtime evaluator can't resolve
   // synthetic group rows against `binding_ref` directly, so let
@@ -2980,7 +2996,8 @@ const tryEvaluateParsedRuntimeSelect = (
     || element.clauses.offset !== undefined
   )));
 
-  const bindingNeedsParsedRuntime = (value: WithBindingValue): boolean => value.kind === "backlink_path"
+  const bindingNeedsParsedRuntime = (value: WithBindingValue): boolean => value.kind === "subquery_statement"
+    || value.kind === "backlink_path"
     || value.kind === "path"
     || value.kind === "path_chain"
     || (value.kind === "subquery" && shapeNeedsParsedRuntime(value.query.shape));
@@ -6005,6 +6022,7 @@ export const executeQueryWithTrace = (
       result = {
         kind: ir.kind,
         changes: writeResult.changes,
+        rows: writeResult.rows,
       };
     }
 
@@ -6224,7 +6242,7 @@ export const executeQueryUnitWithTrace = (
         };
       } else {
         const writeResult = runWriteWithAccessPolicies(db, schema, ast, ir, sqlArtifact, subjectType!, context);
-        result = { kind: ir.kind, changes: writeResult.changes };
+        result = { kind: ir.kind, changes: writeResult.changes, rows: writeResult.rows };
       }
 
       const currentOverlays = extractOverlays(ir);
@@ -6501,6 +6519,12 @@ const executeForLoop = (
 
       const insertAst: InsertStatement = {
         ...body,
+        with: isScalarValue(value)
+          ? [
+              ...(body.with ?? []).filter((binding) => binding.name !== ast.variable),
+              { name: ast.variable, value: { kind: "literal", value } },
+            ]
+          : body.with,
         values: insertValues,
       };
 
@@ -11952,7 +11976,7 @@ const runWriteWithAccessPolicies = (
   sqlArtifact: SQLArtifact,
   subjectType: TypeDef,
   context: SecurityContext,
-): { changes: number } => {
+): { changes: number; rows?: Record<string, unknown>[] } => {
   validateLinkAssignments(db, schema, ir, ast);
 
   if (ast.kind === "update") {
@@ -12186,6 +12210,11 @@ const runWriteWithAccessPolicies = (
       const preRows = readTargetRowsForFilter(db, ir.table, ir.filter);
       enforceDeletePolicies(subjectType, preRows, context, ast.pos.line, ast.pos.column);
       applyOnTargetDeletePolicies(subjectType, preRows.map((row) => String(row.id)), ast.pos);
+      if (/\bRETURNING\b/i.test(sqlArtifact.sql)) {
+        const rows = db.prepare(sqlArtifact.sql).all(...sqlArtifact.params) as Record<string, unknown>[];
+        db.prepare("COMMIT").run();
+        return { changes: rows.length, rows };
+      }
       const writeResult = db.prepare(sqlArtifact.sql).run(...sqlArtifact.params);
       db.prepare("COMMIT").run();
       return { changes: writeResult.changes };
@@ -12246,8 +12275,9 @@ const executeMutationBinding = (
 
     if (ir.kind === "delete") {
       const preRows = readTargetRowsForFilter(db, ir.table, ir.filter);
-      runWriteWithAccessPolicies(db, schema, ast, ir, sqlArtifact, subjectType, context);
-      for (const row of preRows) {
+      const writeResult = runWriteWithAccessPolicies(db, schema, ast, ir, sqlArtifact, subjectType, context);
+      const deletedRows = writeResult.rows ?? preRows;
+      for (const row of deletedRows) {
         collected.push({ ...row, __source_type: concreteName });
       }
       continue;

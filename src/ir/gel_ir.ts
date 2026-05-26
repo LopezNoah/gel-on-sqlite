@@ -225,6 +225,9 @@ export interface UpdateStmt extends Statement, MutatingStmtShape {
 export interface DeleteStmt extends Statement, MutatingStmtShape {
   kind: "delete_stmt";
   where?: Set;
+  orderBy?: SortExpr[];
+  limit?: Set;
+  offset?: Set;
   materialType?: TypeRef;
   linksToDelete?: Record<UUID, PointerRef[]>;
 }

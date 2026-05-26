@@ -3669,12 +3669,25 @@ const compileDeleteStatement = (statement: DeleteStatement, ctx: IRCompileContex
     : setFromTypeRoot(subject);
   bindValue(scoped, "__subject__", expr);
   bindValue(scoped, "__current__", expr);
+  const orderBy: SortExpr[] | undefined = statement.orderBy
+    ? [{
+        kind: "sort_expr",
+        path: statement.orderBy.expr
+          ? compileFreeObjectExpr(statement.orderBy.expr, scoped)
+          : compileFreeObjectExpr({ kind: "field_access", expr: { kind: "binding_ref", name: "__current__" }, field: statement.orderBy.field, optional: false }, scoped),
+        direction: statement.orderBy.direction,
+        nonesOrder: "last",
+      }]
+    : undefined;
   return {
     kind: "delete_stmt",
     expr,
     ...statementBase(scoped),
     subject,
     where: compileFilterToSet(statement.filter, expr, scoped),
+    orderBy,
+    limit: statement.limit === undefined ? undefined : literalToSet(statement.limit),
+    offset: statement.offset === undefined ? undefined : literalToSet(statement.offset),
     span: statement.pos,
   };
 };
