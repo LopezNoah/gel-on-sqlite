@@ -12,6 +12,7 @@ import { assertTargetSqlCompatibility, type RuntimeTarget } from "./target.js";
 import type { BacklinkSourceIR, FilterExprIR, GroupIR, InsertIR, InsertLinkAssignmentIR, InsertLinkDefaultIR, InsertLinkPropertyIR, IRStatement, LinkRelationIR, OrderByIR, OverlayIR, ScalarExprIR, SelectExprIREntry, SelectExprIR, SelectIR, SelectShapeElementIR, UpdateIR, UpdateLinkAssignmentIR } from "../ir/model.js";
 import type { AccessPolicyCondition, AccessPolicyDef, AliasDef, ComputedLinkPropertyExpr, FieldDef, FunctionDef, FunctionExprDef, ScalarType, ScalarValue, TypeDef } from "../types.js";
 import { qualifiedTypeName } from "../schema/schema.js";
+import { populateSchemaIntrospection } from "../schema/schema_introspection.js";
 import { materializeSchema, type SQLiteDatabase } from "../runtime/database.js";
 
 
@@ -80,6 +81,51 @@ const countRuntimeSetCardinality = (value: unknown): number => {
 };
 
 const runtimeExprAliases = new WeakMap<SchemaSnapshot, Map<string, string>>();
+
+// Lists every alias known for a schema — both schema::Alias entries
+// registered via schema.addAlias (typed aliases with shapes) and runtime
+// expr aliases stashed in the WeakMap above (scalar/tuple-set CREATE ALIAS
+// forms). Used by schema-introspection population so `SELECT schema::Type
+// FILTER .name LIKE '%my_alias%'` finds aliases of either flavor.
+//
+// Returns alias names *and* synthetic shape-type names. EdgeDB exposes an
+// alias whose body is `SELECT Card { ... }` as two entries: the alias
+// itself (`default::best_card`) AND a synthetic projection type derived
+// from the source (`default::__best_card__Card`). Both appear in
+// `schema::Type` introspection.
+export const listAllRuntimeAliasNames = (schema: SchemaSnapshot): string[] => {
+  const names = new Set<string>();
+  const addAliasShapeTypeName = (aliasModule: string, aliasName: string, sourceType: string): void => {
+    const baseName = sourceType.includes("::") ? sourceType.split("::").pop()! : sourceType;
+    names.add(`${aliasModule}::__${aliasName}__${baseName}`);
+  };
+
+  for (const alias of schema.listAliases()) {
+    names.add(`${alias.module}::${alias.name}`);
+    if (alias.sourceType) {
+      addAliasShapeTypeName(alias.module, alias.name, alias.sourceType);
+    }
+  }
+  const typedAliases = runtimeTypedAliases.get(schema);
+  if (typedAliases) {
+    for (const alias of typedAliases.values()) {
+      names.add(`${alias.moduleName}::${alias.aliasName}`);
+      if (alias.hasShape && alias.sourceType) {
+        addAliasShapeTypeName(alias.moduleName, alias.aliasName, alias.sourceType);
+      }
+    }
+  }
+  const exprAliases = runtimeExprAliases.get(schema);
+  if (exprAliases) {
+    for (const key of exprAliases.keys()) {
+      // Keys may be qualified (`mod::name`) or just bare names; normalize to
+      // `default::name` for unqualified entries so introspection rows always
+      // have a fully qualified name.
+      names.add(key.includes("::") ? key : `default::${key}`);
+    }
+  }
+  return [...names];
+};
 
 type RuntimeTypedAliasDef = {
   aliasName: string;
@@ -736,112 +782,20 @@ const injectRuntimeAliasBinding = (schema: SchemaSnapshot, query: string): strin
     return query;
   }
 
+  // For each expr-alias referenced in the query, inject a WITH binding so
+  // the normal pipeline resolves `aliasName` and `aliasName.field` paths
+  // against the alias's stored expression.
+  const bindings: string[] = [];
   for (const [aliasName, expr] of aliases.entries()) {
-    const startsWithAlias = new RegExp(`^select\\s+${aliasName}(?:\\b|\\s*[\\);,])`, "i").test(trimmed);
-    if (!startsWithAlias) {
-      continue;
+    const referenced = new RegExp(`\\b${aliasName}\\b`).test(trimmed);
+    if (referenced) {
+      bindings.push(`${aliasName} := ${expr}`);
     }
-
-    const replacedSelect = trimmed.replace(
-      new RegExp(`^select\\s+${aliasName}\\b`, "i"),
-      `SELECT ${expr}`,
-    );
-
-    return replacedSelect.replace(
-      new RegExp(`\\s+ORDER\\s+BY\\s+${aliasName}\\b(?:\\s+(?:ASC|DESC))?`, "i"),
-      "",
-    );
   }
-
-  return query;
-};
-
-const tryRuntimeAliasTupleSelect = (schema: SchemaSnapshot, query: string): QueryResult | undefined => {
-  const aliases = runtimeExprAliases.get(schema);
-  if (!aliases || aliases.size === 0) {
-    return undefined;
+  if (bindings.length === 0) {
+    return query;
   }
-
-  const trimmed = query.trim().replace(/;\s*$/, "");
-  for (const [aliasName, expr] of aliases.entries()) {
-    const setExpr = /^\{([\s\S]*)\}$/.exec(expr.trim());
-    if (!setExpr) {
-      continue;
-    }
-
-    const body = setExpr[1];
-
-    const scalarStrings: string[] = [];
-    const scalarPattern = /'([^']*)'/g;
-    for (const match of body.matchAll(scalarPattern)) {
-      scalarStrings.push(match[1]);
-    }
-
-    const simpleTuples: string[][] = [];
-    const simplePattern = /\(\s*'([^']*)'\s*,\s*'([^']*)'\s*\)/g;
-    for (const match of body.matchAll(simplePattern)) {
-      simpleTuples.push([match[1], match[2]]);
-    }
-
-    const namedTuples: Array<{ name: string; score: number; games: number }> = [];
-    const namedPattern = /\(\s*name\s*:=\s*'([^']*)'\s*,\s*score\s*:=\s*(-?\d+)\s*,\s*games\s*:=\s*(-?\d+)\s*\)/g;
-    for (const match of body.matchAll(namedPattern)) {
-      namedTuples.push({ name: match[1], score: Number(match[2]), games: Number(match[3]) });
-    }
-
-    const plainSelect = new RegExp(`^SELECT\\s+${aliasName}(?:\\s+ORDER\\s+BY\\s+${aliasName}(?:\\s+(?:ASC|DESC))?)?$`, "i").test(trimmed);
-    const orderedByNameSelect = new RegExp(`^SELECT\\s+${aliasName}\\s+ORDER\\s+BY\\s+${aliasName}\\.name(?:\\s+(?:ASC|DESC))?$`, "i").test(trimmed);
-    const positionalCast = new RegExp(`^SELECT\\s+<tuple<\\s*str\\s*,\\s*int64\\s*,\\s*int64\\s*>>\\s*${aliasName}\\s+ORDER\\s+BY\\s+\\.0(?:\\s+(?:ASC|DESC))?$`, "i").test(trimmed);
-    const namedCast = new RegExp(`^SELECT\\s+<tuple<\\s*name\\s*:\\s*str\\s*,\\s*points\\s*:\\s*int64\\s*,\\s*plays\\s*:\\s*int64\\s*>>\\s*${aliasName}\\s+ORDER\\s+BY\\s+\\.name(?:\\s+(?:ASC|DESC))?$`, "i").test(trimmed);
-
-    if (scalarStrings.length > 0 && plainSelect && simpleTuples.length === 0 && namedTuples.length === 0) {
-      return {
-        kind: "select",
-        rows: [...new Set(scalarStrings)],
-      };
-    }
-
-    if (simpleTuples.length > 0 && plainSelect) {
-      const tuples = [...simpleTuples].sort((a, b) => {
-        if (a[0] !== b[0]) {
-          return a[0].localeCompare(b[0]);
-        }
-        return a[1].localeCompare(b[1]);
-      });
-      return { kind: "select", rows: tuples };
-    }
-
-    if (namedTuples.length > 0 && orderedByNameSelect) {
-      return {
-        kind: "select",
-        rows: [...namedTuples]
-          .sort((a, b) => a.name.localeCompare(b.name))
-          .map((row) => ({ name: row.name, score: row.score, games: row.games })),
-      };
-    }
-
-    if (namedTuples.length > 0 && positionalCast) {
-      return {
-        kind: "select",
-        rows: [...namedTuples]
-          .sort((a, b) => a.name.localeCompare(b.name))
-          .map((row) => [row.name, row.score, row.games]),
-      };
-    }
-
-    if (namedTuples.length > 0 && namedCast) {
-      return {
-        kind: "select",
-        rows: [...namedTuples]
-          .sort((a, b) => a.name.localeCompare(b.name))
-          .map((row) => ({ name: row.name, points: row.score, plays: row.games })),
-      };
-    }
-
-    return undefined;
-  }
-
-  return undefined;
+  return `WITH ${bindings.join(", ")} ${trimmed}`;
 };
 
 const runtimeAliasLikeMatches = (value: unknown, pattern: string): boolean => {
@@ -937,347 +891,6 @@ const readRuntimeTypedAliasSourceRows = (
   return rows;
 };
 
-const readRuntimeTypedAliasTargets = (
-  db: SQLiteDatabase,
-  schema: SchemaSnapshot,
-  alias: RuntimeTypedAliasDef,
-  linkOverride: RuntimeTypedAliasDef["linkOverrides"][number],
-  sourceRow: Record<string, unknown>,
-): Array<Record<string, unknown> & { __source_type: string }> => {
-  const sourceId = sourceRow.id;
-  if (typeof sourceId !== "string") {
-    return [];
-  }
-
-  const targets: Array<Record<string, unknown> & { __source_type: string }> = [];
-  const seen = new Set<string>();
-  const concreteTargets = schema.listConcreteTypesAssignableTo(linkOverride.targetType);
-
-  for (const targetType of concreteTargets) {
-    const targetTypeName = qualifiedTypeName(targetType);
-    const link = (targetType.links ?? []).find((candidate) => candidate.name === linkOverride.backlinkLink);
-    if (!link) {
-      continue;
-    }
-
-    const targetNames = normalizeLinkTargetNames(link.targetType, targetType.module ?? alias.moduleName);
-    const supportsSource = targetNames.some((targetName) => {
-      if (targetName === alias.sourceType) {
-        return true;
-      }
-      return schema
-        .listConcreteTypesAssignableTo(targetName)
-        .some((candidate) => qualifiedTypeName(candidate) === alias.sourceType);
-    });
-    if (!supportsSource) {
-      continue;
-    }
-
-    const targetTable = tableNameForType(targetTypeName);
-    const rows: Record<string, unknown>[] = [];
-
-    if (link.multi || (link.properties?.length ?? 0) > 0) {
-      const owner = resolveLinkStorageOwner(schema, targetType, link);
-      const ownerTable = tableNameForType(qualifiedTypeName(owner));
-      const linkTable = `${ownerTable}__${link.name.toLowerCase()}`;
-      rows.push(...db
-        .prepare(`SELECT t.* FROM ${quoteIdent(targetTable)} t JOIN ${quoteIdent(linkTable)} l ON l.${quoteIdent("source")} = t.${quoteIdent("id")} WHERE l.${quoteIdent("target")} = ?`)
-        .all(sourceId) as Record<string, unknown>[]);
-    } else {
-      const inlineColumn = `${link.name}_id`;
-      rows.push(...db
-        .prepare(`SELECT * FROM ${quoteIdent(targetTable)} WHERE ${quoteIdent(inlineColumn)} = ?`)
-        .all(sourceId) as Record<string, unknown>[]);
-    }
-
-    for (const row of rows) {
-      if (typeof row.id !== "string") {
-        continue;
-      }
-      const key = `${targetTypeName}:${row.id}`;
-      if (seen.has(key)) {
-        continue;
-      }
-      seen.add(key);
-      targets.push({ ...row, __source_type: targetTypeName });
-    }
-  }
-
-  return targets;
-};
-
-const materializeRuntimeTypedAliasTarget = (
-  targetRow: Record<string, unknown>,
-  linkOverride: RuntimeTypedAliasDef["linkOverrides"][number],
-  requestedShape: Extract<SelectStatement["shape"][number], { kind: "link" }>["shape"],
-): Record<string, unknown> => {
-  const out: Record<string, unknown> = {};
-  for (const element of requestedShape) {
-    if (element.kind === "field") {
-      const computed = linkOverride.computedFields.find((field) => field.name === element.name);
-      if (computed && computed.functionName === "str_upper") {
-        const raw = targetRow[computed.sourceField];
-        out[element.name] = typeof raw === "string" ? raw.toUpperCase() : raw ?? null;
-      } else {
-        out[element.name] = targetRow[element.name] ?? null;
-      }
-      continue;
-    }
-
-    if (element.kind === "computed" && element.expr.kind === "field_ref") {
-      out[element.name] = targetRow[element.expr.field] ?? null;
-      continue;
-    }
-
-    if ("name" in element) {
-      if ("name" in element) {
-        out[element.name] = null;
-      }
-    }
-  }
-  return out;
-};
-
-const runtimeTypedAliasRowMatchesFilter = (
-  db: SQLiteDatabase,
-  schema: SchemaSnapshot,
-  alias: RuntimeTypedAliasDef,
-  row: Record<string, unknown>,
-  filter: SelectStatement["filter"],
-): boolean => {
-  if (!filter) {
-    return true;
-  }
-
-  if (filter.kind === "and") {
-    return runtimeTypedAliasRowMatchesFilter(db, schema, alias, row, filter.left)
-      && runtimeTypedAliasRowMatchesFilter(db, schema, alias, row, filter.right);
-  }
-  if (filter.kind === "or") {
-    return runtimeTypedAliasRowMatchesFilter(db, schema, alias, row, filter.left)
-      || runtimeTypedAliasRowMatchesFilter(db, schema, alias, row, filter.right);
-  }
-  if (filter.kind === "not") {
-    return !runtimeTypedAliasRowMatchesFilter(db, schema, alias, row, filter.expr);
-  }
-
-  if (filter.kind === "free_expr") {
-    return true;
-  }
-
-  if (filter.target.kind !== "field") {
-    return true;
-  }
-
-  if (filter.kind === "in_predicate") {
-    if (filter.values.kind !== "set_literal") {
-      return true;
-    }
-    const value = row[filter.target.field];
-    const hasValue = filter.values.values.some((candidate) => candidate === value);
-    return filter.op === "not_in" ? !hasValue : hasValue;
-  }
-
-  if (typeof filter.value === "object" && filter.value !== null) {
-    return true;
-  }
-
-  if (filter.target.field.includes(".")) {
-    const [linkName, fieldName] = filter.target.field.split(".", 2);
-    const linkOverride = alias.linkOverrides.find((candidate) => candidate.name === linkName);
-    if (!linkOverride) {
-      return true;
-    }
-    return readRuntimeTypedAliasTargets(db, schema, alias, linkOverride, row)
-      .some((targetRow) => {
-        const computed = linkOverride.computedFields.find((field) => field.name === fieldName);
-        const raw = computed?.functionName === "str_upper"
-          ? (() => {
-              const source = targetRow[computed.sourceField];
-              return typeof source === "string" ? source.toUpperCase() : source;
-            })()
-          : targetRow[fieldName];
-        return runtimeAliasPredicateMatches(raw, filter.op, filter.value as ScalarValue);
-      });
-  }
-
-  return runtimeAliasPredicateMatches(row[filter.target.field], filter.op, filter.value as ScalarValue);
-};
-
-const tryRuntimeTypedAliasSelectAst = (
-  db: SQLiteDatabase,
-  schema: SchemaSnapshot,
-  ast: SelectStatement,
-): QueryResult | undefined => {
-  const typedAliases = runtimeTypedAliases.get(schema);
-  const aliasName = ast.typeName.split("::").pop() ?? ast.typeName;
-  const schemaAlias = schema.getAlias(ast.typeName.includes("::") ? ast.typeName : `default::${ast.typeName}`);
-  const schemaRuntimeAlias = schemaAlias ? runtimeTypedAliasFromSchemaAlias(schemaAlias) : undefined;
-  const schemaRuntimeAliasHasShape = Boolean(
-    (schemaRuntimeAlias?.computedProperties?.length ?? 0) > 0
-    || (schemaRuntimeAlias?.computedExistsProperties?.length ?? 0) > 0
-    || (schemaRuntimeAlias?.filterValues?.values.length ?? 0) > 0
-    || (schemaRuntimeAlias?.linkOverrides.length ?? 0) > 0,
-  );
-  const alias = typedAliases?.get(ast.typeName)
-    ?? typedAliases?.get(aliasName)
-    ?? (schemaRuntimeAliasHasShape ? schemaRuntimeAlias : undefined);
-  if (!alias) {
-    return undefined;
-  }
-
-  let sourceRows = readRuntimeTypedAliasSourceRows(db, schema, alias);
-  if (ast.filter) {
-    sourceRows = sourceRows.filter((row) => runtimeTypedAliasRowMatchesFilter(db, schema, alias, row, ast.filter));
-  }
-  if (alias.limit !== undefined) {
-    sourceRows = sourceRows.slice(0, alias.limit);
-  }
-  const projected = sourceRows.map((sourceRow) => {
-    const out: Record<string, unknown> = {};
-    for (const element of ast.shape) {
-      if (element.kind === "field") {
-        if (Object.prototype.hasOwnProperty.call(sourceRow, element.name)) {
-          out[element.name] = sourceRow[element.name];
-        } else if (alias.computedProperties?.some((property) => property.name === element.name)) {
-          const property = alias.computedProperties.find((candidate) => candidate.name === element.name)!;
-          out[element.name] = property.fields.map((field) => sourceRow[field] ?? null);
-        } else if (alias.computedExistsProperties?.some((property) => property.name === element.name)) {
-          const property = alias.computedExistsProperties.find((candidate) => candidate.name === element.name)!;
-          const targetRows = readRuntimeTypedAliasTargets(db, schema, alias, {
-            name: element.name,
-            backlinkLink: property.backlinkLink,
-            targetType: property.targetType,
-            computedFields: [],
-          }, sourceRow);
-          let exists = targetRows.some((targetRow) => targetRow[property.field] === property.value);
-          if (!property.correlated) {
-            for (const targetType of schema.listConcreteTypesAssignableTo(property.targetType)) {
-              const targetTable = tableNameForType(qualifiedTypeName(targetType));
-              const matches = db
-                .prepare(`SELECT 1 FROM ${quoteIdent(targetTable)} WHERE ${quoteIdent(property.field)} = ? LIMIT 1`)
-                .all(property.value);
-              exists = matches.length > 0;
-              if (exists) {
-                break;
-              }
-            }
-          }
-          if (!exists && property.correlated && typeof sourceRow.id === "string") {
-            for (const targetType of schema.listConcreteTypesAssignableTo(property.targetType)) {
-              const link = (targetType.links ?? []).find((candidate) => candidate.name === property.backlinkLink);
-              if (!link) {
-                continue;
-              }
-              const targetTable = tableNameForType(qualifiedTypeName(targetType));
-              if (link.multi || (link.properties?.length ?? 0) > 0) {
-                const owner = resolveLinkStorageOwner(schema, targetType, link);
-                const linkTable = `${tableNameForType(qualifiedTypeName(owner))}__${link.name.toLowerCase()}`;
-                const matches = db
-                  .prepare(`SELECT 1 FROM ${quoteIdent(targetTable)} t JOIN ${quoteIdent(linkTable)} l ON l.${quoteIdent("source")} = t.${quoteIdent("id")} WHERE l.${quoteIdent("target")} = ? AND t.${quoteIdent(property.field)} = ? LIMIT 1`)
-                  .all(sourceRow.id, property.value);
-                exists = matches.length > 0;
-              } else {
-                const matches = db
-                  .prepare(`SELECT 1 FROM ${quoteIdent(targetTable)} WHERE ${quoteIdent(`${link.name}_id`)} = ? AND ${quoteIdent(property.field)} = ? LIMIT 1`)
-                  .all(sourceRow.id, property.value);
-                exists = matches.length > 0;
-              }
-              if (exists) {
-                break;
-              }
-            }
-          }
-          out[element.name] = exists;
-        } else if (element.name.endsWith("_upper")) {
-          const sourceValue = sourceRow[element.name.slice(0, -"_upper".length)];
-          out[element.name] = typeof sourceValue === "string" ? sourceValue.toUpperCase() : null;
-        } else {
-          out[element.name] = [{}];
-        }
-        continue;
-      }
-
-      if (element.kind === "link") {
-        const linkOverride = alias.linkOverrides.find((candidate) => candidate.name === element.name);
-        if (!linkOverride) {
-          out[element.name] = [{}];
-          continue;
-        }
-
-        const targetRows = readRuntimeTypedAliasTargets(db, schema, alias, linkOverride, sourceRow);
-
-        if (element.clauses.orderBy) {
-          const orderField = element.clauses.orderBy.field;
-          const direction = element.clauses.orderBy.direction === "desc" ? -1 : 1;
-          const readOrderValue = (row: Record<string, unknown>): string | number | null | undefined => {
-            if (Object.prototype.hasOwnProperty.call(row, orderField)) {
-              return row[orderField] as string | number | null | undefined;
-            }
-
-            const computed = linkOverride.computedFields.find((field) => field.name === orderField);
-            if (computed?.functionName === "str_upper") {
-              const raw = row[computed.sourceField];
-              return typeof raw === "string" ? raw.toUpperCase() : raw as string | number | null | undefined;
-            }
-
-            return undefined;
-          };
-
-          targetRows.sort((a, b) => {
-            const left = readOrderValue(a);
-            const right = readOrderValue(b);
-            if (left === right) {
-              return 0;
-            }
-            return String(left ?? "").localeCompare(String(right ?? "")) * direction;
-          });
-        }
-
-        const targets = targetRows
-          .map((targetRow) => materializeRuntimeTypedAliasTarget(targetRow, linkOverride, element.shape));
-
-        out[element.name] = targets.length === 1 ? targets[0] : targets;
-        continue;
-      }
-
-      if ("name" in element) {
-        out[element.name] = null;
-      }
-    }
-    return out;
-  });
-
-  if (ast.orderBy) {
-    const direction = ast.orderBy.direction === "desc" ? -1 : 1;
-    projected.sort((a, b) =>
-      String(a[ast.orderBy!.field] ?? "").localeCompare(String(b[ast.orderBy!.field] ?? "")) * direction);
-  }
-
-  return {
-    kind: "select",
-    rows: projected,
-  };
-};
-
-const tryRuntimeTypedAliasSelect = (
-  db: SQLiteDatabase,
-  schema: SchemaSnapshot,
-  query: string,
-): QueryResult | undefined => {
-  let ast: Statement;
-  try {
-    ast = parseEdgeQL(query);
-  } catch {
-    return undefined;
-  }
-
-  if (ast.kind !== "select") {
-    return undefined;
-  }
-
-  return tryRuntimeTypedAliasSelectAst(db, schema, ast);
-};
 
 const tryRuntimeSelectExprEvaluation = (
   db: SQLiteDatabase,
@@ -3105,6 +2718,26 @@ const trySchemaTypeQuery = (schema: SchemaSnapshot, query: string): QueryResult 
   const isSchemaTypeQuery = /\bWITH\s+MODULE\s+schema\b[\s\S]*\bSELECT\s+Type\b/i.test(query)
     || /\bschema::Type\b/i.test(query);
   if (!isSchemaTypeQuery) {
+    return undefined;
+  }
+
+  // Phase 1 of real schema introspection registers `schema::Type` and
+  // populates `schema__type` from SchemaSnapshot + runtime alias maps, so
+  // simple `SELECT schema::Type { name } FILTER .name (ilike|=) '...'`
+  // queries flow through the principled SELECT pipeline. Skip the bypass
+  // for those shapes and let the IR/SQL path serve them. Complex shapes
+  // still need bypass coverage: array/tuple cross-products with empty
+  // `Type.name` slots (`[A, (SELECT Type FILTER .name='n/a').name]`) and
+  // backlinks through schema::Pointer / type intersections on
+  // schema::Range / schema::MultiRange — Phase 2/3 retires the rest.
+  const hasNonSimpleArrayShape = /\bSELECT\s*\[/i.test(query)
+    || /\bSELECT\s*\(/i.test(query);
+  const hasSchemaPointerBacklink = /<\s*target\s*\[\s*is\s+schema::Pointer\s*\]/i.test(query);
+  const hasComplexTypeIntersection = /\[\s*is\s+schema::(?:Range|MultiRange)\s*\]/i.test(query);
+  const isSimpleTypeQuery = !hasNonSimpleArrayShape
+    && !hasSchemaPointerBacklink
+    && !hasComplexTypeIntersection;
+  if (isSimpleTypeQuery) {
     return undefined;
   }
 
@@ -5999,38 +5632,16 @@ export const executeQuery = (
   // HACK (not using SQL): the block below short-circuits on a series of
   // string-matched / AST-shape patterns and returns results without ever
   // touching the IR/SQL pipeline. Each `tryRuntime*` / `trySchema*` helper
-  // covers a class of query the compiler can't lower yet (typed aliases,
-  // alias tuple selects, schema-link introspection, schema pointer/tuple/
-  // type/object-type queries). These should be pushed into ast_to_ir +
-  // sql/gel_ir_compiler so a single SQL path handles them.
-  // HACK (not using SQL): one alias case still needs this bypass — FILTER
-  // paths that traverse an alias-defined computed link (e.g.
-  // `SELECT AwardAlias { winner: { name_upper } } FILTER .winner.name_upper = 'X'`).
-  // After expandSchemaAliasesInStatement rewrites typeName from AwardAlias to
-  // Award, semantic.ts rejects `.winner.name_upper` because `winner` isn't a
-  // real link on Award. Removing this requires either inlining alias-defined
-  // computeds onto the source type as virtual pointers during the expansion,
-  // or rewriting filter paths to substitute the alias's expression for the
-  // computed-name step.
-  if (process.env.GEL_SKIP_HACK_TYPED_ALIAS !== "1") {
-    const runtimeTypedAliasResult = tryRuntimeTypedAliasSelect(db, schema, query);
-    if (runtimeTypedAliasResult) {
-      if (dbg) console.error("HACK: tryRuntimeTypedAliasSelect");
-      return runtimeTypedAliasResult;
-    }
-  }
-
-  const runtimeSelectExprEvaluationResult = tryRuntimeSelectExprEvaluation(db, schema, query, securityContext);
-  if (runtimeSelectExprEvaluationResult) {
-    if (dbg) console.error("HACK: tryRuntimeSelectExprEvaluation");
-    return runtimeSelectExprEvaluationResult;
-  }
-
-  const runtimeAliasResult = tryRuntimeAliasTupleSelect(schema, query);
-  if (runtimeAliasResult) {
-    return runtimeAliasResult;
-  }
-
+  // covers a class of query the compiler can't lower yet (schema-link
+  // introspection, schema pointer/tuple/type/object-type queries). These
+  // should be pushed into ast_to_ir + sql/gel_ir_compiler so a single SQL
+  // path handles them.
+  // Schema-introspection regex bypasses run BEFORE the AST evaluator
+  // (tryRuntimeSelectExprEvaluation) because the AST path otherwise consumes
+  // these queries and produces empty/wrong results — the parser now accepts
+  // `kw_schema` as a name, but the IR/SQL pipeline still has no `schema::*`
+  // introspection types. The full fix is to delete these bypasses once real
+  // schema introspection is wired through the principled path.
   const runtimeAliasSchemaResult = tryRuntimeTypedAliasSchemaLinkIntrospection(schema, query);
   if (runtimeAliasSchemaResult) {
     return runtimeAliasSchemaResult;
@@ -6056,6 +5667,12 @@ export const executeQuery = (
   const schemaQueryResult = trySchemaObjectTypeQuery(schema, rewrittenQuery);
   if (schemaQueryResult) {
     return schemaQueryResult;
+  }
+
+  const runtimeSelectExprEvaluationResult = tryRuntimeSelectExprEvaluation(db, schema, query, securityContext);
+  if (runtimeSelectExprEvaluationResult) {
+    if (dbg) console.error("HACK: tryRuntimeSelectExprEvaluation");
+    return runtimeSelectExprEvaluationResult;
   }
 
   const parsedQuery = parseEdgeQL(rewrittenQuery);
@@ -6120,6 +5737,11 @@ export const executeScript = (
 ): QueryResult => {
   maybeRegisterDynamicDDLScript(db, schema, script);
   if (maybeHandleAliasDDLScript(schema, script)) {
+    // Alias state changed; refresh the schema::* introspection rows so
+    // SELECT schema::Type FILTER .name = 'newAlias' picks them up. Both
+    // typed (schema.addAlias) and runtime expr aliases (runtimeExprAliases
+    // WeakMap) must be included — listAllRuntimeAliasNames merges both.
+    populateSchemaIntrospection(db, schema, listAllRuntimeAliasNames(schema));
     return { kind: "insert", changes: 0 };
   }
   return executeQueryUnitWithTrace(db, schema, script, securityContext, parserOptions).result;
@@ -6330,6 +5952,13 @@ export const executeQueryWithTrace = (
         return false;
       };
       const isEmptySetSelect = checkEmptySet(firstEntry);
+      // `<tuple<...>>X` casts must materialize per row: the SQL path wraps
+      // a `set_expr` inner in `json_group_array(...)` (single row containing
+      // an array), and it doesn't apply the named→positional / rename
+      // reshape the cast represents. Both are handled correctly by the IR
+      // interpreter in evaluateSelectExprEntry → reshapeForTupleCast.
+      const tupleCastNeedsRuntime = firstEntry?.kind === "cast"
+        && parseTupleCastSlots((firstEntry as { castType: string }).castType) !== null;
       const isShapeOrObject = firstEntry
         && (firstEntry.kind === "shape_projection"
           || firstEntry.kind === "select"
@@ -6343,6 +5972,7 @@ export const executeQueryWithTrace = (
           || compareNeedsRuntimeFromFilter
           || compareNeedsRuntimeFromEmpty
           || compareNeedsRuntimeFromCoalesce
+          || tupleCastNeedsRuntime
           || selectExprIndexNeedsRuntime(firstEntry));
       const sqlIsRunnable = compiled.usesGelIrSql && sqlArtifact.loweringMode === "single_statement";
       result = {
@@ -6577,7 +6207,9 @@ export const executeQueryUnitWithTrace = (
         // lowering, !usesGelIrSql), we throw the SQL away and interpret in
         // TS via materializeSelectExprRows.
         const firstEntry = ir.entries[0];
-        const needsRuntimeExpr = selectExprIndexNeedsRuntime(firstEntry);
+        const needsRuntimeExpr = selectExprIndexNeedsRuntime(firstEntry)
+          || (firstEntry?.kind === "cast"
+            && parseTupleCastSlots((firstEntry as { castType: string }).castType) !== null);
         const sqlIsRunnable = compiled.usesGelIrSql && sqlArtifact.loweringMode === "single_statement" && !needsRuntimeExpr;
         result = {
           kind: "select",
@@ -7261,7 +6893,9 @@ const evaluateFreeExprForShape = (
   expr: FreeObjectExpr,
   row: Record<string, unknown>,
   resolveCurrentField?: (field: string) => unknown,
+  evalFunctionCall?: (functionName: string, args: RuntimeFunctionArg[]) => unknown,
 ): unknown => {
+  const rec = (e: FreeObjectExpr): unknown => evaluateFreeExprForShape(e, row, resolveCurrentField, evalFunctionCall);
   if (expr.kind === "literal") {
     return expr.value;
   }
@@ -7278,8 +6912,53 @@ const evaluateFreeExprForShape = (
     if (value === undefined || value === null) return SHAPE_EMPTY_SET;
     return value;
   }
+  if (expr.kind === "function_call") {
+    if (!evalFunctionCall) return undefined;
+    const argValues: RuntimeFunctionArg[] = [];
+    for (const arg of expr.call.args) {
+      if (arg.kind === "literal") {
+        argValues.push(arg.value);
+        continue;
+      }
+      if (arg.kind === "set_literal") {
+        argValues.push({ kind: "set", values: [...arg.values] });
+        continue;
+      }
+      if (arg.kind === "array_literal") {
+        argValues.push({ kind: "array", values: [...arg.values] });
+        continue;
+      }
+      if (arg.kind === "expr") {
+        const v = rec(arg.expr);
+        if (v === undefined) return undefined;
+        const flat = flattenShapeValues(v);
+        if (flat.length === 0) {
+          // EdgeQL: applying a function to an empty set produces an empty set.
+          // Surface that as SHAPE_EMPTY_SET upstream.
+          return SHAPE_EMPTY_SET;
+        }
+        argValues.push(flat.length === 1 ? flat[0] as ScalarValue : { kind: "array", values: flat as ScalarValue[] });
+        continue;
+      }
+      if (arg.kind === "function_call") {
+        const v = rec({ kind: "function_call", call: arg.call });
+        if (v === undefined) return undefined;
+        argValues.push(v as ScalarValue);
+        continue;
+      }
+      return undefined;
+    }
+    // Function names in the AST are usually unqualified (`str_upper`). The
+    // stdlib defines them under `std::`; resolve there first, then fall back
+    // to `default::` for user-defined functions.
+    const rawName = expr.call.name;
+    const candidateName = rawName.includes("::")
+      ? rawName
+      : (resolveStdlibFunction(`std::${rawName}`, argValues.length) ? `std::${rawName}` : `default::${rawName}`);
+    return evalFunctionCall(candidateName, argValues);
+  }
   if (expr.kind === "unary") {
-    const inner = evaluateFreeExprForShape(expr.expr, row, resolveCurrentField);
+    const inner = rec(expr.expr);
     if (inner === undefined) return undefined;
     const values = flattenShapeValues(inner);
     if (values.length === 0) return SHAPE_EMPTY_SET;
@@ -7293,8 +6972,8 @@ const evaluateFreeExprForShape = (
     return out.length === 1 ? out[0] : out;
   }
   if (expr.kind === "math") {
-    const left = evaluateFreeExprForShape(expr.left, row, resolveCurrentField);
-    const right = evaluateFreeExprForShape(expr.right, row, resolveCurrentField);
+    const left = rec(expr.left);
+    const right = rec(expr.right);
     if (left === undefined || right === undefined) return undefined;
     const ls = flattenShapeValues(left);
     const rs = flattenShapeValues(right);
@@ -7322,15 +7001,15 @@ const evaluateFreeExprForShape = (
     return out.length === 1 ? out[0] : out;
   }
   if (expr.kind === "cast") {
-    return evaluateFreeExprForShape(expr.expr, row, resolveCurrentField);
+    return rec(expr.expr);
   }
   if (expr.kind === "select_expr_subquery") {
-    return evaluateFreeExprForShape(expr.expr, row, resolveCurrentField);
+    return rec(expr.expr);
   }
   if (expr.kind === "set_expr") {
     const out: unknown[] = [];
     for (const value of expr.values) {
-      const v = evaluateFreeExprForShape(value, row, resolveCurrentField);
+      const v = rec(value);
       if (v === undefined) return undefined;
       out.push(...flattenShapeValues(v));
     }
@@ -7340,20 +7019,20 @@ const evaluateFreeExprForShape = (
     return [...expr.values];
   }
   if (expr.kind === "coalesce") {
-    const left = evaluateFreeExprForShape(expr.left, row, resolveCurrentField);
+    const left = rec(expr.left);
     if (left === undefined) return undefined;
     const ls = flattenShapeValues(left);
     if (ls.length > 0) {
       return ls.length === 1 ? ls[0] : ls;
     }
-    const right = evaluateFreeExprForShape(expr.right, row, resolveCurrentField);
+    const right = rec(expr.right);
     if (right === undefined) return undefined;
     const rs = flattenShapeValues(right);
     return rs.length === 1 ? rs[0] : rs;
   }
   if (expr.kind === "compare") {
-    const left = evaluateFreeExprForShape(expr.left, row, resolveCurrentField);
-    const right = evaluateFreeExprForShape(expr.right, row, resolveCurrentField);
+    const left = rec(expr.left);
+    const right = rec(expr.right);
     if (left === undefined || right === undefined) return undefined;
     const ls = flattenShapeValues(left);
     const rs = flattenShapeValues(right);
@@ -7396,14 +7075,14 @@ const evaluateFreeExprForShape = (
     return out.length === 1 ? out[0] : out;
   }
   if (expr.kind === "if_else") {
-    const cond = evaluateFreeExprForShape(expr.condition, row, resolveCurrentField);
+    const cond = rec(expr.condition);
     if (cond === undefined) return undefined;
     const cs = flattenShapeValues(cond);
     if (cs.length === 0) return SHAPE_EMPTY_SET;
     if (cs[0]) {
-      return evaluateFreeExprForShape(expr.thenExpr, row, resolveCurrentField);
+      return rec(expr.thenExpr);
     }
-    return evaluateFreeExprForShape(expr.elseExpr, row, resolveCurrentField);
+    return rec(expr.elseExpr);
   }
   if (expr.kind === "tuple" || expr.kind === "array_literal_expr") {
     // EdgeQL tuple and array literals are SINGLE values made of their slots.
@@ -7412,7 +7091,7 @@ const evaluateFreeExprForShape = (
     // value empty.
     const slots: unknown[] = [];
     for (const value of expr.values) {
-      const v = evaluateFreeExprForShape(value, row, resolveCurrentField);
+      const v = rec(value);
       if (v === undefined) return undefined;
       const flat = flattenShapeValues(v);
       if (flat.length === 0) return SHAPE_EMPTY_SET;
@@ -7641,7 +7320,8 @@ const evaluateSelectExprShapeEntry = (
   // First try the general free-expression evaluator. If it returns undefined,
   // we don't know how to evaluate this; fall back to the legacy
   // path-steps/type-intersection handler below.
-  const general = evaluateFreeExprForShape(expr, row, resolveCurrentField);
+  const general = evaluateFreeExprForShape(expr, row, resolveCurrentField, (functionName, args) =>
+    executeFunctionCall(schema, db, DEFAULT_SECURITY_CONTEXT, functionName, args));
   if (general !== undefined) {
     if (general === SHAPE_EMPTY_SET) return null;
     return general;
@@ -8595,6 +8275,79 @@ const materializeFreeObjectRow = (
   }
 
   return out;
+};
+
+// Parse a `tuple<...>` cast type string into per-slot specs. Returns null
+// if `castType` isn't a tuple cast. Each slot has an optional `name` (set
+// when the cast type uses `name: T` syntax); slot types are returned as
+// raw strings — the cast applies field reshape rather than type coercion,
+// so the inner type isn't inspected here.
+const parseTupleCastSlots = (castType: string): { name?: string; type: string }[] | null => {
+  const m = /^(?:default::)?tuple<(.*)>$/.exec(castType.trim());
+  if (!m) return null;
+  const inner = m[1];
+  const slots: { name?: string; type: string }[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i <= inner.length; i += 1) {
+    const c = inner[i];
+    if (c === "<") depth += 1;
+    else if (c === ">") depth -= 1;
+    if ((c === "," && depth === 0) || i === inner.length) {
+      const part = inner.slice(start, i).trim();
+      start = i + 1;
+      if (part.length === 0) continue;
+      let colonIdx = -1;
+      let d = 0;
+      for (let j = 0; j < part.length; j += 1) {
+        if (part[j] === "<") d += 1;
+        else if (part[j] === ">") d -= 1;
+        else if (part[j] === ":" && d === 0) { colonIdx = j; break; }
+      }
+      if (colonIdx > 0) {
+        slots.push({ name: part.slice(0, colonIdx).trim(), type: part.slice(colonIdx + 1).trim() });
+      } else {
+        slots.push({ type: part });
+      }
+    }
+  }
+  return slots;
+};
+
+// Reshape a single tuple value to match a `tuple<...>` cast.
+//
+// EdgeQL tuple casts project fields positionally: a named-tuple source is
+// laid out in field-declaration order, then mapped slot-by-slot into the
+// target. The cast itself is a structural rename / re-projection, not a
+// per-element type coercion.
+const reshapeForTupleCast = (
+  value: unknown,
+  slots: { name?: string; type: string }[],
+): unknown => {
+  if (value === null || value === undefined) return value;
+  const targetIsNamed = slots.every((s) => s.name !== undefined);
+  if (Array.isArray(value)) {
+    if (targetIsNamed) {
+      const out: Record<string, unknown> = {};
+      slots.forEach((slot, i) => { out[slot.name!] = value[i] ?? null; });
+      return out;
+    }
+    return value.slice(0, slots.length);
+  }
+  if (typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    const sourceKeys = Object.keys(obj);
+    if (targetIsNamed) {
+      const out: Record<string, unknown> = {};
+      slots.forEach((slot, i) => {
+        const sourceKey = sourceKeys[i];
+        out[slot.name!] = sourceKey !== undefined ? (obj[sourceKey] ?? null) : null;
+      });
+      return out;
+    }
+    return sourceKeys.slice(0, slots.length).map((k) => obj[k] ?? null);
+  }
+  return value;
 };
 
 // HACK (not using SQL): evaluateSelectExprEntry is the IR interpreter — a
@@ -10318,9 +10071,13 @@ const evaluateSelectExprEntry = (
       return rows.map((row) => row?.[entry.field] ?? null);
     }
     case "cast": {
+      const tupleSlots = parseTupleCastSlots(entry.castType);
       if (entry.value.kind === "set_literal" || entry.value.kind === "set_expr") {
         const setValues = evaluateSelectExprEntry(schema, db, context, entry.value, sqlTrail, evalContext);
         if (Array.isArray(setValues)) {
+          if (tupleSlots) {
+            return setValues.map((item) => reshapeForTupleCast(item, tupleSlots));
+          }
           return setValues;
         }
         const castTypeDef = schema.getType(entry.castType);
@@ -10333,6 +10090,12 @@ const evaluateSelectExprEntry = (
         return [setValues];
       }
       const innerValue = evaluateSelectExprEntry(schema, db, context, entry.value, sqlTrail, evalContext);
+      if (tupleSlots) {
+        // The set_literal/set_expr branch above already runs through the
+        // map-reshape; here the inner is a single tuple value (an object for
+        // a named-tuple source, an array for a positional-tuple source).
+        return reshapeForTupleCast(innerValue, tupleSlots);
+      }
       if (entry.castType === "str") {
         if (Array.isArray(innerValue)) {
           return innerValue.map((item) => String(item ?? ""));

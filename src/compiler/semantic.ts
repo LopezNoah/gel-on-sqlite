@@ -5013,7 +5013,15 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           };
         }
         if (/^(default::)?tuple<.*>$/.test(resolvedCastType)) {
-          return innerEntry;
+          // Preserve `tuple<...>` casts so the runtime can reshape named
+          // tuples / free-objects into positional or renamed-named tuples
+          // per the cast type. Dropping the cast loses the shape, leaving
+          // a named-tuple value where the user asked for `tuple<T, T, T>`.
+          return {
+            kind: "cast",
+            castType: resolvedCastType,
+            value: asNestedExprEntry(innerEntry),
+          };
         }
         fail(`Unsupported cast type '${resolvedCastType}'`);
       }
