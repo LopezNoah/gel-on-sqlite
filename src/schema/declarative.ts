@@ -84,6 +84,7 @@ export interface LinkMember {
   overloaded: boolean;
   annotations: AnnotationDef[];
   properties: LinkMemberProperty[];
+  constraints?: ConstraintDef[];
 }
 
 export interface ComputedMember {

@@ -69,6 +69,14 @@ export class SchemaSnapshot {
     return existing ? cloneAliasDef(existing) : undefined;
   }
 
+  addAlias(alias: AliasDef): void {
+    this.aliasesByName.set(qualifiedAliasName(alias), cloneAliasDef(alias));
+  }
+
+  removeAlias(name: string): void {
+    this.aliasesByName.delete(name);
+  }
+
   listAliases(): AliasDef[] {
     return [...this.aliasesByName.values()].map((alias) => cloneAliasDef(alias));
   }

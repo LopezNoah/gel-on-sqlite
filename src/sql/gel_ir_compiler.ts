@@ -1397,6 +1397,15 @@ const collectProjectedColumns = (shape: ShapeElement[], where?: Set, orderBy?: S
         columns.add(`${pointer.ptrref.shortName}_id`);
       }
     }
+    // Computed shape elements (e.g. `el_cost := (.element, .cost)`) reference
+    // source columns inside their expression that the inner FROM still has to
+    // project for the outer SELECT to read them. Walk the element's expr
+    // through collectReferencedColumns so those columns reach the SELECT list.
+    if (element.expr.expr.kind !== "pointer" && element.expr.expr.kind !== "type_root") {
+      for (const referenced of collectReferencedColumns(element.expr)) {
+        columns.add(referenced);
+      }
+    }
   }
   if (where) {
     for (const column of collectReferencedColumns(where)) {

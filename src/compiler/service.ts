@@ -13,7 +13,7 @@ import { compileGelIRToSQL, type GelIRSQLArtifact } from "../sql/gel_ir_compiler
 import type { ScalarValue } from "../types.js";
 import { compileToIR } from "./semantic.js";
 import type { GeneratedSchema } from "../codegen/schema.js";
-import { compileASTToGelIR, isGelIRCompatibleStatement } from "./ast_to_ir.js";
+import { compileASTToGelIR, expandSchemaAliasesInStatement, isGelIRCompatibleStatement } from "./ast_to_ir.js";
 
 export interface CompilerCacheStats {
   hits: number;
@@ -57,7 +57,12 @@ export class CompilerService {
   private hits = 0;
   private misses = 0;
 
-  compile(schema: SchemaSnapshot, statement: Statement, context: CompileContext = {}): CompileArtifact {
+  compile(schema: SchemaSnapshot, rawStatement: Statement, context: CompileContext = {}): CompileArtifact {
+    // Expand schema-alias references at the AST level before either IR pass
+    // sees the statement. Both compileToIR (semantic.ts) and compileASTToGelIR
+    // (ast_to_ir.ts) then operate on the expanded form, so neither needs its
+    // own alias-substitution logic.
+    const statement = expandSchemaAliasesInStatement(rawStatement, schema);
     const key = buildCompileCacheKey(schema, statement, context);
     const cached = this.cache.get(key);
 

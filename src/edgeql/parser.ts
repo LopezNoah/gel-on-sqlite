@@ -2981,10 +2981,14 @@ class Parser {
     }
 
     if (this.peekNth(1).kind !== "kw_is") {
-      return {
-        kind: "literal",
+      // Array-literal form `[v1, v2, ...]` — only literal-typed elements are
+      // accepted here. If any element isn't a scalar literal (e.g. `[.path]`,
+      // `[Type.field]`, `[(SELECT ...)]`), return undefined so the more general
+      // free-object expression parser can take over.
+      return this.attempt(() => ({
+        kind: "literal" as const,
         value: this.readScalarLikeValue(),
-      };
+      }));
     }
 
     return this.attempt(() => {

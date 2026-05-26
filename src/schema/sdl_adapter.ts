@@ -1723,6 +1723,7 @@ const convertLinkMember = (
   node: LinkDeclarationNode,
   scalarRegistry: ScalarRegistry,
   inheritedTarget: string | undefined,
+  constraintParamNames: Map<string, string[]>,
 ): LinkMember => {
   if (node.computed) {
     unsupported("Computed links are not supported by the new SDL adapter yet");
@@ -1762,12 +1763,16 @@ const convertLinkMember = (
     onTargetDelete: body?.onTargetDelete ? parseOnTargetDeleteAction(body.onTargetDelete) : undefined,
     annotations: (body?.annotations ?? []).map((annotation) => convertAnnotation(moduleName, annotation)),
     properties: linkProperties,
+    constraints: (body?.constraints ?? []).length > 0
+      ? (body?.constraints ?? []).map((constraint) => convertConstraint(moduleName, constraint, constraintParamNames))
+      : undefined,
   };
 };
 
 const convertInferredLinkMember = (
   moduleName: string,
   node: PropertyDeclarationNode,
+  constraintParamNames: Map<string, string[]>,
   overrideDeclaredType?: string,
 ): LinkMember => {
   const declaredType = overrideDeclaredType
@@ -1796,6 +1801,9 @@ const convertInferredLinkMember = (
     readonly: body?.readonly ?? false,
     annotations: (body?.annotations ?? []).map((annotation) => convertAnnotation(moduleName, annotation)),
     properties: [],
+    constraints: (body?.constraints ?? []).length > 0
+      ? (body?.constraints ?? []).map((constraint) => convertConstraint(moduleName, constraint, constraintParamNames))
+      : undefined,
   };
 };
 
@@ -1822,7 +1830,7 @@ const convertDeclarationToMember = (
     const inheritedTarget = (declaration.targetType?.text || declaration.declaredType)
       ? undefined
       : inheritanceResolver.resolve(ownerTypeFullName, qualifiedNameToString(declaration.name))?.target;
-    return convertLinkMember(moduleName, declaration, scalarRegistry, inheritedTarget);
+    return convertLinkMember(moduleName, declaration, scalarRegistry, inheritedTarget, constraintParamNames);
   }
 
   if (declaration.kind === "PropertyDeclaration") {
@@ -1872,7 +1880,7 @@ const convertDeclarationToMember = (
       );
 
     if (inferredLink) {
-      return convertInferredLinkMember(moduleName, declaration, declaredType);
+      return convertInferredLinkMember(moduleName, declaration, constraintParamNames, declaredType);
     }
 
     return convertPropertyMember(moduleName, declaration, scalarRegistry, constraintParamNames, declaredType);
