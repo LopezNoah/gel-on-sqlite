@@ -5811,10 +5811,10 @@ export const executeQueryWithTrace = (
       // of the first IR entry — whether the compiled SQL is trustworthy. If
       // it isn't, we throw the SQL away and call `materializeSelectExprRows`
       // (the IR interpreter). Each of these conditions
-      // (coalesceNeedsRuntime, compareNeedsRuntimeFromFilter/Coalesce,
-      // compareDeepLCP, isShapeOrObject) represents a known bug in
-      // gel_ir_compiler / sql/compiler that needs the SQL output to be
-      // correct end-to-end so the bypass can be deleted.
+      // (compareNeedsRuntimeFromFilter/Coalesce, tupleCastNeedsRuntime,
+      // isShapeOrObject) represents a known bug in gel_ir_compiler /
+      // sql/compiler that needs the SQL output to be correct end-to-end so
+      // the bypass can be deleted.
       const firstEntry = ir.entries[0];
       // `?=` / `?!=` where ONE side wraps a filtered subquery AND the OTHER
       // side has an outer type reference (e.g. `field_access(select(Issue), …)`)
@@ -5906,72 +5906,6 @@ export const executeQueryWithTrace = (
         && (firstEntry.op === "?=" || firstEntry.op === "?!=")
         && (containsCoalesceOverOuterRefs(firstEntry.left) || containsCoalesceOverOuterRefs(firstEntry.right));
 
-      // Top-level `X ?? {Y, Z}` where LHS and RHS share an outer LCP (both
-      // reference the same outer type) still falls into the fall-through
-      // path in `compileScalarSelectSQL` which emits the buggy
-      // `COALESCE(scalar, json_group_array(...))`. Non-LCP cases (`5 ?? {-1, -2}`,
-      // `Issue.time_estimate ?? {-1, -2}`) are correctly handled by
-      // `tryCompileSetLevelCoalesceSQL` and do not need this bypass.
-      const coalesceNeedsRuntime = firstEntry?.kind === "coalesce"
-        && ((firstEntry.right as { kind?: string }).kind === "set_expr"
-          || ((firstEntry.right as { kind?: string; operator?: string }).kind === "operator_call"
-            && (firstEntry.right as { operator?: string }).operator === "union"))
-        && containsOuterSelect(firstEntry.left)
-        && containsOuterSelect(firstEntry.right);
-
-      // `?=` / `?!=` where LHS is `field_access(X.Y)` and RHS contains the
-      // same path needs deep-path LCP — the compiled SQL evaluates per row
-      // (including rows where the path is empty), which returns "true" for
-      // empty IS empty pairs. EdgeDB iterates per the LHS path's non-null
-      // values instead. The LEFT JOIN against the 1-row anchor in
-      // `compileScalarSelectSQL` is responsible for the extra empty-path
-      // row; fixing the SQL emit would require switching to INNER JOIN
-      // (and dropping the WHERE/anchor) when the LHS path appears in RHS.
-      const compareDeepLCP = (firstEntry?.kind === "compare")
-        && (firstEntry.op === "?=" || firstEntry.op === "?!=")
-        && firstEntry.left.kind === "field_access"
-        && (() => {
-          const structurallyEqualExpr = (a: SelectExprIREntry, b: SelectExprIREntry): boolean => {
-            if (a === b) return true;
-            if (a.kind !== b.kind) return false;
-            if (a.kind === "field_access" && b.kind === "field_access") {
-              return a.field === b.field && structurallyEqualExpr(a.value, b.value);
-            }
-            if (a.kind === "select" && b.kind === "select") {
-              return a.query.sourceType === b.query.sourceType;
-            }
-            return false;
-          };
-          const containsExpr = (h: SelectExprIREntry, n: SelectExprIREntry): boolean => {
-            if (structurallyEqualExpr(h, n)) return true;
-            switch (h.kind) {
-              case "field_access": return containsExpr(h.value, n);
-              case "coalesce":
-              case "math":
-              case "compare":
-              case "and":
-              case "or":
-                return containsExpr((h as { left: SelectExprIREntry }).left, n)
-                  || containsExpr((h as { right: SelectExprIREntry }).right, n);
-              case "not":
-              case "cast":
-              case "distinct":
-              case "exists":
-              case "shape_projection":
-              case "select_expr_subquery":
-                return containsExpr((h as { value?: SelectExprIREntry; expr?: SelectExprIREntry }).value
-                  ?? (h as { expr?: SelectExprIREntry }).expr!, n);
-              case "set_expr":
-              case "tuple":
-              case "array_literal_expr":
-                return (h.values as SelectExprIREntry[]).some((v) => containsExpr(v, n));
-              case "concat":
-                return (h.parts as SelectExprIREntry[]).some((p) => containsExpr(p, n));
-            }
-            return false;
-          };
-          return containsExpr(firstEntry.right, firstEntry.left);
-        })();
       // `<tuple<...>>X` cast over a non-literal source (alias, column ref,
       // function call, set/union, etc.) still needs runtime reshape: the
       // SQL emit only handles literal `tuple` sources (where the source
@@ -5988,8 +5922,6 @@ export const executeQueryWithTrace = (
           || firstEntry.kind === "field_access"
           || firstEntry.kind === "select_expr_subquery"
           || firstEntry.kind === "array_literal_expr"
-          || coalesceNeedsRuntime
-          || compareDeepLCP
           || compareNeedsRuntimeFromFilter
           || compareNeedsRuntimeFromCoalesce
           || tupleCastNeedsRuntime);
