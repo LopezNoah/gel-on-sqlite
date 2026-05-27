@@ -714,6 +714,70 @@ const collectTypeRootIds = (set: Set | undefined, ids: globalThis.Set<string>): 
   }
 };
 
+// Walks a set and collects pathId keys (JSON strings) of every nested Set.
+// Used to detect when one side of a comparison references the same path as
+// another (e.g. `Issue.time_estimate ?= Issue.time_estimate * 2`).
+const collectPathIdKeys = (set: Set | undefined, keys: globalThis.Set<string>): void => {
+  if (!set) return;
+  keys.add(pathIdKey(set));
+  const expr = set.expr;
+  if (!expr) return;
+  if (expr.kind === "pointer") {
+    collectPathIdKeys((expr as Pointer).source, keys);
+    return;
+  }
+  if (expr.kind === "select_expr") {
+    const se = expr as SelectExpr;
+    collectPathIdKeys(se.result, keys);
+    collectPathIdKeys(se.where, keys);
+    for (const sort of se.orderBy ?? []) collectPathIdKeys(sort.path, keys);
+    return;
+  }
+  if (expr.kind === "operator_call" || expr.kind === "function_call") {
+    for (const arg of orderedCallArgs((expr as { args: Record<string, CallArg> }).args)) {
+      collectPathIdKeys(arg.expr, keys);
+    }
+    return;
+  }
+  if (expr.kind === "coalesce_expr") {
+    collectPathIdKeys((expr as CoalesceExpr).left, keys);
+    collectPathIdKeys((expr as CoalesceExpr).right, keys);
+    return;
+  }
+  if (expr.kind === "if_else_expr") {
+    const ie = expr as IfElseExpr;
+    collectPathIdKeys(ie.condition, keys);
+    collectPathIdKeys(ie.ifExpr, keys);
+    collectPathIdKeys(ie.elseExpr, keys);
+    return;
+  }
+  if (expr.kind === "tuple") {
+    for (const el of (expr as Tuple).elements) collectPathIdKeys(el.val, keys);
+    return;
+  }
+  if (expr.kind === "type_cast") {
+    collectPathIdKeys((expr as TypeCast).expr, keys);
+    return;
+  }
+  if (expr.kind === "exists_expr") {
+    collectPathIdKeys((expr as ExistsExpr).expr, keys);
+    return;
+  }
+  if (expr.kind === "index_expr") {
+    const ix = expr as IndexExpr;
+    collectPathIdKeys(ix.expr, keys);
+    collectPathIdKeys(ix.index, keys);
+    return;
+  }
+  if (expr.kind === "slice_expr") {
+    const sl = expr as SliceExpr;
+    collectPathIdKeys(sl.expr, keys);
+    collectPathIdKeys(sl.start, keys);
+    collectPathIdKeys(sl.end, keys);
+    return;
+  }
+};
+
 // When LHS and RHS of `??` share no LCP (no common type_root), EdgeDB
 // semantics says: empty LHS → return RHS as a singleton; non-empty LHS →
 // return LHS values (NULL-valued pointer leaves are excluded from the set).
@@ -732,9 +796,25 @@ const tryCompileSetLevelCoalesceSQL = (
   const rhsRoots = new globalThis.Set<string>();
   collectTypeRootIds(coalesce.left, lhsRoots);
   collectTypeRootIds(coalesce.right, rhsRoots);
+  let sharesRoots = false;
   for (const id of rhsRoots) {
-    if (lhsRoots.has(id)) return null;
+    if (lhsRoots.has(id)) { sharesRoots = true; break; }
   }
+  // Shared-LCP shared-path shortcut: when LHS is structurally identical to one
+  // of RHS's union args (`X ?? {X, …}`), the shared LCP iteration emits one
+  // row per non-null LHS value — RHS is unreachable for those rows. Emit LHS
+  // as a NULL-filtered set; skip the RHS branch entirely.
+  const rhsExprForShortcut = coalesce.right.expr;
+  let lhsAppearsInRhsUnion = false;
+  if (sharesRoots
+    && rhsExprForShortcut.kind === "operator_call"
+    && (rhsExprForShortcut as OperatorCall).operator === "union"
+  ) {
+    const lhsKey = pathIdKey(coalesce.left);
+    const unionArgs = orderedCallArgs((rhsExprForShortcut as OperatorCall).args);
+    lhsAppearsInRhsUnion = unionArgs.some((arg) => pathIdKey(arg.expr) === lhsKey);
+  }
+  if (sharesRoots && !lhsAppearsInRhsUnion) return null;
 
   const lhsSources = new Map<string, TypeRef>();
   collectScalarPointerSources(coalesce.left, lhsSources);
@@ -765,6 +845,16 @@ const tryCompileSetLevelCoalesceSQL = (
   whereParts.push(`${lhsSql} IS NOT NULL`);
   const lhsWhereSql = whereParts.join(" AND ");
   const whereParams = params.slice(whereStart);
+
+  // Shared-LCP shared-path shortcut emits LHS only — RHS is unreachable.
+  if (lhsAppearsInRhsUnion) {
+    if (!lhsFrom) {
+      params.length = paramsStart;
+      return null;
+    }
+    params.push(...whereParams);
+    return `SELECT ${lhsSql} AS ${quoteIdent("value")} FROM ${lhsFrom} WHERE ${lhsWhereSql}`;
+  }
 
   // If RHS is a set built via `union`, expand each element as its own fallback
   // row so `?? {-1, -2}` yields the two values, not a single JSON array.
@@ -923,8 +1013,49 @@ const tryCompileSetLevelOptionalCompareSQL = (
   const rhsRoots = new globalThis.Set<string>();
   collectTypeRootIds(lhs, lhsRoots);
   collectTypeRootIds(rhs, rhsRoots);
+  let sharesRoots = false;
   for (const id of rhsRoots) {
-    if (lhsRoots.has(id)) return null;
+    if (lhsRoots.has(id)) { sharesRoots = true; break; }
+  }
+  if (sharesRoots) {
+    // Shared-LCP shared-path: when one side's path appears in the other (e.g.
+    // `Issue.time_estimate ?= Issue.time_estimate * 2`), the LCP iteration
+    // ranges over non-empty values of that path, not over the source rows.
+    // Emit element-wise compare filtered to non-null LCP rows so the empty-
+    // path rows that the default LEFT-JOIN-against-anchor path would let
+    // through (with both sides NULL → ?= → TRUE) are excluded.
+    const lhsKey = pathIdKey(lhs);
+    const rhsKey = pathIdKey(rhs);
+    const rhsKeys = new globalThis.Set<string>();
+    collectPathIdKeys(rhs, rhsKeys);
+    const lhsAppearsInRhs = rhsKeys.has(lhsKey);
+    const lhsKeys = new globalThis.Set<string>();
+    collectPathIdKeys(lhs, lhsKeys);
+    const rhsAppearsInLhs = lhsKeys.has(rhsKey);
+    if (!lhsAppearsInRhs && !rhsAppearsInLhs) return null;
+
+    const lcp = lhsAppearsInRhs ? lhs : rhs;
+    const sources = new Map<string, TypeRef>();
+    collectScalarPointerSources(lcp, sources);
+    if (sources.size !== 1) return null;
+    const typeRef = sources.values().next().value;
+    const refs: string[] = [];
+    for (const c of collectReferencedColumns(lhs)) refs.push(c);
+    for (const c of collectReferencedColumns(rhs)) refs.push(c);
+    const projectedColumns = Array.from(new globalThis.Set(refs));
+    const sourceSql = compilePolymorphicSource(typeRef!, false, "g0", projectedColumns, options);
+    const ckpt = params.length;
+    const lhsSql = compileValueSetSQL(lhs, "g0", params, target, options);
+    const rhsSql = compileValueSetSQL(rhs, "g0", params, target, options);
+    const lcpSql = compileValueSetSQL(lcp, "g0", params, target, options);
+    if (!lhsSql || !rhsSql || !lcpSql) {
+      params.length = ckpt;
+      return null;
+    }
+    const compareSqlExpr = (op === "?=")
+      ? `(CASE WHEN ${lhsSql} IS ${rhsSql} THEN json('true') ELSE json('false') END)`
+      : `(CASE WHEN ${lhsSql} IS NOT ${rhsSql} THEN json('true') ELSE json('false') END)`;
+    return `SELECT ${compareSqlExpr} AS ${quoteIdent("value")} FROM ${sourceSql} WHERE ${lcpSql} IS NOT NULL`;
   }
 
   const paramsStart = params.length;
