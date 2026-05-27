@@ -44,7 +44,8 @@ const DEFINITIONS: StdlibFunctionDef[] = [
   { name: "std::datetime_of_transaction", minArgs: 0, maxArgs: 0 },
   { name: "std::datetime_of_statement", minArgs: 0, maxArgs: 0 },
   { name: "std::to_datetime", minArgs: 1, maxArgs: 1 },
-  { name: "std::to_str", minArgs: 1, maxArgs: 1 },
+  // to_str accepts an optional format string for datetime / numeric inputs.
+  { name: "std::to_str", minArgs: 1, maxArgs: 2 },
   { name: "std::len", minArgs: 1, maxArgs: 1 },
   { name: "std::count", minArgs: 1, maxArgs: 1 },
   { name: "std::max", minArgs: 1, maxArgs: 1 },
@@ -53,10 +54,15 @@ const DEFINITIONS: StdlibFunctionDef[] = [
   { name: "std::assert_exists", minArgs: 1, maxArgs: 1 },
   { name: "std::assert_single", minArgs: 1, maxArgs: 1 },
   { name: "std::assert_distinct", minArgs: 1, maxArgs: 1 },
+  { name: "std::all", minArgs: 1, maxArgs: 1 },
+  { name: "std::any", minArgs: 1, maxArgs: 1 },
   { name: "std::range", minArgs: 2, maxArgs: 2 },
   { name: "std::range_unpack", minArgs: 1, maxArgs: 1 },
   { name: "std::array_agg", minArgs: 1, maxArgs: 1 },
   { name: "std::array_unpack", minArgs: 1, maxArgs: 1 },
+  { name: "std::array_get", minArgs: 2, maxArgs: 3 },
+  { name: "std::array_set", minArgs: 3, maxArgs: 3 },
+  { name: "std::array_insert", minArgs: 3, maxArgs: 3 },
   { name: "std::enumerate", minArgs: 1, maxArgs: 1 },
   { name: "std::str_lower", minArgs: 1, maxArgs: 1 },
   { name: "std::str_upper", minArgs: 1, maxArgs: 1 },
@@ -102,9 +108,21 @@ export const resolveStdlibFunction = (qualifiedName: string, arity: number): Std
 };
 
 export const tryResolveStdlibFunction = (name: string, arity: number, activeModule: string): StdlibFunctionDef | undefined => {
-  const candidates = name.includes("::")
-    ? [name]
-    : [`${activeModule}::${name}`, `std::${name}`, `math::${name}`, `cal::${name}`];
+  // If the name comes in already qualified (e.g. `default::range`) and that
+  // exact name isn't a stdlib function, fall back to the unqualified name
+  // resolved against `std::` / `math::` / `cal::`. EdgeQL's name resolution
+  // makes unqualified bareword calls in the default module look like
+  // `default::range` after qualification, but stdlib functions live in the
+  // std/math/cal modules — without this fallback every bareword call to a
+  // stdlib function from a default-module script would miss.
+  const candidates: string[] = [];
+  if (name.includes("::")) {
+    candidates.push(name);
+    const shortName = name.split("::").pop()!;
+    candidates.push(`std::${shortName}`, `math::${shortName}`, `cal::${shortName}`);
+  } else {
+    candidates.push(`${activeModule}::${name}`, `std::${name}`, `math::${name}`, `cal::${name}`);
+  }
   for (const candidate of candidates) {
     const hit = resolveStdlibFunction(candidate, arity);
     if (hit) {
@@ -219,6 +237,28 @@ export const executeStdlibFunction = (name: string, args: RuntimeFunctionArg[]):
       return typeof args[0] === "object" && args[0] !== null && "kind" in args[0] && args[0].kind === "set"
         ? args[0].values
         : args[0];
+    case "std::all": {
+      const raw = args[0];
+      const values = typeof raw === "object" && raw !== null && "kind" in raw && raw.kind === "set"
+        ? raw.values
+        : Array.isArray(raw)
+          ? raw
+          : raw == null
+            ? []
+            : [raw];
+      return values.every((value) => value === true || value === 1);
+    }
+    case "std::any": {
+      const raw = args[0];
+      const values = typeof raw === "object" && raw !== null && "kind" in raw && raw.kind === "set"
+        ? raw.values
+        : Array.isArray(raw)
+          ? raw
+          : raw == null
+            ? []
+            : [raw];
+      return values.some((value) => value === true || value === 1);
+    }
     case "cal::to_local_datetime":
       return parseLocalDateTime(extractScalar(args[0]));
     case "cal::to_local_date":
@@ -314,6 +354,49 @@ export const executeStdlibFunction = (name: string, args: RuntimeFunctionArg[]):
         return [...value.values];
       }
       return Array.isArray(value) ? value : [value as ScalarValue];
+    }
+    case "std::array_get": {
+      // `array_get(array, idx)` / `array_get(array, idx, default)` — return
+      // `array[idx]` or `default` (or {} if absent) when `idx` is out of
+      // range. Negative indices count from the end.
+      const raw = args[0];
+      const arr: ScalarValue[] = Array.isArray(raw)
+        ? raw
+        : typeof raw === "object" && raw !== null && "kind" in raw
+          ? [...raw.values]
+          : [];
+      const idx = toNumber(args[1]);
+      const normalized = idx < 0 ? arr.length + idx : idx;
+      if (normalized < 0 || normalized >= arr.length) {
+        return args.length > 2 ? extractScalar(args[2]) ?? null : null;
+      }
+      return arr[normalized];
+    }
+    case "std::array_set": {
+      const raw = args[0];
+      const arr: ScalarValue[] = Array.isArray(raw)
+        ? [...raw]
+        : typeof raw === "object" && raw !== null && "kind" in raw
+          ? [...raw.values]
+          : [];
+      const idx = toNumber(args[1]);
+      const normalized = idx < 0 ? arr.length + idx : idx;
+      const value = extractScalar(args[2]) as ScalarValue;
+      arr[normalized] = value;
+      return arr;
+    }
+    case "std::array_insert": {
+      const raw = args[0];
+      const arr: ScalarValue[] = Array.isArray(raw)
+        ? [...raw]
+        : typeof raw === "object" && raw !== null && "kind" in raw
+          ? [...raw.values]
+          : [];
+      const idx = toNumber(args[1]);
+      const normalized = idx < 0 ? Math.max(0, arr.length + idx) : Math.min(arr.length, idx);
+      const value = extractScalar(args[2]) as ScalarValue;
+      arr.splice(normalized, 0, value);
+      return arr;
     }
     case "std::enumerate": {
       const value = args[0];

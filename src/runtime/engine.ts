@@ -6454,6 +6454,21 @@ export const executeQueryWithTrace = (
     const runtimeTarget = resolvedRuntimeTarget(context, db);
     const compilerService = getCompilerService();
     const ast = parseEdgeQL(query);
+    if (ast.kind === "configure") {
+      // CONFIGURE has no SQLite analogue — return an empty insert-like result
+      // so callers that fire it from `.query()` don't have to pre-filter or
+      // catch the compile-time "Statement kind 'configure' requires
+      // typeName" raised by the strict typed-mutation pipeline.
+      return {
+        ast,
+        ir: { kind: "select", rows: [] } as unknown as IRStatement,
+        sql: { sql: "", params: [], loweringMode: "single_statement" } as SQLArtifact,
+        compiler: { key: "configure-noop", status: "miss", stats: { hits: 0, misses: 0, size: 0 } },
+        sqlTrail: [],
+        overlays: [],
+        result: { kind: "insert", changes: 0 },
+      };
+    }
     validateParsedStatement(ast, { schema, module: ast.withModule });
     const statementType = statementTypeOf(ast);
     enforceBuiltinPermissions(context, statementType, ast.pos.line, ast.pos.column);
@@ -6672,6 +6687,14 @@ export const executeQueryUnitWithTrace = (
           populateSchemaIntrospection(db, schema, listAllRuntimeAliasNames(schema), runtimeExprAliases.get(schema));
           compilerService.clear();
         }
+        continue;
+      }
+      if (ast.kind === "configure") {
+        // Session/instance/database CONFIGURE statements (e.g. `CONFIGURE
+        // SESSION SET allow_user_specified_id := true`) don't have a SQLite
+        // analogue — sqlite-ts has no equivalent session-config knobs to
+        // mutate. Treat them as no-ops so scripts that use them for parity
+        // with upstream still execute their following DML.
         continue;
       }
 
@@ -8941,12 +8964,30 @@ const executeFunctionCall = (
   args: RuntimeFunctionArg[],
   staticArgTypes?: (string | undefined)[],
 ): unknown => {
-  const builtin = resolveStdlibFunction(qualifiedName, args.length);
+  // A bareword EdgeQL call (`range(1, 5)`) in a script whose default module
+  // is `default` arrives here as `default::range`. The stdlib registry keys
+  // by the canonical module (`std::`, `math::`, `cal::`), so a literal
+  // lookup of `default::range` misses. Re-resolve under the stdlib modules
+  // first when the qualified form doesn't exist there directly.
+  let resolvedName = qualifiedName;
+  let builtin = resolveStdlibFunction(qualifiedName, args.length);
+  if (!builtin) {
+    const shortName = qualifiedName.includes("::") ? qualifiedName.split("::").pop()! : qualifiedName;
+    for (const prefix of ["std", "math", "cal"]) {
+      const candidate = `${prefix}::${shortName}`;
+      const hit = resolveStdlibFunction(candidate, args.length);
+      if (hit) {
+        builtin = hit;
+        resolvedName = candidate;
+        break;
+      }
+    }
+  }
   if (builtin) {
-    if (qualifiedName === "std::count") {
+    if (resolvedName === "std::count") {
       return countRuntimeSetCardinality(args[0]);
     }
-    return executeStdlibFunction(qualifiedName, args);
+    return executeStdlibFunction(resolvedName, args);
   }
 
   const divider = qualifiedName.lastIndexOf("::");
@@ -10339,7 +10380,11 @@ const runWriteWithAccessPolicies = (
           .prepare(`SELECT ${quoteIdent("id")} AS ${quoteIdent("id")} FROM ${quoteIdent(ir.table)} ORDER BY rowid DESC LIMIT 1`)
           .all()[0] as { id?: unknown } | undefined;
         if (typeof inserted?.id === "string") {
-          applyInsertLinkAssignments(db, schema, ir, ast, inserted.id, context);
+          const postInsertIR = {
+            ...ir,
+            linkAssignments: ir.linkAssignments?.filter((assignment) => assignment.storage !== "inline"),
+          };
+          applyInsertLinkAssignments(db, schema, postInsertIR, ast, inserted.id, context);
         }
       }
 
@@ -10463,9 +10508,13 @@ const executeNestedInsert = (
   schema: SchemaSnapshot,
   expr: Extract<InsertValue, { kind: "insert" }>,
   context: SecurityContext,
+  parentAst?: Pick<InsertStatement, "with" | "withModule" | "withModuleAliases">,
 ): string[] => {
   const ast: InsertStatement = {
     kind: "insert",
+    with: parentAst?.with,
+    withModule: parentAst?.withModule,
+    withModuleAliases: parentAst?.withModuleAliases,
     typeName: expr.typeName,
     values: expr.values,
     pos: { line: 1, column: 1 },
@@ -10604,7 +10653,7 @@ const resolveInsertTargets = (
   }
 
   if (value.kind === "insert") {
-    return executeNestedInsert(db, schema, value, context).map((id) => ({ id, properties: {} }));
+    return executeNestedInsert(db, schema, value, context, ast).map((id) => ({ id, properties: {} }));
   }
 
   if (value.kind === "set") {
@@ -10655,7 +10704,7 @@ const resolveInsertTargets = (
           }
         }
 
-        const nestedIds = executeNestedInsert(db, schema, { kind: "insert", typeName: value.body.typeName, values: replacedValues }, context);
+        const nestedIds = executeNestedInsert(db, schema, { kind: "insert", typeName: value.body.typeName, values: replacedValues }, context, ast);
         rows.push(...nestedIds.map((id) => ({ id, properties: {} })));
       }
     }

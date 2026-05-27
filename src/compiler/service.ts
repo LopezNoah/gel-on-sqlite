@@ -209,6 +209,17 @@ const compileSqlWithStranglerFig = (
     };
   }
 
+  if ((statement.kind === "insert" || statement.kind === "update" || statement.kind === "delete") && statement.typeName) {
+    const fallbackModule = statement.withModule ?? "default";
+    const rawTypeName = statement.typeName.includes("::") ? statement.typeName : `${fallbackModule}::${statement.typeName}`;
+    if (!schema.getType(rawTypeName)) {
+      return {
+        sql: compileToSQL(ir, { target: context.target ?? "sqlite", parameterValues: context.params, globalValues: context.globals }),
+        usesGelIrSql: false,
+      };
+    }
+  }
+
   if (!isGelIRCompatibleStatement(statement)) {
     throw new Error(`Statement kind '${statement.kind}' is not supported by GEL IR SQL lowering`);
   }

@@ -1,6 +1,6 @@
 import { AppError } from "../errors.js";
 import type { FreeObjectExpr } from "../edgeql/ast.js";
-import type { FilterExprIR, IRStatement, LinkRelationIR, PathIdIR, ScalarExprIR, SelectFreeIR, SelectIR, SelectShapeElementIR } from "../ir/model.js";
+import type { FilterExprIR, IRStatement, LinkPathStepIR, LinkRelationIR, PathIdIR, ScalarExprIR, SelectFreeIR, SelectIR, SelectShapeElementIR } from "../ir/model.js";
 import type { RuntimeTarget } from "../runtime/target.js";
 import { canLowerStdlibFunctionSql, lowerStdlibFunctionSql } from "./stdlib_lowering.js";
 import type { ComputedLinkPropertyDef, ComputedLinkPropertyExpr, ScalarValue } from "../types.js";
@@ -239,7 +239,14 @@ const compileSelectToSQL = (ir: SelectIR, target: RuntimeTarget): SQLArtifact =>
     for (const element of ir.shape) {
       if (element.kind !== "computed") continue;
       if (!element.name) continue;
-      computedByPointer.set(element.name, computedValueAlias(element.pathId));
+      // Only register an alias when the shape projects a `__computed_*` column
+      // for this element. Kinds like `polymorphic_field_ref`, `field_ref`, and
+      // `type_name` resolve to existing columns on the row (or to the
+      // `__source_type` slot) and ORDER BY should use those directly.
+      const kind = element.expr.kind;
+      if (kind === "function_call" || kind === "link_aggregate" || kind === "select_expr") {
+        computedByPointer.set(element.name, computedValueAlias(element.pathId));
+      }
     }
     const terms: string[] = [];
     let term: typeof ir.orderBy | undefined = ir.orderBy;
@@ -403,6 +410,9 @@ const compileBacklinkArrayExpr = (
           if (shapeElement.kind === "computed" && shapeElement.expr.kind === "field_ref" && !shapeElement.expr.column.startsWith("@")) {
             return [shapeElement.expr.column];
           }
+          if (shapeElement.kind === "link" && shapeElement.relation.storage === "inline" && shapeElement.relation.inlineColumn) {
+            return [shapeElement.relation.inlineColumn];
+          }
           return [];
         }),
         ...(orderByValue && !orderByIsLinkProperty ? [orderByValue] : []),
@@ -503,24 +513,25 @@ const compileBacklinkArrayExpr = (
     return `COALESCE((SELECT json_group_array(json_object('id', ${quoteIdent("id")}, '__type__', ${quoteIdent("type_name")})) FROM (${ordered})), '[]')`;
   }
 
+  const itemAlias = `ba_${sanitizePathId(element.pathId)}`;
   const itemPairs: string[] = [];
   for (const shapeElement of shape!) {
     itemPairs.push(quoteLiteral(shapeElement.name));
     if (shapeElement.kind === "field") {
-      itemPairs.push(quoteIdent(shapeElement.column));
+      itemPairs.push(`${itemAlias}.${quoteIdent(shapeElement.column)}`);
       continue;
     }
     if (shapeElement.kind === "computed") {
       if (shapeElement.expr.kind === "field_ref") {
         const colName = shapeElement.expr.column.startsWith("@")
-          ? quoteIdent(shapeElement.expr.column)
-          : quoteIdent(shapeElement.expr.column);
+          ? `${itemAlias}.${quoteIdent(shapeElement.expr.column)}`
+          : `${itemAlias}.${quoteIdent(shapeElement.expr.column)}`;
         itemPairs.push(colName);
         continue;
       }
       if (shapeElement.expr.kind === "literal") {
         if (shapeElement.name.startsWith("@")) {
-          itemPairs.push(quoteIdent(shapeElement.name));
+          itemPairs.push(`${itemAlias}.${quoteIdent(shapeElement.name)}`);
           continue;
         }
         params.push(encodeParam(shapeElement.expr.value));
@@ -528,16 +539,22 @@ const compileBacklinkArrayExpr = (
         continue;
       }
       if (shapeElement.expr.kind === "type_name") {
-        itemPairs.push(quoteIdent("type_name"));
+        itemPairs.push(`${itemAlias}.${quoteIdent("type_name")}`);
         continue;
       }
       itemPairs.push("json('[]')");
       continue;
     }
-    itemPairs.push("json('[]')");
+    if (shapeElement.kind === "link") {
+      itemPairs.push(compileLinkArrayExpr(shapeElement, itemAlias, params, target));
+      continue;
+    }
+    if (shapeElement.kind === "backlink") {
+      itemPairs.push(compileBacklinkArrayExpr(shapeElement, itemAlias, params, target));
+      continue;
+    }
   }
-  void target;
-  return `COALESCE((SELECT json_group_array(json_object(${itemPairs.join(", ")})) FROM (${ordered})), '[]')`;
+  return `COALESCE((SELECT json_group_array(json_object(${itemPairs.join(", ")})) FROM (${ordered}) ${itemAlias}), '[]')`;
 };
 
 type FreePathTail = { fields: string[]; linkProperty?: string };
@@ -1188,6 +1205,29 @@ const compileBacklinkFilterPredicate = (
   return filter.op === "=" ? `(${clauses.join(" OR ")})` : `NOT (${clauses.join(" OR ")})`;
 };
 
+const compileBacklinkExistsPredicate = (
+  rootAlias: string,
+  sources: Extract<FilterExprIR, { kind: "backlink_exists" }>["sources"],
+): string => {
+  const clauses = sources.map((source) => {
+    const sourceTables = source.sourceTables && source.sourceTables.length > 0
+      ? source.sourceTables
+      : [{ name: source.sourceType, table: source.table }];
+    const sourceFrom = sourceTables.length === 1
+      ? `${quoteIdent(sourceTables[0].table)} s`
+      : `(${sourceTables.map((entry) => `SELECT ${quoteLiteral(entry.name)} AS ${quoteIdent("__source_type")}, * FROM ${quoteIdent(entry.table)}`).join(" UNION ALL ")}) s`;
+
+    if (source.storage === "inline") {
+      return `EXISTS (SELECT 1 FROM ${sourceFrom} WHERE s.${quoteIdent(requiredInlineColumn(source.inlineColumn))} = ${rootAlias}.${quoteIdent("id")})`;
+    }
+
+    return `EXISTS (SELECT 1 FROM ${sourceFrom} JOIN ${quoteIdent(requiredLinkTable(source.linkTable))} l ON l.${quoteIdent("source")} = s.${quoteIdent("id")} WHERE l.${quoteIdent("target")} = ${rootAlias}.${quoteIdent("id")})`;
+  });
+
+  if (clauses.length === 0) return "0";
+  return clauses.length === 1 ? clauses[0]! : `(${clauses.join(" OR ")})`;
+};
+
 const filterColumnSql = (column: string, sourceAlias: string, linkPropertyAlias?: string): string => {
   if (column.startsWith("@")) {
     const alias = linkPropertyAlias ?? sourceAlias;
@@ -1237,6 +1277,74 @@ const compileLinkTargetLinkExistsPredicate = (
   });
   if (clauses.length === 0) return "0";
   return clauses.length === 1 ? clauses[0]! : `(${clauses.join(" OR ")})`;
+};
+
+const backlinkSourceFrom = (
+  source: Extract<LinkPathStepIR, { kind: "backlink" }>["sources"][number],
+  alias: string,
+): string => {
+  const sourceTables = source.sourceTables && source.sourceTables.length > 0
+    ? source.sourceTables
+    : [{ name: source.sourceType, table: source.table }];
+  if (sourceTables.length === 1) {
+    return `${quoteIdent(sourceTables[0]!.table)} ${alias}`;
+  }
+  return `(${sourceTables.map((entry) => `SELECT ${quoteLiteral(entry.name)} AS ${quoteIdent("__source_type")}, * FROM ${quoteIdent(entry.table)}`).join(" UNION ALL ")}) ${alias}`;
+};
+
+const linkPathRequiredColumns = (
+  filter: Extract<FilterExprIR, { kind: "link_path_target_field_compare" }>,
+  startIndex: number,
+): string[] => {
+  const columns = new Set<string>([filter.targetColumn]);
+  for (const step of filter.steps.slice(startIndex)) {
+    if (step.kind === "link" && step.relation.storage === "inline" && step.relation.inlineColumn) {
+      columns.add(step.relation.inlineColumn);
+    }
+  }
+  return [...columns];
+};
+
+const compileLinkPathTargetFieldComparePredicate = (
+  filter: Extract<FilterExprIR, { kind: "link_path_target_field_compare" }>,
+  sourceAlias: string,
+  params: ScalarValue[],
+): string => {
+  const compileAt = (stepIndex: number, currentAlias: string, aliasSeed: string): string => {
+    if (stepIndex >= filter.steps.length) {
+      params.push(encodeParam(filter.value));
+      return compileFilterPredicate(`${currentAlias}.${quoteIdent(filter.targetColumn)}`, filter.op);
+    }
+
+    const step = filter.steps[stepIndex]!;
+    if (step.kind === "link") {
+      const relation = step.relation;
+      const targetAlias = `lp_${Math.abs(hashString(`${aliasSeed}:${stepIndex}:target`)).toString(16)}`;
+      const nested = compileAt(stepIndex + 1, targetAlias, `${aliasSeed}:${stepIndex}`);
+      const targetSource = compilePolymorphicTargetSource(relation, targetAlias, linkPathRequiredColumns(filter, stepIndex + 1));
+      if (relation.storage === "inline") {
+        return `EXISTS (SELECT 1 FROM ${targetSource} WHERE ${targetAlias}.${quoteIdent("id")} = ${currentAlias}.${quoteIdent(requiredInlineColumn(relation.inlineColumn))} AND ${nested})`;
+      }
+      const relationAlias = `lp_${Math.abs(hashString(`${aliasSeed}:${stepIndex}:link`)).toString(16)}`;
+      return `EXISTS (SELECT 1 FROM ${linkJunctionFrom(relation, relationAlias)} JOIN ${targetSource} ON ${targetAlias}.${quoteIdent("id")} = ${relationAlias}.${quoteIdent("target")} WHERE ${relationAlias}.${quoteIdent("source")} = ${currentAlias}.${quoteIdent("id")} AND ${nested})`;
+    }
+
+    const clauses = step.sources.map((source, index) => {
+      const sourceAliasInner = `lp_${Math.abs(hashString(`${aliasSeed}:${stepIndex}:source:${index}`)).toString(16)}`;
+      const nested = compileAt(stepIndex + 1, sourceAliasInner, `${aliasSeed}:${stepIndex}:${index}`);
+      const sourceFrom = backlinkSourceFrom(source, sourceAliasInner);
+      if (source.storage === "inline") {
+        return `EXISTS (SELECT 1 FROM ${sourceFrom} WHERE ${sourceAliasInner}.${quoteIdent(requiredInlineColumn(source.inlineColumn))} = ${currentAlias}.${quoteIdent("id")} AND ${nested})`;
+      }
+      const linkAlias = `lp_${Math.abs(hashString(`${aliasSeed}:${stepIndex}:backlink:${index}`)).toString(16)}`;
+      return `EXISTS (SELECT 1 FROM ${sourceFrom} JOIN ${quoteIdent(requiredLinkTable(source.linkTable))} ${linkAlias} ON ${linkAlias}.${quoteIdent("source")} = ${sourceAliasInner}.${quoteIdent("id")} WHERE ${linkAlias}.${quoteIdent("target")} = ${currentAlias}.${quoteIdent("id")} AND ${nested})`;
+    });
+
+    if (clauses.length === 0) return "0";
+    return clauses.length === 1 ? clauses[0]! : `(${clauses.join(" OR ")})`;
+  };
+
+  return compileAt(0, sourceAlias, `${sourceAlias}:${filter.targetColumn}`);
 };
 
 const compileFilterExprSQL = (
@@ -1317,6 +1425,10 @@ const compileFilterExprSQL = (
     return compileBacklinkFilterPredicate(sourceAlias, filter, params);
   }
 
+  if (filter.kind === "backlink_exists") {
+    return compileBacklinkExistsPredicate(sourceAlias, filter.sources);
+  }
+
   if (filter.kind === "link_property_exists") {
     if (filter.relation.storage !== "table" || !filter.relation.linkTable) {
       return "0";
@@ -1392,6 +1504,10 @@ const compileFilterExprSQL = (
       });
     if (clauses.length === 0) return "0";
     return clauses.length === 1 ? clauses[0]! : `(${clauses.join(" OR ")})`;
+  }
+
+  if (filter.kind === "link_path_target_field_compare") {
+    return compileLinkPathTargetFieldComparePredicate(filter, sourceAlias, params);
   }
 
   if (filter.kind === "link_target_field_in") {
@@ -1550,7 +1666,7 @@ const collectFieldFilterColumns = (filter: FilterExprIR | undefined): string[] =
     return [filter.leftColumn, filter.rightColumn];
   }
 
-  if (filter.kind === "backlink") {
+  if (filter.kind === "backlink" || filter.kind === "backlink_exists") {
     return [];
   }
 
@@ -1592,6 +1708,13 @@ const collectFieldFilterColumns = (filter: FilterExprIR | undefined): string[] =
 
   if (filter.kind === "backlink_target_field_compare") {
     return [];
+  }
+
+  if (filter.kind === "link_path_target_field_compare") {
+    const first = filter.steps[0];
+    return first?.kind === "link" && first.relation.storage === "inline" && first.relation.inlineColumn
+      ? [first.relation.inlineColumn]
+      : [];
   }
 
   if (filter.kind === "not") {

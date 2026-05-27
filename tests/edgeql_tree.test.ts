@@ -4,7 +4,7 @@ import { assertQueryResult, unorderedSet } from "./python_query_test_helpers.js"
 
 // Ported from gel/tests/test_edgeql_tree.py. Schema = tree.esdl, setup =
 // tree_setup.edgeql. Tests use the standard QueryHarness; ones marked
-// @test.xerror upstream are kept as `it.skip` here, mirroring the Python
+// @test.xerror upstream are kept as `it` here, mirroring the Python
 // suite's intent. Other tests run against the sqlite-ts pipeline and may
 // fail until the relevant EdgeQL features land — failures are real parity
 // signal, not noise.
@@ -26,7 +26,7 @@ describe("TestTree", () => {
     assertQueryResult(h, `SELECT Eert FILTER .val = '0';`, []);
   });
 
-  it.skip("test_edgeql_tree_insert_01 [xerror upstream]", () => {
+  it("test_edgeql_tree_insert_01 [xerror upstream]", () => {
     h.query(`INSERT Tree {
                 val := 'i2',
                 parent := (
@@ -69,7 +69,7 @@ describe("TestTree", () => {
     ]);
   });
 
-  it.skip("test_edgeql_tree_insert_02 [xerror upstream]", () => {
+  it("test_edgeql_tree_insert_02 [xerror upstream]", () => {
     h.query(`INSERT Eert {
                 val := 'i0',
                 children := (
@@ -112,7 +112,7 @@ describe("TestTree", () => {
     ]);
   });
 
-  it.skip("test_edgeql_tree_insert_03 [xerror upstream]", () => {
+  it("test_edgeql_tree_insert_03 [xerror upstream]", () => {
     h.query(`WITH
                 T1 := Tree,
                 T2 := Tree,
@@ -158,7 +158,7 @@ describe("TestTree", () => {
     ]);
   });
 
-  it.skip("test_edgeql_tree_select_01 [unconverted: computed parent/children link not exposed]", () => {
+  it("test_edgeql_tree_select_01 [unconverted: computed parent/children link not exposed]", () => {
     assertQueryResult(h, `SELECT Tree {
                     val,
                     children: {
@@ -224,7 +224,7 @@ describe("TestTree", () => {
     ]);
   });
 
-  it.skip("test_edgeql_tree_select_02 [unconverted: computed parent link not exposed]", () => {
+  it("test_edgeql_tree_select_02 [unconverted: computed parent link not exposed]", () => {
     assertQueryResult(h, `SELECT Eert {
                     val,
                     children: {
@@ -296,13 +296,13 @@ describe("TestTree", () => {
     ]);
   });
 
-  it.skip("test_edgeql_tree_select_04 [unconverted: computed parent link not exposed]", () => {
+  it("test_edgeql_tree_select_04 [unconverted: computed parent link not exposed]", () => {
     assertQueryResult(h, `SELECT Eert.parent.parent.val;`, [
       "0",
     ]);
   });
 
-  it.skip("test_edgeql_tree_select_05 [unconverted: backlink chain through aliased target not supported]", () => {
+  it("test_edgeql_tree_select_05 [unconverted: backlink chain through aliased target not supported]", () => {
     assertQueryResult(h, `SELECT Eert.<children[IS Eert].<children[IS Eert].val;`, [
       "0",
     ]);
@@ -351,7 +351,7 @@ describe("TestTree", () => {
     ]);
   });
 
-  it.skip("test_edgeql_tree_select_11 [unconverted: WITH-binding string literal not evaluated as literal]", () => {
+  it("test_edgeql_tree_select_11 [unconverted: WITH-binding string literal not evaluated as literal]", () => {
     assertQueryResult(h, `WITH
                     x := '010',
                 SELECT Tree {
@@ -404,7 +404,7 @@ describe("TestTree", () => {
     ]);
   });
 
-  it.skip("test_edgeql_tree_select_12 [unconverted: WITH-binding string literal not evaluated as literal]", () => {
+  it("test_edgeql_tree_select_12 [unconverted: WITH-binding string literal not evaluated as literal]", () => {
     assertQueryResult(h, `WITH
                     x := '12',
                 SELECT Tree {
@@ -451,7 +451,7 @@ describe("TestTree", () => {
     ]);
   });
 
-  it.skip("test_edgeql_tree_select_13 [unconverted: WITH-binding string literal not evaluated as literal]", () => {
+  it("test_edgeql_tree_select_13 [unconverted: WITH-binding string literal not evaluated as literal]", () => {
     assertQueryResult(h, `WITH
                     x := '010',
                 SELECT Eert {
@@ -504,7 +504,7 @@ describe("TestTree", () => {
     ]);
   });
 
-  it.skip("test_edgeql_tree_select_14 [unconverted: WITH-binding string literal not evaluated as literal]", () => {
+  it("test_edgeql_tree_select_14 [unconverted: WITH-binding string literal not evaluated as literal]", () => {
     assertQueryResult(h, `WITH
                     x := '12',
                 SELECT Eert {
@@ -551,7 +551,7 @@ describe("TestTree", () => {
     ]);
   });
 
-  it.skip("test_edgeql_tree_update_01 [unconverted: computed parent/children link not exposed]", () => {
+  it("test_edgeql_tree_update_01 [unconverted: computed parent/children link not exposed]", () => {
     h.query(`UPDATE Tree
                 SET {
                     val := array_join(
@@ -627,7 +627,7 @@ describe("TestTree", () => {
     ]);
   });
 
-  it.skip("test_edgeql_tree_update_02 [unconverted: computed parent link not exposed]", () => {
+  it("test_edgeql_tree_update_02 [unconverted: computed parent link not exposed]", () => {
     h.query(`UPDATE Eert
                 SET {
                     val := array_join(
@@ -703,7 +703,7 @@ describe("TestTree", () => {
     ]);
   });
 
-  it.skip("test_edgeql_tree_update_03 [unconverted: parent path access in UPDATE assignment not lowered]", () => {
+  it("test_edgeql_tree_update_03 [unconverted: parent path access in UPDATE assignment not lowered]", () => {
     h.query(`UPDATE Tree
                 SET {
                     val := .val ++ '_p' ++ (('_' ++ .parent.val) ?? '')
@@ -746,7 +746,7 @@ describe("TestTree", () => {
     ]);
   });
 
-  it.skip("test_edgeql_tree_update_04 [unconverted: parent path access in UPDATE assignment not lowered]", () => {
+  it("test_edgeql_tree_update_04 [unconverted: parent path access in UPDATE assignment not lowered]", () => {
     h.query(`UPDATE Eert
                 SET {
                     val := .val ++ '_p' ++ (('_' ++ .parent.val) ?? '')
@@ -789,7 +789,7 @@ describe("TestTree", () => {
     ]);
   });
 
-  it.skip("test_edgeql_tree_update_05 [unconverted: WITH bindings as type aliases not supported]", () => {
+  it("test_edgeql_tree_update_05 [unconverted: WITH bindings as type aliases not supported]", () => {
     h.query(`WITH
                     # start with node '00'
                     T00 := (
@@ -849,7 +849,7 @@ describe("TestTree", () => {
     ]);
   });
 
-  it.skip("test_edgeql_tree_update_06 [xerror upstream]", () => {
+  it("test_edgeql_tree_update_06 [xerror upstream]", () => {
     h.query(`WITH
                     # start with node '00'
                     T00 := (
@@ -930,7 +930,7 @@ describe("TestTree", () => {
     ]);
   });
 
-  it.skip("test_edgeql_tree_update_07 [unconverted: WITH bindings as type aliases not supported]", () => {
+  it("test_edgeql_tree_update_07 [unconverted: WITH bindings as type aliases not supported]", () => {
     h.query(`WITH
                     # start with node '000', get its parent
                     TP := (
@@ -989,7 +989,7 @@ describe("TestTree", () => {
     ]);
   });
 
-  it.skip("test_edgeql_tree_update_08 [unconverted: WITH bindings + assert_distinct not supported]", () => {
+  it("test_edgeql_tree_update_08 [unconverted: WITH bindings + assert_distinct not supported]", () => {
     h.query(`WITH
                     # start with node '000'
                     T000 := (
@@ -1065,7 +1065,7 @@ describe("TestTree", () => {
     ]);
   });
 
-  it.skip("test_edgeql_tree_update_09 [unconverted: empty UPDATE SET {} not supported]", () => {
+  it("test_edgeql_tree_update_09 [unconverted: empty UPDATE SET {} not supported]", () => {
     assertQueryResult(h, `select (update Tree filter .val = "00" set { }) {
                     children: {val}
                 }`, [
@@ -1079,7 +1079,7 @@ describe("TestTree", () => {
     ]);
   });
 
-  it.skip("test_edgeql_tree_update_10 [unconverted: multi-predicate UPDATE FILTER (IN {}) not supported]", () => {
+  it("test_edgeql_tree_update_10 [unconverted: multi-predicate UPDATE FILTER (IN {}) not supported]", () => {
     assertQueryResult(h, `select (
                     update Tree filter .val IN {"0", "00"}
                     set { parent := {} }
