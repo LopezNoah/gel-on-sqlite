@@ -69,6 +69,13 @@ export interface OrderByIR<TValue = string> {
   direction: "asc" | "desc";
   nullsPosition?: "first" | "last";
   then?: OrderByIR<TValue>;
+  /**
+   * Raw AST expression for `ORDER BY <expr>` forms (e.g. `len(.body)`). When
+   * set, the SQL compiler compiles this expression against the current row
+   * alias instead of looking up `value` as a column. `value` is left as the
+   * `__expr__` sentinel and is unused.
+   */
+  exprAst?: FreeObjectExpr;
 }
 
 export interface PageIR {

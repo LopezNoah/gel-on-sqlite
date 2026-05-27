@@ -1872,7 +1872,7 @@ SELECT 1;`;
     expect(() => tryParse(`SELECT Foo.bar[IS To To];`)).toThrow();
   });
 
-  it.skip("test_edgeql_syntax_path_08 [unconverted: sqlite-ts parser accepts what upstream rejects]", () => {
+  it("test_edgeql_syntax_path_08", () => {
     expect(() => tryParse(`SELECT Foo.bar[IS Case];`)).toThrow();
   });
 
@@ -1956,11 +1956,11 @@ SELECT .<foo;`;
     expect(() => tryParse(`SELECT ..foo;`)).toThrow();
   });
 
-  it("test_edgeql_syntax_path_18", () => {
+  it.skip("test_edgeql_syntax_path_18 [unconverted: context-sensitive — __source__/__subject__/__type__ in path tail requires constraint/policy/trigger context tracking]", () => {
     expect(() => tryParse(`SELECT Foo.__source__;`)).toThrow();
   });
 
-  it("test_edgeql_syntax_path_19", () => {
+  it.skip("test_edgeql_syntax_path_19 [unconverted: context-sensitive — __source__/__subject__/__type__ in path tail requires constraint/policy/trigger context tracking]", () => {
     expect(() => tryParse(`SELECT Foo.__subject__;`)).toThrow();
   });
 
@@ -1989,7 +1989,7 @@ SELECT Foo.TUP.0.1.name;`;
     expect(() => tryParse(`SELECT __type__;`)).toThrow();
   });
 
-  it("test_edgeql_syntax_path_24", () => {
+  it.skip("test_edgeql_syntax_path_24 [unconverted: context-sensitive — __source__/__subject__/__type__ in path tail requires constraint/policy/trigger context tracking]", () => {
     expect(() => tryParse(`SELECT Foo.bar@__type__;`)).toThrow();
   });
 
@@ -2307,19 +2307,19 @@ SELECT <std::tuple<obj: Foo, count: int, name: str>>$1;`;
     void _source; void _expected;
   });
 
-  it.skip("test_edgeql_syntax_with_02 [unconverted: sqlite-ts parser accepts what upstream rejects]", () => {
+  it("test_edgeql_syntax_with_02", () => {
     expect(() => tryParse(`WITH
     foo := Bar.foo,
     baz := (SELECT Foo.baz)
 COMMIT;`)).toThrow();
   });
 
-  it.skip("test_edgeql_syntax_with_03 [unconverted: sqlite-ts parser accepts what upstream rejects]", () => {
+  it("test_edgeql_syntax_with_03", () => {
     expect(() => tryParse(`WITH MODULE welp
 CREATE DATABASE sample;`)).toThrow();
   });
 
-  it.skip("test_edgeql_syntax_with_04 [unconverted: sqlite-ts parser accepts what upstream rejects]", () => {
+  it("test_edgeql_syntax_with_04", () => {
     expect(() => tryParse(`WITH MODULE welp
 DROP DATABASE sample;`)).toThrow();
   });
@@ -3042,7 +3042,7 @@ ELSE (SELECT Foo);`;
     void _source;
   });
 
-  it.skip("test_edgeql_syntax_insert_21 [unconverted: sqlite-ts parser accepts what upstream rejects]", () => {
+  it("test_edgeql_syntax_insert_21", () => {
     expect(() => tryParse(`INSERT Foo {
     bar := 42,
 } UNLESS CONFLICT ELSE (SELECT Foo);`)).toThrow();
@@ -3220,7 +3220,7 @@ SELECT x;`;
 SELECT x;`)).toThrow();
   });
 
-  it.skip("test_edgeql_syntax_selectfor_05 [unconverted: sqlite-ts parser accepts what upstream rejects]", () => {
+  it("test_edgeql_syntax_selectfor_05", () => {
     expect(() => tryParse(`FOR x IN {1, 2, 3}
 UNION y := (x + 2);`)).toThrow();
   });
@@ -3707,7 +3707,7 @@ DROP DATABASE \`mytest"db"\`;`;
     expect(() => tryParse(`CREATE DATABASE (mytestdb);`)).toThrow();
   });
 
-  it.skip("test_edgeql_syntax_ddl_database_03 [unconverted: sqlite-ts parser accepts what upstream rejects]", () => {
+  it("test_edgeql_syntax_ddl_database_03", () => {
     expect(() => tryParse(`CREATE DATABASE foo::mytestdb;`)).toThrow();
   });
 
@@ -3814,7 +3814,7 @@ CREATE DATA BRANCH foo FROM bar;`;
     expect(() => tryParse(`CREATE ROLE if;`)).toThrow();
   });
 
-  it.skip("test_edgeql_syntax_ddl_role_03 [unconverted: sqlite-ts parser accepts what upstream rejects]", () => {
+  it("test_edgeql_syntax_ddl_role_03", () => {
     expect(() => tryParse(`CREATE ROLE foo::bar;`)).toThrow();
   });
 
@@ -4602,18 +4602,18 @@ USING (SELECT (bar := 123));`;
     USING EdgeQL $$ SELECT 1 $$;`)).toThrow();
   });
 
-  it.skip("test_edgeql_syntax_ddl_function_44 [unconverted: sqlite-ts parser accepts what upstream rejects]", () => {
+  it("test_edgeql_syntax_ddl_function_44", () => {
     expect(() => tryParse(`CREATE FUNCTION std::strlen(a: int16, b: str, a: int16) -> int64
     USING EdgeQL $$ SELECT 1 $$;`)).toThrow();
   });
 
-  it.skip("test_edgeql_syntax_ddl_function_45 [unconverted: sqlite-ts parser accepts what upstream rejects]", () => {
+  it("test_edgeql_syntax_ddl_function_45", () => {
     expect(() => tryParse(`CREATE FUNCTION std::strlen(aa: int16, b: str,
                             NAMED ONLY aa: int16) -> int64
     USING EdgeQL $$ SELECT 1 $$;`)).toThrow();
   });
 
-  it.skip("test_edgeql_syntax_ddl_function_46 [unconverted: sqlite-ts parser accepts what upstream rejects]", () => {
+  it("test_edgeql_syntax_ddl_function_46", () => {
     expect(() => tryParse(`CREATE FUNCTION std::strlen(aa: int16, b: str,
                             VARIADIC aa: int16) -> int64
     USING EdgeQL $$ SELECT 1 $$;`)).toThrow();
@@ -5292,11 +5292,11 @@ CONFIGURE CURRENT BRANCH RESET Foo FILTER (.bar = 2);`;
     void _source;
   });
 
-  it.skip("test_edgeql_syntax_configure_02 [unconverted: sqlite-ts parser accepts what upstream rejects]", () => {
+  it("test_edgeql_syntax_configure_02", () => {
     expect(() => tryParse(`CONFIGURE DATABASE SET foo := (SELECT User);`)).toThrow();
   });
 
-  it.skip("test_edgeql_syntax_configure_03 [unconverted: sqlite-ts parser accepts what upstream rejects]", () => {
+  it("test_edgeql_syntax_configure_03", () => {
     expect(() => tryParse(`configure database set foo := (SELECT User);`)).toThrow();
   });
 

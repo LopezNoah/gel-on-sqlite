@@ -5764,16 +5764,6 @@ export const executeScript = (
   return executeQueryUnitWithTrace(db, schema, script, securityContext, parserOptions).result;
 };
 
-const selectExprIndexNeedsRuntime = (entry: SelectExprIREntry | undefined): boolean => {
-  if (!entry || entry.kind !== "index_access") {
-    return false;
-  }
-  return entry.value.kind === "coalesce"
-    || entry.value.kind === "tuple"
-    || entry.value.kind === "set_expr"
-    || selectExprIndexNeedsRuntime(entry.value);
-};
-
 export const executeQueryWithTrace = (
   db: SQLiteDatabase,
   schema: SchemaSnapshot,
@@ -5821,97 +5811,122 @@ export const executeQueryWithTrace = (
       // of the first IR entry — whether the compiled SQL is trustworthy. If
       // it isn't, we throw the SQL away and call `materializeSelectExprRows`
       // (the IR interpreter). Each of these conditions
-      // (coalesceNeedsRuntime, compareNeedsRuntimeFromFilter/Empty/Coalesce,
-      // compareDeepLCP, isEmptySetSelect, isShapeOrObject,
-      // selectExprIndexNeedsRuntime) represents a known bug in
+      // (coalesceNeedsRuntime, compareNeedsRuntimeFromFilter/Coalesce,
+      // compareDeepLCP, isShapeOrObject) represents a known bug in
       // gel_ir_compiler / sql/compiler that needs the SQL output to be
       // correct end-to-end so the bypass can be deleted.
       const firstEntry = ir.entries[0];
-      // Coalesce whose RHS is itself a set/union (e.g. `X ?? {X, Y}`)
-      // needs per-row LCP iteration to suppress nulls inside the RHS set —
-      // the compiled SQL produces `COALESCE(scalar, json_group_array(...))`
-      // which can leak nulls into the multi-set fallback. Use the runtime
-      // evaluator instead.
-      const coalesceNeedsRuntime = firstEntry?.kind === "coalesce"
-        && (firstEntry.right.kind === "set_expr"
-          || ((firstEntry.right as { kind?: string; operator?: string }).kind === "operator_call"
-            && (firstEntry.right as { operator?: string }).operator === "union"));
-      // `?=` / `?!=` where either side wraps a filtered subquery needs
-      // runtime evaluation — the compiled SQL collapses the subquery's
-      // filter onto the cross-join row, mixing the LHS's filtered scope
-      // with the RHS's broader scope.
-      const containsFilteredSubquery = (e: SelectExprIREntry | undefined): boolean => {
+      // `?=` / `?!=` where ONE side wraps a filtered subquery AND the OTHER
+      // side has an outer type reference (e.g. `field_access(select(Issue), …)`)
+      // needs runtime evaluation: the compiled SQL hoists the inner
+      // subquery's filter onto the outer JOIN row, so the outer iteration
+      // gets restricted by the inner filter. Cases with no outer LCP (a
+      // constant or simple scalar on the other side) compile correctly to
+      // SQL via `(SELECT … WHERE …) IS …` and do not need this bypass.
+      const containsSelectExprSubquery = (e: SelectExprIREntry | undefined): boolean => {
         if (!e || typeof e !== "object") return false;
         if (e.kind === "select_expr_subquery") return true;
-        if (e.kind === "field_access") return containsFilteredSubquery(e.value);
+        if (e.kind === "field_access") return containsSelectExprSubquery(e.value);
         if (e.kind === "cast" || e.kind === "not" || e.kind === "distinct" || e.kind === "exists" || e.kind === "shape_projection") {
-          return containsFilteredSubquery((e as { value?: SelectExprIREntry; expr?: SelectExprIREntry }).value
+          return containsSelectExprSubquery((e as { value?: SelectExprIREntry; expr?: SelectExprIREntry }).value
             ?? (e as { expr?: SelectExprIREntry }).expr);
         }
         if (e.kind === "coalesce" || e.kind === "math" || e.kind === "compare" || e.kind === "and" || e.kind === "or") {
-          return containsFilteredSubquery((e as { left: SelectExprIREntry }).left)
-            || containsFilteredSubquery((e as { right: SelectExprIREntry }).right);
+          return containsSelectExprSubquery((e as { left: SelectExprIREntry }).left)
+            || containsSelectExprSubquery((e as { right: SelectExprIREntry }).right);
         }
         if (e.kind === "set_expr" || e.kind === "tuple" || e.kind === "array_literal_expr") {
-          return (e.values as SelectExprIREntry[]).some(containsFilteredSubquery);
+          return (e.values as SelectExprIREntry[]).some(containsSelectExprSubquery);
         }
         if (e.kind === "concat") {
-          return (e.parts as SelectExprIREntry[]).some(containsFilteredSubquery);
+          return (e.parts as SelectExprIREntry[]).some(containsSelectExprSubquery);
+        }
+        return false;
+      };
+      const containsOuterSelect = (e: SelectExprIREntry | undefined): boolean => {
+        if (!e || typeof e !== "object") return false;
+        if (e.kind === "select_expr_subquery") return false;
+        if (e.kind === "select" || e.kind === "path_steps") return true;
+        if (e.kind === "field_access") return containsOuterSelect(e.value);
+        if (e.kind === "cast" || e.kind === "not" || e.kind === "distinct" || e.kind === "exists" || e.kind === "shape_projection") {
+          return containsOuterSelect((e as { value?: SelectExprIREntry; expr?: SelectExprIREntry }).value
+            ?? (e as { expr?: SelectExprIREntry }).expr);
+        }
+        if (e.kind === "coalesce" || e.kind === "math" || e.kind === "compare" || e.kind === "and" || e.kind === "or") {
+          return containsOuterSelect((e as { left: SelectExprIREntry }).left)
+            || containsOuterSelect((e as { right: SelectExprIREntry }).right);
+        }
+        if (e.kind === "set_expr" || e.kind === "tuple" || e.kind === "array_literal_expr") {
+          return (e.values as SelectExprIREntry[]).some(containsOuterSelect);
+        }
+        if (e.kind === "concat") {
+          return (e.parts as SelectExprIREntry[]).some(containsOuterSelect);
         }
         return false;
       };
       const compareNeedsRuntimeFromFilter = (firstEntry?.kind === "compare")
         && (firstEntry.op === "?=" || firstEntry.op === "?!=")
-        && (containsFilteredSubquery(firstEntry.left) || containsFilteredSubquery(firstEntry.right));
+        && (
+          (containsSelectExprSubquery(firstEntry.left) && containsOuterSelect(firstEntry.right))
+          || (containsSelectExprSubquery(firstEntry.right) && containsOuterSelect(firstEntry.left))
+        );
 
-      // EdgeQL: `X op Y` with empty-set on either side yields empty set.
-      // The SQL path produces NULLs that get materialised as `false` booleans
-      // instead of zero rows; route through the runtime evaluator instead.
-      const isStructurallyEmpty = (e: SelectExprIREntry | undefined): boolean => {
-        if (!e) return false;
-        if (e.kind === "set_literal" && (e as { values?: unknown[] }).values?.length === 0) return true;
-        if (e.kind === "cast") {
-          return isStructurallyEmpty((e as { value?: SelectExprIREntry }).value);
-        }
-        return false;
-      };
-      const compareNeedsRuntimeFromEmpty = (firstEntry?.kind === "compare")
-        && (isStructurallyEmpty(firstEntry.left) || isStructurallyEmpty(firstEntry.right));
-
-      // `?=` / `?!=` with a `coalesce` inside either side needs the runtime
-      // LCP evaluator: the compiled SQL flattens `X ?? Y` to a SQL COALESCE
-      // over a single join row (e.g. `COALESCE(g0.time_estimate, g0.time_estimate)`
-      // for `Issue.time_estimate ?? Issue.related_to.time_estimate`), losing
-      // the per-Issue dependency on `related_to`.
-      const containsCoalesce = (e: SelectExprIREntry | undefined): boolean => {
+      // `?=` / `?!=` with a `coalesce` inside either side whose operands
+      // reference an outer LCP needs the runtime: the compiled SQL flattens
+      // `X ?? Y` to a SQL COALESCE over a single join row (e.g.
+      // `COALESCE(g0.time_estimate, g0.time_estimate)` for
+      // `Issue.time_estimate ?? Issue.related_to.time_estimate`), losing the
+      // per-Issue dependency on `related_to`. Coalesce over constants or
+      // simple scalars (`1 ?= (2 ?? 3)`) compiles to a correct
+      // `COALESCE(?, ?)` in SQL and does not need this bypass.
+      const containsCoalesceOverOuterRefs = (e: SelectExprIREntry | undefined): boolean => {
         if (!e || typeof e !== "object") return false;
-        if (e.kind === "coalesce") return true;
-        if (e.kind === "field_access") return containsCoalesce(e.value);
+        if (e.kind === "coalesce") {
+          return containsOuterSelect((e as { left: SelectExprIREntry }).left)
+            || containsOuterSelect((e as { right: SelectExprIREntry }).right);
+        }
+        if (e.kind === "field_access") return containsCoalesceOverOuterRefs(e.value);
         if (e.kind === "cast" || e.kind === "not" || e.kind === "distinct" || e.kind === "exists" || e.kind === "shape_projection") {
-          return containsCoalesce((e as { value?: SelectExprIREntry; expr?: SelectExprIREntry }).value
+          return containsCoalesceOverOuterRefs((e as { value?: SelectExprIREntry; expr?: SelectExprIREntry }).value
             ?? (e as { expr?: SelectExprIREntry }).expr);
         }
         if (e.kind === "math" || e.kind === "compare" || e.kind === "and" || e.kind === "or") {
-          return containsCoalesce((e as { left: SelectExprIREntry }).left)
-            || containsCoalesce((e as { right: SelectExprIREntry }).right);
+          return containsCoalesceOverOuterRefs((e as { left: SelectExprIREntry }).left)
+            || containsCoalesceOverOuterRefs((e as { right: SelectExprIREntry }).right);
         }
         if (e.kind === "set_expr" || e.kind === "tuple" || e.kind === "array_literal_expr") {
-          return (e.values as SelectExprIREntry[]).some(containsCoalesce);
+          return (e.values as SelectExprIREntry[]).some(containsCoalesceOverOuterRefs);
         }
         if (e.kind === "concat") {
-          return (e.parts as SelectExprIREntry[]).some(containsCoalesce);
+          return (e.parts as SelectExprIREntry[]).some(containsCoalesceOverOuterRefs);
         }
         return false;
       };
       const compareNeedsRuntimeFromCoalesce = (firstEntry?.kind === "compare")
         && (firstEntry.op === "?=" || firstEntry.op === "?!=")
-        && (containsCoalesce(firstEntry.left) || containsCoalesce(firstEntry.right));
+        && (containsCoalesceOverOuterRefs(firstEntry.left) || containsCoalesceOverOuterRefs(firstEntry.right));
+
+      // Top-level `X ?? {Y, Z}` where LHS and RHS share an outer LCP (both
+      // reference the same outer type) still falls into the fall-through
+      // path in `compileScalarSelectSQL` which emits the buggy
+      // `COALESCE(scalar, json_group_array(...))`. Non-LCP cases (`5 ?? {-1, -2}`,
+      // `Issue.time_estimate ?? {-1, -2}`) are correctly handled by
+      // `tryCompileSetLevelCoalesceSQL` and do not need this bypass.
+      const coalesceNeedsRuntime = firstEntry?.kind === "coalesce"
+        && ((firstEntry.right as { kind?: string }).kind === "set_expr"
+          || ((firstEntry.right as { kind?: string; operator?: string }).kind === "operator_call"
+            && (firstEntry.right as { operator?: string }).operator === "union"))
+        && containsOuterSelect(firstEntry.left)
+        && containsOuterSelect(firstEntry.right);
 
       // `?=` / `?!=` where LHS is `field_access(X.Y)` and RHS contains the
       // same path needs deep-path LCP — the compiled SQL evaluates per row
       // (including rows where the path is empty), which returns "true" for
       // empty IS empty pairs. EdgeDB iterates per the LHS path's non-null
-      // values instead.
+      // values instead. The LEFT JOIN against the 1-row anchor in
+      // `compileScalarSelectSQL` is responsible for the extra empty-path
+      // row; fixing the SQL emit would require switching to INNER JOIN
+      // (and dropping the WHERE/anchor) when the LHS path appears in RHS.
       const compareDeepLCP = (firstEntry?.kind === "compare")
         && (firstEntry.op === "?=" || firstEntry.op === "?!=")
         && firstEntry.left.kind === "field_access"
@@ -5957,25 +5972,15 @@ export const executeQueryWithTrace = (
           };
           return containsExpr(firstEntry.right, firstEntry.left);
         })();
-      // An empty set literal (or a cast thereof) at the top of a SELECT
-      // should yield zero rows, not a single NULL row that SQL "SELECT NULL"
-      // would produce. Route through the runtime evaluator so [] is preserved.
-      const checkEmptySet = (entry: SelectExprIREntry): boolean => {
-        if (entry.kind === "set_literal" && (entry as { values?: unknown[] }).values?.length === 0) return true;
-        if (entry.kind === "cast") {
-          const inner = (entry as { value?: SelectExprIREntry }).value;
-          return inner ? checkEmptySet(inner) : false;
-        }
-        return false;
-      };
-      const isEmptySetSelect = checkEmptySet(firstEntry);
-      // `<tuple<...>>X` casts must materialize per row: the SQL path wraps
-      // a `set_expr` inner in `json_group_array(...)` (single row containing
-      // an array), and it doesn't apply the named→positional / rename
-      // reshape the cast represents. Both are handled correctly by the IR
-      // interpreter in evaluateSelectExprEntry → reshapeForTupleCast.
+      // `<tuple<...>>X` cast over a non-literal source (alias, column ref,
+      // function call, set/union, etc.) still needs runtime reshape: the
+      // SQL emit only handles literal `tuple` sources (where the source
+      // elements are visible in the IR and can be re-emitted with the
+      // target's shape). Literal-source casts compile via gel_ir_compiler's
+      // type_cast→tuple branch.
       const tupleCastNeedsRuntime = firstEntry?.kind === "cast"
-        && parseTupleCastSlots((firstEntry as { castType: string }).castType) !== null;
+        && parseTupleCastSlots((firstEntry as { castType: string }).castType) !== null
+        && (firstEntry as { value?: SelectExprIREntry }).value?.kind !== "tuple";
       const isShapeOrObject = firstEntry
         && (firstEntry.kind === "shape_projection"
           || firstEntry.kind === "select"
@@ -5983,14 +5988,11 @@ export const executeQueryWithTrace = (
           || firstEntry.kind === "field_access"
           || firstEntry.kind === "select_expr_subquery"
           || firstEntry.kind === "array_literal_expr"
-          || isEmptySetSelect
           || coalesceNeedsRuntime
           || compareDeepLCP
           || compareNeedsRuntimeFromFilter
-          || compareNeedsRuntimeFromEmpty
           || compareNeedsRuntimeFromCoalesce
-          || tupleCastNeedsRuntime
-          || selectExprIndexNeedsRuntime(firstEntry));
+          || tupleCastNeedsRuntime);
       const sqlIsRunnable = compiled.usesGelIrSql && sqlArtifact.loweringMode === "single_statement";
       result = {
         kind: "select",
@@ -6221,13 +6223,13 @@ export const executeQueryUnitWithTrace = (
     } else if (ir.kind === "select_expr") {
         // HACK (not using SQL): same `runnable vs. materialize` dispatch as
         // executeQueryWithTrace's select_expr branch — when the IR/SQL path
-        // isn't trusted (selectExprIndexNeedsRuntime, non-single_statement
-        // lowering, !usesGelIrSql), we throw the SQL away and interpret in
-        // TS via materializeSelectExprRows.
+        // isn't trusted (non-single_statement lowering, !usesGelIrSql, or
+        // tuple-cast reshape over a non-literal source), we throw the SQL
+        // away and interpret in TS via materializeSelectExprRows.
         const firstEntry = ir.entries[0];
-        const needsRuntimeExpr = selectExprIndexNeedsRuntime(firstEntry)
-          || (firstEntry?.kind === "cast"
-            && parseTupleCastSlots((firstEntry as { castType: string }).castType) !== null);
+        const needsRuntimeExpr = firstEntry?.kind === "cast"
+          && parseTupleCastSlots((firstEntry as { castType: string }).castType) !== null
+          && (firstEntry as { value?: SelectExprIREntry }).value?.kind !== "tuple";
         const sqlIsRunnable = compiled.usesGelIrSql && sqlArtifact.loweringMode === "single_statement" && !needsRuntimeExpr;
         result = {
           kind: "select",

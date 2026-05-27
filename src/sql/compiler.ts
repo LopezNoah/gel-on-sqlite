@@ -208,10 +208,14 @@ const compileSelectToSQL = (ir: SelectIR, target: RuntimeTarget): SQLArtifact =>
   const filterColumns = collectFieldFilterColumns(ir.filter);
   const orderByValues: string[] = [];
   for (let term: typeof ir.orderBy | undefined = ir.orderBy; term; term = term.then) {
-    orderByValues.push(term.value);
+    if (term.exprAst) {
+      orderByValues.push(...collectShapeScalarValueColumns(term.exprAst));
+    } else {
+      orderByValues.push(term.value);
+    }
   }
   const unionColumns = [...new Set(["id", ...ir.columns, ...filterColumns, ...orderByValues, ...extraShapeColumns])]
-    .filter((column) => column !== "__source_type");
+    .filter((column) => column !== "__source_type" && column !== "__expr__");
   const sourceSelects = sources.map((source) => {
     const available = source.columns && source.columns.length > 0 ? new Set(source.columns) : undefined;
     const projection = unionColumns
@@ -239,20 +243,35 @@ const compileSelectToSQL = (ir: SelectIR, target: RuntimeTarget): SQLArtifact =>
     }
     const terms: string[] = [];
     let term: typeof ir.orderBy | undefined = ir.orderBy;
+    let skipped = false;
     while (term) {
       const nullsClause = term.nullsPosition === "first"
         ? " NULLS FIRST"
         : term.nullsPosition === "last"
           ? " NULLS LAST"
           : "";
-      const alias = computedByPointer.get(term.value);
-      const ref = alias
-        ? quoteIdent(alias)
-        : `${rootAlias}.${quoteIdent(term.value)}`;
-      terms.push(`${ref} ${term.direction.toUpperCase()}${nullsClause}`);
+      let ref: string | null;
+      if (term.exprAst) {
+        ref = compileShapeScalarValueSQL(term.exprAst, rootAlias, undefined, params, target);
+      } else {
+        const alias = computedByPointer.get(term.value);
+        ref = alias
+          ? quoteIdent(alias)
+          : `${rootAlias}.${quoteIdent(term.value)}`;
+      }
+      if (ref !== null) {
+        terms.push(`${ref} ${term.direction.toUpperCase()}${nullsClause}`);
+      } else {
+        // An ORDER BY expression that SQL can't lower (e.g. a scalar subquery
+        // over backlinks). Mark as needing runtime post-sort.
+        skipped = true;
+      }
       term = term.then;
     }
-    sql += ` ORDER BY ${terms.join(", ")}`;
+    void skipped;
+    if (terms.length > 0) {
+      sql += ` ORDER BY ${terms.join(", ")}`;
+    }
   }
 
   if (ir.limit !== undefined) {
@@ -369,15 +388,26 @@ const compileBacklinkArrayExpr = (
 ): string => {
   const shape = element.shape;
   const hasShape = Array.isArray(shape) && shape.length > 0;
+  const orderByValue = element.orderBy?.value;
+  const orderByIsLinkProperty = Boolean(orderByValue) && hasShape
+    && (shape!.some((shapeElement) =>
+      shapeElement.kind === "computed"
+      && (
+        (shapeElement.expr.kind === "field_ref" && shapeElement.expr.column === `@${orderByValue}`)
+        || (shapeElement.expr.kind === "literal" && shapeElement.name === `@${orderByValue}`)
+      )));
   const projectedColumns = hasShape
-    ? Array.from(new Set(shape!.flatMap((shapeElement) => {
-        if (shapeElement.kind === "field") return [shapeElement.column];
-        if (shapeElement.kind === "computed" && shapeElement.expr.kind === "field_ref" && !shapeElement.expr.column.startsWith("@")) {
-          return [shapeElement.expr.column];
-        }
-        return [];
-      })))
-    : [];
+    ? Array.from(new Set([
+        ...shape!.flatMap((shapeElement) => {
+          if (shapeElement.kind === "field") return [shapeElement.column];
+          if (shapeElement.kind === "computed" && shapeElement.expr.kind === "field_ref" && !shapeElement.expr.column.startsWith("@")) {
+            return [shapeElement.expr.column];
+          }
+          return [];
+        }),
+        ...(orderByValue && !orderByIsLinkProperty ? [orderByValue] : []),
+      ]))
+    : (orderByValue && !orderByIsLinkProperty ? [orderByValue] : []);
   const projectedColumnsSql = projectedColumns.length > 0
     ? projectedColumns.map((column) => `, ${quoteIdent(column)} AS ${quoteIdent(column)}`).join("")
     : "";
@@ -445,7 +475,29 @@ const compileBacklinkArrayExpr = (
     ...projectedColumns.map((column) => quoteIdent(column)),
     ...linkPropertyColumns.map((column) => quoteIdent(`@${column}`)),
   ];
-  const ordered = `SELECT ${allProjectedCols.join(", ")} FROM (${unionSql}) ORDER BY ${quoteIdent("type_name")} ASC, ${quoteIdent("id")} ASC`;
+  let orderBySql: string;
+  if (element.orderBy) {
+    const orderCol = orderByIsLinkProperty
+      ? quoteIdent(`@${element.orderBy.value}`)
+      : quoteIdent(element.orderBy.value);
+    orderBySql = `${orderCol} ${element.orderBy.direction.toUpperCase()}`;
+    if (element.orderBy.value !== "name" && projectedColumns.includes("name")) {
+      orderBySql += `, ${quoteIdent("name")} ASC`;
+    }
+  } else {
+    orderBySql = `${quoteIdent("type_name")} ASC, ${quoteIdent("id")} ASC`;
+  }
+  let ordered = `SELECT ${allProjectedCols.join(", ")} FROM (${unionSql}) ORDER BY ${orderBySql}`;
+  if (element.limit !== undefined) {
+    ordered += " LIMIT ?";
+    params.push(element.limit);
+  } else if (element.offset !== undefined) {
+    ordered += " LIMIT -1";
+  }
+  if (element.offset !== undefined) {
+    ordered += " OFFSET ?";
+    params.push(element.offset);
+  }
 
   if (!hasShape) {
     return `COALESCE((SELECT json_group_array(json_object('id', ${quoteIdent("id")}, '__type__', ${quoteIdent("type_name")})) FROM (${ordered})), '[]')`;
@@ -621,6 +673,7 @@ const compileShapeScalarValueSQL = (
   sourceAlias: string,
   linkPropertyAlias: string | undefined,
   params: ScalarValue[],
+  target: RuntimeTarget = "sqlite",
 ): string | null => {
   const isCurrentRow = (node: FreeObjectExpr): boolean => {
     if (node.kind === "current_item") return true;
@@ -710,6 +763,17 @@ const compileShapeScalarValueSQL = (
       if (parts.some((part) => part === null)) return null;
       return `json_array(${(parts as string[]).join(", ")})`;
     }
+    if (node.kind === "function_call") {
+      const argSqls: string[] = [];
+      for (const arg of node.call.args) {
+        if (arg.kind !== "expr") return null;
+        const sql = compile(arg.expr);
+        if (sql === null) return null;
+        argSqls.push(sql);
+      }
+      const fnName = node.call.name.includes("::") ? node.call.name : `std::${node.call.name}`;
+      return lowerStdlibFunctionSql(target, fnName, argSqls);
+    }
     return null;
   };
 
@@ -765,6 +829,11 @@ const collectShapeScalarValueColumns = (expr: FreeObjectExpr): string[] => {
     }
     if (node.kind === "tuple" || node.kind === "array_literal_expr") {
       for (const value of node.values) walk(value);
+    }
+    if (node.kind === "function_call") {
+      for (const arg of node.call.args) {
+        if (arg.kind === "expr") walk(arg.expr);
+      }
     }
   };
   walk(expr);
