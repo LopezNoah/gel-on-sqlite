@@ -60,6 +60,7 @@ def compact_reason(text: str, max_len: int = 220) -> str:
 
 
 def template_literal(text: str) -> str:
+    text = re.sub(r"(?m)^[ \t]*set\s+is_inlined\s*:=\s*true;[ \t]*(?:\r?\n)?", "", text)
     escaped = text.replace("`", "\\`").replace("${", "\\${")
     return f"`{escaped}`"
 
@@ -1336,11 +1337,32 @@ def convert_statements(
                 continue
 
             if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                module_node = ast.Module(body=[stmt], type_ignores=[])
-                code = compile(module_node, "<converter-fn>", "exec")
-                local_env = dict(env)
-                exec(code, module_globals, local_env)
-                env[stmt.name] = local_env[stmt.name]
+                fn_env = dict(env)
+                for arg in stmt.args.posonlyargs + stmt.args.args + stmt.args.kwonlyargs:
+                    fn_env[arg.arg] = RuntimeVar(arg.arg)
+                if stmt.args.vararg:
+                    fn_env[stmt.args.vararg.arg] = RuntimeVar(stmt.args.vararg.arg)
+                if stmt.args.kwarg:
+                    fn_env[stmt.args.kwarg.arg] = RuntimeVar(stmt.args.kwarg.arg)
+
+                body_lines = convert_statements(
+                    stmt.name,
+                    stmt.body,
+                    fn_env,
+                    helper_names,
+                    module_globals,
+                    strict=strict,
+                )
+                args = [arg.arg for arg in stmt.args.posonlyargs + stmt.args.args]
+                if stmt.args.vararg:
+                    args.append("..." + stmt.args.vararg.arg)
+                args.extend(arg.arg for arg in stmt.args.kwonlyargs)
+                if stmt.args.kwarg:
+                    args.append(stmt.args.kwarg.arg)
+                out_lines.append(f"function {stmt.name}({', '.join(args)}): void {{")
+                out_lines.extend(indent_block(body_lines, 1))
+                out_lines.append("}")
+                env[stmt.name] = RuntimeVar(stmt.name)
                 continue
 
             raise ValueError(f"Unsupported statement: {ast.dump(stmt)}")
@@ -1500,8 +1522,6 @@ def convert_file(source_path: Path, output_path: Path, strict: bool = False) -> 
             lines.append(f'      schema: "{schema_name}",')
         if setup_name:
             lines.append(f'      setup: "{setup_name}",')
-        lines.append(f'      dbFile: "./tests/.artifacts/{artifact_name}.sqlite",')
-        lines.append("      resetDbFile: true")
         lines.append("    });")
         lines.append("  });")
         lines.append("")
