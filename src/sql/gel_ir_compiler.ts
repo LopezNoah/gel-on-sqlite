@@ -126,7 +126,8 @@ export const compileGelIRToSQL = (
   const compiledSource = sourceSet ? compileSelectSource(sourceSet, statement.where, statement.orderBy, options, params, target) : null;
   if (!compiledSource) {
     if (sourceSet) {
-      const scalarSql = compileScalarSelectSQL(sourceSet, params, target, options);
+      const outerWheres = selectWhere ? [selectWhere] : [];
+      const scalarSql = compileScalarSelectSQL(sourceSet, params, target, options, outerWheres);
       if (scalarSql) {
         let sql = scalarSql;
         if (selectOrderBy && selectOrderBy.length > 0) {
@@ -1126,25 +1127,108 @@ const tryCompileSetLevelOptionalCompareSQL = (
   return `WITH ${cteDefs.join(", ")} ${elementWise} UNION ALL ${fallback}`;
 };
 
+// Walk a value's expression and return true iff any pointer's source is
+// (or unwraps to) a select_expr. Such pointers are SET OF in EdgeQL — the
+// outer FILTER does not correlate per-row with them, so an A3-style WHERE
+// must not be attached at the value's iteration level.
+const valueExprWrapsPointerInSelectExpr = (set: Set): boolean => {
+  const visit = (s: Set | undefined): boolean => {
+    if (!s || !s.expr) return false;
+    const e = s.expr;
+    if (e.kind === "pointer") {
+      const sourceExpr = (e as Pointer).source.expr;
+      if (sourceExpr.kind === "select_expr") return true;
+      return visit((e as Pointer).source);
+    }
+    if (e.kind === "type_cast") return visit((e as TypeCast).expr);
+    if (e.kind === "coalesce_expr") return visit((e as CoalesceExpr).left) || visit((e as CoalesceExpr).right);
+    if (e.kind === "operator_call" || e.kind === "function_call") {
+      const call = e as { args: Record<string, CallArg> };
+      return orderedCallArgs(call.args).some((arg) => visit(arg.expr));
+    }
+    if (e.kind === "if_else_expr") {
+      const ie = e as IfElseExpr;
+      return visit(ie.condition) || visit(ie.ifExpr) || visit(ie.elseExpr);
+    }
+    if (e.kind === "tuple") {
+      return (e as Tuple).elements.some((el) => visit(el.val));
+    }
+    if (e.kind === "array") {
+      return (e as { elements: Set[] }).elements.some(visit);
+    }
+    return false;
+  };
+  return visit(set);
+};
+
 const compileScalarSelectSQL = (
   sourceSet: Set,
   params: ScalarValue[],
   target: RuntimeTarget,
   options: GelIRCompileOptions,
+  // Extra WHERE clauses (Set predicates) to apply at the source-iteration
+  // level. Used so a top-level `SELECT V FILTER F` lowers F against the
+  // same source alias as V. Predicates are AND-combined with any innerWheres
+  // discovered within the value expression itself.
+  outerWheres: Set[] = [],
 ): string | null => {
+  // Checkpoint params so a null return doesn't leak partial pushes from
+  // sub-compiles (e.g. a coalesce_expr that pushed `-1` before later sub-
+  // compiles bailed and we fell through to the caller's NULL fallback).
+  const entryCheckpoint = params.length;
+  const result = compileScalarSelectSQLInner(sourceSet, params, target, options, outerWheres);
+  if (result === null) {
+    params.length = entryCheckpoint;
+  }
+  return result;
+};
+
+const compileScalarSelectSQLInner = (
+  sourceSet: Set,
+  params: ScalarValue[],
+  target: RuntimeTarget,
+  options: GelIRCompileOptions,
+  outerWheres: Set[],
+): string | null => {
+  // Pre-compute whether the outer FILTERs (if any) reference the same
+  // iteration root as the value. If not, the set-level coalesce / ?= / ?!=
+  // shortcuts are still safe to take — the filter will be applied
+  // separately at the top level (or, today, dropped, matching pre-A3
+  // behaviour). If they DO match, the shortcuts can't carry the filter
+  // through their UNION ALL so we fall through to the generic FROM-based
+  // emit which can attach the WHERE.
   const expr = sourceSet.expr;
+  const outerWhereSourceIds = new Set<string>();
+  if (outerWheres.length > 0) {
+    const m = new Map<string, TypeRef>();
+    for (const w of outerWheres) collectScalarPointerSources(w, m);
+    for (const id of m.keys()) outerWhereSourceIds.add(id);
+  }
+  const exprSourceIds = new Set<string>();
+  {
+    const m = new Map<string, TypeRef>();
+    collectScalarPointerSources(sourceSet, m);
+    for (const id of m.keys()) exprSourceIds.add(id);
+  }
+  const outerWhereSharesValueSource = outerWheres.length > 0
+    && Array.from(outerWhereSourceIds).every((id) => exprSourceIds.has(id))
+    && outerWhereSourceIds.size > 0;
   if (expr.kind === "coalesce_expr") {
-    const setLevel = tryCompileSetLevelCoalesceSQL(expr as CoalesceExpr, params, target, options);
-    if (setLevel) {
-      return setLevel;
+    if (!outerWhereSharesValueSource) {
+      const setLevel = tryCompileSetLevelCoalesceSQL(expr as CoalesceExpr, params, target, options);
+      if (setLevel) {
+        return setLevel;
+      }
     }
   }
   if (expr.kind === "operator_call") {
     const opCall = expr as OperatorCall;
     if (opCall.operator === "?=" || opCall.operator === "?!=") {
-      const setLevel = tryCompileSetLevelOptionalCompareSQL(opCall, params, target, options);
-      if (setLevel) {
-        return setLevel;
+      if (!outerWhereSharesValueSource) {
+        const setLevel = tryCompileSetLevelOptionalCompareSQL(opCall, params, target, options);
+        if (setLevel) {
+          return setLevel;
+        }
       }
     }
   }
@@ -1152,32 +1236,171 @@ const compileScalarSelectSQL = (
     const args = orderedCallArgs((expr as OperatorCall).args);
     const parts: string[] = [];
     for (const arg of args) {
-      const partSql = compileScalarSelectSQL(arg.expr, params, target, options);
+      const partSql = compileScalarSelectSQL(arg.expr, params, target, options, outerWheres);
       if (!partSql) return null;
       parts.push(partSql);
     }
     if (parts.length === 0) return null;
     return parts.join(" UNION ALL ");
   }
+
+  // DISTINCT X: compile X as a scalar select, then wrap with SELECT DISTINCT.
+  if (expr.kind === "operator_call" && (expr as OperatorCall).operator === "distinct") {
+    const args = orderedCallArgs((expr as OperatorCall).args);
+    if (args.length === 1) {
+      const innerSql = compileScalarSelectSQL(args[0].expr, params, target, options, outerWheres);
+      if (innerSql) {
+        return `SELECT DISTINCT ${quoteIdent("value")} AS ${quoteIdent("value")} FROM (${innerSql})`;
+      }
+    }
+  }
+
+  // For a binary operator_call with a set-valued arg that *cannot* be
+  // enumerated branch-by-branch (e.g. DISTINCT(X), or any other set
+  // expression whose cardinality we'd compute at runtime), lift the arg
+  // into the FROM clause as `(scalar_sql) AS r_N` and reference its
+  // `value` column. `SELECT 2 * DISTINCT(...)` becomes
+  // `SELECT 2 * r_0.value AS value FROM (DISTINCT-sql) r_0`.
+  if (expr.kind === "operator_call" && (expr as OperatorCall).operator !== "union" && (expr as OperatorCall).operator !== "distinct") {
+    const opCall = expr as OperatorCall;
+    const op = operatorToInfixSql(opCall.operator) ?? normalizeOperator(opCall.operator);
+    if (op && (opCall.operator !== "and" && opCall.operator !== "or" && opCall.operator !== "not")) {
+      const args = orderedCallArgs(opCall.args);
+      const isSetProducer = (s: Set): boolean => {
+        const e = s.expr;
+        return e.kind === "operator_call"
+          && ((e as OperatorCall).operator === "distinct"
+              || (e as OperatorCall).operator === "union");
+      };
+      const setArgs = args.map((arg, i) => ({ idx: i, arg, isSet: isSetProducer(arg.expr) }));
+      const hasSetArg = setArgs.some((s) => s.isSet);
+      // Skip if any union arg — the earlier "distribute over union" branch
+      // handles that more cleanly. We only get here when set args are pure
+      // DISTINCT (or other non-enumerable set producers).
+      const hasUnionArg = args.some((arg) => arg.expr.expr.kind === "operator_call"
+        && (arg.expr.expr as OperatorCall).operator === "union");
+      if (hasSetArg && !hasUnionArg && args.length === 2) {
+        const innerCheckpoint = params.length;
+        const fromSources: string[] = [];
+        const argSqls: string[] = [];
+        let ok = true;
+        for (const { idx, arg, isSet } of setArgs) {
+          if (isSet) {
+            const argSql = compileScalarSelectSQL(arg.expr, params, target, options);
+            if (!argSql) { ok = false; break; }
+            const alias = `r_${idx}`;
+            fromSources.push(`(${argSql}) ${alias}`);
+            argSqls.push(`${alias}.${quoteIdent("value")}`);
+          } else {
+            const argSql = compileValueSetSQL(arg.expr, "g0", params, target, options);
+            if (!argSql) { ok = false; break; }
+            argSqls.push(argSql);
+          }
+        }
+        if (ok && fromSources.length > 0) {
+          const valueExpr = op === "ilike"
+            ? `(LOWER(${argSqls[0]}) LIKE LOWER(${argSqls[1]}))`
+            : `(${argSqls[0]} ${op} ${argSqls[1]})`;
+          return `SELECT ${valueExpr} AS ${quoteIdent("value")} FROM ${fromSources.join(", ")}`;
+        }
+        params.length = innerCheckpoint;
+      }
+    }
+  }
+
+  // Distribute a binary operator_call over a union arg. `2 * (1 UNION 2)`
+  // and `(SELECT 2) * (1 UNION 2)` should yield a set of products
+  // (`{2, 4}`), not a scalar of `2 * json_group_array(...)`. We re-emit the
+  // operator_call once per union branch (Cartesian product when both sides
+  // are unions) and UNION ALL the resulting per-row SELECTs.
+  if (expr.kind === "operator_call" && (expr as OperatorCall).operator !== "union") {
+    const opCall = expr as OperatorCall;
+    const args = orderedCallArgs(opCall.args);
+    const unwrapUnionBranches = (s: Set): Set[] | null => {
+      if (s.expr.kind === "operator_call" && (s.expr as OperatorCall).operator === "union") {
+        const branches = orderedCallArgs((s.expr as OperatorCall).args).map((arg) => arg.expr);
+        return branches.length > 0 ? branches : null;
+      }
+      return null;
+    };
+    const argBranches = args.map((arg) => unwrapUnionBranches(arg.expr) ?? [arg.expr]);
+    const anyUnion = argBranches.some((branches, i) => unwrapUnionBranches(args[i].expr) !== null);
+    if (anyUnion) {
+      const innerCheckpoint = params.length;
+      const cartesian: Set[][] = [[]];
+      for (const branches of argBranches) {
+        const next: Set[][] = [];
+        for (const acc of cartesian) {
+          for (const branch of branches) {
+            next.push([...acc, branch]);
+          }
+        }
+        cartesian.splice(0, cartesian.length, ...next);
+      }
+      const parts: string[] = [];
+      let failed = false;
+      for (const combo of cartesian) {
+        const newArgs: Record<string, CallArg> = {};
+        combo.forEach((b, i) => {
+          newArgs[String(i)] = { ...args[i], expr: b };
+        });
+        const variantCall = { ...opCall, args: newArgs };
+        const variantSet: Set = {
+          ...sourceSet,
+          expr: variantCall,
+        };
+        const partSql = compileScalarSelectSQL(variantSet, params, target, options, outerWheres);
+        if (!partSql) {
+          failed = true;
+          break;
+        }
+        parts.push(partSql);
+      }
+      if (!failed && parts.length > 0) {
+        return parts.join(" UNION ALL ");
+      }
+      params.length = innerCheckpoint;
+    }
+  }
   const sources = new Map<string, TypeRef>();
   collectScalarPointerSources(sourceSet, sources);
+  // Only apply outerWheres when (a) their sources are a subset of the
+  // value's sources — the FILTER references the same iteration root — and
+  // (b) the value's pointer chain isn't wrapped in a `select_expr`, which
+  // would make the value a SET OF expression in EdgeQL's semantics and
+  // therefore independent of the outer FILTER (test_edgeql_scope_filter_06).
+  // When either check fails, we fall back to dropping the filter, matching
+  // the pre-A3 behaviour.
+  const valueSourceIds = new Set(sources.keys());
+  const outerWhereSources = new Map<string, TypeRef>();
+  for (const where of outerWheres) {
+    collectScalarPointerSources(where, outerWhereSources);
+  }
+  const outerWheresMatchValueSources = outerWheres.length === 0
+    || (valueSourceIds.size > 0
+        && Array.from(outerWhereSources.keys()).every((id) => valueSourceIds.has(id)));
+  const valueIsSetOfWrapped = outerWheres.length > 0 && valueExprWrapsPointerInSelectExpr(sourceSet);
+  const appliedOuterWheres = (outerWheresMatchValueSources && !valueIsSetOfWrapped) ? outerWheres : [];
   const innerWheres = collectInnerWhereClauses(sourceSet);
   const valueSql = compileValueSetSQL(sourceSet, "g0", params, target, options);
   if (!valueSql) return null;
   if (sources.size === 0) {
-    if (innerWheres.length > 0) return null;
+    if (innerWheres.length > 0 || appliedOuterWheres.length > 0) return null;
     return `SELECT ${valueSql} AS ${quoteIdent("value")}`;
   }
   if (sources.size > 1) return null;
   const [typeRef] = sources.values();
-  const projectedColumns = collectReferencedColumns(sourceSet);
+  const projectedColumns = Array.from(new Set([
+    ...collectReferencedColumns(sourceSet),
+    ...appliedOuterWheres.flatMap((w) => collectReferencedColumns(w)),
+  ]));
   const sourceSql = compilePolymorphicSource(typeRef!, false, "g0", projectedColumns, options);
 
   // If every pointer to the source is wrapped in a set-level operator
   // (?=, ?!=, ??), the source's empty case should still produce one row
   // with NULL columns (so set-level ops yield their fallback values).
   // Use LEFT JOIN against a 1-row anchor to guarantee that row.
-  const useLeftJoin = innerWheres.length === 0 && allPathsAreSetLevelWrapped(sourceSet);
+  const useLeftJoin = innerWheres.length === 0 && appliedOuterWheres.length === 0 && allPathsAreSetLevelWrapped(sourceSet);
 
   let sql: string;
   if (useLeftJoin) {
@@ -1185,14 +1408,25 @@ const compileScalarSelectSQL = (
   } else {
     sql = `SELECT ${valueSql} AS ${quoteIdent("value")} FROM ${sourceSql}`;
   }
-  if (innerWheres.length > 0) {
-    const whereSqls: string[] = [];
-    for (const where of innerWheres) {
-      const compiled = compilePredicateSetSQL(where, "g0", params, target, options)
-        ?? compileValueSetSQL(where, "g0", params, target, options);
-      if (!compiled) return null;
-      whereSqls.push(compiled);
-    }
+  const whereSqls: string[] = [];
+  const compileWhere = (where: Set): string | null => {
+    const checkpoint = params.length;
+    const predicate = compilePredicateSetSQL(where, "g0", params, target, options);
+    if (predicate) return predicate;
+    params.length = checkpoint;
+    return compileValueSetSQL(where, "g0", params, target, options);
+  };
+  for (const where of innerWheres) {
+    const compiled = compileWhere(where);
+    if (!compiled) return null;
+    whereSqls.push(compiled);
+  }
+  for (const where of appliedOuterWheres) {
+    const compiled = compileWhere(where);
+    if (!compiled) return null;
+    whereSqls.push(compiled);
+  }
+  if (whereSqls.length > 0) {
     sql += ` WHERE ${whereSqls.join(" AND ")}`;
   }
   return sql;
@@ -2188,6 +2422,24 @@ const compileValueSetSQL = (
     return compiled;
   }
 
+  // `NOT EXISTS X` short-circuit (must beat the generic `operator_call`
+  // branch below, which routes through compilePredicateSetSQL and chokes
+  // on the empty-set marker). Inverse of the EXISTS CASE further down.
+  if (expr.kind === "operator_call"
+      && (expr as OperatorCall).operator === "not"
+      && Object.values((expr as OperatorCall).args).length === 1) {
+    const onlyArg = Object.values((expr as OperatorCall).args)[0] as CallArg;
+    if (onlyArg.expr.expr.kind === "exists_expr") {
+      const existsExpr = onlyArg.expr.expr as ExistsExpr;
+      const inner = compileValueSetSQL(existsExpr.expr, sourceAlias, params, target, options, linkPropertyAlias);
+      if (!inner) {
+        params.length = checkpoint;
+        return null;
+      }
+      return `(CASE WHEN ${inner} IS NULL THEN json('true') ELSE json('false') END)`;
+    }
+  }
+
   if (expr.kind === "operator_call") {
     const compiled = compileOperatorValueSQL(expr as OperatorCall, sourceAlias, params, target, options, linkPropertyAlias);
     if (!compiled) {
@@ -2256,6 +2508,7 @@ const compileValueSetSQL = (
     }
     return `(CASE WHEN ${inner} IS NULL THEN json('false') ELSE json('true') END)`;
   }
+
 
   if (expr.kind === "tuple") {
     const tuple = expr as Tuple;
@@ -2579,6 +2832,19 @@ const compileCountOfSetSQL = (
     params.length = checkpoint;
   }
 
+  // Set literals (`{1,2,3}`) and other operator_calls with non-scalar
+  // results land here via compileScalarSelectSQL — `count({…})` is the
+  // length of that union. (Scalar constants already evaluate to a single
+  // row, so they count as 1.)
+  if (expr.kind === "operator_call") {
+    const checkpoint = params.length;
+    const scalarSql = compileScalarSelectSQL(set, params, target, options);
+    if (scalarSql) {
+      return `(SELECT count(*) FROM (${scalarSql}))`;
+    }
+    params.length = checkpoint;
+  }
+
   return null;
 };
 
@@ -2592,11 +2858,25 @@ const compileFunctionCallSQL = (
 ): string | null => {
   const checkpoint = params.length;
 
-  // Aggregates whose argument is a type_root: lower to `(SELECT agg(*) FROM table)`.
+  // Aggregates whose argument is a set: lower to `(SELECT agg(value) FROM (<set-sql>))`.
+  // count() has its own dedicated lowering that handles type_root, tuple
+  // cross-products, and select_expr modifiers; sum/min/max/avg/array_agg all
+  // share the generic "compile the arg as a scalar value set, then wrap in
+  // the SQL aggregate" shape.
   const shortName = call.functionName.split("::").pop() ?? "";
-  const aggregateOfType = ["count", "min", "max", "sum", "avg"].includes(shortName);
+  const aggregateOfType = ["count", "min", "max", "sum", "avg", "array_agg"].includes(shortName);
   if (aggregateOfType) {
     const argList = orderedCallArgs(call.args);
+    // Empty-set short-circuit: EdgeQL aggregates over the empty set have
+    // defined identities. Without this, e.g. `array_agg(<int64>{})` would
+    // compile to `json_group_array` over a single-row `SELECT NULL` and
+    // produce `[null]` instead of the correct `[]`.
+    if (argList.length === 1 && isTopLevelEmptySetMarker(argList[0].expr)) {
+      if (shortName === "count") return "0";
+      if (shortName === "sum") return "0";
+      if (shortName === "array_agg") return "json('[]')";
+      if (shortName === "min" || shortName === "max" || shortName === "avg") return "NULL";
+    }
     if (shortName === "count" && argList.length === 1) {
       const countSql = compileCountOfSetSQL(argList[0].expr, params, target, options);
       if (countSql) {
@@ -2610,7 +2890,20 @@ const compileFunctionCallSQL = (
       if (shortName === "count") {
         return `(SELECT count(*) FROM ${fromSql})`;
       }
-      // Other aggregates need a value column — not handled here.
+      // sum/min/max/avg/array_agg over a bare type_root have no value column,
+      // so they would aggregate over `id` which isn't useful — fall through to
+      // null so the caller can reject the query.
+    }
+    if (argList.length === 1 && shortName !== "count") {
+      const innerCheckpoint = params.length;
+      const scalarSql = compileScalarSelectSQL(argList[0].expr, params, target, options);
+      if (scalarSql) {
+        const sqlAgg = shortName === "array_agg"
+          ? `json_group_array(${quoteIdent("value")})`
+          : `${shortName}(${quoteIdent("value")})`;
+        return `(SELECT ${sqlAgg} FROM (${scalarSql}))`;
+      }
+      params.length = innerCheckpoint;
     }
   }
 
@@ -3075,16 +3368,51 @@ const isTopLevelEmptySetMarker = (set: Set): boolean => {
 // handled separately. Returns true when the SELECT's top expression is
 // guaranteed to be empty by this rule.
 const STRICT_COMPARE_OPS = new Set(["=", "!=", "<", "<=", ">", ">="]);
+// Strict binary operators that propagate empty-set: comparisons, arithmetic,
+// concatenation, logical, and standard relational ops. NOT included: `??`,
+// `?=`, `?!=` (set-level coalescing), `union` (combines, doesn't propagate),
+// `distinct` (degenerates to empty itself), `and`/`or` (short-circuit at
+// boolean level — empty-bool is not empty-result).
+const STRICT_BINARY_OPS = new Set([
+  ...STRICT_COMPARE_OPS,
+  "+", "-", "*", "/", "//", "%", "^", "++",
+  "like", "ilike", "in", "not in",
+]);
+// Stdlib functions that DO NOT propagate empty-set: they yield a defined
+// result (false / 0 / [] / throw) when their arg is empty.
+const NON_STRICT_STDLIB = new Set([
+  "exists", "not exists",
+  "count", "array_agg", "sum",
+  "assert_exists", "assert_single", "assert_distinct",
+  "coalesce",
+  "enumerate",
+]);
 const selectYieldsEmptyByStrictOperand = (set: Set): boolean => {
   let expr: Expr = set.expr;
   while (expr.kind === "type_cast") {
     expr = (expr as TypeCast).expr.expr;
   }
-  if (expr.kind !== "operator_call") return false;
-  const op = (expr as OperatorCall).operator;
-  if (!STRICT_COMPARE_OPS.has(op)) return false;
-  const args = orderedCallArgs((expr as OperatorCall).args);
-  return args.some((arg) => isTopLevelEmptySetMarker(arg.expr));
+  if (expr.kind === "operator_call") {
+    const op = (expr as OperatorCall).operator;
+    if (op === "not") {
+      const args = orderedCallArgs((expr as OperatorCall).args);
+      const onlyArg = args[0]?.expr;
+      // `NOT EXISTS X` is always defined (true when X empty), not empty-propagating.
+      if (onlyArg && onlyArg.expr.kind === "exists_expr") return false;
+      return Boolean(onlyArg && isTopLevelEmptySetMarker(onlyArg));
+    }
+    if (!STRICT_BINARY_OPS.has(op)) return false;
+    const args = orderedCallArgs((expr as OperatorCall).args);
+    return args.some((arg) => isTopLevelEmptySetMarker(arg.expr));
+  }
+  if (expr.kind === "function_call") {
+    const call = expr as FunctionCall;
+    const shortName = (call.functionName ?? "").split("::").pop() ?? "";
+    if (NON_STRICT_STDLIB.has(shortName)) return false;
+    const args = orderedCallArgs(call.args);
+    return args.some((arg) => isTopLevelEmptySetMarker(arg.expr));
+  }
+  return false;
 };
 
 const resolveInputValue = (

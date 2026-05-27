@@ -1628,6 +1628,12 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
           if (arg.kind === "field_ref") {
             return compileFreeObjectExpr({ kind: "binding_ref", name: arg.field }, ctx);
           }
+          // Bare-expression args (binding_ref `Issue`, field_access `Issue.x`,
+          // tuple `(a, b)`, select `(SELECT …)`, etc.) arrive here without an
+          // `{kind:"expr"}` wrapper. They are themselves FreeObjectExprs and
+          // must be lowered as such — otherwise we fall through to the null
+          // literal and `count(Issue)` becomes count of an empty scalar set.
+          return compileFreeObjectExpr(arg as FreeObjectExpr, ctx);
         }
         return literalToSet(null);
       });

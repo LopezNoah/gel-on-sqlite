@@ -33,6 +33,23 @@ const STDLIB_SQL_TEMPLATES = new Map<string, StdlibSqlTemplate>([
   ["std::min", (argSql) => argSql[0] ? `min(${argSql[0]})` : null],
   ["std::str_lower", (argSql) => argSql[0] ? `lower(COALESCE(CAST(${argSql[0]} AS TEXT), ''))` : null],
   ["std::str_upper", (argSql) => argSql[0] ? `upper(COALESCE(CAST(${argSql[0]} AS TEXT), ''))` : null],
+  // SQLite's round() rounds half-to-even at the boundary, matching EdgeQL.
+  ["std::round", (argSql) => {
+    if (!argSql[0]) return null;
+    if (argSql[1]) return `round(${argSql[0]}, ${argSql[1]})`;
+    return `round(${argSql[0]})`;
+  }],
+  // `find(haystack, needle)` returns 0-based position or -1 if not found.
+  // SQLite's instr returns 1-based, 0 if not found — translate accordingly.
+  ["std::find", (argSql) => {
+    if (!argSql[0] || !argSql[1]) return null;
+    return `(instr(CAST(${argSql[0]} AS TEXT), CAST(${argSql[1]} AS TEXT)) - 1)`;
+  }],
+  // `contains(haystack, needle)` for strings: true if instr > 0.
+  ["std::contains", (argSql) => {
+    if (!argSql[0] || !argSql[1]) return null;
+    return `(instr(CAST(${argSql[0]} AS TEXT), CAST(${argSql[1]} AS TEXT)) > 0)`;
+  }],
   ["std::datetime_get", (argSql) => {
     if (!argSql[0] || !argSql[1]) {
       return null;
@@ -68,12 +85,19 @@ export const lowerStdlibFunctionSql = (
   functionName: string,
   args: string[],
 ): string | null => {
-  if (!canLowerStdlibFunctionSql(target, functionName)) {
-    return null;
+  // Unqualified names (e.g. `len`, `count`) reach us when the AST→IR
+  // pass doesn't qualify the function. Try the standard module prefixes
+  // before giving up — matches tryResolveStdlibFunction in stdlib/functions.
+  const candidates = functionName.includes("::")
+    ? [functionName]
+    : [`std::${functionName}`, `math::${functionName}`, `cal::${functionName}`];
+  for (const candidate of candidates) {
+    if (!canLowerStdlibFunctionSql(target, candidate)) continue;
+    const template = STDLIB_SQL_TEMPLATES.get(candidate);
+    if (template) {
+      const result = template(args);
+      if (result) return result;
+    }
   }
-  const template = STDLIB_SQL_TEMPLATES.get(functionName);
-  if (!template) {
-    return null;
-  }
-  return template(args);
+  return null;
 };

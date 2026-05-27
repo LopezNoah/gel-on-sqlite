@@ -856,7 +856,7 @@ const compileShapeObjectExpr = (
     pairs.push(quoteLiteral(element.name));
 
     if (element.kind === "field") {
-      pairs.push(`${sourceAlias}.${quoteIdent(element.column)}`);
+      pairs.push(jsonObjectFieldValueSQL(sourceAlias, element.column));
       continue;
     }
 
@@ -1070,6 +1070,13 @@ const requiredAlias = (value: string | undefined): string => {
   return value;
 };
 
+const jsonObjectFieldValueSQL = (sourceAlias: string, column: string): string => {
+  if (column === "from_alias" || column === "is_abstract" || column === "delegated") {
+    return `json(CASE WHEN ${sourceAlias}.${quoteIdent(column)} THEN 'true' ELSE 'false' END)`;
+  }
+  return `${sourceAlias}.${quoteIdent(column)}`;
+};
+
 const compileLinkAggregateExpr = (
   expr: Extract<Extract<SelectShapeElementIR, { kind: "computed" }>["expr"], { kind: "link_aggregate" }>,
   sourceAlias: string,
@@ -1194,6 +1201,44 @@ const filterColumnSql = (column: string, sourceAlias: string, linkPropertyAlias?
   return `${sourceAlias}.${quoteIdent(column)}`;
 };
 
+const compileLinkExistsPredicate = (
+  relation: LinkRelationIR,
+  sourceAlias: string,
+  aliasSeed: string,
+): string => {
+  if (relation.storage === "inline") {
+    return `${sourceAlias}.${quoteIdent(requiredInlineColumn(relation.inlineColumn))} IS NOT NULL`;
+  }
+
+  const alias = `le_${Math.abs(hashString(aliasSeed)).toString(16)}`;
+  return `EXISTS (SELECT 1 FROM ${linkJunctionFrom(relation, alias)} WHERE ${alias}.${quoteIdent("source")} = ${sourceAlias}.${quoteIdent("id")})`;
+};
+
+const compileLinkTargetLinkExistsPredicate = (
+  relation: LinkRelationIR,
+  targetRelation: LinkRelationIR,
+  sourceAlias: string,
+): string => {
+  const targets = relation.targetTables.length > 0
+    ? relation.targetTables
+    : [{ name: relation.targetType, table: relation.targetTable }];
+  const relationAlias = `ltle_${Math.abs(hashString(`${relation.sourceType}:${relation.targetType}:${targetRelation.sourceType}`)).toString(16)}`;
+  const clauses = targets.map((target, index) => {
+    const targetAlias = `${relationAlias}_t${index}`;
+    const nestedExists = compileLinkExistsPredicate(
+      targetRelation,
+      targetAlias,
+      `${targetRelation.sourceType}:${targetRelation.targetType}:${targetRelation.linkTable ?? targetRelation.inlineColumn ?? "inline"}:${index}`,
+    );
+    if (relation.storage === "inline") {
+      return `EXISTS (SELECT 1 FROM ${quoteIdent(target.table)} ${targetAlias} WHERE ${targetAlias}.${quoteIdent("id")} = ${sourceAlias}.${quoteIdent(requiredInlineColumn(relation.inlineColumn))} AND ${nestedExists})`;
+    }
+    return `EXISTS (SELECT 1 FROM ${linkJunctionFrom(relation, relationAlias)} JOIN ${quoteIdent(target.table)} ${targetAlias} ON ${targetAlias}.${quoteIdent("id")} = ${relationAlias}.${quoteIdent("target")} WHERE ${relationAlias}.${quoteIdent("source")} = ${sourceAlias}.${quoteIdent("id")} AND ${nestedExists})`;
+  });
+  if (clauses.length === 0) return "0";
+  return clauses.length === 1 ? clauses[0]! : `(${clauses.join(" OR ")})`;
+};
+
 const compileFilterExprSQL = (
   filter: FilterExprIR,
   sourceAlias: string,
@@ -1278,6 +1323,14 @@ const compileFilterExprSQL = (
     }
     const alias = `lp_${Math.abs(hashString(`${filter.relation.sourceType}:${filter.relation.linkTable}:${filter.property}`)).toString(16)}`;
     return `EXISTS (SELECT 1 FROM ${linkJunctionFrom(filter.relation, alias)} WHERE ${alias}.${quoteIdent("source")} = ${sourceAlias}.${quoteIdent("id")} AND ${alias}.${quoteIdent(filter.property)} IS NOT NULL)`;
+  }
+
+  if (filter.kind === "link_exists") {
+    return compileLinkExistsPredicate(filter.relation, sourceAlias, `${filter.relation.sourceType}:${filter.relation.targetType}:${filter.relation.linkTable ?? filter.relation.inlineColumn ?? "inline"}`);
+  }
+
+  if (filter.kind === "link_target_link_exists") {
+    return compileLinkTargetLinkExistsPredicate(filter.relation, filter.targetRelation, sourceAlias);
   }
 
   if (filter.kind === "link_property_compare_exists") {
@@ -1511,6 +1564,12 @@ const collectFieldFilterColumns = (filter: FilterExprIR | undefined): string[] =
 
   if (filter.kind === "link_property_exists") {
     return [];
+  }
+
+  if (filter.kind === "link_exists" || filter.kind === "link_target_link_exists") {
+    return filter.relation.storage === "inline" && filter.relation.inlineColumn
+      ? [filter.relation.inlineColumn]
+      : [];
   }
 
   if (filter.kind === "link_property_compare_exists") {

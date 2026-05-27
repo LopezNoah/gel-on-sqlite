@@ -239,6 +239,15 @@ export type FilterExprIR =
       property: string;
     }
   | {
+      kind: "link_exists";
+      relation: LinkRelationIR;
+    }
+  | {
+      kind: "link_target_link_exists";
+      relation: LinkRelationIR;
+      targetRelation: LinkRelationIR;
+    }
+  | {
       kind: "link_property_compare_exists";
       relation: LinkRelationIR;
       targetColumn: string;

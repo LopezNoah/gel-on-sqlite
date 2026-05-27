@@ -998,12 +998,11 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     filter: FilterExpr,
     options: { allowBacklink: boolean; fallbackModule: string; subjectType?: TypeDef },
   ): FilterExprIR => {
-    const buildSubjectLinkRelation = (linkName: string): LinkRelationIR => {
-      const subjectType = options.subjectType ?? fail(`Unknown link '${linkName}' on '${typeLabel}'`);
-      const ownerQualifiedName = qualifiedTypeName(subjectType);
-      const ownerScopeModule = subjectType.module ?? options.fallbackModule;
+    const buildForwardLinkRelation = (ownerTypeDef: TypeDef, linkName: string): LinkRelationIR => {
+      const ownerQualifiedName = qualifiedTypeName(ownerTypeDef);
+      const ownerScopeModule = ownerTypeDef.module ?? options.fallbackModule;
       const link = requireValue(
-        collectLinks(subjectType, true).find((candidate) => candidate.name === linkName),
+        collectLinks(ownerTypeDef, true).find((candidate) => candidate.name === linkName),
         `Unknown link '${linkName}' on '${ownerQualifiedName}'`,
       );
       const targetTypeNames = linkTargetNames(link.targetType, ownerScopeModule);
@@ -1022,8 +1021,13 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         storage: usesLinkTable ? "table" : "inline",
         inlineColumn: usesLinkTable ? undefined : `${link.name}_id`,
         linkTable: usesLinkTable ? `${tableNameForType(ownerQualifiedName)}__${link.name.toLowerCase()}` : undefined,
-        linkTables: usesLinkTable ? collectLinkTableSources(subjectType, link.name) : undefined,
+        linkTables: usesLinkTable ? collectLinkTableSources(ownerTypeDef, link.name) : undefined,
       };
+    };
+
+    const buildSubjectLinkRelation = (linkName: string): LinkRelationIR => {
+      const subjectType = options.subjectType ?? fail(`Unknown link '${linkName}' on '${typeLabel}'`);
+      return buildForwardLinkRelation(subjectType, linkName);
     };
 
     // Mapping for the small whitelist of stdlib scalar functions the filter
@@ -1723,6 +1727,37 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       // EdgeQL treats `filter X = ...` as a name reference that must resolve to
       // an object type / alias (a field would be written `.X`).
       fail(`object type or alias '${normalizeTypeName(targetBareName, options.fallbackModule)}' does not exist`);
+    }
+
+    if (filter.op === "=" && resolvedFilterValue === true && options.subjectType) {
+      const pathParts = targetField.split(".");
+      if (pathParts.length === 1) {
+        const link = collectLinks(options.subjectType, true).find((candidate) => candidate.name === targetField);
+        if (link) {
+          return {
+            kind: "link_exists",
+            relation: buildForwardLinkRelation(options.subjectType, link.name),
+          };
+        }
+      }
+      if (pathParts.length === 2) {
+        const [linkName, targetLinkName] = pathParts;
+        const link = collectLinks(options.subjectType, true).find((candidate) => candidate.name === linkName);
+        if (link) {
+          const relation = buildForwardLinkRelation(options.subjectType, link.name);
+          const targetType = schema.getType(relation.targetType);
+          const targetLink = targetType
+            ? collectLinks(targetType, true).find((candidate) => candidate.name === targetLinkName)
+            : undefined;
+          if (targetType && targetLink) {
+            return {
+              kind: "link_target_link_exists",
+              relation,
+              targetRelation: buildForwardLinkRelation(targetType, targetLink.name),
+            };
+          }
+        }
+      }
     }
 
     if (!knownFields.has(targetField) && targetField.includes(".") && options.subjectType) {
@@ -2658,17 +2693,20 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         const elementPathId = createPathId(pathId);
         if (shapeElement.expr.kind === "field_ref") {
           if (shapeElement.expr.field.startsWith("@")) {
-            const propertyName = shapeElement.expr.field.slice(1);
+            const rawPropertyName = shapeElement.expr.field.slice(1);
+            const propertyName = [...(options.linkProperties ?? new Set<string>())]
+              .find((candidate) => candidate.toLowerCase() === rawPropertyName.toLowerCase())
+              ?? rawPropertyName;
             if (!options.linkProperties?.has(propertyName)) {
               fail(`Unknown field '${shapeElement.expr.field}' on '${qualifiedName}'`);
             }
             shapeElements.push({
               kind: "computed",
-              name: shapeElement.name,
+              name: shapeElement.name.startsWith("@") ? `@${propertyName}` : shapeElement.name,
               pathId: toPathIdIR(elementPathId),
               expr: {
                 kind: "field_ref",
-                column: shapeElement.expr.field,
+                column: `@${propertyName}`,
               },
             });
             shapeNames.add(shapeElement.name);
@@ -3323,6 +3361,11 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         return built;
       }
       let value = term.field.startsWith("@") ? term.field.slice(1) : term.field;
+      if (term.field.startsWith("@") && options.linkProperties) {
+        value = [...options.linkProperties]
+          .find((candidate) => candidate.toLowerCase() === value.toLowerCase())
+          ?? value;
+      }
       if (!term.field.startsWith("@") && options.linkScopeName && value.startsWith(`${options.linkScopeName}.`)) {
         // Strip the link's own name from the path. `ORDER BY User.deck.cost`
         // parses to field `deck.cost`; from the link target's perspective
