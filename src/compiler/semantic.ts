@@ -2151,6 +2151,12 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       typeFilterExprs?: TypeExpr[];
       branchTypeFilterExprs?: TypeExpr[];
       subjectBindingName?: string;
+      // Set when this call compiles a link/backlink shape element. Strips a
+      // leading `<linkScopeName>.` from clause-orderBy field paths so e.g.
+      // `deck: { id } ORDER BY User.deck.cost` resolves `cost` relative to
+      // the link target (the parser already strips `User.`, leaving us with
+      // `deck.cost`).
+      linkScopeName?: string;
     },
     ): {
       pathId: PathIdIR;
@@ -3183,6 +3189,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         const nested = compileSelectForType(nestedType, linkPathId, shapeElement.shape, shapeElement.clauses, {
           allowBacklinkFilter: false,
           linkProperties: new Set(sources.flatMap((source) => source.propertyColumns ?? [])),
+          linkScopeName: shapeElement.name,
         });
         shapeElements.push({
           kind: "backlink",
@@ -3228,6 +3235,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           ...(relation.propertyColumns ?? []),
           ...(relation.computedProperties ?? []).map((property) => property.name),
         ]),
+        linkScopeName: shapeElement.name,
       });
 
       if (relation.storage === "inline") {
@@ -3315,6 +3323,12 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         return built;
       }
       let value = term.field.startsWith("@") ? term.field.slice(1) : term.field;
+      if (!term.field.startsWith("@") && options.linkScopeName && value.startsWith(`${options.linkScopeName}.`)) {
+        // Strip the link's own name from the path. `ORDER BY User.deck.cost`
+        // parses to field `deck.cost`; from the link target's perspective
+        // (Card), the actual sort column is `cost`.
+        value = value.slice(options.linkScopeName.length + 1);
+      }
       if (!term.field.startsWith("@") && value.includes(".")) {
         return undefined;
       }
