@@ -3303,6 +3303,17 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
 
     const resolveOrderByTerm = (term: OrderExpr | undefined): OrderByIR<string> | undefined => {
       if (!term) return undefined;
+      if (term.expr) {
+        const built: OrderByIR<string> = {
+          value: "__expr__",
+          direction: term.direction,
+          exprAst: term.expr,
+        };
+        if (term.nullsPosition) built.nullsPosition = term.nullsPosition;
+        const nextTerm = resolveOrderByTerm(term.then);
+        if (nextTerm) built.then = nextTerm;
+        return built;
+      }
       let value = term.field.startsWith("@") ? term.field.slice(1) : term.field;
       if (!term.field.startsWith("@") && value.includes(".")) {
         return undefined;

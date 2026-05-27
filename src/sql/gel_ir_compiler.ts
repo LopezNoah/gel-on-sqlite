@@ -73,6 +73,24 @@ export const compileGelIRToSQL = (
   const selectWhere = statement.where ?? topSelect.selectExpr?.where;
   const selectOrderBy = statement.orderBy ?? topSelect.selectExpr?.orderBy;
   const sourceSet = topSelect.selectExpr ? topSelect.result : unwrapSelectResultSet(statement.expr);
+
+  // `SELECT <T>{}` (and bare `SELECT {}`) must yield zero rows, not one
+  // NULL row. The IR represents an empty set literal as a typeless
+  // `string_constant` with `value: null` (see literalToSet in ast_to_ir);
+  // without this shortcut we would lower it to `SELECT ? AS "value"` with a
+  // single null parameter, which SQLite materializes as one row.
+  //
+  // Same rule for strict binary operators (`=`, `<`, `+`, etc.) whose cross
+  // product with an empty operand is also empty: SQL would otherwise
+  // materialize a single NULL/false row.
+  if (sourceSet && (isTopLevelEmptySetMarker(sourceSet) || selectYieldsEmptyByStrictOperand(sourceSet))) {
+    return {
+      sql: `SELECT NULL AS ${quoteIdent("value")} WHERE 0`,
+      params,
+      loweringMode: "single_statement",
+    };
+  }
+
   if (sourceSet?.expr.kind === "for_expr") {
     const projectedColumns = collectForExprProjectedColumns(sourceSet, selectWhere, selectOrderBy);
     const forSource = compileForExprSource(sourceSet, projectedColumns, options);
@@ -720,8 +738,8 @@ const tryCompileSetLevelCoalesceSQL = (
 
   const lhsSources = new Map<string, TypeRef>();
   collectScalarPointerSources(coalesce.left, lhsSources);
-  if (lhsSources.size !== 1) return null;
-  const [lhsTypeRef] = lhsSources.values();
+  if (lhsSources.size > 1) return null;
+  const lhsTypeRef = lhsSources.size === 1 ? lhsSources.values().next().value : undefined;
   const lhsWheres = collectInnerWhereClauses(coalesce.left);
 
   const paramsStart = params.length;
@@ -731,7 +749,7 @@ const tryCompileSetLevelCoalesceSQL = (
     return null;
   }
   const projectedColumns = collectReferencedColumns(coalesce.left);
-  const lhsFrom = compilePolymorphicSource(lhsTypeRef, false, "g0", projectedColumns, options);
+  const lhsFrom = lhsTypeRef ? compilePolymorphicSource(lhsTypeRef, false, "g0", projectedColumns, options) : null;
 
   const whereStart = params.length;
   const whereParts: string[] = [];
@@ -771,11 +789,25 @@ const tryCompileSetLevelCoalesceSQL = (
     rhsRowsSql = `SELECT ${rhsSql} AS ${quoteIdent("value")}`;
   }
 
-  params.push(...whereParams);
+  if (lhsFrom) {
+    params.push(...whereParams);
+    return `SELECT ${lhsSql} AS ${quoteIdent("value")} FROM ${lhsFrom} WHERE ${lhsWhereSql}`
+      + ` UNION ALL `
+      + `SELECT ${quoteIdent("value")} FROM (${rhsRowsSql}) WHERE NOT EXISTS (SELECT 1 FROM ${lhsFrom} WHERE ${lhsWhereSql})`;
+  }
 
-  return `SELECT ${lhsSql} AS ${quoteIdent("value")} FROM ${lhsFrom} WHERE ${lhsWhereSql}`
+  // LHS has no polymorphic source — it's a literal/parameter/scalar
+  // expression whose lhsSql may itself carry placeholders. Wrap it in a
+  // CTE so lhsSql appears only once. The `IS NOT NULL` check is moved
+  // outside the CTE (testing the projected `value` column) so we don't
+  // need to repeat lhsSql, and the empty-LHS fallback can detect via
+  // `NOT EXISTS … WHERE value IS NOT NULL`.
+  const innerWhereSqlNoNullCheck = whereParts.slice(0, -1).join(" AND ");
+  const cteWhereClause = innerWhereSqlNoNullCheck ? ` WHERE ${innerWhereSqlNoNullCheck}` : "";
+  return `WITH lhs_q AS (SELECT ${lhsSql} AS ${quoteIdent("value")}${cteWhereClause})`
+    + ` SELECT ${quoteIdent("value")} FROM lhs_q WHERE ${quoteIdent("value")} IS NOT NULL`
     + ` UNION ALL `
-    + `SELECT ${quoteIdent("value")} FROM (${rhsRowsSql}) WHERE NOT EXISTS (SELECT 1 FROM ${lhsFrom} WHERE ${lhsWhereSql})`;
+    + `SELECT ${quoteIdent("value")} FROM (${rhsRowsSql}) WHERE NOT EXISTS (SELECT 1 FROM lhs_q WHERE ${quoteIdent("value")} IS NOT NULL)`;
 };
 
 // Describes one side of a set-level ?= / ?!= comparison. The descriptor is
@@ -1987,6 +2019,26 @@ const compileValueSetSQL = (
 
   if (expr.kind === "type_cast") {
     const castExpr = expr as TypeCast;
+    // Tuple casts are structural reprojections (named → positional, rename,
+    // or both). When the source is a literal `tuple` expression we can
+    // re-emit it directly with the target slot names/shape instead of
+    // letting the inner emit win — otherwise `json_object('name', …)`
+    // would survive a `<tuple<…>>` cast that wanted `json_array(…)`.
+    const targetTupleSlots = parseTupleTypeSlots(qualifyTypeName(castExpr.toType));
+    if (targetTupleSlots && castExpr.expr.expr.kind === "tuple") {
+      const sourceTuple = castExpr.expr.expr as Tuple;
+      const sourceParts = sourceTuple.elements.map((element) =>
+        compileValueSetSQL(element.val, sourceAlias, params, target, options, linkPropertyAlias));
+      if (sourceParts.some((part) => !part)) {
+        params.length = checkpoint;
+        return null;
+      }
+      const targetIsNamed = targetTupleSlots.length > 0 && targetTupleSlots.every((s) => s.name !== undefined);
+      if (targetIsNamed) {
+        return `json_object(${targetTupleSlots.map((slot, idx) => `${quoteLiteral(slot.name!)}, ${sourceParts[idx]}`).join(", ")})`;
+      }
+      return `json_array(${sourceParts.slice(0, targetTupleSlots.length).join(", ")})`;
+    }
     const inner = compileValueSetSQL(castExpr.expr, sourceAlias, params, target, options, linkPropertyAlias);
     if (!inner) {
       params.length = checkpoint;
@@ -2103,12 +2155,18 @@ const compileValueSetSQL = (
     if (base && numericIndex !== undefined && (baseType === "std::str" || baseType === "std::bytes")) {
       return `substr(${base}, ${numericIndex >= 0 ? numericIndex + 1 : numericIndex}, 1)`;
     }
+    if (base && numericIndex !== undefined) {
+      // Inline the index as a literal integer in the JSON path. Using `?`
+      // would let SQLite render JS Numbers as `0.0` during `||`
+      // concatenation, producing an invalid path like `$[0.0]`.
+      return `json_extract(${base}, '$[${numericIndex}]')`;
+    }
     const index = compileValueSetSQL(indexExpr.index, sourceAlias, params, target, options, linkPropertyAlias);
     if (!base || !index) {
       params.length = checkpoint;
       return null;
     }
-    return `json_extract(${base}, '$[' || ${index} || ']')`;
+    return `json_extract(${base}, '$[' || CAST(${index} AS INTEGER) || ']')`;
   }
 
   if (expr.kind === "slice_expr") {
@@ -2444,6 +2502,42 @@ const orderedCallArgs = (args: Record<string, CallArg>): CallArg[] => {
   return Object.entries(args)
     .sort(([left], [right]) => left.localeCompare(right, undefined, { numeric: true }))
     .map(([, arg]) => arg);
+};
+
+// Parse `tuple<…>` / `default::tuple<…>` type names into slot descriptors.
+// Returns null when the type isn't a tuple. Slots have a `name` only when
+// the tuple is named (e.g. `tuple<a: str, b: int64>` → `[{name:"a",…},{name:"b",…}]`,
+// while `tuple<str, int64>` → `[{type:"str"},{type:"int64"}]`).
+const parseTupleTypeSlots = (typeName: string): { name?: string; type: string }[] | null => {
+  const m = /^(?:default::)?tuple<(.*)>$/.exec(typeName.trim());
+  if (!m) return null;
+  const inner = m[1];
+  const slots: { name?: string; type: string }[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i <= inner.length; i += 1) {
+    const c = inner[i];
+    if (c === "<") depth += 1;
+    else if (c === ">") depth -= 1;
+    if ((c === "," && depth === 0) || i === inner.length) {
+      const part = inner.slice(start, i).trim();
+      start = i + 1;
+      if (part.length === 0) continue;
+      let colonIdx = -1;
+      let d = 0;
+      for (let j = 0; j < part.length; j += 1) {
+        if (part[j] === "<") d += 1;
+        else if (part[j] === ">") d -= 1;
+        else if (part[j] === ":" && d === 0) { colonIdx = j; break; }
+      }
+      if (colonIdx > 0) {
+        slots.push({ name: part.slice(0, colonIdx).trim(), type: part.slice(colonIdx + 1).trim() });
+      } else {
+        slots.push({ type: part });
+      }
+    }
+  }
+  return slots;
 };
 
 const sqlCastTarget = (typeRef: TypeRef): "TEXT" | "INTEGER" | "REAL" | null => {
@@ -2828,6 +2922,35 @@ const extractScalarConstant = (set: Set): ScalarValue | undefined => {
   }
 
   return undefined;
+};
+
+// Detect the empty-set sentinel that `literalToSet(null)` produces in
+// ast_to_ir.ts: a `string_constant` with `value: null`, optionally wrapped
+// in one or more `type_cast` layers (e.g. `<Issue>{}` casts the sentinel).
+// Real string literals never carry `null` here.
+const isTopLevelEmptySetMarker = (set: Set): boolean => {
+  let expr: Expr = set.expr;
+  while (expr.kind === "type_cast") {
+    expr = (expr as TypeCast).expr.expr;
+  }
+  return expr.kind === "string_constant" && (expr as BaseConstant).value === null;
+};
+
+// EdgeQL semantics: any strict (non-coalescing) operator with an empty-set
+// operand yields the empty set. `?=`, `?!=`, and `??` are coalescing and
+// handled separately. Returns true when the SELECT's top expression is
+// guaranteed to be empty by this rule.
+const STRICT_COMPARE_OPS = new Set(["=", "!=", "<", "<=", ">", ">="]);
+const selectYieldsEmptyByStrictOperand = (set: Set): boolean => {
+  let expr: Expr = set.expr;
+  while (expr.kind === "type_cast") {
+    expr = (expr as TypeCast).expr.expr;
+  }
+  if (expr.kind !== "operator_call") return false;
+  const op = (expr as OperatorCall).operator;
+  if (!STRICT_COMPARE_OPS.has(op)) return false;
+  const args = orderedCallArgs((expr as OperatorCall).args);
+  return args.some((arg) => isTopLevelEmptySetMarker(arg.expr));
 };
 
 const resolveInputValue = (

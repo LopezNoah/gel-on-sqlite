@@ -339,6 +339,18 @@ class Parser {
     return this.consume();
   }
 
+  // Throws an E_SYNTAX error tagged with `[not supported]` so callers (tests,
+  // tooling, users) can search/filter for parity gaps without false positives
+  // against ordinary "Expected X" diagnostics. Use this anywhere upstream
+  // EdgeQL accepts a construct that sqlite-ts has not yet implemented, or
+  // where upstream explicitly rejects a construct that we want to mirror.
+  private notSupported(token: Token, area: string, detail?: string): never {
+    const msg = detail
+      ? `[not supported] ${area}: ${detail}`
+      : `[not supported] ${area}`;
+    throw new AppError("E_SYNTAX", msg, ...this.posPair(token));
+  }
+
   private isKeywordLikeToken(token: Token): boolean {
     const k = token.kind;
     return KW_TOKEN_KINDS.has(k) || k === "identifier" || k === "backtick_name";
@@ -428,8 +440,65 @@ class Parser {
     if (!this.isNameToken(token)) {
       throw new AppError("E_SYNTAX", message, ...this.posPair(token));
     }
+    this.rejectReservedDunderName(token);
     this.index += 1;
     return { ...token, lexeme: this.nameTokenLexeme(token) };
+  }
+
+  // Names surrounded by double-underscores (`__Foo__`, `__std__`, etc.) and
+  // certain magic names (`__type__`, `__source__`, `__subject__`) are reserved
+  // by EdgeQL — the upstream parser rejects them as identifiers in user code.
+  // We don't yet wire them into context-sensitive positions (constraint
+  // bodies, default expressions, type-intersection paths), so any appearance
+  // in name position is treated as `[not supported]`. Backtick-quoted forms
+  // like `` `__Foo__` `` are also rejected to match upstream behaviour.
+  private rejectReservedDunderName(token: Token): void {
+    const raw = token.kind === "backtick_name"
+      ? token.lexeme.replace(/^`|`$/g, "")
+      : token.lexeme;
+    if (this.isReservedDunderName(raw)) {
+      this.notSupported(
+        token,
+        "reserved double-underscore identifier",
+        `'${raw}' is reserved by EdgeQL and not usable as a plain identifier here`,
+      );
+    }
+  }
+
+  // Magic identifiers that EdgeQL exposes for path/shape/constraint/policy/
+  // trigger contexts. They are *never* valid as a bare top-level reference
+  // (e.g. `SELECT __type__` is an error upstream, even though `.__type__`
+  // and `Foo.__type__` are fine).
+  private isMagicBareReferenceRejected(name: string): boolean {
+    const BARE_REJECTED: ReadonlySet<string> = new Set([
+      "__type__",
+      "__source__",
+      "__subject__",
+      "__new__",
+      "__old__",
+      "__default__",
+      "__specified__",
+    ]);
+    return BARE_REJECTED.has(name);
+  }
+
+  // Names that should never appear as a user identifier. Excludes the
+  // EdgeQL-magic names (`__type__`, `__source__`, etc.) which are legal in
+  // their idiomatic positions.
+  private isReservedDunderName(name: string): boolean {
+    if (name.length < 4) return false;
+    if (!name.startsWith("__") || !name.endsWith("__")) return false;
+    const EDGEQL_MAGIC_ALLOWED: ReadonlySet<string> = new Set([
+      "__type__",
+      "__source__",
+      "__subject__",
+      "__new__",
+      "__old__",
+      "__default__",
+      "__specified__",
+      "__internal__",
+    ]);
+    return !EDGEQL_MAGIC_ALLOWED.has(name);
   }
 
   private atParenthesizedSelect(): boolean {
@@ -479,7 +548,63 @@ class Parser {
 
   private parseNumberLexeme(value: string): number {
     const normalized = value.endsWith("n") ? value.slice(0, -1) : value;
-    return Number(normalized.replace(/_/g, ""));
+    const cleaned = normalized.replace(/_/g, "");
+    return Number(cleaned);
+  }
+
+  // Validate a numeric literal token's value-range, matching upstream EdgeQL's
+  // syntax-level checks. Called wherever a number token is consumed for an
+  // expression (not for array indexes / slices, which are free to be huge).
+  // Mirrors `errors.EdgeQLSyntaxError` for: number too large (integer), float
+  // exponent too large / too small (under-/overflow Number).
+  private validateNumericLiteralToken(token: Token): void {
+    if (token.kind !== "number") return;
+    const lex = token.lexeme;
+    // BigInt literals (`123…n`) are explicitly arbitrary-precision — they
+    // don't have to fit in int64 / double range.
+    if (lex.endsWith("n")) return;
+    const cleaned = lex.replace(/_/g, "");
+    const hasFraction = cleaned.includes(".") || /[eE]/.test(cleaned);
+
+    if (!hasFraction) {
+      // Plain integer. Reject anything beyond Number.MAX_SAFE_INTEGER (2^53-1)
+      // when the token is intended to be a JS-number literal; the upstream
+      // parser rejects `111111…` with EdgeQLSyntaxError for over-range int64.
+      // We use a digit-count heuristic so we don't depend on the literal's
+      // sign (the unary minus is parsed separately).
+      const digits = cleaned.replace(/^[+-]/, "");
+      // int64 max has 19 digits (9_223_372_036_854_775_807). 20+ digits is
+      // always out of range; 19 digits may or may not be. Be conservative —
+      // mirroring the must_fail intent — and only reject ≥20-digit literals.
+      if (digits.length >= 20) {
+        this.notSupported(
+          token,
+          "numeric literal out of range",
+          `integer ${lex} exceeds int64 range`,
+        );
+      }
+      return;
+    }
+
+    // Float / decimal literal. Number() returns Infinity for too-large
+    // magnitudes and 0 for too-small ones — both are rejected upstream as
+    // syntax errors.
+    const parsed = Number(cleaned);
+    if (!Number.isFinite(parsed)) {
+      this.notSupported(
+        token,
+        "numeric literal out of range",
+        `float ${lex} overflows IEEE-754 double`,
+      );
+    }
+    // Detect underflow: literal looks non-zero but Number() snapped to 0.
+    if (parsed === 0 && /[1-9]/.test(cleaned)) {
+      this.notSupported(
+        token,
+        "numeric literal out of range",
+        `float ${lex} underflows IEEE-754 double`,
+      );
+    }
   }
 
   private buildIndexAccessExpr(expr: FreeObjectExpr, indexLexeme: string): FreeObjectExpr {
@@ -676,10 +801,30 @@ class Parser {
       }
 
       if (token.kind === "kw_start" || token.kind === "kw_commit" || token.kind === "kw_rollback") {
+        // `WITH ... COMMIT` is not legal upstream — WITH bindings only attach
+        // to query/DML statements, not transaction control.
+        if (withClause.with && withClause.with.length > 0) {
+          this.notSupported(
+            token,
+            "WITH before transaction control",
+            `'${token.lexeme}' cannot follow a WITH-bindings block; transaction statements stand alone`,
+          );
+        }
         return this.parseTransaction();
       }
 
       if (token.kind === "kw_create" || token.kind === "kw_alter" || token.kind === "kw_drop") {
+        // `WITH MODULE foo CREATE DATABASE bar` and similar combinations are
+        // rejected upstream — DDL statements don't accept a WITH prefix.
+        if (withClause.with !== undefined
+          || withClause.withModuleAliases !== undefined
+          || (withClause.withModule !== undefined && withClause.withModule !== this.defaultModule)) {
+          this.notSupported(
+            token,
+            "WITH before DDL",
+            `DDL statements cannot be prefixed with a WITH block`,
+          );
+        }
         return this.parseDDL();
       }
 
@@ -693,13 +838,38 @@ class Parser {
 
   private parseConfigure(ctx: ParseContext = {}): ConfigureStatement {
     const start = this.expect("kw_configure", "Expected 'configure'");
-    const { value: scope } = this.parseKeywordChoice<ConfigureStatement["scope"]>({
-      session: "session",
-      instance: "instance",
-      current_database: "current_database",
-      currentdatabase: "current_database",
-      database: "current_database",
-    }, "Expected configure scope: session, current_database, or instance");
+    // Upstream EdgeQL renamed `CONFIGURE DATABASE` to `CONFIGURE CURRENT
+    // DATABASE`; the bare-DATABASE form is a syntax error there. Catch it
+    // explicitly before falling through to the keyword-choice parser so the
+    // user gets a directional hint instead of a generic message.
+    const scopeToken = this.peek();
+    if (this.isKeywordLikeToken(scopeToken) && scopeToken.lower === "database") {
+      this.notSupported(
+        scopeToken,
+        "CONFIGURE DATABASE",
+        "use 'CONFIGURE CURRENT DATABASE' instead",
+      );
+    }
+    // `CURRENT DATABASE` is tokenized as two adjacent keywords; consume them
+    // as a pair before falling through to the single-keyword scope parser.
+    let scope: ConfigureStatement["scope"];
+    if (
+      this.isKeywordLikeToken(scopeToken)
+      && scopeToken.lower === "current"
+      && this.isKeywordLikeToken(this.peekNext())
+      && this.peekNext().lower === "database"
+    ) {
+      this.consume();
+      this.consume();
+      scope = "current_database";
+    } else {
+      scope = this.parseKeywordChoice<ConfigureStatement["scope"]>({
+        session: "session",
+        instance: "instance",
+        current_database: "current_database",
+        currentdatabase: "current_database",
+      }, "Expected configure scope: session, current_database, or instance").value;
+    }
 
     const { value: operation } = this.parseKeywordChoice<ConfigureStatement["operation"]>({
       set: "set",
@@ -994,7 +1164,39 @@ class Parser {
       throw new AppError("E_SYNTAX", `Unsupported DDL object kind '${objectToken.lexeme}'`, ...this.posPair(objectToken));
     }
 
+    const nameStartToken = this.peek();
     const name = this.parseQualifiedName("Expected DDL object name");
+    // `CREATE MODULE a.b` / `CREATE MODULE a.__std__` — upstream EdgeQL rejects
+    // dotted module names (and dunder segments). parseQualifiedName only stops
+    // at the first `.` (it handles `::`-qualified names), so any leftover dot
+    // here is an attempted dotted module path.
+    if (objectKind === "module" && this.peek().kind === "dot") {
+      this.notSupported(
+        this.peek(),
+        "dotted module name",
+        "module names must be plain identifiers; dotted (a.b) and dunder-segmented names are not allowed",
+      );
+    }
+    // DATABASE / BRANCH / ROLE names are plain identifiers upstream — qualified
+    // forms like `foo::bar` are rejected. Mirror that.
+    if ((objectKind === "database" || objectKind === "branch" || objectKind === "role")
+      && name.includes("::")) {
+      this.notSupported(
+        nameStartToken,
+        `qualified ${objectKind} name`,
+        `${objectKind} names must be plain identifiers; '${name}' is module-qualified`,
+      );
+    }
+    // Module names must be plain user identifiers. `expectName`'s dunder check
+    // allowlists EdgeQL-magic identifiers (`__subject__` etc.) for valid path
+    // positions, but they are still illegal as module names.
+    if (objectKind === "module" && name.startsWith("__") && name.endsWith("__")) {
+      this.notSupported(
+        nameStartToken,
+        "reserved module name",
+        `'${name}' is a reserved identifier and cannot be used as a module name`,
+      );
+    }
     let value: DDLStatement["value"];
     let functionDecl: DDLStatement["functionDecl"];
     if (action === "create" && (objectKind === "alias" || objectKind === "global") && this.peek().kind === "assign") {
@@ -1022,11 +1224,24 @@ class Parser {
   }
 
   private parseCreateFunctionTail(): FunctionDecl {
-    this.expect("lparen", "Expected '(' after function name");
+    const lparen = this.expect("lparen", "Expected '(' after function name");
     const params: FunctionParamDecl[] = [];
+    const seenParamNames = new Map<string, Token>();
     if (this.peek().kind !== "rparen") {
       while (true) {
-        params.push(this.parseFunctionParamDecl());
+        const declStartToken = this.peek();
+        const param = this.parseFunctionParamDecl();
+        if (param.name) {
+          if (seenParamNames.has(param.name)) {
+            this.notSupported(
+              declStartToken,
+              "duplicate function parameter name",
+              `parameter '${param.name}' is declared more than once`,
+            );
+          }
+          seenParamNames.set(param.name, declStartToken);
+        }
+        params.push(param);
         if (this.peek().kind === "comma") {
           this.consume();
           continue;
@@ -1034,6 +1249,7 @@ class Parser {
         break;
       }
     }
+    void lparen;
     this.expect("rparen", "Expected ')' after function parameters");
     this.expect("arrow", "Expected '->' before function return type");
 
@@ -1241,6 +1457,16 @@ class Parser {
     const iteratorExpr = this.parseFreeObjectIfElseExpr();
     if (this.peek().kind === "kw_union") {
       this.consume();
+      // `FOR x IN ... UNION y := ...` — the assignment-after-UNION form is
+      // rejected upstream. Catch it here so the test gets a clear hint instead
+      // of failing later.
+      if (this.isNameToken(this.peek()) && this.peekNext().kind === "assign") {
+        this.notSupported(
+          this.peek(),
+          "FOR ... UNION y := ...",
+          `the body after UNION cannot be an assignment; wrap it in a SELECT/INSERT/UPDATE/DELETE`,
+        );
+      }
     }
     const hasWrappedStatement = this.peek().kind === "lparen"
       && (this.peekNext().kind === "kw_select" || this.peekNext().kind === "kw_insert");
@@ -1647,6 +1873,7 @@ class Parser {
 
   private parseFreeObjectComparisonExpr(): FreeObjectExpr {
     let left = this.parseFreeObjectExprWithPrecedence();
+    let sawCompareOp = false;
 
     while (true) {
       const token = this.peek();
@@ -1665,7 +1892,19 @@ class Parser {
         break;
       }
 
+      // Upstream EdgeQL forbids chained comparison operators (`a < b < c`,
+      // `a = b = c`, etc.) — the second compare op is reported with
+      // "Unexpected '<'" / "Unexpected '>'" syntax errors. Mirror that.
+      if (sawCompareOp) {
+        this.notSupported(
+          token,
+          "chained comparison operators",
+          `unexpected '${token.lexeme}' after a comparison expression — chained comparisons (a < b < c) are not allowed; use 'and' instead`,
+        );
+      }
+
       this.consume();
+      sawCompareOp = true;
       const right = this.parseFreeObjectExprWithPrecedence();
       left = {
         kind: "compare",
@@ -2005,7 +2244,26 @@ class Parser {
     }
 
     if (this.peek().kind.startsWith("kw_current_reserved_")) {
-      const token = this.consume();
+      const token = this.peek();
+      // `__source__`, `__subject__`, `__type__`, `__new__`, `__old__`,
+      // `__default__`, `__specified__` are only valid inside specific
+      // contexts (constraint bodies, policy expressions, rewrite triggers,
+      // path/shape positions). At top level — a bare reference with no
+      // enclosing path or shape — upstream EdgeQL rejects them. The
+      // shape/path code paths reach these tokens via `expectName` and
+      // `kindAfterQualifiedName`, not through this branch, so reaching
+      // here means the token is the entire expression on its own.
+      if (this.isMagicBareReferenceRejected(token.lexeme)) {
+        this.notSupported(
+          token,
+          "bare top-level reference to reserved identifier",
+          `'${token.lexeme}' is only valid inside the contexts that define it (constraint/policy/trigger body, '.<name>' / 'X.<name>' path access)`,
+        );
+      }
+      // Anything else that looks like a `__X__` user identifier (already
+      // tokenized as a current-reserved keyword) gets the standard reject.
+      this.rejectReservedDunderName(token);
+      this.consume();
       return {
         kind: "global_ref",
         name: token.lexeme,
@@ -2049,7 +2307,9 @@ class Parser {
     }
 
     if (this.isNameToken(this.peek())) {
-      const identifier = this.nameTokenLexeme(this.peek());
+      const nameToken = this.peek();
+      const identifier = this.nameTokenLexeme(nameToken);
+      this.rejectReservedDunderName(nameToken);
       if (this.localBindings.includes(identifier)) {
         this.consume();
         return {
@@ -4024,6 +4284,17 @@ class Parser {
       onField = this.expectName("Expected field name in conflict target").lexeme;
     }
 
+    // `UNLESS CONFLICT ELSE (...)` without an `ON (...)` clause is rejected
+    // upstream — the ON target is required to disambiguate which constraint
+    // the ELSE branch should react to.
+    if (this.peek().kind === "kw_else" && onField === undefined) {
+      this.notSupported(
+        this.peek(),
+        "UNLESS CONFLICT ELSE without ON",
+        "UNLESS CONFLICT ELSE (...) requires an ON (.field) target",
+      );
+    }
+
     let elseExpr: InsertConflict["else"];
     if (this.peek().kind === "kw_else") {
       this.consume();
@@ -5280,6 +5551,17 @@ class Parser {
       this.expect("rparen", `Expected ')' in ${context}`);
       return expr;
     }
+    // Future-reserved keywords (CASE, WHEN, WHERE, ON, etc.) are tokenized
+    // as name-like keywords for forward-compat but are *not* valid type
+    // names. Upstream rejects them with "Unexpected keyword '<KW>'".
+    const headTok = this.peek();
+    if (headTok.kind === "kw_future_reserved") {
+      this.notSupported(
+        headTok,
+        `reserved keyword in type-name position (${context})`,
+        `'${headTok.lexeme}' is a reserved keyword and cannot be used as a type name`,
+      );
+    }
     const name = this.parseQualifiedName(`Expected type name in ${context}`);
     // Support parameterized types like `array<X>`, `tuple<X, Y>`, `set<X>`.
     // We don't fully model these; just consume the angle-bracketed parameters
@@ -5435,6 +5717,7 @@ class Parser {
       if (next.kind !== "number") {
         throw new AppError("E_SYNTAX", "Expected a numeric literal after '-'", ...this.posPair(token));
       }
+      this.validateNumericLiteralToken(next);
       this.consume();
       this.consume();
       return -this.parseNumberLexeme(next.lexeme);
@@ -5455,6 +5738,7 @@ class Parser {
     }
 
     if (token.kind === "number") {
+      this.validateNumericLiteralToken(token);
       this.consume();
       const lexeme = token.lexeme;
       return this.parseNumberLexeme(lexeme);
