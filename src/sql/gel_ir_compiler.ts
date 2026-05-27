@@ -2722,7 +2722,10 @@ const compilePointerArrayExpr = (
 
   const targetAlias = `p${depth}`;
   const joinAlias = `j${depth}`;
-  const projectedCols = collectProjectedColumns(targetShape);
+  // Include columns referenced by the link's modifier clauses (FILTER /
+  // ORDER BY) so they reach the inner FROM. Without this, e.g. an
+  // `ORDER BY .cost DESC LIMIT 1` on a `deck: { id }` shape sorts by NULL.
+  const projectedCols = collectProjectedColumns(targetShape, modifiers?.where, modifiers?.orderBy);
   const rowExpr = compileShapeObjectExpr(targetAlias, targetShape, params, options, target, depth, joinAlias);
 
   if (pointer.direction === "inbound") {
