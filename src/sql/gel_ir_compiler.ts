@@ -169,7 +169,18 @@ export const compileGelIRToSQL = (
     }
   }
 
-  let sql = `SELECT ${projections.join(", ")} FROM ${sourceSql}`;
+  // Link-traversal sources surface the same target row once per source row
+  // (e.g. `SELECT Issue.owner{name}` returns one row per Issue even though
+  // multiple Issues may share an owner). EdgeQL set semantics deduplicates
+  // by object identity, so add DISTINCT on `id` for those cases. `type_root`
+  // sources already yield unique rows per id; leave them as plain SELECT to
+  // preserve `select_expr` UNION ALL semantics for free expressions.
+  const needsDistinct = sourceSet?.expr.kind === "pointer"
+    && (sourceSet.expr as Pointer).ptrref.outTarget.isScalar === false;
+
+  let sql = needsDistinct
+    ? `SELECT DISTINCT ${projections.join(", ")} FROM ${sourceSql}`
+    : `SELECT ${projections.join(", ")} FROM ${sourceSql}`;
 
   if (statement.where) {
     const whereSql = compileWhereClause(statement.where, sourceAlias, params, target, options);
@@ -1190,6 +1201,22 @@ const compileScalarSelectSQLInner = (
   options: GelIRCompileOptions,
   outerWheres: Set[],
 ): string | null => {
+  // `FOR X IN iter UNION X` is the upstream sugar the engine wraps every plain
+  // FOR with — the body substitutes back to the iterator. After the AST→IR
+  // pass the for_expr's body equals (or contains) the iterator expression, so
+  // the for_expr itself is a no-op wrapper and we can compile the body
+  // directly. The non-trivial branches (joined FORs over type/pointer
+  // iterators) are still handled earlier in compileSelectStmtToSQL via
+  // compileForExprSource.
+  if (sourceSet.expr.kind === "for_expr") {
+    return compileScalarSelectSQL(
+      (sourceSet.expr as ForExpr).body,
+      params,
+      target,
+      options,
+      outerWheres,
+    );
+  }
   // Pre-compute whether the outer FILTERs (if any) reference the same
   // iteration root as the value. If not, the set-level coalesce / ?= / ?!=
   // shortcuts are still safe to take — the filter will be applied
@@ -1362,6 +1389,12 @@ const compileScalarSelectSQLInner = (
       params.length = innerCheckpoint;
     }
   }
+
+  const pointerPathSql = tryCompileScalarPointerPathSelectSQL(sourceSet, params, options);
+  if (pointerPathSql) {
+    return pointerPathSql;
+  }
+
   const sources = new Map<string, TypeRef>();
   collectScalarPointerSources(sourceSet, sources);
   // Only apply outerWheres when (a) their sources are a subset of the
@@ -1430,6 +1463,121 @@ const compileScalarSelectSQLInner = (
     sql += ` WHERE ${whereSqls.join(" AND ")}`;
   }
   return sql;
+};
+
+type ScalarPointerPath = {
+  root: Set;
+  leaf: Pointer;
+  links: Pointer[];
+};
+
+const extractScalarPointerPath = (set: Set): ScalarPointerPath | null => {
+  const chain: Pointer[] = [];
+  let cursor: Set = set;
+  while (cursor.expr.kind === "pointer") {
+    const pointer = cursor.expr as Pointer;
+    chain.push(pointer);
+    cursor = pointer.source;
+  }
+
+  let rootExpr: Expr = cursor.expr;
+  while (rootExpr.kind === "select_expr") {
+    rootExpr = (rootExpr as SelectExpr).result.expr;
+  }
+  if (rootExpr.kind !== "type_root" || chain.length < 2) {
+    return null;
+  }
+
+  const leaf = chain[0]!;
+  if (!leaf.ptrref.outTarget.isScalar || leaf.ptrref.isLinkProperty) {
+    return null;
+  }
+
+  const links = chain.slice(1).reverse();
+  if (links.some((link) => link.ptrref.outTarget.isScalar || link.ptrref.isLinkProperty)) {
+    return null;
+  }
+
+  return { root: cursor, leaf, links };
+};
+
+const pointerPathAliasColumns = (path: ScalarPointerPath): string[][] => {
+  const columns = Array.from({ length: path.links.length + 1 }, () => new Set<string>(["id"]));
+  path.links.forEach((link, index) => {
+    if (shouldUseLinkTable(link)) {
+      return;
+    }
+    const inlineColumn = `${link.ptrref.shortName}_id`;
+    if (link.direction === "inbound") {
+      columns[index + 1]!.add(inlineColumn);
+    } else {
+      columns[index]!.add(inlineColumn);
+    }
+  });
+  columns[columns.length - 1]!.add(columnForPointer(path.leaf));
+  return columns.map((entry) => [...entry]);
+};
+
+const linkTableNameForPointer = (pointer: Pointer): string => {
+  const sourceType = pointer.direction === "inbound" ? pointer.ptrref.outSource : pointer.source.typeref;
+  return `${tableNameForType(qualifyTypeName(sourceType))}__${pointer.ptrref.shortName.toLowerCase()}`;
+};
+
+const scalarResultValueSQL = (sql: string, typeRef: TypeRef): string => (
+  qualifyTypeName(typeRef) === "std::str" ? `json_quote(${sql})` : sql
+);
+
+const tryCompileScalarPointerPathSelectSQL = (
+  set: Set,
+  params: ScalarValue[],
+  options: GelIRCompileOptions,
+): string | null => {
+  const path = extractScalarPointerPath(set);
+  if (!path) {
+    return null;
+  }
+
+  const checkpoint = params.length;
+  const aliasColumns = pointerPathAliasColumns(path);
+  const rootAlias = "p0";
+  let fromSql = compilePolymorphicSource(path.root.typeref, false, rootAlias, aliasColumns[0]!, options);
+  let previousAlias = rootAlias;
+
+  path.links.forEach((link, index) => {
+    const nextAlias = `p${index + 1}`;
+    const targetType = link.direction === "inbound" ? link.ptrref.outSource : link.ptrref.outTarget;
+    const targetSource = compilePolymorphicSource(targetType, false, nextAlias, aliasColumns[index + 1]!, options);
+    if (shouldUseLinkTable(link)) {
+      const linkAlias = `pj${index}`;
+      const linkTable = linkTableNameForPointer(link);
+      if (link.direction === "inbound") {
+        fromSql += ` JOIN ${quoteIdent(linkTable)} ${linkAlias}`
+          + ` ON ${linkAlias}.${quoteIdent("target")} = ${previousAlias}.${quoteIdent("id")}`
+          + ` JOIN ${targetSource}`
+          + ` ON ${nextAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("source")}`;
+      } else {
+        fromSql += ` JOIN ${quoteIdent(linkTable)} ${linkAlias}`
+          + ` ON ${linkAlias}.${quoteIdent("source")} = ${previousAlias}.${quoteIdent("id")}`
+          + ` JOIN ${targetSource}`
+          + ` ON ${nextAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("target")}`;
+      }
+    } else {
+      const inlineColumn = `${link.ptrref.shortName}_id`;
+      if (link.direction === "inbound") {
+        fromSql += ` JOIN ${targetSource}`
+          + ` ON ${nextAlias}.${quoteIdent(inlineColumn)} = ${previousAlias}.${quoteIdent("id")}`;
+      } else {
+        fromSql += ` JOIN ${targetSource}`
+          + ` ON ${nextAlias}.${quoteIdent("id")} = ${previousAlias}.${quoteIdent(inlineColumn)}`;
+      }
+    }
+    previousAlias = nextAlias;
+  });
+
+  const leafSql = `${previousAlias}.${quoteIdent(columnForPointer(path.leaf))}`;
+  const valueSql = scalarResultValueSQL(leafSql, path.leaf.ptrref.outTarget);
+  params.length = checkpoint;
+  return `SELECT DISTINCT ${valueSql} AS ${quoteIdent("value")} FROM ${fromSql} WHERE ${leafSql} IS NOT NULL`;
 };
 
 // Walks the set's expression tree; returns true if every `pointer` reference
@@ -2005,17 +2153,26 @@ const compileProjectedSourceColumnRef = (set: Set): string | null => {
   if (pointer.ptrref.isLinkProperty || !pointer.ptrref.outTarget.isScalar) {
     return null;
   }
-  // Direct scalar pointer must hang off the outer source (type_root or select_expr
-  // wrapping one) — multi-hop chains live behind their own EXISTS lowering and
-  // need a different column (the FK of the link adjacent to the type_root).
+  // Direct scalar pointer must hang off the outer source. Unwrap select_expr
+  // wrappers, and additionally accept the case where the immediate source is
+  // itself a pointer to an object (`SELECT Issue.owner{name}` — the shape's
+  // `name` pointer's source is the Issue.owner link pointer). In that case
+  // the scalar property is still a column on the rows surfaced by the outer
+  // SELECT, so it should be added to the projected column list.
   let sourceExpr: Expr = pointer.source.expr;
   while (sourceExpr.kind === "select_expr") {
     sourceExpr = (sourceExpr as SelectExpr).result.expr;
   }
-  if (sourceExpr.kind !== "type_root") {
-    return null;
+  if (sourceExpr.kind === "type_root") {
+    return columnForPointer(pointer);
   }
-  return columnForPointer(pointer);
+  if (sourceExpr.kind === "pointer") {
+    const sourcePointer = sourceExpr as Pointer;
+    if (!sourcePointer.ptrref.outTarget.isScalar) {
+      return columnForPointer(pointer);
+    }
+  }
+  return null;
 };
 
 // For a pointer chain rooted at a type_root, returns the FK column on the
@@ -2154,27 +2311,8 @@ const tryCompileMultiStepPointerExistsSQL = (
   target: RuntimeTarget,
   options: GelIRCompileOptions,
 ): string | null => {
-  const chain: Pointer[] = [];
-  let cursor: Set = leftSet;
-  while (cursor.expr.kind === "pointer") {
-    const ptr = cursor.expr as Pointer;
-    chain.push(ptr);
-    cursor = ptr.source;
-  }
-  let rootExpr: Expr = cursor.expr;
-  while (rootExpr.kind === "select_expr") {
-    rootExpr = (rootExpr as SelectExpr).result.expr;
-  }
-  if (rootExpr.kind !== "type_root") return null;
-  if (chain.length < 2) return null;
-  const leaf = chain[0];
-  if (!leaf.ptrref.outTarget.isScalar) return null;
-  for (let i = 1; i < chain.length; i++) {
-    const link = chain[i];
-    if (link.direction !== "outbound") return null;
-    if (shouldUseLinkTable(link)) return null;
-    if (link.ptrref.outTarget.isScalar) return null;
-  }
+  const path = extractScalarPointerPath(leftSet);
+  if (!path) return null;
 
   const checkpoint = params.length;
   const rightSql = compileValueSetSQL(rightSet, sourceAlias, params, target, options);
@@ -2183,28 +2321,62 @@ const tryCompileMultiStepPointerExistsSQL = (
     return null;
   }
 
-  // Emit nested EXISTS layers, from outermost link (nearest type_root) inward
-  // to the leaf scalar comparison.
-  const emit = (i: number, parentColExpr: string): string => {
-    const link = chain[i];
-    const alias = `lt${chain.length - 1 - i}`;
-    const projected = i === 1
-      ? ["id", leaf.ptrref.shortName]
-      : ["id", `${chain[i - 1].ptrref.shortName}_id`];
-    const tableSql = compilePolymorphicSource(link.ptrref.outTarget, false, alias, projected, options);
-    const idMatch = `${alias}.${quoteIdent("id")} = ${parentColExpr}`;
-    if (i === 1) {
-      const leafCol = `${alias}.${quoteIdent(leaf.ptrref.shortName)}`;
-      return `EXISTS (SELECT 1 FROM ${tableSql} WHERE ${idMatch} AND ${leafCol} ${op} ${rightSql})`;
-    }
-    const nextParent = `${alias}.${quoteIdent(`${chain[i - 1].ptrref.shortName}_id`)}`;
-    const inner = emit(i - 1, nextParent);
-    return `EXISTS (SELECT 1 FROM ${tableSql} WHERE ${idMatch} AND ${inner})`;
-  };
+  const aliasColumns = pointerPathAliasColumns(path);
+  let fromSql = "";
+  const whereSqls: string[] = [];
+  let previousAlias = sourceAlias;
 
-  const outerLink = chain[chain.length - 1];
-  const outerParentCol = `${sourceAlias}.${quoteIdent(`${outerLink.ptrref.shortName}_id`)}`;
-  return emit(chain.length - 1, outerParentCol);
+  path.links.forEach((link, index) => {
+    const nextAlias = `lt${index}`;
+    const targetType = link.direction === "inbound" ? link.ptrref.outSource : link.ptrref.outTarget;
+    const targetSource = compilePolymorphicSource(targetType, false, nextAlias, aliasColumns[index + 1]!, options);
+    if (shouldUseLinkTable(link)) {
+      const linkAlias = `lj${index}`;
+      const linkTable = linkTableNameForPointer(link);
+      if (link.direction === "inbound") {
+        if (!fromSql) {
+          fromSql = `${quoteIdent(linkTable)} ${linkAlias} JOIN ${targetSource}`
+            + ` ON ${nextAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("source")}`;
+          whereSqls.push(`${linkAlias}.${quoteIdent("target")} = ${previousAlias}.${quoteIdent("id")}`);
+        } else {
+          fromSql += ` JOIN ${quoteIdent(linkTable)} ${linkAlias}`
+            + ` ON ${linkAlias}.${quoteIdent("target")} = ${previousAlias}.${quoteIdent("id")}`
+            + ` JOIN ${targetSource}`
+            + ` ON ${nextAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("source")}`;
+        }
+      } else if (!fromSql) {
+        fromSql = `${quoteIdent(linkTable)} ${linkAlias} JOIN ${targetSource}`
+          + ` ON ${nextAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("target")}`;
+        whereSqls.push(`${linkAlias}.${quoteIdent("source")} = ${previousAlias}.${quoteIdent("id")}`);
+      } else {
+        fromSql += ` JOIN ${quoteIdent(linkTable)} ${linkAlias}`
+          + ` ON ${linkAlias}.${quoteIdent("source")} = ${previousAlias}.${quoteIdent("id")}`
+          + ` JOIN ${targetSource}`
+          + ` ON ${nextAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("target")}`;
+      }
+    } else {
+      const inlineColumn = `${link.ptrref.shortName}_id`;
+      const joinSql = link.direction === "inbound"
+        ? `${nextAlias}.${quoteIdent(inlineColumn)} = ${previousAlias}.${quoteIdent("id")}`
+        : `${nextAlias}.${quoteIdent("id")} = ${previousAlias}.${quoteIdent(inlineColumn)}`;
+      if (!fromSql) {
+        fromSql = targetSource;
+        whereSqls.push(joinSql);
+      } else {
+        fromSql += ` JOIN ${targetSource} ON ${joinSql}`;
+      }
+    }
+    previousAlias = nextAlias;
+  });
+
+  if (!fromSql) {
+    params.length = checkpoint;
+    return null;
+  }
+
+  const leafCol = `${previousAlias}.${quoteIdent(columnForPointer(path.leaf))}`;
+  whereSqls.push(`${leafCol} ${op} ${rightSql}`);
+  return `EXISTS (SELECT 1 FROM ${fromSql} WHERE ${whereSqls.join(" AND ")})`;
 };
 
 const compilePredicateSetSQL = (

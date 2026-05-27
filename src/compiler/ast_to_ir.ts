@@ -583,7 +583,11 @@ const compilePathSteps = (steps: EdgeQLPathStep[], ctx: IRCompileContext): Set =
       if (!ptrref) {
         return { ...out, pathId: defaultPathId("path_steps") };
       }
-      out = extendPathSetDirectional(out, ptrref, step.direction ?? "outbound");
+      out = extendPathSetDirectional(
+        out,
+        ptrref,
+        ptrref.computedLinkAliasIsBackward ? "inbound" : (step.direction ?? "outbound"),
+      );
       if (step.optional) {
         out = {
           ...out,
@@ -949,7 +953,7 @@ const tryResolveSchemaAliasSet = (ctx: IRCompileContext, name: string): Set | un
     body = inner;
   }
 
-  let ast: EdgeQLStatement | undefined;
+  let ast: SelectStatement | undefined;
   for (const candidate of [body, `SELECT ${body}`]) {
     try {
       const parsed = parseEdgeQL(candidate);
@@ -1721,6 +1725,43 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
       };
     }
 
+    case "in_expr": {
+      const members = expr.right.kind === "set_literal"
+        ? expr.right.values.map((value): FreeObjectExpr => ({ kind: "literal", value }))
+        : expr.right.kind === "set_expr"
+          ? expr.right.values
+          : undefined;
+      if (members) {
+        if (members.length === 0) {
+          return compileFreeObjectExpr({ kind: "literal", value: expr.op === "in" }, ctx);
+        }
+        const orChain: FreeObjectExpr = members.reduceRight((acc, value, idx) => {
+          const eq: FreeObjectExpr = { kind: "compare", op: "=", left: expr.left, right: value };
+          return idx === members.length - 1 ? eq : { kind: "or", left: eq, right: acc };
+        }, undefined as unknown as FreeObjectExpr);
+        const result: FreeObjectExpr = expr.op === "not_in" ? { kind: "not", expr: orChain } : orChain;
+        return compileFreeObjectExpr(result, ctx);
+      }
+      // Singleton-RHS form (array literal, tuple, scalar): `A IN B` → `A = B`.
+      const singletonRhs = expr.right.kind === "array_literal_expr"
+        || expr.right.kind === "tuple"
+        || expr.right.kind === "literal"
+        || expr.right.kind === "cast";
+      if (singletonRhs) {
+        const compareOp = expr.op === "in" ? "=" : "!=";
+        return compileFreeObjectExpr(
+          { kind: "compare", op: compareOp, left: expr.left, right: expr.right },
+          ctx,
+        );
+      }
+      throw new AppError(
+        "E_RUNTIME",
+        "IN operator only supports literal set RHS in this context",
+        0,
+        0,
+      );
+    }
+
     case "logical": {
       const left = compileFreeObjectExpr(expr.left, ctx);
       const right = compileFreeObjectExpr(expr.right, ctx);
@@ -1801,6 +1842,29 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
         const enumType = lookupEnumScalar(ctx, expr.iterator.name);
         if (enumType) {
           failSemantic("enum types do not support backlink");
+        }
+      }
+      if (
+        expr.variable === "__gel_backlink_item__"
+        && expr.body.kind === "backlink_path"
+        && !expr.filter
+        && !expr.orderBy
+        && expr.limit === undefined
+        && expr.offset === undefined
+      ) {
+        const iterator = compileFreeObjectExpr(expr.iterator, ctx);
+        const ptrref = resolveBacklinkPointerRef(ctx, iterator.typeref, expr.body.link, expr.body.sourceType);
+        if (ptrref) {
+          const out = extendPathSetDirectional(iterator, ptrref, "inbound");
+          return expr.body.optional
+            ? {
+                ...out,
+                expr: {
+                  ...(out.expr as Pointer),
+                  optionalDeref: true,
+                },
+              }
+            : out;
         }
       }
       const iterator = compileFreeObjectExpr(expr.iterator, ctx);
@@ -2072,7 +2136,9 @@ const compileFilterExpr = (filter: FilterExpr, subject: Set, ctx: IRCompileConte
         ? compileFreeObjectExpr({ kind: "binding_ref", name: filter.values.name }, ctx)
         : filter.values.kind === "select"
           ? setFromTypeRoot(resolveTypeRef(ctx, filter.values.query.typeName))
-          : literalToSet(null);
+          : filter.values.kind === "expr_set"
+            ? compileSetConstructor(filter.values.values.map((value) => compileFreeObjectExpr(value, ctx)), "filter:in:expr_set")
+            : literalToSet(null);
     return {
       kind: "set",
       expr: {

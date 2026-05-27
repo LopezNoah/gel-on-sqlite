@@ -1270,6 +1270,15 @@ const parseComputedLinkExpr = (text: string): Extract<ComputedDef, { kind: "link
     };
   }
 
+  const selectBacklinkMatch = /^select\s+\.<([A-Za-z_][A-Za-z0-9_]*)(?:\[\s*is\s+([A-Za-z_][A-Za-z0-9_:]*)\s*\])?(?:\s+limit\s+\d+)?$/i.exec(trimmed);
+  if (selectBacklinkMatch) {
+    return {
+      kind: "backlink",
+      link: selectBacklinkMatch[1],
+      sourceType: selectBacklinkMatch[2],
+    };
+  }
+
   const selectMatch = /^select\s+\.([A-Za-z_][A-Za-z0-9_]*)(?:\s+filter\s+\.([A-Za-z_][A-Za-z0-9_]*)\s*(=|!=|like|ilike)\s*(.+))?(?:\s+order\s+by\s+\.[A-Za-z_][A-Za-z0-9_]*)?(?:\s+limit\s+\d+)?$/i.exec(trimmed);
   if (selectMatch) {
     const expr: Extract<ComputedDef, { kind: "link" }>["expr"] = { kind: "link_ref", link: selectMatch[1] };

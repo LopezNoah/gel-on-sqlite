@@ -118,6 +118,10 @@ export type FilterExpr =
             name: string;
           }
         | {
+            kind: "expr_set";
+            values: FreeObjectExpr[];
+          }
+        | {
             kind: "backlink_property_ref";
             link: string;
             sourceType?: string;
@@ -525,6 +529,16 @@ export type FreeObjectExpr =
   | {
       kind: "compare";
       op: "=" | "!=" | ">" | "<" | ">=" | "<=" | "?=" | "?!=" | "like" | "ilike";
+      left: FreeObjectExpr;
+      right: FreeObjectExpr;
+    }
+  | {
+      // EdgeQL `expr IN set` / `expr NOT IN set` — true iff `left` equals any
+      // element of `right`. `right` is set-valued (a set literal, subquery,
+      // path, …). The semantic and IR layers desugar the literal-RHS case to
+      // an OR-chain of `=` comparisons; non-literal RHS is not yet supported.
+      kind: "in_expr";
+      op: "in" | "not_in";
       left: FreeObjectExpr;
       right: FreeObjectExpr;
     }

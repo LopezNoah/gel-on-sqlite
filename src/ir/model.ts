@@ -191,6 +191,16 @@ export interface LinkRelationIR {
   linkTables?: Array<{ name: string; table: string }>;
 }
 
+export type LinkPathStepIR =
+  | {
+      kind: "link";
+      relation: LinkRelationIR;
+    }
+  | {
+      kind: "backlink";
+      sources: BacklinkSourceIR[];
+    };
+
 /* ---------------------------------- */
 /* Filter                             */
 /* ---------------------------------- */
@@ -232,6 +242,10 @@ export type FilterExprIR =
       sources: BacklinkSourceIR[];
       op: "=" | "!=";
       value: ScalarValue;
+    }
+  | {
+      kind: "backlink_exists";
+      sources: BacklinkSourceIR[];
     }
   | {
       kind: "link_property_exists";
@@ -304,6 +318,13 @@ export type FilterExprIR =
       sources: BacklinkSourceIR[];
       targetColumn: string;
       targetFn?: ScalarFnName;
+      value: ScalarValue;
+      op: "=" | "!=" | "<" | "<=" | ">" | ">=" | "like" | "ilike";
+    }
+  | {
+      kind: "link_path_target_field_compare";
+      steps: LinkPathStepIR[];
+      targetColumn: string;
       value: ScalarValue;
       op: "=" | "!=" | "<" | "<=" | ">" | ">=" | "like" | "ilike";
     }
