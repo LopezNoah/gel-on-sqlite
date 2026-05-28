@@ -11,10 +11,22 @@ export type RuntimeFunctionArg =
       values: ScalarValue[];
     };
 
+export type StdlibVolatility = "immutable" | "stable" | "volatile";
+
 export interface StdlibFunctionDef {
   name: string;
   minArgs: number;
   maxArgs: number;
+  /** Defaults to "immutable" when omitted. */
+  volatility?: StdlibVolatility;
+  /** True when the function can return an empty set even with non-empty
+   * input (e.g. `array_get`, `to_json`, `assert`). Used by cardinality
+   * inference to lower the return cardinality bound to at_most_one. */
+  returnOptional?: boolean;
+  /** Per-parameter SET OF flag (true ⇒ the arg's set is collapsed to a
+   * single invocation, like aggregates). Length matches max-arity; trailing
+   * entries default to false. */
+  paramSetOf?: boolean[];
 }
 
 const DEFINITIONS: StdlibFunctionDef[] = [
@@ -40,26 +52,43 @@ const DEFINITIONS: StdlibFunctionDef[] = [
   { name: "math::cot", minArgs: 1, maxArgs: 1 },
   { name: "math::sin", minArgs: 1, maxArgs: 1 },
   { name: "math::tan", minArgs: 1, maxArgs: 1 },
-  { name: "std::datetime_current", minArgs: 0, maxArgs: 0 },
-  { name: "std::datetime_of_transaction", minArgs: 0, maxArgs: 0 },
-  { name: "std::datetime_of_statement", minArgs: 0, maxArgs: 0 },
+  { name: "std::datetime_current", minArgs: 0, maxArgs: 0, volatility: "volatile" },
+  { name: "std::datetime_of_transaction", minArgs: 0, maxArgs: 0, volatility: "stable" },
+  { name: "std::datetime_of_statement", minArgs: 0, maxArgs: 0, volatility: "stable" },
   { name: "std::to_datetime", minArgs: 1, maxArgs: 1 },
-  { name: "std::to_str", minArgs: 1, maxArgs: 1 },
+  // to_str accepts an optional format string for datetime / numeric inputs.
+  { name: "std::to_str", minArgs: 1, maxArgs: 2 },
   { name: "std::len", minArgs: 1, maxArgs: 1 },
   { name: "std::count", minArgs: 1, maxArgs: 1 },
   { name: "std::max", minArgs: 1, maxArgs: 1 },
   { name: "std::min", minArgs: 1, maxArgs: 1 },
   { name: "std::sum", minArgs: 1, maxArgs: 1 },
-  { name: "std::assert_exists", minArgs: 1, maxArgs: 1 },
-  { name: "std::assert_single", minArgs: 1, maxArgs: 1 },
-  { name: "std::assert_distinct", minArgs: 1, maxArgs: 1 },
+  { name: "std::assert_exists", minArgs: 1, maxArgs: 2 },
+  { name: "std::assert_single", minArgs: 1, maxArgs: 2 },
+  { name: "std::assert_distinct", minArgs: 1, maxArgs: 2 },
+  // `std::assert(cond, message := …)` passes through the condition's
+  // cardinality and multiplicity. The optional `message` is a SET OF arg
+  // (joined into the call), so when multi, the call multiplies out.
+  { name: "std::assert", minArgs: 1, maxArgs: 2 },
+  { name: "std::all", minArgs: 1, maxArgs: 1 },
+  { name: "std::any", minArgs: 1, maxArgs: 1 },
   { name: "std::range", minArgs: 2, maxArgs: 2 },
   { name: "std::range_unpack", minArgs: 1, maxArgs: 1 },
   { name: "std::array_agg", minArgs: 1, maxArgs: 1 },
   { name: "std::array_unpack", minArgs: 1, maxArgs: 1 },
+  // array_get returns an OPTIONAL element — out-of-bounds yields an empty
+  // set rather than an error. Marking the return optional lets cardinality
+  // inference report the result as at_most_one per index.
+  { name: "std::array_get", minArgs: 2, maxArgs: 3, returnOptional: true },
+  { name: "std::array_set", minArgs: 3, maxArgs: 3 },
+  { name: "std::array_insert", minArgs: 3, maxArgs: 3 },
   { name: "std::enumerate", minArgs: 1, maxArgs: 1 },
   { name: "std::str_lower", minArgs: 1, maxArgs: 1 },
   { name: "std::str_upper", minArgs: 1, maxArgs: 1 },
+  // str_split returns a set of strings — not a single value. Multiplicity
+  // inference treats it as a regular function (no SET OF params), so the
+  // result can be DUPLICATE when the operand is multi.
+  { name: "std::str_split", minArgs: 2, maxArgs: 2 },
   { name: "std::to_duration", minArgs: 1, maxArgs: 1 },
   { name: "std::array_join", minArgs: 2, maxArgs: 2 },
   { name: "cal::to_local_datetime", minArgs: 1, maxArgs: 1 },
@@ -77,8 +106,13 @@ const DEFINITIONS: StdlibFunctionDef[] = [
   { name: "cal::duration_normalize_days", minArgs: 1, maxArgs: 1 },
   { name: "std::__gel_subtract", minArgs: 2, maxArgs: 2 },
   { name: "std::__gel_if_eq", minArgs: 4, maxArgs: 4 },
-  { name: "std::to_json", minArgs: 1, maxArgs: 1 },
-  { name: "std::random", minArgs: 0, maxArgs: 0 },
+  // to_json can return JSON `null`, and casting JSON null yields the empty
+  // set — so on the casting-back path the effective return is OPTIONAL.
+  { name: "std::to_json", minArgs: 1, maxArgs: 1, returnOptional: true },
+  { name: "std::random", minArgs: 0, maxArgs: 0, volatility: "volatile" },
+  { name: "std::round", minArgs: 1, maxArgs: 2 },
+  { name: "std::find", minArgs: 2, maxArgs: 2 },
+  { name: "std::contains", minArgs: 2, maxArgs: 2 },
   { name: "std::re_test", minArgs: 2, maxArgs: 2 },
   { name: "std::re_match", minArgs: 2, maxArgs: 2 },
   { name: "std::re_match_all", minArgs: 2, maxArgs: 2 },
@@ -99,9 +133,21 @@ export const resolveStdlibFunction = (qualifiedName: string, arity: number): Std
 };
 
 export const tryResolveStdlibFunction = (name: string, arity: number, activeModule: string): StdlibFunctionDef | undefined => {
-  const candidates = name.includes("::")
-    ? [name]
-    : [`${activeModule}::${name}`, `std::${name}`, `math::${name}`, `cal::${name}`];
+  // If the name comes in already qualified (e.g. `default::range`) and that
+  // exact name isn't a stdlib function, fall back to the unqualified name
+  // resolved against `std::` / `math::` / `cal::`. EdgeQL's name resolution
+  // makes unqualified bareword calls in the default module look like
+  // `default::range` after qualification, but stdlib functions live in the
+  // std/math/cal modules — without this fallback every bareword call to a
+  // stdlib function from a default-module script would miss.
+  const candidates: string[] = [];
+  if (name.includes("::")) {
+    candidates.push(name);
+    const shortName = name.split("::").pop()!;
+    candidates.push(`std::${shortName}`, `math::${shortName}`, `cal::${shortName}`);
+  } else {
+    candidates.push(`${activeModule}::${name}`, `std::${name}`, `math::${name}`, `cal::${name}`);
+  }
   for (const candidate of candidates) {
     const hit = resolveStdlibFunction(candidate, arity);
     if (hit) {
@@ -216,6 +262,28 @@ export const executeStdlibFunction = (name: string, args: RuntimeFunctionArg[]):
       return typeof args[0] === "object" && args[0] !== null && "kind" in args[0] && args[0].kind === "set"
         ? args[0].values
         : args[0];
+    case "std::all": {
+      const raw = args[0];
+      const values = typeof raw === "object" && raw !== null && "kind" in raw && raw.kind === "set"
+        ? raw.values
+        : Array.isArray(raw)
+          ? raw
+          : raw == null
+            ? []
+            : [raw];
+      return values.every((value) => value === true || value === 1);
+    }
+    case "std::any": {
+      const raw = args[0];
+      const values = typeof raw === "object" && raw !== null && "kind" in raw && raw.kind === "set"
+        ? raw.values
+        : Array.isArray(raw)
+          ? raw
+          : raw == null
+            ? []
+            : [raw];
+      return values.some((value) => value === true || value === 1);
+    }
     case "cal::to_local_datetime":
       return parseLocalDateTime(extractScalar(args[0]));
     case "cal::to_local_date":
@@ -258,12 +326,18 @@ export const executeStdlibFunction = (name: string, args: RuntimeFunctionArg[]):
       return new RegExp(source, flags).test(subject);
     }
     case "std::re_match": {
-      const pattern = String(args[0] ?? "");
-      const subject = String(args[1] ?? "");
-      const { source, flags } = parseEdgeQLRegex(pattern);
-      const match = new RegExp(source, flags).exec(subject);
-      if (!match) return [];
-      return match.length === 1 ? [match[0]] : match.slice(1);
+      const patterns = toStringList(args[0]);
+      const subjects = toStringList(args[1]);
+      const out: unknown[] = [];
+      for (const pattern of patterns) {
+        const { source, flags } = parseEdgeQLRegex(pattern);
+        for (const subject of subjects) {
+          const match = new RegExp(source, flags).exec(subject);
+          if (!match) continue;
+          out.push(match.length === 1 ? [match[0]] : match.slice(1));
+        }
+      }
+      return out;
     }
     case "std::re_match_all": {
       const pattern = String(args[0] ?? "");
@@ -307,10 +381,73 @@ export const executeStdlibFunction = (name: string, args: RuntimeFunctionArg[]):
     case "std::range_unpack":
     case "std::array_unpack": {
       const value = args[0];
+      if (value === null || value === undefined) return [];
       if (typeof value === "object" && value !== null && "kind" in value) {
         return [...value.values];
       }
       return Array.isArray(value) ? value : [value as ScalarValue];
+    }
+    case "std::array_get": {
+      // `array_get(array, idx)` / `array_get(array, idx, default)` — return
+      // `array[idx]` or `default` (or {} if absent) when `idx` is out of
+      // range. Negative indices count from the end.
+      const raw = args[0];
+      const arr: ScalarValue[] = Array.isArray(raw)
+        ? raw
+        : typeof raw === "object" && raw !== null && "kind" in raw
+          ? [...raw.values]
+          : [];
+      if (arr.length === 0 && typeof raw === "object" && raw !== null && "kind" in raw && raw.kind === "set") {
+        return [];
+      }
+      const indexes = toNumberList(args[1]);
+      if (indexes.length > 1) {
+        const values = arr.some(Array.isArray)
+          ? arr.flatMap((item) => Array.isArray(item)
+            ? indexes.map((idx) => item[idx < 0 ? item.length + idx : idx] ?? null).filter((v) => v !== null && v !== undefined)
+            : [])
+          : indexes.map((idx) => arr[idx < 0 ? arr.length + idx : idx] ?? null).filter((v) => v !== null && v !== undefined);
+        return values.sort((a, b) => String(a).localeCompare(String(b)));
+      }
+      const idx = indexes[0] ?? 0;
+      if (arr.length > 0 && Array.isArray(arr[0])) {
+        return arr.map((item) => {
+          const tuple = item as unknown as unknown[];
+          return tuple[idx < 0 ? tuple.length + idx : idx] ?? null;
+        }).filter((value) => value !== null && value !== undefined)
+          .sort((a, b) => String(a).localeCompare(String(b)));
+      }
+      const normalized = idx < 0 ? arr.length + idx : idx;
+      if (normalized < 0 || normalized >= arr.length) {
+        return args.length > 2 ? extractScalar(args[2]) ?? null : null;
+      }
+      return arr[normalized];
+    }
+    case "std::array_set": {
+      const raw = args[0];
+      const arr: ScalarValue[] = Array.isArray(raw)
+        ? [...raw]
+        : typeof raw === "object" && raw !== null && "kind" in raw
+          ? [...raw.values]
+          : [];
+      const idx = toNumber(args[1]);
+      const normalized = idx < 0 ? arr.length + idx : idx;
+      const value = extractScalar(args[2]) as ScalarValue;
+      arr[normalized] = value;
+      return arr;
+    }
+    case "std::array_insert": {
+      const raw = args[0];
+      const arr: ScalarValue[] = Array.isArray(raw)
+        ? [...raw]
+        : typeof raw === "object" && raw !== null && "kind" in raw
+          ? [...raw.values]
+          : [];
+      const idx = toNumber(args[1]);
+      const normalized = idx < 0 ? Math.max(0, arr.length + idx) : Math.min(arr.length, idx);
+      const value = extractScalar(args[2]) as ScalarValue;
+      arr.splice(normalized, 0, value);
+      return arr;
     }
     case "std::enumerate": {
       const value = args[0];
@@ -326,10 +463,17 @@ export const executeStdlibFunction = (name: string, args: RuntimeFunctionArg[]):
       return args[0] === null ? 0 : 1;
     }
     case "std::array_agg": {
-      if (typeof args[0] === "object" && args[0] !== null && "kind" in args[0]) {
-        return [...args[0].values];
+      const value = args[0];
+      if (typeof value === "object" && value !== null && "kind" in value) {
+        return [...value.values];
       }
-      return [args[0] as ScalarValue];
+      // Multi-property fields materialize to a plain JS array of elements.
+      // EdgeQL `array_agg(<multi-set>)` should fold those elements directly
+      // into the resulting array, not wrap the set in an extra layer.
+      if (Array.isArray(value)) {
+        return [...value];
+      }
+      return value == null ? [] : [value as ScalarValue];
     }
     case "std::str_lower":
       return String(extractScalar(args[0]) ?? "").toLowerCase();

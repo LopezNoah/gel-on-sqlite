@@ -42,7 +42,7 @@ import type {
 } from "./ast.js";
 import { simpleTypeName } from "./ast.js";
 import type { Token, TokenKind } from "./tokenizer.js";
-import { tokenize, tokenizeWithStarts, offsetToLineCol } from "./tokenizer.js";
+import { tokenizeWithStarts, offsetToLineCol } from "./tokenizer.js";
 
 // Token kinds the parser treats as "name-like" (identifier or context-sensitive
 // keyword that can also be used as a name). Using a Set lets isNameToken run as
@@ -800,6 +800,24 @@ class Parser {
         return this.parseGroup(withClause);
       }
 
+      // Bare IF/THEN/ELSE expression as a top-level statement (`if true then
+      // 10 else 11;`) — synthesize a `SELECT <expr>` so the rest of the
+      // pipeline can compile it via the select_expr path.
+      if (token.kind === "kw_if") {
+        const ctx: ParseContext = withClause;
+        const expr = this.parseFreeObjectExpr();
+        if (this.peek().kind === "semi") {
+          this.consume();
+        }
+        this.expect("eof", "Unexpected tokens after statement");
+        return {
+          ...this.withContext(ctx),
+          kind: "select_expr",
+          expr,
+          pos: this.posOf(token),
+        };
+      }
+
       if (token.kind === "kw_start" || token.kind === "kw_commit" || token.kind === "kw_rollback") {
         // `WITH ... COMMIT` is not legal upstream — WITH bindings only attach
         // to query/DML statements, not transaction control.
@@ -826,6 +844,38 @@ class Parser {
           );
         }
         return this.parseDDL();
+      }
+
+      // Bare top-level expression (`'a' if true else 'b'`, `1 + 2`,
+      // `<str>{}`, …). Try to parse it as a free-object expression and wrap
+      // as `SELECT <expr>` so the rest of the pipeline runs through the
+      // select_expr path. We restrict to a set of tokens that can start a
+      // free expression to keep error messages helpful for genuine syntax
+      // failures.
+      const exprStartTokens = new Set([
+        "lparen", "lbrace", "lbracket", "lt",
+        "number", "string", "bytes_string",
+        "kw_true", "kw_false", "kw_null",
+        "kw_not", "kw_distinct", "kw_exists", "kw_detached",
+        "kw_assert", "kw_assert_exists", "kw_assert_single", "kw_assert_distinct",
+        "dot", "backward_link", "optional_link",
+        "minus", "param", "global",
+      ]);
+      if (exprStartTokens.has(token.kind) || this.isNameToken(token)) {
+        const fallbackAttempt = this.attempt(() => {
+          const expr = this.parseFreeObjectExpr();
+          if (this.peek().kind === "semi") this.consume();
+          this.expect("eof", "Unexpected tokens after statement");
+          return expr;
+        });
+        if (fallbackAttempt) {
+          return {
+            ...this.withContext(withClause),
+            kind: "select_expr",
+            expr: fallbackAttempt,
+            pos: this.posOf(token),
+          };
+        }
       }
 
       throw new AppError("E_SYNTAX", "Expected 'select', 'insert', 'update', 'delete', 'for', 'configure', transaction, or DDL statement", ...this.posPair(token));
@@ -1555,6 +1605,17 @@ class Parser {
       "kw_detached",
       "dot",
       "kw_not",
+      // Unary minus/plus on a literal / sub-expression starts a
+      // free-expression select: `SELECT -1 + 2 * 3`, `SELECT +<int64>{}`.
+      // Without these branches the parser falls through to parseTypedSelect
+      // and reports "Expected type name".
+      "minus",
+      "plus",
+      // IF/THEN/ELSE conditional expressions can appear at the top of a
+      // SELECT (`SELECT IF cond THEN x ELSE y`).
+      "kw_if",
+      // `SELECT global X` references a global variable as the result.
+      "kw_global",
     ].includes(this.peek().kind)) {
       return this.parseSelectExprTail(start, ctx, this.parseFreeObjectExpr(), expectEof);
     }
@@ -1669,6 +1730,8 @@ class Parser {
       orderBy: clauses.orderBy,
       limit: clauses.limit,
       offset: clauses.offset,
+      limitExpr: clauses.limitExpr,
+      offsetExpr: clauses.offsetExpr,
       pos: this.posOf(start),
     };
   }
@@ -1725,6 +1788,8 @@ class Parser {
       orderBy: clauses.orderBy,
       limit: clauses.limit,
       offset: clauses.offset,
+      limitExpr: clauses.limitExpr,
+      offsetExpr: clauses.offsetExpr,
       pos: this.posOf(start),
     };
   }
@@ -1795,12 +1860,26 @@ class Parser {
 
   private parseFreeObjectExpr(): FreeObjectExpr {
     let expr = this.parseFreeObjectIfElseExpr();
-    while (this.peek().kind === "kw_union") {
+    while (
+      this.peek().kind === "kw_union"
+      || this.peek().kind === "kw_intersect"
+      || this.peek().kind === "kw_except"
+    ) {
+      const opTok = this.peek();
       this.consume();
       const right = this.parseFreeObjectIfElseExpr();
-      expr = expr.kind === "set_expr"
-        ? { kind: "set_expr", values: [...expr.values, right] }
-        : { kind: "set_expr", values: [expr, right] };
+      if (opTok.kind === "kw_union") {
+        expr = expr.kind === "set_expr"
+          ? { kind: "set_expr", values: [...expr.values, right] }
+          : { kind: "set_expr", values: [expr, right] };
+      } else {
+        expr = {
+          kind: "set_op",
+          op: opTok.kind === "kw_intersect" ? "intersect" : "except",
+          left: expr,
+          right,
+        };
+      }
     }
     return expr;
   }
@@ -1876,6 +1955,40 @@ class Parser {
     let sawCompareOp = false;
 
     while (true) {
+      // EdgeQL `expr IN set` / `expr NOT IN set` lives at the same precedence
+      // tier as the boolean comparisons. Recognize them before falling out so
+      // a select-expression FILTER (`FILTER _ IN {1, 2}`) parses end-to-end.
+      const inToken = this.peek();
+      if (inToken.kind === "kw_in") {
+        if (sawCompareOp) {
+          this.notSupported(
+            inToken,
+            "chained comparison operators",
+            `unexpected '${inToken.lexeme}' after a comparison expression — chained comparisons are not allowed; use 'and' instead`,
+          );
+        }
+        this.consume();
+        const right = this.parseFreeObjectExprWithPrecedence();
+        left = { kind: "in_expr", op: "in", left, right };
+        sawCompareOp = true;
+        continue;
+      }
+      if (inToken.kind === "kw_not" && this.peekNext().kind === "kw_in") {
+        if (sawCompareOp) {
+          this.notSupported(
+            inToken,
+            "chained comparison operators",
+            `unexpected '${inToken.lexeme}' after a comparison expression — chained comparisons are not allowed; use 'and' instead`,
+          );
+        }
+        this.consume();
+        this.consume();
+        const right = this.parseFreeObjectExprWithPrecedence();
+        left = { kind: "in_expr", op: "not_in", left, right };
+        sawCompareOp = true;
+        continue;
+      }
+
       const token = this.peek();
       if (
         token.kind !== "equals"
@@ -1936,6 +2049,17 @@ class Parser {
   }
 
   private parseFreeObjectPrimaryExpr(): FreeObjectExpr {
+    if (this.peek().kind === "kw_if") {
+      // EdgeQL prefix conditional: `IF cond THEN x ELSE y`. The postfix form
+      // (`x IF cond ELSE y`) is handled by parseFreeObjectIfElseExpr.
+      this.consume();
+      const condition = this.parseFreeObjectExpr();
+      this.expect("kw_then", "Expected 'then' after IF condition");
+      const thenExpr = this.parseFreeObjectExpr();
+      this.expect("kw_else", "Expected 'else' in IF expression");
+      const elseExpr = this.parseFreeObjectExpr();
+      return { kind: "if_else", thenExpr, condition, elseExpr };
+    }
     if (this.peek().kind === "lparen") {
       this.consume();
       if (this.peek().kind === "rparen") {
@@ -2212,6 +2336,15 @@ class Parser {
         expr: { kind: "current_item" },
         field,
         optional: op === "optional_link",
+      };
+    }
+
+    if (this.peek().kind === "kw_global") {
+      this.consume();
+      const name = this.parseQualifiedName("Expected global name after 'global'");
+      return {
+        kind: "global_ref",
+        name,
       };
     }
 
@@ -2494,22 +2627,25 @@ class Parser {
 
         if (this.peek().kind === "colon") {
           this.consume();
-          let end: number | undefined;
+          let end: number | FreeObjectExpr | undefined;
           if (this.peek().kind === "number") {
             end = this.parseNumberLexeme(this.consume().lexeme);
+          } else if (this.peek().kind !== "rbracket") {
+            end = this.parseFreeObjectExpr();
           }
           this.expect("rbracket", "Expected ']' after slice access");
           expr = {
             kind: "slice_access",
             expr,
             start: undefined,
-            end,
+            end: typeof end === "number" ? end : undefined,
+            endExpr: typeof end === "number" ? undefined : end,
           };
           continue;
         }
 
         const startToken = this.peek();
-        let start: number | undefined;
+        let start: number | FreeObjectExpr | undefined;
         let startSign = 1;
         if (startToken.kind === "minus" && this.peekNth(1).kind === "number") {
           this.consume();
@@ -2519,11 +2655,13 @@ class Parser {
         }
         if (this.peek().kind === "number") {
           start = startSign * this.parseNumberLexeme(this.consume().lexeme);
+        } else if (this.peek().kind !== "colon") {
+          start = this.parseFreeObjectExpr();
         }
 
         if (this.peek().kind === "colon") {
           this.consume();
-          let end: number | undefined;
+          let end: number | FreeObjectExpr | undefined;
           let endSign = 1;
           if (this.peek().kind === "minus" && this.peekNth(1).kind === "number") {
             this.consume();
@@ -2533,13 +2671,17 @@ class Parser {
           }
           if (this.peek().kind === "number") {
             end = endSign * this.parseNumberLexeme(this.consume().lexeme);
+          } else if (this.peek().kind !== "rbracket") {
+            end = this.parseFreeObjectExpr();
           }
           this.expect("rbracket", "Expected ']' after slice access");
           expr = {
             kind: "slice_access",
             expr,
-            start,
-            end,
+            start: typeof start === "number" ? start : undefined,
+            end: typeof end === "number" ? end : undefined,
+            startExpr: typeof start === "number" ? undefined : start,
+            endExpr: typeof end === "number" ? undefined : end,
           };
           continue;
         }
@@ -2551,7 +2693,8 @@ class Parser {
         expr = {
           kind: "index_access",
           expr,
-          index: start,
+          index: typeof start === "number" ? start : 0,
+          indexExpr: typeof start === "number" ? undefined : start,
         };
         continue;
       }
@@ -3376,6 +3519,7 @@ class Parser {
         const continuesAsBinary: Array<Token["kind"]> = [
           "plus", "minus", "star", "slash",
           "coalesce", "equals", "not_equals", "lt", "gt", "lte", "gte",
+          "concat", "kw_union",
         ];
         if (afterChain && continuesAsBinary.includes(afterChain)) {
           return undefined;
@@ -3445,6 +3589,36 @@ class Parser {
   // parse the rest of the expression too.
 
   private parseComputedSubqueryExpr(): ComputedExpr | undefined {
+    // If a parenthesized subquery is followed by a postfix (`.field`, `[…]`,
+    // `@property`) or a binary operator (`+`, `++`, `=`, …), defer to the
+    // general expression parser so the whole expression is captured. Without
+    // this the simple subquery parser returns at the closing paren and the
+    // caller (parseShapeEntry) chokes on the trailing tokens.
+    if (this.peek().kind === "lparen") {
+      let depth = 0;
+      let i = this.index;
+      while (i < this.tokens.length) {
+        const k = this.tokens[i]!.kind;
+        if (k === "lparen") depth += 1;
+        else if (k === "rparen") {
+          depth -= 1;
+          if (depth === 0) { i += 1; break; }
+        }
+        i += 1;
+      }
+      if (depth === 0 && i < this.tokens.length) {
+        const continuesAsExpr: Array<Token["kind"]> = [
+          "plus", "minus", "star", "slash",
+          "coalesce", "equals", "not_equals", "lt", "gt", "lte", "gte",
+          "concat", "kw_union",
+          "dot", "lbracket", "at",
+        ];
+        if (continuesAsExpr.includes(this.tokens[i]!.kind)) {
+          return undefined;
+        }
+      }
+    }
+
     if (this.peek().kind === "lparen" && this.peekNext().kind === "kw_with") {
       this.consume();
       const withClause = this.parseWithClause();
@@ -3535,6 +3709,41 @@ class Parser {
   private parseComputedFunctionCallExpr(): ComputedExpr | undefined {
     if (!this.atFunctionCall()) {
       return undefined;
+    }
+
+    // If a binary operator (`++`, `+`, `-`, `*`, `/`, comparison, `??`)
+    // follows the function call's closing paren, defer to the general
+    // expression parser so the whole binary expression is captured.
+    const savedIndex = this.index;
+    let depth = 0;
+    let i = this.index;
+    while (i < this.tokens.length) {
+      const k = this.tokens[i]!.kind;
+      if (k === "lparen") depth += 1;
+      else if (k === "rparen") {
+        depth -= 1;
+        if (depth === 0) { i += 1; break; }
+      }
+      i += 1;
+    }
+    if (depth === 0 && i < this.tokens.length) {
+      const continuesAsExpr: Array<Token["kind"]> = [
+        "plus", "minus", "star", "slash",
+        "coalesce", "equals", "not_equals", "lt", "gt", "lte", "gte",
+        "concat", "kw_union",
+        // Postfix continuations on the function result:
+        //   foo(.b).a           — field access
+        //   foo(.b)[0]          — index / type filter
+        //   foo(.b)@property    — link-property access
+        "dot", "lbracket", "at",
+      ];
+      if (continuesAsExpr.includes(this.tokens[i]!.kind)) {
+        // Defer to general expression parser. parseComputedFunctionCallExpr
+        // pre-checks atFunctionCall, so the index doesn't need restoration —
+        // but be defensive.
+        this.index = savedIndex;
+        return undefined;
+      }
     }
 
     const call = this.parseFunctionCallExpr(true);
@@ -3963,6 +4172,9 @@ class Parser {
 
   private parseInsert(ctx: ParseContext = {}, expectEof = true): InsertStatement {
     const start = this.expect("kw_insert", "Expected 'insert'");
+    if (this.peek().kind === "kw_detached") {
+      this.consume();
+    }
     const typeName = this.parseQualifiedName("Expected type name");
 
     const values: Record<string, InsertValue> = {};
@@ -4239,6 +4451,9 @@ class Parser {
   }
 
   private parseNestedInsertExpr(): { kind: "insert"; typeName: string; values: Record<string, InsertValue> } {
+    if (this.peek().kind === "kw_detached") {
+      this.consume();
+    }
     const typeName = this.parseQualifiedName("Expected type name in nested insert");
     const values: Record<string, InsertValue> = {};
     if (this.peek().kind !== "lbrace") {
@@ -4280,8 +4495,17 @@ class Parser {
     let onField: string | undefined;
     if (this.peek().kind === "kw_on") {
       this.consume();
+      // EdgeQL accepts both `ON .field` and `ON (.field)` — the latter is the
+      // upstream-canonical form. Accept an optional `(...)` wrapper.
+      const wrapped = this.peek().kind === "lparen";
+      if (wrapped) {
+        this.consume();
+      }
       this.expect("dot", "Expected '.' in conflict target");
       onField = this.expectName("Expected field name in conflict target").lexeme;
+      if (wrapped) {
+        this.expect("rparen", "Expected ')' after conflict target");
+      }
     }
 
     // `UNLESS CONFLICT ELSE (...)` without an `ON (...)` clause is rejected
@@ -4298,17 +4522,46 @@ class Parser {
     let elseExpr: InsertConflict["else"];
     if (this.peek().kind === "kw_else") {
       this.consume();
-      this.expect("lparen", "Expected '(' after else");
+      const hasParen = this.peek().kind === "lparen";
+      if (hasParen) this.consume();
+      // Accept `DETACHED ...` and arbitrary parenthesised expressions as
+      // best-effort: we record the underlying type name so cardinality
+      // inference can act on it, without yet executing the body.
+      if (this.peek().kind === "kw_detached") {
+        this.consume();
+      }
+      const innerHasParen = this.peek().kind === "lparen";
+      if (innerHasParen) this.consume();
       if (this.peek().kind === "kw_select") {
         this.consume();
         elseExpr = this.parseInlineSelectExpr();
       } else if (this.peek().kind === "kw_update") {
         elseExpr = this.parseInlineUpdateExpr();
+      } else if (this.peek().kind === "kw_insert") {
+        this.consume();
+        const insTypeName = this.parseQualifiedName("Expected type name in insert expression");
+        // Skip optional `{...}` body — we don't compile inline INSERTs through
+        // this branch yet; only the type name is needed for cardinality.
+        if (this.peek().kind === "lbrace") {
+          let depth = 1;
+          this.consume();
+          while (depth > 0 && this.peek().kind !== "eof") {
+            if (this.peek().kind === "lbrace") depth++;
+            else if (this.peek().kind === "rbrace") depth--;
+            this.consume();
+          }
+        }
+        elseExpr = { kind: "select", typeName: insTypeName, shape: [], clauses: {} };
+      } else if (this.isNameToken(this.peek())) {
+        // Bare type-name form: `UNLESS CONFLICT ON (.n) ELSE X` is sugar for
+        // `... ELSE (SELECT X)`. Route through the same inline-select parser.
+        elseExpr = this.parseInlineSelectExpr();
       } else {
         const token = this.peek();
         throw new AppError("E_SYNTAX", "Expected select or update expression in else clause", ...this.posPair(token));
       }
-      this.expect("rparen", "Expected ')' after else expression");
+      if (innerHasParen) this.expect("rparen", "Expected ')' after else inner expression");
+      if (hasParen) this.expect("rparen", "Expected ')' after else expression");
     }
 
     return {
@@ -4354,7 +4607,15 @@ class Parser {
     const start = this.expect("kw_update", "Expected 'update'");
     let target: FreeObjectExpr | undefined;
     let typeName: string;
-    if (this.peek().kind === "lbrace" || this.peek().kind === "lparen" || (this.isNameToken(this.peek()) && this.peekNext().kind === "lbracket")) {
+    if (
+      this.peek().kind === "lbrace"
+      || this.peek().kind === "lparen"
+      || this.peek().kind === "dot"
+      || this.peek().kind === "backward_link"
+      || this.peek().kind === "optional_link"
+      || (this.isNameToken(this.peek()) && this.peekNext().kind === "lbracket")
+      || (this.isNameToken(this.peek()) && this.peekNext().kind === "dot")
+    ) {
       target = this.parseFreeObjectExpr();
       typeName = this.deleteTargetRootTypeName(target);
     } else {
@@ -4559,6 +4820,7 @@ class Parser {
         || (this.isNameToken(lookahead) && this.peekNext().kind === "dot")
         || (this.isNameToken(lookahead) && this.peekNext().kind === "backward_link")
         || (this.isNameToken(lookahead) && this.peekNext().kind === "at")
+        || (this.isNameToken(lookahead) && this.peekNext().kind === "lparen")
         || lookahead.kind === "kw_select"
         || lookahead.kind === "kw_with"
         || lookahead.kind === "kw_for"
@@ -4653,6 +4915,23 @@ class Parser {
     if (this.isNameToken(this.peek()) && this.peekNext().kind === "lparen") {
       const expr = this.parseFreeObjectExpr();
       return { kind: "free_expr", expr };
+    }
+    // `.field.NUMBER` is a tuple-element access (`.t.0`), which the simple
+    // field-target parser can't consume — route to free_expr for the runtime
+    // evaluator.
+    {
+      let scan = this.index;
+      if (this.tokens[scan]?.kind === "dot") scan += 1;
+      if (this.isNameToken(this.tokens[scan] as Token)) {
+        scan += 1;
+        while (this.tokens[scan]?.kind === "dot" && this.isNameToken(this.tokens[scan + 1] as Token)) {
+          scan += 2;
+        }
+        if (this.tokens[scan]?.kind === "dot" && this.tokens[scan + 1]?.kind === "number") {
+          const expr = this.parseFreeObjectExpr();
+          return { kind: "free_expr", expr };
+        }
+      }
     }
     const beforeTarget = this.index;
     const target = this.parseFilterTarget();
@@ -4771,9 +5050,20 @@ class Parser {
       throw new AppError("E_SYNTAX", "Expected filter operator (=, !=, like, ilike, IN, NOT IN)", ...this.posPair(token));
     }
 
-    if (this.peek().kind === "lt" || this.peek().kind === "lparen") {
-      // Complex RHS like `<int64>v.0` or `(x)` — rewind to predicate start and
-      // parse as free_expr so the runtime evaluator handles it.
+    if (
+      this.peek().kind === "lt"
+      || this.peek().kind === "lparen"
+      || this.peek().kind === "lbrace"
+      || this.peek().kind === "lbracket"
+      // `name(...)` on the RHS is a function call — readFilterValue would
+      // truncate at the name and leave the `(...)` for the caller, which
+      // then errors with "Unexpected tokens after statement".
+      || (this.isNameToken(this.peek()) && this.peekNext().kind === "lparen")
+    ) {
+      // Complex RHS like `<int64>v.0`, `(x)`, a set literal `{a, b}`, an
+      // array literal `[a, b]`, or a function call — rewind to the predicate
+      // start and parse the whole predicate as a free expression so the
+      // runtime evaluator handles it.
       this.index = beforeTarget;
       const expr = this.parseFreeObjectExpr();
       return { kind: "free_expr", expr };
@@ -4797,6 +5087,7 @@ class Parser {
 
   private parseInPredicateValues():
     | { kind: "set_literal"; values: ScalarValue[] }
+    | { kind: "expr_set"; values: FreeObjectExpr[] }
     | { kind: "select"; query: { typeName: string; shape: ShapeElement[]; clauses: ClauseChain } }
     | { kind: "name"; name: string }
     | { kind: "backlink_property_ref"; link: string; sourceType?: string; property: string } {
@@ -4806,11 +5097,22 @@ class Parser {
       this.consume();
     }
     if (this.peek().kind === "lbrace") {
+      const scalarSet = this.attempt(() => {
+        this.consume();
+        const values = this.parseDelimited("rbrace", () => this.readScalarValue(), "Expected ',' in IN filter values");
+        this.expect("rbrace", "Expected '}' to close IN filter value set");
+        return {
+          kind: "set_literal" as const,
+          values,
+        };
+      });
+      if (scalarSet) return scalarSet;
+
       this.consume();
-      const values = this.parseDelimited("rbrace", () => this.readScalarValue(), "Expected ',' in IN filter values");
+      const values = this.parseDelimited("rbrace", () => this.parseFreeObjectExpr(), "Expected ',' in IN filter values");
       this.expect("rbrace", "Expected '}' to close IN filter value set");
       return {
-        kind: "set_literal",
+        kind: "expr_set",
         values,
       };
     }
@@ -4840,7 +5142,7 @@ class Parser {
     throw new AppError("E_SYNTAX", "Expected set literal, identifier, or SELECT subquery in IN filter", ...this.posPair(token));
   }
 
-  private parseFilterTarget(): { kind: "field"; field: string } | { kind: "backlink"; link: string; sourceType?: string } | { kind: "backlink_property"; link: string; sourceType?: string; property: string } {
+  private parseFilterTarget(): { kind: "field"; field: string; bareName?: string } | { kind: "backlink"; link: string; sourceType?: string } | { kind: "backlink_property"; link: string; sourceType?: string; property: string } {
     if (
       this.isNameToken(this.peek())
       && (
@@ -4976,6 +5278,17 @@ class Parser {
     }
 
     if (this.isNameToken(this.peek())) {
+      // A bare name followed by `.field` is a typed-path filter value
+      // (`FILTER Issue.owner = Issue.related_to.owner`). parseFieldReference
+      // strips the leading type-like segment so the downstream filter target
+      // resolution treats `Issue.owner` and `.owner` identically — matching
+      // the behaviour of parseFilterTarget for the LHS.
+      if (this.peekNext().kind === "dot" && this.isTypeLikeName(this.peek().lexeme)) {
+        return {
+          kind: "field_ref",
+          field: this.parseFieldReference("filter value"),
+        };
+      }
       return {
         kind: "binding_ref",
         name: this.consume().lexeme,
@@ -5277,7 +5590,14 @@ class Parser {
 
     if (this.peek().kind === "kw_detached" && this.isNameToken(this.peekNext())) {
       this.consume();
-      const typeName = this.consume().lexeme;
+      // Allow `DETACHED <module>::<Type>` (qualified) as well as the bare
+      // type name. The qualified form shows up in scope-stripped queries
+      // like `WITH H := DETACHED default::User`.
+      let typeName = this.consume().lexeme;
+      while (this.peek().kind === "coloncolon" && this.isNameToken(this.peekNext())) {
+        this.consume();
+        typeName = `${typeName}::${this.consume().lexeme}`;
+      }
       return {
         kind: "subquery",
         query: {
@@ -5420,7 +5740,7 @@ class Parser {
       || (this.isNameToken(this.peek()) && this.peekNext().kind === "backward_link")
       // partial backlink: `.<owner[IS Issue]...`
       || this.peek().kind === "backward_link";
-    let field = "";
+    let field: string;
     let expr: FreeObjectExpr | undefined;
     if (looksLikeExpression) {
       const startToken = this.peek();
@@ -5606,8 +5926,50 @@ class Parser {
       orderBy.push({ field: cursor.field, direction: cursor.direction, then: undefined });
       cursor = cursor.then;
     }
+    // Shape-element FILTER comes in three forms from parseFilter:
+    //  - free_expr: the expression is already there to evaluate.
+    //  - predicate: `Item.tag_set1 > 'p'` — rebuild as a compare against the
+    //    referenced path so the runtime materializer can evaluate it per
+    //    element.
+    //  - other (and/or/not) — leave undefined for now; not yet needed by the
+    //    multi-property shape modifier path.
+    let whereExpr: FreeObjectExpr | undefined;
+    if (clauses.filter) {
+      if (clauses.filter.kind === "free_expr") {
+        whereExpr = clauses.filter.expr;
+      } else if (
+        clauses.filter.kind === "predicate"
+        && clauses.filter.target.kind === "field"
+        && (
+          clauses.filter.op === "="
+          || clauses.filter.op === "!="
+          || clauses.filter.op === "<"
+          || clauses.filter.op === "<="
+          || clauses.filter.op === ">"
+          || clauses.filter.op === ">="
+        )
+        && (typeof clauses.filter.value === "string"
+          || typeof clauses.filter.value === "number"
+          || typeof clauses.filter.value === "boolean"
+          || clauses.filter.value === null)
+      ) {
+        const fieldPath = clauses.filter.target.field;
+        const dotIndex = fieldPath.indexOf(".");
+        const headName = dotIndex >= 0 ? fieldPath.slice(0, dotIndex) : "__current__";
+        const tail = dotIndex >= 0 ? fieldPath.slice(dotIndex + 1) : fieldPath;
+        const path: FreeObjectExpr = dotIndex >= 0
+          ? { kind: "path", head: headName, tail, steps: undefined }
+          : { kind: "field_access", expr: { kind: "current_item" }, field: tail, optional: false };
+        whereExpr = {
+          kind: "compare",
+          op: clauses.filter.op,
+          left: path,
+          right: { kind: "literal", value: clauses.filter.value },
+        };
+      }
+    }
     return {
-      where: clauses.filter?.kind === "free_expr" ? clauses.filter.expr : undefined,
+      where: whereExpr,
       orderBy: orderBy.length > 0 ? orderBy : undefined,
       offset: clauses.offset,
       limit: clauses.limit,
@@ -5940,9 +6302,6 @@ const parseSetModuleStatementFromTokens = (tokens: Token[]): string | undefined 
 
   return i === tokens.length ? parts.join("::") : undefined;
 };
-
-const parseSetModuleStatement = (input: string): string | undefined =>
-  parseSetModuleStatementFromTokens(tokenize(input));
 
 export const parseEdgeQL = (input: string, options: ParseEdgeQLOptions = {}): Statement => {
   const parser = new Parser(input, options);

@@ -191,6 +191,16 @@ export interface LinkRelationIR {
   linkTables?: Array<{ name: string; table: string }>;
 }
 
+export type LinkPathStepIR =
+  | {
+      kind: "link";
+      relation: LinkRelationIR;
+    }
+  | {
+      kind: "backlink";
+      sources: BacklinkSourceIR[];
+    };
+
 /* ---------------------------------- */
 /* Filter                             */
 /* ---------------------------------- */
@@ -204,6 +214,16 @@ export type FilterExprIR =
     }
   | {
       kind: "field_in";
+      column: string;
+      op: "in" | "not_in";
+      values: ScalarValue[];
+    }
+  | {
+      // Multi-property set-membership: tests whether the JSON-encoded multi
+      // value at `column` shares any element with `values`. Used to lower
+      // EdgeQL's set-cross-product semantics (`X IN .multi`, `.multi IN {…}`,
+      // `.multi = {…}`) directly to SQL via `json_each` + `EXISTS`.
+      kind: "multi_field_in";
       column: string;
       op: "in" | "not_in";
       values: ScalarValue[];
@@ -234,9 +254,22 @@ export type FilterExprIR =
       value: ScalarValue;
     }
   | {
+      kind: "backlink_exists";
+      sources: BacklinkSourceIR[];
+    }
+  | {
       kind: "link_property_exists";
       relation: LinkRelationIR;
       property: string;
+    }
+  | {
+      kind: "link_exists";
+      relation: LinkRelationIR;
+    }
+  | {
+      kind: "link_target_link_exists";
+      relation: LinkRelationIR;
+      targetRelation: LinkRelationIR;
     }
   | {
       kind: "link_property_compare_exists";
@@ -299,6 +332,13 @@ export type FilterExprIR =
       op: "=" | "!=" | "<" | "<=" | ">" | ">=" | "like" | "ilike";
     }
   | {
+      kind: "link_path_target_field_compare";
+      steps: LinkPathStepIR[];
+      targetColumn: string;
+      value: ScalarValue;
+      op: "=" | "!=" | "<" | "<=" | ">" | ">=" | "like" | "ilike";
+    }
+  | {
       kind: "and";
       left: FilterExprIR;
       right: FilterExprIR;
@@ -332,7 +372,23 @@ export type ScalarExprIR =
   | { kind: "binop"; op: "+" | "-" | "*" | "/" | "//" | "%" | "++"; left: ScalarExprIR; right: ScalarExprIR }
   | { kind: "neg"; expr: ScalarExprIR }
   | { kind: "index_access"; value: ScalarExprIR; index: number }
-  | { kind: "fn_call"; name: ScalarFnName; args: ScalarExprIR[] };
+  | { kind: "fn_call"; name: ScalarFnName; args: ScalarExprIR[] }
+  // `array_agg(.multi_prop ORDER BY .multi_prop [ASC|DESC])` lowered to the
+  // JSON-string representation of the sorted multi-property elements, so
+  // `array_agg = array_agg` / `array_agg = [literal]` compare by canonical
+  // JSON equality directly in SQL.
+  | { kind: "multi_field_array_agg"; column: string; direction: "asc" | "desc" }
+  // `count(.multi_prop)` / `count((SELECT _ := .multi_prop FILTER ...))` —
+  // lowered to a `COUNT(*)` over `json_each` with an optional WHERE clause
+  // on the iterated element value.
+  | { kind: "multi_field_count"; column: string; elementFilter?: MultiFieldElementFilterIR };
+
+/** Lowered `_ <op> ...` filter on a multi-property element inside a
+ *  `count(SELECT _ := .multi FILTER ...)` subquery. The element value comes
+ *  from `json_each(...).value`. */
+export type MultiFieldElementFilterIR =
+  | { kind: "in"; op: "in" | "not_in"; values: ScalarValue[] }
+  | { kind: "compare"; op: "=" | "!=" | "<" | "<=" | ">" | ">="; value: ScalarValue };
 
 /* ---------------------------------- */
 /* Select-shape expressions           */
@@ -396,6 +452,8 @@ export type SelectShapeExprIR =
 export interface ShapeBaseIR {
   name: string;
   pathId: PathIdIR;
+  typeRef?: SchemaTypeRefIR;
+  cardinality?: Cardinality;
 }
 
 export type SelectShapeElementIR =
@@ -516,6 +574,7 @@ export interface InsertIR extends MutationBaseIR {
   linkDefaults?: InsertLinkDefaultIR[];
   triggers?: TriggerIR[];
   policies?: PolicyIR[];
+  inference?: InferenceResult;
 }
 
 export interface UpdateLinkAssignmentIR {
@@ -541,6 +600,7 @@ export interface UpdateIR extends MutationBaseIR {
   linkAssignments?: UpdateLinkAssignmentIR[];
   triggers?: TriggerIR[];
   policies?: PolicyIR[];
+  inference?: InferenceResult;
 }
 
 export interface DeleteIR extends MutationBaseIR {
@@ -551,6 +611,7 @@ export interface DeleteIR extends MutationBaseIR {
   };
   triggers?: TriggerIR[];
   policies?: PolicyIR[];
+  inference?: InferenceResult;
 }
 
 /* ---------------------------------- */
@@ -602,6 +663,7 @@ export interface SelectFreeIR extends PathStatementIR {
   entries: SelectFreeIREntry[];
   triggers?: TriggerIR[];
   policies?: PolicyIR[];
+  inference?: InferenceResult;
 }
 
 /* ---------------------------------- */
@@ -649,6 +711,10 @@ export type SelectExprIREntry<D extends Depth = 4> =
       kind: "current_item_field";
       bindingName: string;
       field: string;
+    }
+  | {
+      kind: "global_ref";
+      name: string;
     }
   | (D extends 0
       ? never
@@ -831,6 +897,8 @@ export interface SelectExprIR {
   entries: SelectExprIREntry[];
   currentBinding?: string;
   orderBy?: OrderByIR<SelectExprIREntry>;
+  typeRef?: SchemaTypeRefIR;
+  inference?: InferenceResult;
 }
 
 /* ---------------------------------- */

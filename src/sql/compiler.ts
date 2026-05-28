@@ -1,6 +1,6 @@
 import { AppError } from "../errors.js";
 import type { FreeObjectExpr } from "../edgeql/ast.js";
-import type { FilterExprIR, IRStatement, LinkRelationIR, PathIdIR, ScalarExprIR, SelectFreeIR, SelectIR, SelectShapeElementIR } from "../ir/model.js";
+import type { FilterExprIR, IRStatement, LinkPathStepIR, LinkRelationIR, PathIdIR, ScalarExprIR, SelectFreeIR, SelectIR, SelectShapeElementIR } from "../ir/model.js";
 import type { RuntimeTarget } from "../runtime/target.js";
 import { canLowerStdlibFunctionSql, lowerStdlibFunctionSql } from "./stdlib_lowering.js";
 import type { ComputedLinkPropertyDef, ComputedLinkPropertyExpr, ScalarValue } from "../types.js";
@@ -239,7 +239,14 @@ const compileSelectToSQL = (ir: SelectIR, target: RuntimeTarget): SQLArtifact =>
     for (const element of ir.shape) {
       if (element.kind !== "computed") continue;
       if (!element.name) continue;
-      computedByPointer.set(element.name, computedValueAlias(element.pathId));
+      // Only register an alias when the shape projects a `__computed_*` column
+      // for this element. Kinds like `polymorphic_field_ref`, `field_ref`, and
+      // `type_name` resolve to existing columns on the row (or to the
+      // `__source_type` slot) and ORDER BY should use those directly.
+      const kind = element.expr.kind;
+      if (kind === "function_call" || kind === "link_aggregate" || kind === "select_expr") {
+        computedByPointer.set(element.name, computedValueAlias(element.pathId));
+      }
     }
     const terms: string[] = [];
     let term: typeof ir.orderBy | undefined = ir.orderBy;
@@ -403,6 +410,9 @@ const compileBacklinkArrayExpr = (
           if (shapeElement.kind === "computed" && shapeElement.expr.kind === "field_ref" && !shapeElement.expr.column.startsWith("@")) {
             return [shapeElement.expr.column];
           }
+          if (shapeElement.kind === "link" && shapeElement.relation.storage === "inline" && shapeElement.relation.inlineColumn) {
+            return [shapeElement.relation.inlineColumn];
+          }
           return [];
         }),
         ...(orderByValue && !orderByIsLinkProperty ? [orderByValue] : []),
@@ -503,24 +513,25 @@ const compileBacklinkArrayExpr = (
     return `COALESCE((SELECT json_group_array(json_object('id', ${quoteIdent("id")}, '__type__', ${quoteIdent("type_name")})) FROM (${ordered})), '[]')`;
   }
 
+  const itemAlias = `ba_${sanitizePathId(element.pathId)}`;
   const itemPairs: string[] = [];
   for (const shapeElement of shape!) {
     itemPairs.push(quoteLiteral(shapeElement.name));
     if (shapeElement.kind === "field") {
-      itemPairs.push(quoteIdent(shapeElement.column));
+      itemPairs.push(`${itemAlias}.${quoteIdent(shapeElement.column)}`);
       continue;
     }
     if (shapeElement.kind === "computed") {
       if (shapeElement.expr.kind === "field_ref") {
         const colName = shapeElement.expr.column.startsWith("@")
-          ? quoteIdent(shapeElement.expr.column)
-          : quoteIdent(shapeElement.expr.column);
+          ? `${itemAlias}.${quoteIdent(shapeElement.expr.column)}`
+          : `${itemAlias}.${quoteIdent(shapeElement.expr.column)}`;
         itemPairs.push(colName);
         continue;
       }
       if (shapeElement.expr.kind === "literal") {
         if (shapeElement.name.startsWith("@")) {
-          itemPairs.push(quoteIdent(shapeElement.name));
+          itemPairs.push(`${itemAlias}.${quoteIdent(shapeElement.name)}`);
           continue;
         }
         params.push(encodeParam(shapeElement.expr.value));
@@ -528,16 +539,22 @@ const compileBacklinkArrayExpr = (
         continue;
       }
       if (shapeElement.expr.kind === "type_name") {
-        itemPairs.push(quoteIdent("type_name"));
+        itemPairs.push(`${itemAlias}.${quoteIdent("type_name")}`);
         continue;
       }
       itemPairs.push("json('[]')");
       continue;
     }
-    itemPairs.push("json('[]')");
+    if (shapeElement.kind === "link") {
+      itemPairs.push(compileLinkArrayExpr(shapeElement, itemAlias, params, target));
+      continue;
+    }
+    if (shapeElement.kind === "backlink") {
+      itemPairs.push(compileBacklinkArrayExpr(shapeElement, itemAlias, params, target));
+      continue;
+    }
   }
-  void target;
-  return `COALESCE((SELECT json_group_array(json_object(${itemPairs.join(", ")})) FROM (${ordered})), '[]')`;
+  return `COALESCE((SELECT json_group_array(json_object(${itemPairs.join(", ")})) FROM (${ordered}) ${itemAlias}), '[]')`;
 };
 
 type FreePathTail = { fields: string[]; linkProperty?: string };
@@ -764,6 +781,11 @@ const compileShapeScalarValueSQL = (
       return `json_array(${(parts as string[]).join(", ")})`;
     }
     if (node.kind === "function_call") {
+      // `count(.multi)` / `count((SELECT _ := .multi FILTER …))` in a
+      // shape-scalar / ORDER BY context. Mirror the filter-side lowering so
+      // ORDER BY count(...) doesn't require the parsed-runtime fallback.
+      const countMulti = compileMultiFieldCountInShape(node);
+      if (countMulti) return countMulti;
       const argSqls: string[] = [];
       for (const arg of node.call.args) {
         if (arg.kind !== "expr") return null;
@@ -773,6 +795,83 @@ const compileShapeScalarValueSQL = (
       }
       const fnName = node.call.name.includes("::") ? node.call.name : `std::${node.call.name}`;
       return lowerStdlibFunctionSql(target, fnName, argSqls);
+    }
+    return null;
+  };
+
+  const compileMultiFieldCountInShape = (node: FreeObjectExpr): string | null => {
+    if (node.kind !== "function_call") return null;
+    if (node.call.name !== "count" && node.call.name !== "std::count") return null;
+    if (node.call.args.length !== 1) return null;
+    const arg = node.call.args[0];
+    if (arg.kind !== "expr") return null;
+    const isSubjectFieldAccess = (e: FreeObjectExpr): string | null => {
+      if (e.kind !== "field_access") return null;
+      if (e.field.startsWith("@")) return null;
+      if (!isCurrentRow(e.expr)) return null;
+      return e.field;
+    };
+    const renderFieldCount = (column: string, elemFilter: string | null): string => {
+      const col = `${sourceAlias}.${quoteIdent(column)}`;
+      const where = elemFilter ? ` WHERE ${elemFilter}` : "";
+      return `(SELECT COUNT(*) FROM json_each(IFNULL(${col}, '[]')) __c${where})`;
+    };
+    const inner = arg.expr;
+    const bareField = isSubjectFieldAccess(inner);
+    if (bareField !== null) {
+      return renderFieldCount(bareField, null);
+    }
+    if (inner.kind !== "select_expr_subquery") return null;
+    if (inner.limit !== undefined || inner.offset !== undefined || inner.orderBy) return null;
+    const iterField = isSubjectFieldAccess(inner.expr);
+    if (iterField === null) return null;
+    if (!inner.filter) {
+      return renderFieldCount(iterField, null);
+    }
+    const filterExpr = inner.filter;
+    const alias = inner.alias;
+    const isAliasRef = (x: FreeObjectExpr): boolean =>
+      alias !== undefined && x.kind === "binding_ref" && x.name === alias;
+    if (filterExpr.kind === "in_expr") {
+      if (!isAliasRef(filterExpr.left)) return null;
+      const setSide = filterExpr.right;
+      const values: unknown[] = setSide.kind === "set_literal"
+        ? setSide.values
+        : setSide.kind === "literal" ? [setSide.value] : null as unknown as unknown[];
+      if (!values) return null;
+      const valid = values.every((v) => typeof v === "string" || typeof v === "number"
+        || typeof v === "boolean" || v === null);
+      if (!valid) return null;
+      const placeholders = values.map(() => "?").join(", ");
+      params.push(...values.map((v) => encodeParam(v as ScalarValue)));
+      const op = filterExpr.op === "in" ? "IN" : "NOT IN";
+      return renderFieldCount(iterField, `__c.value ${op} (${placeholders})`);
+    }
+    if (filterExpr.kind === "compare"
+      && (filterExpr.op === "=" || filterExpr.op === "!="
+        || filterExpr.op === "<" || filterExpr.op === "<="
+        || filterExpr.op === ">" || filterExpr.op === ">=")) {
+      const literal = (side: FreeObjectExpr): ScalarValue | null =>
+        side.kind === "literal" && (typeof side.value === "string"
+          || typeof side.value === "number" || typeof side.value === "boolean"
+          || side.value === null) ? (side.value as ScalarValue) : null;
+      let value: ScalarValue | null = null;
+      let op: string = filterExpr.op;
+      if (isAliasRef(filterExpr.left)) {
+        value = literal(filterExpr.right);
+      } else if (isAliasRef(filterExpr.right)) {
+        value = literal(filterExpr.left);
+        op = filterExpr.op === "<" ? ">"
+          : filterExpr.op === "<=" ? ">="
+          : filterExpr.op === ">" ? "<"
+          : filterExpr.op === ">=" ? "<="
+          : filterExpr.op;
+      } else {
+        return null;
+      }
+      if (value === null && filterExpr.op !== "=" && filterExpr.op !== "!=") return null;
+      params.push(encodeParam(value));
+      return renderFieldCount(iterField, `__c.value ${op} ?`);
     }
     return null;
   };
@@ -856,7 +955,7 @@ const compileShapeObjectExpr = (
     pairs.push(quoteLiteral(element.name));
 
     if (element.kind === "field") {
-      pairs.push(`${sourceAlias}.${quoteIdent(element.column)}`);
+      pairs.push(jsonObjectFieldValueSQL(sourceAlias, element.column));
       continue;
     }
 
@@ -1070,6 +1169,13 @@ const requiredAlias = (value: string | undefined): string => {
   return value;
 };
 
+const jsonObjectFieldValueSQL = (sourceAlias: string, column: string): string => {
+  if (column === "from_alias" || column === "is_abstract" || column === "delegated") {
+    return `json(CASE WHEN ${sourceAlias}.${quoteIdent(column)} THEN 'true' ELSE 'false' END)`;
+  }
+  return `${sourceAlias}.${quoteIdent(column)}`;
+};
+
 const compileLinkAggregateExpr = (
   expr: Extract<Extract<SelectShapeElementIR, { kind: "computed" }>["expr"], { kind: "link_aggregate" }>,
   sourceAlias: string,
@@ -1181,6 +1287,29 @@ const compileBacklinkFilterPredicate = (
   return filter.op === "=" ? `(${clauses.join(" OR ")})` : `NOT (${clauses.join(" OR ")})`;
 };
 
+const compileBacklinkExistsPredicate = (
+  rootAlias: string,
+  sources: Extract<FilterExprIR, { kind: "backlink_exists" }>["sources"],
+): string => {
+  const clauses = sources.map((source) => {
+    const sourceTables = source.sourceTables && source.sourceTables.length > 0
+      ? source.sourceTables
+      : [{ name: source.sourceType, table: source.table }];
+    const sourceFrom = sourceTables.length === 1
+      ? `${quoteIdent(sourceTables[0].table)} s`
+      : `(${sourceTables.map((entry) => `SELECT ${quoteLiteral(entry.name)} AS ${quoteIdent("__source_type")}, * FROM ${quoteIdent(entry.table)}`).join(" UNION ALL ")}) s`;
+
+    if (source.storage === "inline") {
+      return `EXISTS (SELECT 1 FROM ${sourceFrom} WHERE s.${quoteIdent(requiredInlineColumn(source.inlineColumn))} = ${rootAlias}.${quoteIdent("id")})`;
+    }
+
+    return `EXISTS (SELECT 1 FROM ${sourceFrom} JOIN ${quoteIdent(requiredLinkTable(source.linkTable))} l ON l.${quoteIdent("source")} = s.${quoteIdent("id")} WHERE l.${quoteIdent("target")} = ${rootAlias}.${quoteIdent("id")})`;
+  });
+
+  if (clauses.length === 0) return "0";
+  return clauses.length === 1 ? clauses[0]! : `(${clauses.join(" OR ")})`;
+};
+
 const filterColumnSql = (column: string, sourceAlias: string, linkPropertyAlias?: string): string => {
   if (column.startsWith("@")) {
     const alias = linkPropertyAlias ?? sourceAlias;
@@ -1192,6 +1321,112 @@ const filterColumnSql = (column: string, sourceAlias: string, linkPropertyAlias?
   }
 
   return `${sourceAlias}.${quoteIdent(column)}`;
+};
+
+const compileLinkExistsPredicate = (
+  relation: LinkRelationIR,
+  sourceAlias: string,
+  aliasSeed: string,
+): string => {
+  if (relation.storage === "inline") {
+    return `${sourceAlias}.${quoteIdent(requiredInlineColumn(relation.inlineColumn))} IS NOT NULL`;
+  }
+
+  const alias = `le_${Math.abs(hashString(aliasSeed)).toString(16)}`;
+  return `EXISTS (SELECT 1 FROM ${linkJunctionFrom(relation, alias)} WHERE ${alias}.${quoteIdent("source")} = ${sourceAlias}.${quoteIdent("id")})`;
+};
+
+const compileLinkTargetLinkExistsPredicate = (
+  relation: LinkRelationIR,
+  targetRelation: LinkRelationIR,
+  sourceAlias: string,
+): string => {
+  const targets = relation.targetTables.length > 0
+    ? relation.targetTables
+    : [{ name: relation.targetType, table: relation.targetTable }];
+  const relationAlias = `ltle_${Math.abs(hashString(`${relation.sourceType}:${relation.targetType}:${targetRelation.sourceType}`)).toString(16)}`;
+  const clauses = targets.map((target, index) => {
+    const targetAlias = `${relationAlias}_t${index}`;
+    const nestedExists = compileLinkExistsPredicate(
+      targetRelation,
+      targetAlias,
+      `${targetRelation.sourceType}:${targetRelation.targetType}:${targetRelation.linkTable ?? targetRelation.inlineColumn ?? "inline"}:${index}`,
+    );
+    if (relation.storage === "inline") {
+      return `EXISTS (SELECT 1 FROM ${quoteIdent(target.table)} ${targetAlias} WHERE ${targetAlias}.${quoteIdent("id")} = ${sourceAlias}.${quoteIdent(requiredInlineColumn(relation.inlineColumn))} AND ${nestedExists})`;
+    }
+    return `EXISTS (SELECT 1 FROM ${linkJunctionFrom(relation, relationAlias)} JOIN ${quoteIdent(target.table)} ${targetAlias} ON ${targetAlias}.${quoteIdent("id")} = ${relationAlias}.${quoteIdent("target")} WHERE ${relationAlias}.${quoteIdent("source")} = ${sourceAlias}.${quoteIdent("id")} AND ${nestedExists})`;
+  });
+  if (clauses.length === 0) return "0";
+  return clauses.length === 1 ? clauses[0]! : `(${clauses.join(" OR ")})`;
+};
+
+const backlinkSourceFrom = (
+  source: Extract<LinkPathStepIR, { kind: "backlink" }>["sources"][number],
+  alias: string,
+): string => {
+  const sourceTables = source.sourceTables && source.sourceTables.length > 0
+    ? source.sourceTables
+    : [{ name: source.sourceType, table: source.table }];
+  if (sourceTables.length === 1) {
+    return `${quoteIdent(sourceTables[0]!.table)} ${alias}`;
+  }
+  return `(${sourceTables.map((entry) => `SELECT ${quoteLiteral(entry.name)} AS ${quoteIdent("__source_type")}, * FROM ${quoteIdent(entry.table)}`).join(" UNION ALL ")}) ${alias}`;
+};
+
+const linkPathRequiredColumns = (
+  filter: Extract<FilterExprIR, { kind: "link_path_target_field_compare" }>,
+  startIndex: number,
+): string[] => {
+  const columns = new Set<string>([filter.targetColumn]);
+  for (const step of filter.steps.slice(startIndex)) {
+    if (step.kind === "link" && step.relation.storage === "inline" && step.relation.inlineColumn) {
+      columns.add(step.relation.inlineColumn);
+    }
+  }
+  return [...columns];
+};
+
+const compileLinkPathTargetFieldComparePredicate = (
+  filter: Extract<FilterExprIR, { kind: "link_path_target_field_compare" }>,
+  sourceAlias: string,
+  params: ScalarValue[],
+): string => {
+  const compileAt = (stepIndex: number, currentAlias: string, aliasSeed: string): string => {
+    if (stepIndex >= filter.steps.length) {
+      params.push(encodeParam(filter.value));
+      return compileFilterPredicate(`${currentAlias}.${quoteIdent(filter.targetColumn)}`, filter.op);
+    }
+
+    const step = filter.steps[stepIndex]!;
+    if (step.kind === "link") {
+      const relation = step.relation;
+      const targetAlias = `lp_${Math.abs(hashString(`${aliasSeed}:${stepIndex}:target`)).toString(16)}`;
+      const nested = compileAt(stepIndex + 1, targetAlias, `${aliasSeed}:${stepIndex}`);
+      const targetSource = compilePolymorphicTargetSource(relation, targetAlias, linkPathRequiredColumns(filter, stepIndex + 1));
+      if (relation.storage === "inline") {
+        return `EXISTS (SELECT 1 FROM ${targetSource} WHERE ${targetAlias}.${quoteIdent("id")} = ${currentAlias}.${quoteIdent(requiredInlineColumn(relation.inlineColumn))} AND ${nested})`;
+      }
+      const relationAlias = `lp_${Math.abs(hashString(`${aliasSeed}:${stepIndex}:link`)).toString(16)}`;
+      return `EXISTS (SELECT 1 FROM ${linkJunctionFrom(relation, relationAlias)} JOIN ${targetSource} ON ${targetAlias}.${quoteIdent("id")} = ${relationAlias}.${quoteIdent("target")} WHERE ${relationAlias}.${quoteIdent("source")} = ${currentAlias}.${quoteIdent("id")} AND ${nested})`;
+    }
+
+    const clauses = step.sources.map((source, index) => {
+      const sourceAliasInner = `lp_${Math.abs(hashString(`${aliasSeed}:${stepIndex}:source:${index}`)).toString(16)}`;
+      const nested = compileAt(stepIndex + 1, sourceAliasInner, `${aliasSeed}:${stepIndex}:${index}`);
+      const sourceFrom = backlinkSourceFrom(source, sourceAliasInner);
+      if (source.storage === "inline") {
+        return `EXISTS (SELECT 1 FROM ${sourceFrom} WHERE ${sourceAliasInner}.${quoteIdent(requiredInlineColumn(source.inlineColumn))} = ${currentAlias}.${quoteIdent("id")} AND ${nested})`;
+      }
+      const linkAlias = `lp_${Math.abs(hashString(`${aliasSeed}:${stepIndex}:backlink:${index}`)).toString(16)}`;
+      return `EXISTS (SELECT 1 FROM ${sourceFrom} JOIN ${quoteIdent(requiredLinkTable(source.linkTable))} ${linkAlias} ON ${linkAlias}.${quoteIdent("source")} = ${sourceAliasInner}.${quoteIdent("id")} WHERE ${linkAlias}.${quoteIdent("target")} = ${currentAlias}.${quoteIdent("id")} AND ${nested})`;
+    });
+
+    if (clauses.length === 0) return "0";
+    return clauses.length === 1 ? clauses[0]! : `(${clauses.join(" OR ")})`;
+  };
+
+  return compileAt(0, sourceAlias, `${sourceAlias}:${filter.targetColumn}`);
 };
 
 const compileFilterExprSQL = (
@@ -1212,6 +1447,22 @@ const compileFilterExprSQL = (
     params.push(...encodedValues);
     const op = filter.op === "in" ? "IN" : "NOT IN";
     return `${column} ${op} (${placeholders})`;
+  }
+
+  if (filter.kind === "multi_field_in") {
+    // EdgeQL set-cross-product semantics: any element of the multi-property
+    // matching any literal in `values` makes the filter true. SQLite stores
+    // multi-properties as a JSON TEXT array; iterate them with `json_each`.
+    const column = filterColumnSql(filter.column, sourceAlias, linkPropertyAlias);
+    if (filter.values.length === 0) {
+      // `x IN <empty>` → false, `x NOT IN <empty>` → true (EdgeQL empty
+      // propagation collapses to no-match for the `in` case).
+      return filter.op === "in" ? "0" : "1";
+    }
+    const placeholders = filter.values.map(() => "?").join(", ");
+    params.push(...filter.values.map((v) => encodeParam(v)));
+    const inner = `SELECT 1 FROM json_each(${column}) WHERE ${column} IS NOT NULL AND json_each.value IN (${placeholders})`;
+    return filter.op === "in" ? `EXISTS (${inner})` : `NOT EXISTS (${inner})`;
   }
 
   if (filter.kind === "self_in_select") {
@@ -1272,12 +1523,24 @@ const compileFilterExprSQL = (
     return compileBacklinkFilterPredicate(sourceAlias, filter, params);
   }
 
+  if (filter.kind === "backlink_exists") {
+    return compileBacklinkExistsPredicate(sourceAlias, filter.sources);
+  }
+
   if (filter.kind === "link_property_exists") {
     if (filter.relation.storage !== "table" || !filter.relation.linkTable) {
       return "0";
     }
     const alias = `lp_${Math.abs(hashString(`${filter.relation.sourceType}:${filter.relation.linkTable}:${filter.property}`)).toString(16)}`;
     return `EXISTS (SELECT 1 FROM ${linkJunctionFrom(filter.relation, alias)} WHERE ${alias}.${quoteIdent("source")} = ${sourceAlias}.${quoteIdent("id")} AND ${alias}.${quoteIdent(filter.property)} IS NOT NULL)`;
+  }
+
+  if (filter.kind === "link_exists") {
+    return compileLinkExistsPredicate(filter.relation, sourceAlias, `${filter.relation.sourceType}:${filter.relation.targetType}:${filter.relation.linkTable ?? filter.relation.inlineColumn ?? "inline"}`);
+  }
+
+  if (filter.kind === "link_target_link_exists") {
+    return compileLinkTargetLinkExistsPredicate(filter.relation, filter.targetRelation, sourceAlias);
   }
 
   if (filter.kind === "link_property_compare_exists") {
@@ -1339,6 +1602,10 @@ const compileFilterExprSQL = (
       });
     if (clauses.length === 0) return "0";
     return clauses.length === 1 ? clauses[0]! : `(${clauses.join(" OR ")})`;
+  }
+
+  if (filter.kind === "link_path_target_field_compare") {
+    return compileLinkPathTargetFieldComparePredicate(filter, sourceAlias, params);
   }
 
   if (filter.kind === "link_target_field_in") {
@@ -1468,6 +1735,37 @@ const compileScalarExprSQL = (
     const args = expr.args.map((arg) => compileScalarExprSQL(arg, sourceAlias, params));
     return wrapScalarFn(expr.name, args.join(", "));
   }
+  if (expr.kind === "multi_field_array_agg") {
+    // EdgeQL `array_agg(.multi ORDER BY .multi <dir>)` lowered to the JSON
+    // string of the sorted elements. Wrapping the column with `IFNULL(…, '[]')`
+    // keeps `json_each` happy on NULL multi-properties (the empty case),
+    // and the outer `IFNULL(json_group_array(...), '[]')` produces `'[]'`
+    // when the iterator yielded no rows — matching `array_agg({}) = []`
+    // semantics so empty-vs-empty compares equal.
+    const col = `${sourceAlias}.${quoteIdent(expr.column)}`;
+    const dir = expr.direction === "desc" ? "DESC" : "ASC";
+    return `(SELECT IFNULL(json_group_array(__v.value), '[]') FROM (SELECT value FROM json_each(IFNULL(${col}, '[]')) ORDER BY value ${dir}) __v)`;
+  }
+  if (expr.kind === "multi_field_count") {
+    // EdgeQL `count(.multi)` / `count((SELECT _ := .multi FILTER …))` —
+    // lower to `COUNT(*)` over `json_each(IFNULL(col, '[]'))` plus an
+    // optional WHERE clause derived from the inner FILTER expression.
+    const col = `${sourceAlias}.${quoteIdent(expr.column)}`;
+    let where = "";
+    const ef = expr.elementFilter;
+    if (ef) {
+      if (ef.kind === "in") {
+        const placeholders = ef.values.map(() => "?").join(", ");
+        params.push(...ef.values.map((v) => encodeParam(v)));
+        const op = ef.op === "in" ? "IN" : "NOT IN";
+        where = ` WHERE __c.value ${op} (${placeholders})`;
+      } else {
+        params.push(encodeParam(ef.value));
+        where = ` WHERE __c.value ${ef.op} ?`;
+      }
+    }
+    return `(SELECT COUNT(*) FROM json_each(IFNULL(${col}, '[]')) __c${where})`;
+  }
   const leftSql = compileScalarExprSQL(expr.left, sourceAlias, params);
   const rightSql = compileScalarExprSQL(expr.right, sourceAlias, params);
   if (expr.op === "//") {
@@ -1493,11 +1791,15 @@ const collectFieldFilterColumns = (filter: FilterExprIR | undefined): string[] =
     return [filter.column];
   }
 
+  if (filter.kind === "multi_field_in") {
+    return [filter.column];
+  }
+
   if (filter.kind === "field_compare") {
     return [filter.leftColumn, filter.rightColumn];
   }
 
-  if (filter.kind === "backlink") {
+  if (filter.kind === "backlink" || filter.kind === "backlink_exists") {
     return [];
   }
 
@@ -1511,6 +1813,12 @@ const collectFieldFilterColumns = (filter: FilterExprIR | undefined): string[] =
 
   if (filter.kind === "link_property_exists") {
     return [];
+  }
+
+  if (filter.kind === "link_exists" || filter.kind === "link_target_link_exists") {
+    return filter.relation.storage === "inline" && filter.relation.inlineColumn
+      ? [filter.relation.inlineColumn]
+      : [];
   }
 
   if (filter.kind === "link_property_compare_exists") {
@@ -1535,6 +1843,13 @@ const collectFieldFilterColumns = (filter: FilterExprIR | undefined): string[] =
     return [];
   }
 
+  if (filter.kind === "link_path_target_field_compare") {
+    const first = filter.steps[0];
+    return first?.kind === "link" && first.relation.storage === "inline" && first.relation.inlineColumn
+      ? [first.relation.inlineColumn]
+      : [];
+  }
+
   if (filter.kind === "not") {
     return collectFieldFilterColumns(filter.expr);
   }
@@ -1552,6 +1867,8 @@ const collectScalarExprColumns = (expr: ScalarExprIR): string[] => {
   if (expr.kind === "neg") return collectScalarExprColumns(expr.expr);
   if (expr.kind === "index_access") return collectScalarExprColumns(expr.value);
   if (expr.kind === "fn_call") return expr.args.flatMap(collectScalarExprColumns);
+  if (expr.kind === "multi_field_array_agg") return [expr.column];
+  if (expr.kind === "multi_field_count") return [expr.column];
   return [...collectScalarExprColumns(expr.left), ...collectScalarExprColumns(expr.right)];
 };
 
