@@ -11,10 +11,22 @@ export type RuntimeFunctionArg =
       values: ScalarValue[];
     };
 
+export type StdlibVolatility = "immutable" | "stable" | "volatile";
+
 export interface StdlibFunctionDef {
   name: string;
   minArgs: number;
   maxArgs: number;
+  /** Defaults to "immutable" when omitted. */
+  volatility?: StdlibVolatility;
+  /** True when the function can return an empty set even with non-empty
+   * input (e.g. `array_get`, `to_json`, `assert`). Used by cardinality
+   * inference to lower the return cardinality bound to at_most_one. */
+  returnOptional?: boolean;
+  /** Per-parameter SET OF flag (true ⇒ the arg's set is collapsed to a
+   * single invocation, like aggregates). Length matches max-arity; trailing
+   * entries default to false. */
+  paramSetOf?: boolean[];
 }
 
 const DEFINITIONS: StdlibFunctionDef[] = [
@@ -40,9 +52,9 @@ const DEFINITIONS: StdlibFunctionDef[] = [
   { name: "math::cot", minArgs: 1, maxArgs: 1 },
   { name: "math::sin", minArgs: 1, maxArgs: 1 },
   { name: "math::tan", minArgs: 1, maxArgs: 1 },
-  { name: "std::datetime_current", minArgs: 0, maxArgs: 0 },
-  { name: "std::datetime_of_transaction", minArgs: 0, maxArgs: 0 },
-  { name: "std::datetime_of_statement", minArgs: 0, maxArgs: 0 },
+  { name: "std::datetime_current", minArgs: 0, maxArgs: 0, volatility: "volatile" },
+  { name: "std::datetime_of_transaction", minArgs: 0, maxArgs: 0, volatility: "stable" },
+  { name: "std::datetime_of_statement", minArgs: 0, maxArgs: 0, volatility: "stable" },
   { name: "std::to_datetime", minArgs: 1, maxArgs: 1 },
   // to_str accepts an optional format string for datetime / numeric inputs.
   { name: "std::to_str", minArgs: 1, maxArgs: 2 },
@@ -51,21 +63,32 @@ const DEFINITIONS: StdlibFunctionDef[] = [
   { name: "std::max", minArgs: 1, maxArgs: 1 },
   { name: "std::min", minArgs: 1, maxArgs: 1 },
   { name: "std::sum", minArgs: 1, maxArgs: 1 },
-  { name: "std::assert_exists", minArgs: 1, maxArgs: 1 },
-  { name: "std::assert_single", minArgs: 1, maxArgs: 1 },
-  { name: "std::assert_distinct", minArgs: 1, maxArgs: 1 },
+  { name: "std::assert_exists", minArgs: 1, maxArgs: 2 },
+  { name: "std::assert_single", minArgs: 1, maxArgs: 2 },
+  { name: "std::assert_distinct", minArgs: 1, maxArgs: 2 },
+  // `std::assert(cond, message := …)` passes through the condition's
+  // cardinality and multiplicity. The optional `message` is a SET OF arg
+  // (joined into the call), so when multi, the call multiplies out.
+  { name: "std::assert", minArgs: 1, maxArgs: 2 },
   { name: "std::all", minArgs: 1, maxArgs: 1 },
   { name: "std::any", minArgs: 1, maxArgs: 1 },
   { name: "std::range", minArgs: 2, maxArgs: 2 },
   { name: "std::range_unpack", minArgs: 1, maxArgs: 1 },
   { name: "std::array_agg", minArgs: 1, maxArgs: 1 },
   { name: "std::array_unpack", minArgs: 1, maxArgs: 1 },
-  { name: "std::array_get", minArgs: 2, maxArgs: 3 },
+  // array_get returns an OPTIONAL element — out-of-bounds yields an empty
+  // set rather than an error. Marking the return optional lets cardinality
+  // inference report the result as at_most_one per index.
+  { name: "std::array_get", minArgs: 2, maxArgs: 3, returnOptional: true },
   { name: "std::array_set", minArgs: 3, maxArgs: 3 },
   { name: "std::array_insert", minArgs: 3, maxArgs: 3 },
   { name: "std::enumerate", minArgs: 1, maxArgs: 1 },
   { name: "std::str_lower", minArgs: 1, maxArgs: 1 },
   { name: "std::str_upper", minArgs: 1, maxArgs: 1 },
+  // str_split returns a set of strings — not a single value. Multiplicity
+  // inference treats it as a regular function (no SET OF params), so the
+  // result can be DUPLICATE when the operand is multi.
+  { name: "std::str_split", minArgs: 2, maxArgs: 2 },
   { name: "std::to_duration", minArgs: 1, maxArgs: 1 },
   { name: "std::array_join", minArgs: 2, maxArgs: 2 },
   { name: "cal::to_local_datetime", minArgs: 1, maxArgs: 1 },
@@ -83,8 +106,10 @@ const DEFINITIONS: StdlibFunctionDef[] = [
   { name: "cal::duration_normalize_days", minArgs: 1, maxArgs: 1 },
   { name: "std::__gel_subtract", minArgs: 2, maxArgs: 2 },
   { name: "std::__gel_if_eq", minArgs: 4, maxArgs: 4 },
-  { name: "std::to_json", minArgs: 1, maxArgs: 1 },
-  { name: "std::random", minArgs: 0, maxArgs: 0 },
+  // to_json can return JSON `null`, and casting JSON null yields the empty
+  // set — so on the casting-back path the effective return is OPTIONAL.
+  { name: "std::to_json", minArgs: 1, maxArgs: 1, returnOptional: true },
+  { name: "std::random", minArgs: 0, maxArgs: 0, volatility: "volatile" },
   { name: "std::round", minArgs: 1, maxArgs: 2 },
   { name: "std::find", minArgs: 2, maxArgs: 2 },
   { name: "std::contains", minArgs: 2, maxArgs: 2 },

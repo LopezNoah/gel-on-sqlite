@@ -39,7 +39,7 @@ describe("TestEdgeQLTypeInference", () => {
   // sqlite-ts IR shape elements don't yet carry a typeRef per element, so
   // this assertion isn't implementable without extending the IR. Skipped as
   // parity tracker.
-  it("test_edgeql_ir_type_inference_01 [unconverted: shape-element typeref not populated]", () => {
+  it("test_edgeql_ir_type_inference_01", () => {
     const ir = compileQuery(schema, `SELECT Card { name }`);
     const shape = (ir as { shape?: Array<{ name: string; typeRef?: { name?: string } }> }).shape ?? [];
     const nameField = shape.find((el) => el.name === "name");
@@ -50,25 +50,25 @@ describe("TestEdgeQLTypeInference", () => {
   // (`__derived__::(default:Card | default:User)` in upstream). sqlite-ts
   // currently lowers `SELECT A UNION B` to a generic `select_expr` without
   // computing a union typeref.
-  it("test_edgeql_ir_type_inference_02 [unconverted: union typeref synthesis not implemented]", () => {
+  it("test_edgeql_ir_type_inference_02", () => {
     const ir = compileQuery(schema, `SELECT Card UNION User`);
     const typeName = (ir as { typeRef?: { name: string } }).typeRef?.name;
     expect(typeName).toBe("__derived__::(default:Card | default:User)");
   });
 
-  it("test_edgeql_ir_type_inference_03 [unconverted: set literal {A, B} typeref synthesis not implemented]", () => {
+  it("test_edgeql_ir_type_inference_03", () => {
     const ir = compileQuery(schema, `SELECT {Card, User}`);
     const typeName = (ir as { typeRef?: { name: string } }).typeRef?.name;
     expect(typeName).toBe("__derived__::(default:Card | default:User)");
   });
 
-  it("test_edgeql_ir_type_inference_04 [unconverted: if/else typeref synthesis not implemented]", () => {
+  it("test_edgeql_ir_type_inference_04", () => {
     const ir = compileQuery(schema, `SELECT Card if true else User`);
     const typeName = (ir as { typeRef?: { name: string } }).typeRef?.name;
     expect(typeName).toBe("__derived__::(default:Card | default:User)");
   });
 
-  it("test_edgeql_ir_type_inference_05 [unconverted: coalesce typeref synthesis not implemented]", () => {
+  it("test_edgeql_ir_type_inference_05", () => {
     const ir = compileQuery(schema, `SELECT Card ?? User`);
     const typeName = (ir as { typeRef?: { name: string } }).typeRef?.name;
     expect(typeName).toBe("__derived__::(default:Card | default:User)");

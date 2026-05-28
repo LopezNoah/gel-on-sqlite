@@ -1614,6 +1614,8 @@ class Parser {
       // IF/THEN/ELSE conditional expressions can appear at the top of a
       // SELECT (`SELECT IF cond THEN x ELSE y`).
       "kw_if",
+      // `SELECT global X` references a global variable as the result.
+      "kw_global",
     ].includes(this.peek().kind)) {
       return this.parseSelectExprTail(start, ctx, this.parseFreeObjectExpr(), expectEof);
     }
@@ -1728,6 +1730,8 @@ class Parser {
       orderBy: clauses.orderBy,
       limit: clauses.limit,
       offset: clauses.offset,
+      limitExpr: clauses.limitExpr,
+      offsetExpr: clauses.offsetExpr,
       pos: this.posOf(start),
     };
   }
@@ -1784,6 +1788,8 @@ class Parser {
       orderBy: clauses.orderBy,
       limit: clauses.limit,
       offset: clauses.offset,
+      limitExpr: clauses.limitExpr,
+      offsetExpr: clauses.offsetExpr,
       pos: this.posOf(start),
     };
   }
@@ -2330,6 +2336,15 @@ class Parser {
         expr: { kind: "current_item" },
         field,
         optional: op === "optional_link",
+      };
+    }
+
+    if (this.peek().kind === "kw_global") {
+      this.consume();
+      const name = this.parseQualifiedName("Expected global name after 'global'");
+      return {
+        kind: "global_ref",
+        name,
       };
     }
 
@@ -5536,7 +5551,14 @@ class Parser {
 
     if (this.peek().kind === "kw_detached" && this.isNameToken(this.peekNext())) {
       this.consume();
-      const typeName = this.consume().lexeme;
+      // Allow `DETACHED <module>::<Type>` (qualified) as well as the bare
+      // type name. The qualified form shows up in scope-stripped queries
+      // like `WITH H := DETACHED default::User`.
+      let typeName = this.consume().lexeme;
+      while (this.peek().kind === "coloncolon" && this.isNameToken(this.peekNext())) {
+        this.consume();
+        typeName = `${typeName}::${this.consume().lexeme}`;
+      }
       return {
         kind: "subquery",
         query: {

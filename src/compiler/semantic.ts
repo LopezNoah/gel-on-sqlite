@@ -658,8 +658,21 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
   const resolveFunctionOrFail = (name: string, arity: number): { qualifiedName: string; volatility?: "Immutable" | "Stable" | "Volatile" | "Modifying" } => {
     const stdlib = tryResolveStdlibFunction(name, arity, activeModule);
     if (stdlib) {
+      const stdlibVolatility = ((): "Immutable" | "Stable" | "Volatile" | undefined => {
+        switch (stdlib.volatility) {
+          case "immutable":
+            return "Immutable";
+          case "stable":
+            return "Stable";
+          case "volatile":
+            return "Volatile";
+          default:
+            return undefined;
+        }
+      })();
       return {
         qualifiedName: stdlib.name,
+        volatility: stdlibVolatility,
       };
     }
 
@@ -673,6 +686,324 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       qualifiedName: `${moduleName}::${fnName}`,
       volatility: fn.volatility,
     };
+  };
+
+  type VolatilityLevel = "immutable" | "stable" | "volatile" | "modifying";
+  const VOLATILITY_RANK: Record<VolatilityLevel, number> = {
+    immutable: 0,
+    stable: 1,
+    volatile: 2,
+    modifying: 3,
+  };
+  const maxVolatility = (...vols: VolatilityLevel[]): VolatilityLevel => {
+    let result: VolatilityLevel = "immutable";
+    for (const v of vols) {
+      if (VOLATILITY_RANK[v] > VOLATILITY_RANK[result]) result = v;
+    }
+    return result;
+  };
+  const fnVolatilityToLevel = (
+    v: "Immutable" | "Stable" | "Volatile" | "Modifying" | undefined,
+  ): VolatilityLevel => {
+    switch (v) {
+      case "Stable":
+        return "stable";
+      case "Volatile":
+        return "volatile";
+      case "Modifying":
+        return "modifying";
+      default:
+        return "immutable";
+    }
+  };
+
+  // True when the given binding-ref name resolves to an object type root
+  // (either directly via the schema or through a schema alias's sourceType).
+  // Object roots are STABLE in volatility inference; scalar bindings are not.
+  const bindingRefIsObjectRoot = (name: string, bindings: Map<string, WithBindingValue>): boolean => {
+    if (bindings.has(name)) return false;
+    const normalized = normalizeTypeName(name, activeModule);
+    if (schema.getType(normalized)) return true;
+    const alias = schema.getAlias(normalized);
+    if (alias?.sourceType) {
+      const sourceName = normalizeTypeName(alias.sourceType, alias.module ?? activeModule);
+      return Boolean(schema.getType(sourceName));
+    }
+    return false;
+  };
+
+  const inferTypeNameVolatility = (typeName: string, bindings: Map<string, WithBindingValue>): VolatilityLevel => {
+    if (bindings.has(typeName)) {
+      return inferWithBindingValueVolatility(bindings.get(typeName)!, bindings);
+    }
+    const normalized = normalizeTypeName(typeName, activeModule);
+    if (schema.getType(normalized)) return "stable";
+    const alias = schema.getAlias(normalized);
+    if (alias?.sourceType) {
+      const sourceName = normalizeTypeName(alias.sourceType, alias.module ?? activeModule);
+      if (schema.getType(sourceName)) return "stable";
+    }
+    return "immutable";
+  };
+
+  const inferFilterExprVolatility = (filter: FilterExpr | undefined, bindings: Map<string, WithBindingValue>): VolatilityLevel => {
+    if (!filter) return "immutable";
+    switch (filter.kind) {
+      case "predicate":
+      case "in_predicate":
+        return "immutable";
+      case "and":
+      case "or":
+        return maxVolatility(
+          inferFilterExprVolatility(filter.left, bindings),
+          inferFilterExprVolatility(filter.right, bindings),
+        );
+      case "not":
+        return inferFilterExprVolatility(filter.expr, bindings);
+      case "free_expr":
+        return inferFreeObjectExprVolatility(filter.expr, bindings);
+    }
+  };
+
+  const inferOrderByVolatility = (orderBy: OrderExpr | undefined, bindings: Map<string, WithBindingValue>): VolatilityLevel => {
+    if (!orderBy) return "immutable";
+    const own: VolatilityLevel = orderBy.expr ? inferFreeObjectExprVolatility(orderBy.expr, bindings) : "immutable";
+    return maxVolatility(own, inferOrderByVolatility(orderBy.then, bindings));
+  };
+
+  const inferOrderByChainVolatility = (chain: OrderExprChain | undefined, bindings: Map<string, WithBindingValue>): VolatilityLevel => {
+    if (!chain) return "immutable";
+    return maxVolatility(
+      inferFreeObjectExprVolatility(chain.expr, bindings),
+      inferOrderByChainVolatility(chain.then, bindings),
+    );
+  };
+
+  const inferWithBindingValueVolatility = (value: WithBindingValue, bindings: Map<string, WithBindingValue>): VolatilityLevel => {
+    switch (value.kind) {
+      case "literal":
+      case "set_literal":
+      case "array_literal":
+      case "parameter":
+      case "enum_path":
+        return "immutable";
+      case "binding_ref":
+        return inferTypeNameVolatility(value.name, bindings);
+      case "subquery": {
+        const subType = inferTypeNameVolatility(value.query.typeName, bindings);
+        const subFilter = inferFilterExprVolatility(value.query.clauses?.filter, bindings);
+        const subOrder = inferOrderByVolatility(value.query.clauses?.orderBy, bindings);
+        const subLimitExpr = value.query.clauses?.limitExpr
+          ? inferFreeObjectExprVolatility(value.query.clauses.limitExpr, bindings)
+          : "immutable";
+        const subOffsetExpr = value.query.clauses?.offsetExpr
+          ? inferFreeObjectExprVolatility(value.query.clauses.offsetExpr, bindings)
+          : "immutable";
+        return maxVolatility(subType, subFilter, subOrder, subLimitExpr, subOffsetExpr);
+      }
+      case "subquery_statement":
+        return inferStatementVolatility(value.statement, bindings);
+      case "subquery_expr":
+        return inferFreeObjectExprVolatility(value.expr, bindings);
+      case "path":
+      case "path_chain":
+      case "backlink_path":
+        return "stable";
+    }
+  };
+
+  const inferStatementVolatility = (stmt: Statement, parentBindings: Map<string, WithBindingValue>): VolatilityLevel => {
+    const localBindings = new Map(parentBindings);
+    for (const binding of (stmt as { with?: Array<{ name: string; value: WithBindingValue }> }).with ?? []) {
+      localBindings.set(binding.name, binding.value);
+    }
+
+    if (stmt.kind === "insert" || stmt.kind === "update" || stmt.kind === "delete") {
+      return "modifying";
+    }
+
+    let bindingsVol: VolatilityLevel = "immutable";
+    for (const binding of (stmt as { with?: Array<{ name: string; value: WithBindingValue }> }).with ?? []) {
+      bindingsVol = maxVolatility(bindingsVol, inferWithBindingValueVolatility(binding.value, localBindings));
+    }
+
+    if (stmt.kind === "select") {
+      const baseVol = inferTypeNameVolatility(stmt.typeName, localBindings);
+      const filterVol = inferFilterExprVolatility(stmt.filter, localBindings);
+      const orderByVol = inferOrderByVolatility(stmt.orderBy, localBindings);
+      const limitVol = stmt.limitExpr ? inferFreeObjectExprVolatility(stmt.limitExpr, localBindings) : "immutable";
+      const offsetVol = stmt.offsetExpr ? inferFreeObjectExprVolatility(stmt.offsetExpr, localBindings) : "immutable";
+      return maxVolatility(baseVol, filterVol, orderByVol, limitVol, offsetVol, bindingsVol);
+    }
+
+    if (stmt.kind === "select_expr") {
+      const exprVol = inferFreeObjectExprVolatility(stmt.expr, localBindings);
+      const orderByVol = inferOrderByChainVolatility(stmt.orderBy, localBindings);
+      return maxVolatility(exprVol, orderByVol, bindingsVol);
+    }
+
+    if (stmt.kind === "select_free") {
+      let vol: VolatilityLevel = bindingsVol;
+      for (const entry of stmt.entries) {
+        vol = maxVolatility(vol, inferFreeObjectExprVolatility(entry.expr, localBindings));
+      }
+      return vol;
+    }
+
+    if (stmt.kind === "for") {
+      return "stable";
+    }
+
+    return bindingsVol;
+  };
+
+  const inferFreeObjectExprVolatility = (expr: FreeObjectExpr | ComputedExpr, bindings: Map<string, WithBindingValue>): VolatilityLevel => {
+    switch (expr.kind) {
+      case "literal":
+      case "set_literal":
+      case "parameter":
+      case "substitution":
+      case "enum_path":
+      case "type_name":
+        return "immutable";
+      case "global_ref":
+        return "stable";
+      case "current_item":
+      case "current_item_field":
+      case "field_ref":
+      case "polymorphic_field_ref":
+      case "field_suffix_math":
+        return "immutable";
+      case "binding_ref":
+        // Bindings forward to the schema type when the name is a type; their
+        // value's volatility folds in at the enclosing SELECT level so a bare
+        // binding reference itself stays immutable.
+        return bindingRefIsObjectRoot(expr.name, bindings) ? "stable" : "immutable";
+      case "path":
+      case "path_chain":
+      case "path_steps":
+      case "backlink_path":
+        return "stable";
+      case "field_access":
+        return inferFreeObjectExprVolatility(expr.expr, bindings);
+      case "shape_projection": {
+        let vol: VolatilityLevel = inferFreeObjectExprVolatility(expr.expr, bindings);
+        for (const element of expr.shape) {
+          if (element.kind === "computed") {
+            vol = maxVolatility(vol, inferFreeObjectExprVolatility(element.expr, bindings));
+          }
+        }
+        return vol;
+      }
+      case "select":
+        return inferStatementVolatility({
+          kind: "select",
+          typeName: expr.typeName,
+          shape: expr.shape,
+          fields: [],
+          filter: expr.clauses?.filter,
+          orderBy: expr.clauses?.orderBy,
+          limit: expr.clauses?.limit,
+          offset: expr.clauses?.offset,
+          limitExpr: expr.clauses?.limitExpr,
+          offsetExpr: expr.clauses?.offsetExpr,
+          pos: { line: 0, column: 0 },
+        } as Statement, bindings);
+      case "select_expr_subquery": {
+        const exprVol = inferFreeObjectExprVolatility(expr.expr, bindings);
+        const filterVol = expr.filter ? inferFreeObjectExprVolatility(expr.filter, bindings) : "immutable";
+        const orderVol = inferOrderByChainVolatility(expr.orderBy, bindings);
+        const limitVol = expr.limitExpr ? inferFreeObjectExprVolatility(expr.limitExpr, bindings) : "immutable";
+        const offsetVol = expr.offsetExpr ? inferFreeObjectExprVolatility(expr.offsetExpr, bindings) : "immutable";
+        let extraBindingsVol: VolatilityLevel = "immutable";
+        const subBindings = new Map(bindings);
+        for (const binding of expr.clauses?._withBindings ?? []) {
+          subBindings.set(binding.name, binding.value);
+          extraBindingsVol = maxVolatility(extraBindingsVol, inferWithBindingValueVolatility(binding.value, subBindings));
+        }
+        // Re-evaluate the inner expression with the added bindings in scope.
+        const exprVolWithBindings = inferFreeObjectExprVolatility(expr.expr, subBindings);
+        return maxVolatility(exprVol, exprVolWithBindings, filterVol, orderVol, limitVol, offsetVol, extraBindingsVol);
+      }
+      case "set_expr":
+      case "tuple":
+      case "array_literal_expr":
+        return expr.values.reduce<VolatilityLevel>((acc, value) => maxVolatility(acc, inferFreeObjectExprVolatility(value, bindings)), "immutable");
+      case "set_op":
+      case "compare":
+      case "and":
+      case "or":
+      case "in_expr":
+      case "math":
+      case "logical":
+      case "coalesce":
+        return maxVolatility(
+          inferFreeObjectExprVolatility(expr.left, bindings),
+          inferFreeObjectExprVolatility(expr.right, bindings),
+        );
+      case "distinct":
+      case "exists":
+      case "not":
+      case "unary":
+      case "cast":
+        return inferFreeObjectExprVolatility(expr.expr, bindings);
+      case "if_else":
+        return maxVolatility(
+          inferFreeObjectExprVolatility(expr.thenExpr, bindings),
+          inferFreeObjectExprVolatility(expr.condition, bindings),
+          inferFreeObjectExprVolatility(expr.elseExpr, bindings),
+        );
+      case "is_type":
+        return inferFreeObjectExprVolatility(expr.expr, bindings);
+      case "concat":
+        return expr.parts.reduce<VolatilityLevel>((acc, part) => maxVolatility(acc, inferFreeObjectExprVolatility(part, bindings)), "immutable");
+      case "free_object_constructor":
+        return expr.entries.reduce<VolatilityLevel>((acc, entry) => maxVolatility(acc, inferFreeObjectExprVolatility(entry.expr, bindings)), "immutable");
+      case "function_call": {
+        const resolved = resolveFunctionOrFail(expr.call.name, expr.call.args.length);
+        let vol: VolatilityLevel = fnVolatilityToLevel(resolved.volatility);
+        for (const arg of expr.call.args) {
+          if (arg.kind === "expr") {
+            vol = maxVolatility(vol, inferFreeObjectExprVolatility(arg.expr, bindings));
+          }
+        }
+        return vol;
+      }
+      case "for_expr": {
+        const iterVol = inferFreeObjectExprVolatility(expr.iterator, bindings);
+        const bodyVol = inferFreeObjectExprVolatility(expr.body, bindings);
+        const filterVol = expr.filter ? inferFreeObjectExprVolatility(expr.filter, bindings) : "immutable";
+        const limitVol = expr.limitExpr ? inferFreeObjectExprVolatility(expr.limitExpr, bindings) : "immutable";
+        const offsetVol = expr.offsetExpr ? inferFreeObjectExprVolatility(expr.offsetExpr, bindings) : "immutable";
+        return maxVolatility(iterVol, bodyVol, filterVol, limitVol, offsetVol);
+      }
+      case "mutation_expr":
+        return "modifying";
+      case "index_access":
+      case "slice_access":
+        return inferFreeObjectExprVolatility(expr.expr, bindings);
+      case "subquery":
+        return inferStatementVolatility({
+          kind: "select",
+          typeName: expr.typeName,
+          shape: expr.shape,
+          fields: [],
+          filter: expr.clauses?.filter,
+          orderBy: expr.clauses?.orderBy,
+          limit: expr.clauses?.limit,
+          offset: expr.clauses?.offset,
+          limitExpr: expr.clauses?.limitExpr,
+          offsetExpr: expr.clauses?.offsetExpr,
+          pos: { line: 0, column: 0 },
+        } as Statement, bindings);
+      case "type_intersection":
+        return inferFreeObjectExprVolatility(expr.expr, bindings);
+      case "select_expr":
+        return inferFreeObjectExprVolatility(expr.expr, bindings);
+      case "group_expr":
+        return "stable";
+    }
+    return "immutable";
   };
 
   type CompiledShapeFunctionArg =
@@ -2583,7 +2914,35 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       case "field_access": {
         // Walk to the path's root if possible. For our tests the relevant
         // cases are subqueries with LIMIT 1 used as a single source.
-        return inferAstCardinality(expr.expr);
+        const sourceCard = inferAstCardinality(expr.expr);
+        // If the source's shape defines `expr.field` as a polymorphic
+        // (`[is T].field`) projection and `T` isn't a supertype of the
+        // source's type, the field can be empty on non-matching rows —
+        // multiply the bound by at_most_one.
+        const findShapeProjection = (e: FreeObjectExpr): { kind: "shape_projection"; expr: FreeObjectExpr; shape: ShapeElement[] } | undefined => {
+          if (e.kind === "shape_projection") return e as { kind: "shape_projection"; expr: FreeObjectExpr; shape: ShapeElement[] };
+          if (e.kind === "select_expr_subquery") return findShapeProjection(e.expr);
+          if (e.kind === "cast") return findShapeProjection(e.expr);
+          return undefined;
+        };
+        const shaped = findShapeProjection(expr.expr);
+        if (shaped) {
+          const matchingShapeEl = shaped.shape.find((el) => (el as { name?: string }).name === expr.field);
+          if (matchingShapeEl && (matchingShapeEl as { expr?: { kind?: string; sourceType?: string } }).expr?.kind === "polymorphic_field_ref") {
+            const polySrc = (matchingShapeEl as { expr: { sourceType: string } }).expr.sourceType;
+            const srcType = resolveExprObjectType(shaped.expr);
+            const srcTypeName = srcType ? qualifiedTypeName(srcType) : undefined;
+            const polyNormalized = normalizeTypeName(polySrc, activeModule);
+            const intersectIsTotal = srcTypeName ? isAssignableTo(srcTypeName, polyNormalized) : false;
+            if (!intersectIsTotal) {
+              // Multiplying by at_most_one effectively drops the lower bound.
+              if (sourceCard === "one") return "at_most_one";
+              if (sourceCard === "at_least_one") return "many";
+              return sourceCard;
+            }
+          }
+        }
+        return sourceCard;
       }
       case "set_literal":
         return expr.values.length === 0 ? "empty" : "at_least_one";
@@ -2609,8 +2968,12 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         return "many";
       }
       case "array_literal_expr":
+        // An array literal builds one array per cross-product position of its
+        // elements — so `[a, b]` has card |a| * |b|. An empty array literal
+        // reduces to a single empty array (cartesianMany([]) = "one").
+        return cartesianMany(expr.values.map(inferAstCardinality));
       case "free_object_constructor":
-        // Constructors emit exactly one value (the collection itself).
+        // Free-object constructor: exactly one value.
         return "one";
       case "tuple":
         // A tuple expression iterates over the cartesian product of its
@@ -2620,8 +2983,11 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         return inferAstCardinality(expr.expr);
       case "distinct":
         return inferAstCardinality(expr.expr);
-      case "math":
       case "in_expr":
+        // `x IN s` desugars to `x = s[0] OR x = s[1] OR …`, producing a
+        // single bool per LHS value — so the result's card mirrors the LHS.
+        return inferAstCardinality(expr.left);
+      case "math":
       case "logical":
       case "and":
       case "or":
@@ -2744,6 +3110,16 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           const returnCard: AstCardinality = fn.returnOptional ? "at_most_one" : "one";
           return cartesianCard(argCart, returnCard);
         }
+        // Stdlib fallback: respect `returnOptional` and `paramSetOf` flags
+        // declared in the stdlib registry so e.g. `array_get` properly
+        // lowers its return bound to at_most_one.
+        const stdlib = tryResolveStdlibFunction(callName, expr.call.args.length, "default");
+        if (stdlib) {
+          const effective: AstCardinality[] = argCards.map((c, i) => stdlib.paramSetOf?.[i] ? "one" : c);
+          const argCart = effective.reduce((acc, c) => cartesianCard(acc, c), "one" as AstCardinality);
+          const returnCard: AstCardinality = stdlib.returnOptional ? "at_most_one" : "one";
+          return cartesianCard(argCart, returnCard);
+        }
         return cartesianMany(argCards);
       }
       case "index_access":
@@ -2765,9 +3141,413 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         }
         return "many";
       }
+      case "backlink_path": {
+        // `.<link[IS Type]` traverses the forward `link` backwards. If the
+        // forward link has an exclusive constraint, every target maps to at
+        // most one source, so the back-link is at_most_one per row;
+        // otherwise it's unbounded (many). When the constraint is delegated
+        // and the source type is abstract, the constraint only fires per
+        // concrete subtype — so multiple subtypes can each contribute a row.
+        const sourceTypeName = expr.sourceType;
+        if (!sourceTypeName) return "many";
+        const srcType = resolveObjectTypeOrAliasSource(sourceTypeName);
+        if (!srcType) return "many";
+        const collected = collectLinks(srcType, true);
+        const fwd = collected.find((l) => l.name === expr.link);
+        if (!fwd) return "many";
+        const exclusiveConstraint = (fwd.constraints ?? []).find((c) => c.name === "std::exclusive" || c.name === "exclusive");
+        if (!exclusiveConstraint) return "many";
+        if (exclusiveConstraint.delegated && srcType.abstract) return "many";
+        return "at_most_one";
+      }
+      case "mutation_expr": {
+        // INSERT yields exactly one new row; UPDATE/DELETE yield as many as
+        // they affect — conservatively `many` until we can read the filter.
+        if (expr.statement.kind === "insert") return "one";
+        return "many";
+      }
       default:
         return "many";
     }
+  };
+
+  // ---------- Multiplicity inference (parity with Python infer_multiplicity).
+  // Multiplicity tracks whether a set may contain repeated values: UNIQUE means
+  // every element is distinct, DUPLICATE means values may repeat, EMPTY for the
+  // empty set, UNKNOWN when neither can be proven.
+  type AstMultiplicity = "empty" | "unique" | "duplicate" | "unknown";
+
+  // Per-binding multiplicity, mirroring `bindingTypes` / `bindingCards`.
+  const bindingMults = new Map<string, AstMultiplicity>();
+
+  // Cheap "do these two object types share any concrete subtype?" predicate —
+  // used by set/union to detect whether the branches may overlap on the same
+  // row (which forces the union's multiplicity to DUPLICATE).
+  const objectTypesOverlap = (a: TypeDef, b: TypeDef): boolean => {
+    const aName = qualifiedTypeName(a);
+    const bName = qualifiedTypeName(b);
+    if (aName === bName) return true;
+    const aConc = new Set(schema.listConcreteTypesAssignableTo(aName).map(qualifiedTypeName));
+    const bConc = schema.listConcreteTypesAssignableTo(bName).map(qualifiedTypeName);
+    return bConc.some((n) => aConc.has(n));
+  };
+
+  // Look up an own-or-inherited field/link/computed on `typeDef` and return
+  // the matching definition along with a tag identifying which kind it is.
+  // (`fields` describe scalar properties, `links` object links, `computeds`
+  // either kind expressed as a derived expression.)
+  type PointerLookup =
+    | { kind: "field"; def: TypeDef["fields"][number] }
+    | { kind: "link"; def: NonNullable<TypeDef["links"]>[number] }
+    | { kind: "computed"; def: NonNullable<TypeDef["computeds"]>[number] };
+
+  const lookupPointer = (typeDef: TypeDef, fieldName: string, seen = new Set<string>()): PointerLookup | undefined => {
+    const tn = qualifiedTypeName(typeDef);
+    if (seen.has(tn)) return undefined;
+    seen.add(tn);
+    const own = typeDef.fields.find((f) => f.name === fieldName);
+    if (own) return { kind: "field", def: own };
+    const link = (typeDef.links ?? []).find((l) => l.name === fieldName);
+    if (link) return { kind: "link", def: link };
+    const comp = (typeDef.computeds ?? []).find((c) => c.name === fieldName);
+    if (comp) return { kind: "computed", def: comp };
+    for (const baseName of typeDef.extends ?? []) {
+      const base = schema.getType(baseName);
+      if (base) {
+        const inherited = lookupPointer(base, fieldName, seen);
+        if (inherited) return inherited;
+      }
+    }
+    return undefined;
+  };
+
+  // Multiplicity for a path step `<source>.<field>` whose source iterates over
+  // `typeDef`. Mirrors the Python rule: object-typed terminals are always
+  // UNIQUE (a link target is a "proper set"); scalar terminals are UNIQUE iff
+  // the underlying pointer has an exclusive constraint.
+  const fieldMultiplicityOnType = (typeDef: TypeDef, fieldName: string): AstMultiplicity => {
+    if (fieldName === "id") return "unique";
+    const p = lookupPointer(typeDef, fieldName);
+    if (!p) return "unknown";
+    if (p.kind === "link") return "unique"; // object link → UNIQUE
+    if (p.kind === "computed") {
+      if (p.def.kind === "link") return "unique"; // computed object link
+      // Computed scalar property — conservative: DUPLICATE unless trivially
+      // single (handled by the post-hoc card override at the top level).
+      return "duplicate";
+    }
+    // Plain scalar property: exclusive ⇒ UNIQUE, else DUPLICATE.
+    if (isExclusiveFieldOf(fieldName, typeDef)) return "unique";
+    return "duplicate";
+  };
+
+  // True if at least one element multiplicity is non-unique. Used as the
+  // outer-mult escalation rule for tuples / arrays / set unions etc.
+  const anyDup = (mults: AstMultiplicity[]): boolean => mults.some((m) => m === "duplicate" || m === "unknown");
+
+  // Multiplicity for an EdgeQL `{a, b, c, …}` / `a UNION b` UNION. Mirrors the
+  // Python rule: all-empty ⇒ EMPTY; any DUPLICATE arm ⇒ DUPLICATE; for object
+  // types, branches must be disjoint to stay UNIQUE; for scalars / mixed, two
+  // or more arms force DUPLICATE.
+  const inferUnionMultiplicity = (values: FreeObjectExpr[]): AstMultiplicity => {
+    if (values.length === 0) return "empty";
+    const mults = values.map(inferAstMultiplicity);
+    const nonEmpty = mults.filter((m) => m !== "empty");
+    if (nonEmpty.length === 0) return "empty";
+    if (nonEmpty.some((m) => m === "duplicate")) return "duplicate";
+    if (nonEmpty.length === 1) return nonEmpty[0]; // single-arm: pass through
+    // INSERT mutations have implicit fresh identities — a union of INSERT
+    // expressions is always UNIQUE, even when each insert targets the same
+    // type (the python rule via `disjoint_union` on InsertStmt).
+    if (values.every((v) => v.kind === "mutation_expr" && v.statement.kind === "insert")) {
+      return "unique";
+    }
+    // Multi-arm: check for type overlap. Disjoint object types ⇒ UNIQUE.
+    const types = values.map(resolveExprObjectType);
+    let anyType = false;
+    let overlap = false;
+    for (let i = 0; i < types.length && !overlap; i++) {
+      if (!types[i]) continue;
+      anyType = true;
+      for (let j = i + 1; j < types.length; j++) {
+        if (types[j] && objectTypesOverlap(types[i]!, types[j]!)) {
+          overlap = true;
+          break;
+        }
+      }
+    }
+    if (anyType && !overlap) return "unique";
+    return "duplicate";
+  };
+
+  // Convert a function-call argument node (which uses a separate AST shape) to
+  // the FreeObjectExpr form so we can run the recursive inferrers on it.
+  const callArgAsExpr = (a: unknown): FreeObjectExpr | undefined => {
+    const k = (a as { kind?: string }).kind;
+    if (k === "expr") return (a as { expr: FreeObjectExpr }).expr;
+    if (k === "binding_ref") return { kind: "binding_ref", name: (a as { name: string }).name } as FreeObjectExpr;
+    if (k === "literal") return { kind: "literal", value: (a as { value: ScalarValue }).value } as FreeObjectExpr;
+    if (k === "parameter") return { kind: "parameter", name: (a as { name: string }).name } as FreeObjectExpr;
+    if (k === "set_literal") return { kind: "set_literal", values: (a as { values: FreeObjectExpr[] }).values } as FreeObjectExpr;
+    if (k === "array_literal") return { kind: "array_literal_expr", values: [] } as FreeObjectExpr;
+    if (k === "function_call") return { kind: "function_call", call: (a as { call: FunctionCallExpr }).call } as FreeObjectExpr;
+    return undefined;
+  };
+
+  // Tuple- and array-aware multiplicity. Recurses through the FreeObjectExpr
+  // grammar; the top-level entry (`inferTopLevelMultiplicity`) layers on the
+  // "card single ⇒ UNIQUE" override.
+  const inferAstMultiplicity = (expr: FreeObjectExpr | undefined): AstMultiplicity => {
+    if (!expr) return "unknown";
+    switch (expr.kind) {
+      case "literal":
+      case "parameter":
+      case "substitution":
+      case "global_ref":
+      case "current_item":
+      case "enum_path":
+        return "unique";
+      case "select": {
+        const t = resolveObjectTypeOrAliasSource(expr.typeName);
+        return t ? "unique" : "duplicate";
+      }
+      case "binding_ref": {
+        const bound = bindingMults.get(expr.name);
+        if (bound !== undefined) return bound;
+        const t = resolveObjectTypeOrAliasSource(expr.name);
+        return t ? "unique" : "unknown";
+      }
+      case "shape_projection":
+      case "cast":
+        return inferAstMultiplicity(expr.expr);
+      case "distinct": {
+        const inner = inferAstMultiplicity(expr.expr);
+        if (inner === "empty") return "empty";
+        return "unique";
+      }
+      case "set_literal": {
+        // SetLiteralValue stores raw ScalarValues — detect duplicates by
+        // structural equality on the literal values themselves.
+        if (expr.values.length === 0) return "empty";
+        const seen = new Set<string>();
+        for (const v of expr.values) {
+          const key = JSON.stringify(v);
+          if (seen.has(key)) return "duplicate";
+          seen.add(key);
+        }
+        return "unique";
+      }
+      case "set_expr":
+        return inferUnionMultiplicity(expr.values);
+      case "set_op": {
+        const a = inferAstMultiplicity(expr.left);
+        const b = inferAstMultiplicity(expr.right);
+        if (a === "empty" || b === "empty") return "empty";
+        if (expr.op === "intersect") {
+          // Bounded above by min of the two — UNIQUE if either is.
+          if (a === "unique" || b === "unique") return "unique";
+          return "duplicate";
+        }
+        // except: bounded by left.
+        return a;
+      }
+      case "tuple": {
+        // Tuple iterates the cartesian product. UNIQUE iff at most one
+        // element has card>1 and that element is itself UNIQUE; otherwise
+        // pairs may collide ⇒ DUPLICATE.
+        const mults = expr.values.map(inferAstMultiplicity);
+        if (mults.some((m) => m === "empty")) return "empty";
+        const cards = expr.values.map(inferAstCardinality);
+        const numMany = cards.filter((c) => !isAtMostOneCard(c)).length;
+        if (numMany === 0) return mults.every((m) => m === "unique") ? "unique" : "duplicate";
+        if (numMany > 1) return "duplicate";
+        // Exactly one many-element: tuple is unique iff that element is unique.
+        for (let i = 0; i < cards.length; i++) {
+          if (!isAtMostOneCard(cards[i])) return mults[i];
+        }
+        return "duplicate";
+      }
+      case "free_object_constructor":
+        return "unique";
+      case "array_literal_expr": {
+        // An array literal builds a single array value per cross-product
+        // position. The whole expression iterates over those cross-products.
+        const mults = expr.values.map(inferAstMultiplicity);
+        if (mults.some((m) => m === "empty")) return "empty";
+        const cards = expr.values.map(inferAstCardinality);
+        const numMany = cards.filter((c) => !isAtMostOneCard(c)).length;
+        if (numMany <= 1 && mults.every((m) => m === "unique")) return "unique";
+        return "duplicate";
+      }
+      case "field_access": {
+        // Tuple-element access: peel through to the underlying tuple element.
+        // `(a, b).0` is parsed as an index_access, but `(name := ...).field`
+        // is a field_access on a free_object — treat similarly.
+        const srcType = resolveExprObjectType(expr.expr);
+        if (!srcType) return "duplicate";
+        return fieldMultiplicityOnType(srcType, expr.field);
+      }
+      case "is_type":
+      case "exists":
+        // Both produce a derived boolean; pre-override mult mirrors the
+        // Python rule (single ⇒ UNIQUE, else DUPLICATE), but our top-level
+        // override picks up the single case.
+        return "duplicate";
+      case "math": {
+        // Python treats `+` and `++` as injective binary ops: result mult is
+        // max(operands), with at most one operand allowed to have card > 1.
+        const lm = inferAstMultiplicity(expr.left);
+        const rm = inferAstMultiplicity(expr.right);
+        if (lm === "empty" || rm === "empty") return "empty";
+        if (expr.op === "+") {
+          if (lm === "duplicate" || rm === "duplicate") return "duplicate";
+          const lc = inferAstCardinality(expr.left);
+          const rc = inferAstCardinality(expr.right);
+          const numMany = (isAtMostOneCard(lc) ? 0 : 1) + (isAtMostOneCard(rc) ? 0 : 1);
+          if (numMany > 1) return "duplicate";
+          return "unique";
+        }
+        // Other arithmetic ops (`-`, `*`, `/`, …) are not injective.
+        return "duplicate";
+      }
+      case "compare":
+      case "in_expr":
+      case "logical":
+      case "and":
+      case "or":
+        // Conservative: scalar binary ops are DUPLICATE unless the
+        // top-level card override pulls them back to UNIQUE.
+        return "duplicate";
+      case "not":
+      case "unary":
+        return inferAstMultiplicity(expr.expr);
+      case "if_else": {
+        // Mirrors Python: condition-card must be single for the per-branch
+        // multiplicity (max(then, else)) to apply; otherwise DUPLICATE.
+        const condCard = inferAstCardinality(expr.condition);
+        if (!isAtMostOneCard(condCard)) return "duplicate";
+        const t = inferAstMultiplicity(expr.thenExpr);
+        const e = inferAstMultiplicity(expr.elseExpr);
+        if (t === "empty") return e;
+        if (e === "empty") return t;
+        if (t === "unique" && e === "unique") return "unique";
+        return "duplicate";
+      }
+      case "coalesce": {
+        const a = inferAstMultiplicity(expr.left);
+        const b = inferAstMultiplicity(expr.right);
+        if (a === "empty") return b;
+        if (b === "empty") return a;
+        if (a === "unique" && b === "unique") return "unique";
+        return "duplicate";
+      }
+      case "concat": {
+        // Python's `++` rule: max(mults); if any DUPLICATE, return DUPLICATE;
+        // otherwise UNIQUE iff at most one arg has card > 1.
+        const partMults = expr.parts.map(inferAstMultiplicity);
+        if (partMults.some((m) => m === "empty")) return "empty";
+        if (partMults.some((m) => m === "duplicate")) return "duplicate";
+        const partCards = expr.parts.map(inferAstCardinality);
+        const numMany = partCards.filter((c) => !isAtMostOneCard(c)).length;
+        if (numMany > 1) return "duplicate";
+        return partMults.every((m) => m === "unique") ? "unique" : "duplicate";
+      }
+      case "function_call": {
+        const callName = expr.call.name;
+        const stripped = stripModulePrefix(callName);
+        const argExprs = expr.call.args.map(callArgAsExpr);
+        const argMults: AstMultiplicity[] = argExprs.map((a) => a ? inferAstMultiplicity(a) : "duplicate");
+        const argCards: AstCardinality[] = argExprs.map((a) => a ? inferAstCardinality(a) : "many");
+        // Aggregates (count, sum, …) and optional aggregates (max, min, …)
+        // collapse the operand to a single value; the result is single-valued
+        // so multiplicity is UNIQUE.
+        if (isAggregating(callName) || isOptionalAggregate(callName)) return "unique";
+        if (stripped === "assert_distinct") return "unique";
+        if (stripped === "enumerate") return "unique";
+        if (stripped === "assert_exists" || stripped === "assert_single") {
+          return argMults[0] ?? "unknown";
+        }
+        const fn = schema.findFunction("default", stripped, expr.call.args.length)
+          ?? schema.findFunction("std", stripped, expr.call.args.length);
+        if (fn) {
+          // SET OF params collapse to a single per-call invocation (like
+          // aggregates) — their input multiplicity doesn't escape.
+          const eMults: AstMultiplicity[] = fn.params.map((p, i) => p.setOf ? "unique" : (argMults[i] ?? "unknown"));
+          const eCards: AstCardinality[] = fn.params.map((p, i) => p.setOf ? "one" : (argCards[i] ?? "many"));
+          if (eMults.some((m) => m === "empty")) return "empty";
+          if (eMults.some((m) => m === "duplicate" || m === "unknown")) return "duplicate";
+          const numMany = eCards.filter((c) => !isAtMostOneCard(c)).length;
+          if (numMany > 1) return "duplicate";
+          return "unique";
+        }
+        // Unknown function: fall back to DUPLICATE (Python's catch-all).
+        return "duplicate";
+      }
+      case "index_access": {
+        // Tuple index access: project a specific element from a Tuple. We
+        // need to compute the projected element's multiplicity using the
+        // per-tuple-element rule from Python's __infer_tuple.
+        if (expr.expr.kind === "tuple") {
+          const tupleEls = expr.expr.values;
+          const idx = expr.index;
+          if (idx < 0 || idx >= tupleEls.length) return "unknown";
+          const elMults = tupleEls.map(inferAstMultiplicity);
+          const elCards = tupleEls.map(inferAstCardinality);
+          const numMany = elCards.filter((c) => !isAtMostOneCard(c)).length;
+          if (numMany > 1) return "duplicate";
+          if (numMany === 1 && isAtMostOneCard(elCards[idx])) return "duplicate";
+          return elMults[idx];
+        }
+        // Array / generic index: DUPLICATE unless card is single (override
+        // applies at the top level).
+        return "duplicate";
+      }
+      case "slice_access":
+        return "duplicate";
+      case "select_expr_subquery":
+        if (expr.limit === 0) return "empty";
+        return inferAstMultiplicity(expr.expr);
+      case "for_expr": {
+        const iterMult = inferAstMultiplicity(expr.iterator);
+        const bodyMult = inferAstMultiplicity(expr.body);
+        if (iterMult === "empty") return "empty";
+        if (bodyMult === "empty") return "empty";
+        // Mirrors Python's `_infer_for_multiplicity`: an iterator with
+        // non-DUPLICATE multiplicity flags the iterator as a "distinct
+        // iterator" — if the body returns UNIQUE relative to that iterator
+        // (the body is uniquely determined by the iteration variable), the
+        // overall result is UNIQUE. Otherwise DUPLICATE.
+        if (iterMult === "duplicate") return "duplicate";
+        // Body is a free-object constructor: each iteration produces a fresh
+        // unique object identity even if `x` repeats — UNIQUE.
+        if (expr.body.kind === "free_object_constructor") return "unique";
+        if (bodyMult === "unique") return "unique";
+        return "duplicate";
+      }
+      case "path_steps":
+        return "unknown";
+      case "backlink_path":
+        // A bare backlink reaches an object set → UNIQUE.
+        return "unique";
+      case "mutation_expr":
+        // INSERT / UPDATE / DELETE produce a fresh set with unique identity.
+        return "unique";
+      case "group_expr":
+        // GROUP yields a set of free-object groups, one per unique key.
+        return "unique";
+      default:
+        return "unknown";
+    }
+  };
+
+  // Top-level entry point that layers on the "card single ⇒ UNIQUE" override
+  // from the Python `infer_multiplicity` post-processing step, so that single-
+  // valued expressions can't accidentally be reported as DUPLICATE.
+  const inferTopLevelMultiplicity = (expr: FreeObjectExpr | undefined, card: AstCardinality): AstMultiplicity => {
+    const m = inferAstMultiplicity(expr);
+    if (m === "duplicate" && isAtMostOneCard(card)) return "unique";
+    if (m === "unknown" && isAtMostOneCard(card)) return "unique";
+    return m;
   };
 
   // Collect the set of own-field names that a filter pins to a single value
@@ -2854,12 +3634,50 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     return false;
   };
 
+  // True if a dotted field path (e.g. `unique_avatar.name`) on `typeDef` is
+  // single-valued and injective end-to-end — every step is non-multi with an
+  // exclusive constraint (or is the special `id` property), so an equality
+  // against the path narrows the subject to at_most_one row.
+  const dottedPathIsExclusiveChain = (dotted: string, typeDef: TypeDef): boolean => {
+    const steps = dotted.split(".");
+    let stepType: TypeDef | undefined = typeDef;
+    for (let i = 0; i < steps.length; i++) {
+      if (!stepType) return false;
+      const step = steps[i];
+      const link = collectLinks(stepType, true).find((l) => l.name === step);
+      if (link) {
+        if (link.multi) return false;
+        const exclusive = (link.constraints ?? []).some((c) => c.name === "std::exclusive" || c.name === "exclusive");
+        if (!exclusive) return false;
+        stepType = resolveObjectTypeOrAliasSource(link.targetType);
+        continue;
+      }
+      const field = collectFields(stepType, true).find((f) => f.name === step);
+      if (!field) return false;
+      if (field.multi) return false;
+      if (step === "id") { stepType = undefined; continue; }
+      if (!isExclusiveFieldOf(step, stepType)) return false;
+      stepType = undefined;
+    }
+    return true;
+  };
+
   const filterRestrictsAtMostOneInner = (filter: FilterExpr | undefined, typeDef: TypeDef): boolean => {
     if (!filter) return false;
     switch (filter.kind) {
       case "predicate":
         if (filter.op !== "=") return false;
-        return filter.target.kind === "field" && isExclusiveFieldOf(filter.target.field, typeDef);
+        if (filter.target.kind === "field") {
+          // Predicate-form filters store dotted field chains as a single
+          // string (e.g. `unique_avatar.name`). A direct exclusive on the
+          // first segment handles the simple `.field = …` case; for chains,
+          // verify every step is single + exclusive (the path is injective).
+          if (filter.target.field.includes(".")) {
+            return dottedPathIsExclusiveChain(filter.target.field, typeDef);
+          }
+          return isExclusiveFieldOf(filter.target.field, typeDef);
+        }
+        return false;
       case "and":
         return filterRestrictsAtMostOneInner(filter.left, typeDef) || filterRestrictsAtMostOneInner(filter.right, typeDef);
       case "or":
@@ -2939,6 +3757,63 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     return false;
   };
 
+  // True if `expr` is a path like `.<f1>.<f2>...<fN>` rooted at the subject
+  // type, where every step is single-valued and the entire chain is
+  // injective (exclusive constraint on each property/link). When such a
+  // chain appears on one side of an equality, the equality restricts the
+  // subject to at most one row — even though `unique_avatar` is the
+  // forward link, the exclusive constraint makes the path 1-to-1.
+  const isExclusiveSinglePathChain = (expr: FreeObjectExpr, typeDef: TypeDef): boolean => {
+    // Walk down to the root, collecting field names.
+    const path: string[] = [];
+    let cur: FreeObjectExpr = expr;
+    while (true) {
+      if (cur.kind === "field_access") {
+        path.unshift(cur.field);
+        cur = cur.expr;
+        continue;
+      }
+      if (cur.kind === "current_item" || cur.kind === "binding_ref" || cur.kind === "select" || cur.kind === "shape_projection") {
+        break;
+      }
+      return false;
+    }
+    if (cur.kind === "field_access") return false;
+    if (!isSubjectReference(cur, typeDef) && cur.kind !== "current_item") {
+      const aliases = subjectAliasesFor(typeDef);
+      if (cur.kind === "binding_ref" && !aliases.has(cur.name)) return false;
+    }
+    let stepType: TypeDef | undefined = typeDef;
+    for (const step of path) {
+      if (!stepType) return false;
+      const link = (stepType.links ?? []).find((l) => l.name === step) ?? (() => {
+        for (const base of stepType?.extends ?? []) {
+          const baseDef = schema.getType(base);
+          const found = (baseDef?.links ?? []).find((l) => l.name === step);
+          if (found) return found;
+        }
+        return undefined;
+      })();
+      if (link) {
+        if (link.multi) return false;
+        const exclusive = (link.constraints ?? []).some((c) => c.name === "std::exclusive" || c.name === "exclusive");
+        if (!exclusive) return false;
+        stepType = resolveObjectTypeOrAliasSource(link.targetType);
+        continue;
+      }
+      const field = collectFields(stepType, true).find((f) => f.name === step);
+      if (!field) return false;
+      if (field.multi) return false;
+      if (step === "id") {
+        stepType = undefined;
+        continue;
+      }
+      if (!isExclusiveFieldOf(step, stepType)) return false;
+      stepType = undefined;
+    }
+    return true;
+  };
+
   const freeExprRestrictsAtMostOne = (expr: FreeObjectExpr, typeDef: TypeDef): boolean => {
     if (expr.kind === "logical") {
       if (expr.op === "and") {
@@ -2959,6 +3834,9 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       const rightField = isSubjectFieldAccess(expr.right, typeDef);
       const field = leftField?.field ?? rightField?.field;
       if (field && isExclusiveFieldOf(field, typeDef)) return true;
+      // Multi-step exclusive chain: `.unique_avatar.name = '…'`.
+      if (isExclusiveSinglePathChain(expr.left, typeDef)) return true;
+      if (isExclusiveSinglePathChain(expr.right, typeDef)) return true;
       // Card = (single-element subquery)
       if (isSubjectReference(expr.left, typeDef)) {
         if (isAtMostOneCard(inferAstCardinality(expr.right))) return true;
@@ -3117,6 +3995,11 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
   ): boolean => {
     const requestedSourceType = sourceTypeName ? normalizeTypeName(sourceTypeName, fallbackModule) : undefined;
     let anyMatched = false;
+    // Track concrete subtypes whose forward link points to `target`. Two
+    // distinct concrete sources can each contribute one row per target —
+    // so when multiple match, the back-link is "many" even if each
+    // individual constraint is exclusive.
+    const matchedConcrete = new Set<string>();
     for (const candidate of schema.listTypes()) {
       const candidateQualifiedName = qualifiedTypeName(candidate);
       if (requestedSourceType && !isAssignableTo(candidateQualifiedName, requestedSourceType)) {
@@ -3134,8 +4017,13 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         if (!isExclusive) {
           return false;
         }
+        if (!candidate.abstract) matchedConcrete.add(candidateQualifiedName);
       }
     }
+    // If more than one concrete subtype matches and the requested source
+    // covers all of them (e.g. `[is AbstractSrc]`), the back-link can have
+    // one row per matching subtype — not a single value.
+    if (matchedConcrete.size > 1) return false;
     return anyMatched;
   };
 
@@ -3180,8 +4068,18 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
             const base = schema.getType(baseName);
             return base ? (base.links ?? []).some((l) => l.name === link.name) : false;
           });
+        // Skip inherited links to avoid producing duplicate sources (the
+        // ancestor already covers them). Exception: if an explicit `[is T]`
+        // filter targets *this* candidate (and the ancestor wouldn't match
+        // the filter), include the inherited link so the filtered back-link
+        // still resolves.
         if (linkAppearsInAncestor(candidate.extends ?? [])) {
-          continue;
+          const ancestorIsAssignable = (candidate.extends ?? []).some((baseName) =>
+            requestedSourceType ? isAssignableTo(normalizeTypeName(baseName, candidate.module ?? "default"), requestedSourceType) : true,
+          );
+          if (!requestedSourceType || ancestorIsAssignable) {
+            continue;
+          }
         }
 
         const usesLinkTable = Boolean(link.multi) || (link.properties?.length ?? 0) > 0;
@@ -3852,6 +4750,53 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
             }
           }
           selectedColumns.add(polymorphicFieldName);
+          // Cardinality for a polymorphic shape element `[is T].field`:
+          //   - If T is a supertype of (or equal to) the row type, the
+          //     intersection is always-true; use the field's natural
+          //     cardinality on T.
+          //   - Otherwise the intersection narrows each row to at most one
+          //     occurrence, capping the field's bound at at_most_one.
+          const polySrcDef = schema.getType(polymorphicSourceTypeName);
+          const intersectIsTotal = isAssignableTo(qualifiedName, polymorphicSourceTypeName);
+          const intersectIsSubset = polySrcDef ? isAssignableTo(polymorphicSourceTypeName, qualifiedName) : false;
+          // Diagnostic for "possibly empty set": `field` is required on the
+          // source type and the [is T] intersection narrows to a strict
+          // subtype — non-T rows can't satisfy the required projection,
+          // so the shape element "possibly returns an empty set" (Python
+          // raises a QueryError here). The narrowing-to-disjoint case is
+          // not checked because typed-select `Ba[IS Bb|Bc]` re-roots the
+          // source through the type filter and the schema-level relation
+          // makes disjoint-narrowing legal.
+          const sourceField = collectFields(typeDef, true).find((f) => f.name === polymorphicFieldName);
+          const sourceFieldRequired = Boolean(sourceField?.required);
+          if (sourceField && sourceFieldRequired && !intersectIsTotal && intersectIsSubset) {
+            fail(`possibly an empty set returned by an expression for a computable '${shapeElement.name}'`);
+          }
+          // `[is schema::Object]` (or other types not in the user schema)
+          // narrows to a meta-type that doesn't appear in the user-level
+          // type hierarchy — every user row falls outside the intersection,
+          // so a required-field projection always returns empty ⇒ error.
+          // Skip the diagnostic for union/intersection expressions like
+          // `[IS Ba | Bc]` whose `sourceTypeExpr.kind` is a type expression
+          // rather than a plain type name — the resolved type set is
+          // computed from the concrete subtypes and the diagnostic doesn't
+          // apply cleanly.
+          const polyExprKind = (shapeElement.expr as { sourceTypeExpr?: { kind?: string } }).sourceTypeExpr?.kind;
+          const isPlainTypeRef = polyExprKind === undefined || polyExprKind === "type_name";
+          if (!polySrcDef && sourceField && sourceFieldRequired && isPlainTypeRef && polymorphicSourceTypeName.includes("::")) {
+            fail(`possibly an empty set returned by an expression for a computable '${shapeElement.name}'`);
+          }
+          const polymorphicCard: InferenceResult["cardinality"] = (() => {
+            const fieldDef = polySrcDef ? collectFields(polySrcDef, true).find((f) => f.name === polymorphicFieldName) : undefined;
+            const naturalCard = fieldDef ? cardinalityForFieldDef(fieldDef) : "at_most_one";
+            if (intersectIsTotal) return naturalCard;
+            // [is T] on a non-ancestor narrows source set: scale down upper
+            // bound. Required field → at_most_one (one per matching row);
+            // optional/multi remain bounded above by their natural card.
+            if (naturalCard === "one") return "at_most_one";
+            if (naturalCard === "at_least_one") return "many";
+            return naturalCard;
+          })();
           shapeElements.push({
             kind: "computed",
             name: shapeElement.name,
@@ -3862,6 +4807,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
               concreteSourceTypes: polymorphicConcretes,
               column: polymorphicFieldName,
             },
+            cardinality: polymorphicCard,
           });
           shapeNames.add(shapeElement.name);
           scopeChildren.push({
@@ -5197,6 +6143,10 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       return compileFreeObjectExprToSelectFreeEntry(entry.expr, entry.name);
     });
 
+    const selectFreeBindings = new Map<string, WithBindingValue>();
+    for (const binding of statement.with ?? []) {
+      selectFreeBindings.set(binding.name, binding.value);
+    }
     return {
       kind: "select_free",
       pathId: toPathIdIR(pathId),
@@ -5205,7 +6155,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       inference: {
         cardinality: "one",
         multiplicity: "unknown",
-        volatility: "immutable",
+        volatility: inferStatementVolatility(statement, selectFreeBindings),
       },
     };
   }
@@ -5406,6 +6356,9 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         // entries so the runtime evaluator substitutes the supplied parameter
         // value. The cast is handled in the surrounding `cast` wrapper.
         return { kind: "binding_ref", name: expr.name };
+      }
+      if (expr.kind === "global_ref") {
+        return { kind: "global_ref", name: expr.name };
       }
       if (expr.kind === "literal") {
         return { kind: "literal", value: expr.value };
@@ -6795,6 +7748,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     // treat the two interchangeably, so promote to at_most_one at the IR
     // boundary.
     const exprCardinality: AstCardinality = rawCard === "empty" ? "at_most_one" : rawCard;
+    const exprMultiplicity = inferTopLevelMultiplicity(statement.expr, rawCard);
     return {
       kind: "select_expr",
       entries: [entry],
@@ -6808,13 +7762,36 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       typeRef: unionTypeRef,
       inference: {
         cardinality: exprCardinality,
-        multiplicity: "unknown",
-        volatility: "immutable",
+        multiplicity: exprMultiplicity,
+        volatility: inferStatementVolatility(statement, new Map()),
       },
     };
   }
 
   if (statement.kind === "for") {
+    // Seed WITH-binding multiplicity / type / cardinality so the body can
+    // resolve references like `WITH C := <Card>{} FOR card IN {C} …`.
+    for (const binding of statement.with ?? []) {
+      const value = binding.value;
+      if (value.kind === "subquery_expr") {
+        bindingMults.set(binding.name, inferAstMultiplicity(value.expr));
+        const t = resolveExprObjectType(value.expr);
+        if (t) bindingTypes.set(binding.name, t);
+        bindingCards.set(binding.name, inferAstCardinality(value.expr));
+      } else if (value.kind === "set_literal") {
+        bindingMults.set(binding.name, value.values.length === 0 ? "empty" : (new Set(value.values.map((v) => JSON.stringify(v))).size === value.values.length ? "unique" : "duplicate"));
+        bindingCards.set(binding.name, value.values.length === 0 ? "empty" : "at_least_one");
+      } else if (value.kind === "literal" || value.kind === "parameter" || value.kind === "array_literal") {
+        bindingMults.set(binding.name, "unique");
+        bindingCards.set(binding.name, "one");
+      } else if (value.kind === "binding_ref") {
+        const inheritedMult = bindingMults.get(value.name);
+        if (inheritedMult !== undefined) bindingMults.set(binding.name, inheritedMult);
+        const t = resolveObjectTypeOrAliasSource(value.name) ?? bindingTypes.get(value.name);
+        if (t) bindingTypes.set(binding.name, t);
+      }
+    }
+
     // The execution layer drives FOR statements directly, but cardinality
     // inference still needs to surface a result IR. Emit a placeholder
     // select_expr carrying the inferred `inference` so consumers can read it.
@@ -6834,14 +7811,176 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     }
     const combinedRaw = cartesianCard(iterCard, bodyCard);
     const combined: AstCardinality = combinedRaw === "empty" ? "at_most_one" : combinedRaw;
+
+    // Multiplicity: mirror Python's `_infer_for_multiplicity`. The iteration
+    // variable always holds a single value per iteration (multiplicity UNIQUE);
+    // seed it temporarily so body references resolve.
+    bindingMults.set(statement.variable, "unique");
+    bindingCards.set(statement.variable, "one");
+
+    const forIterMult = inferAstMultiplicity(statement.iteratorExpr);
+    const forBodyExpr: FreeObjectExpr | undefined =
+      body.kind === "select_expr" ? body.expr :
+      body.kind === "select" ? { kind: "select", typeName: body.typeName, shape: body.shape, clauses: {} } as FreeObjectExpr :
+      undefined;
+
+    // Whether `body` filters by the iter variable in a way that makes each
+    // iteration disjoint from the others. Mirrors python's DISTINCT_UNION
+    // detection: a filter `.<field> = <iter_var>` with a simple field LHS
+    // (not index/function/...).
+    const isDirectIterFilter = (filter: FilterExpr | undefined): boolean => {
+      if (!filter) return false;
+      if (filter.kind === "predicate" && filter.op === "=" && filter.target.kind === "field") {
+        const v = filter.value;
+        if (v.kind === "binding_ref" && v.name === statement.variable) return true;
+      }
+      if (filter.kind === "and") return isDirectIterFilter(filter.left) || isDirectIterFilter(filter.right);
+      if (filter.kind === "free_expr") {
+        const e = filter.expr;
+        if (e.kind === "compare" && e.op === "=") {
+          const sides = [e.left, e.right];
+          const fieldSide = sides.find((s) => s.kind === "field_access" && (s.expr.kind === "current_item" || s.expr.kind === "binding_ref"));
+          const varSide = sides.find((s) => s.kind === "binding_ref" && (s as { name: string }).name === statement.variable);
+          if (fieldSide && varSide) return true;
+        }
+      }
+      return false;
+    };
+
+    const bodyFilter: FilterExpr | undefined =
+      body.kind === "select" ? body.filter :
+      body.kind === "select_expr" && (body.expr as { filter?: unknown }).filter ? (body.expr as { filter: FreeObjectExpr }).filter as unknown as FilterExpr :
+      undefined;
+
+    // Walk through "transparent" wrappers (shape_projection, cast, distinct,
+    // and select_expr_subquery wrappers without a filter) to find the
+    // underlying expression — used for the "does body reference the iter
+    // variable" and "is the body a free object" checks.
+    const unwrapBodyExpr = (e: FreeObjectExpr | undefined): FreeObjectExpr | undefined => {
+      if (!e) return undefined;
+      if (e.kind === "shape_projection" || e.kind === "cast" || e.kind === "distinct") {
+        return unwrapBodyExpr(e.expr);
+      }
+      if (e.kind === "select_expr_subquery" && !e.filter && !e.orderBy && e.limit === undefined && e.offset === undefined) {
+        return unwrapBodyExpr(e.expr);
+      }
+      return e;
+    };
+
+    // Resolve a binding_ref through WITH bindings to its eventual value's
+    // expression (for free-object detection: `WITH F := { foo:=10 } ...`).
+    const resolveBindingToExpr = (name: string, depth = 0): FreeObjectExpr | undefined => {
+      if (depth > 8) return undefined;
+      for (const b of statement.with ?? []) {
+        if (b.name === name) {
+          const v = b.value;
+          if (v.kind === "subquery_expr") return v.expr;
+          if (v.kind === "binding_ref") return resolveBindingToExpr(v.name, depth + 1);
+        }
+      }
+      return undefined;
+    };
+
+    // Walk select_expr_subquery wrappers, collecting any nested WITH bindings
+    // and seeding their multiplicity (so e.g. `WITH z := x, SELECT z` resolves
+    // z to the iter variable's mult).
+    const seededInnerBindings: string[] = [];
+    const seedInnerBindings = (e: FreeObjectExpr | undefined): void => {
+      if (!e) return;
+      if (e.kind === "select_expr_subquery") {
+        const withs = (e.clauses as { _withBindings?: Array<{ name: string; value: { kind: string; expr?: FreeObjectExpr } }> } | undefined)?._withBindings;
+        for (const b of withs ?? []) {
+          if (b.value.kind === "subquery_expr" && b.value.expr) {
+            bindingMults.set(b.name, inferAstMultiplicity(b.value.expr));
+            seededInnerBindings.push(b.name);
+          }
+        }
+        seedInnerBindings(e.expr);
+      }
+    };
+    seedInnerBindings(forBodyExpr);
+
+    // Resolve a binding name through inner WITH bindings to its underlying
+    // expression — used so e.g. `WITH z := x, SELECT z` recognises that z
+    // resolves to the iter variable x.
+    const collectInnerBindings = (e: FreeObjectExpr | undefined, acc = new Map<string, FreeObjectExpr>()): Map<string, FreeObjectExpr> => {
+      if (!e) return acc;
+      if (e.kind === "select_expr_subquery") {
+        const withs = (e.clauses as { _withBindings?: Array<{ name: string; value: { kind: string; expr?: FreeObjectExpr } }> } | undefined)?._withBindings;
+        for (const b of withs ?? []) {
+          if (b.value.kind === "subquery_expr" && b.value.expr) acc.set(b.name, b.value.expr);
+        }
+        collectInnerBindings(e.expr, acc);
+      }
+      return acc;
+    };
+    const innerBindingMap = collectInnerBindings(forBodyExpr);
+    const resolveInnerBindingToExpr = (name: string, depth = 0): FreeObjectExpr | undefined => {
+      if (depth > 8) return undefined;
+      const inner = innerBindingMap.get(name);
+      if (!inner) return resolveBindingToExpr(name);
+      if (inner.kind === "binding_ref") return resolveInnerBindingToExpr(inner.name, depth + 1);
+      return inner;
+    };
+
+    const forBodyMult = forBodyExpr ? inferAstMultiplicity(forBodyExpr) : "unique";
+
+    const bodyInner = unwrapBodyExpr(forBodyExpr);
+    const bodyResolvedFreeObj = bodyInner?.kind === "binding_ref"
+      ? unwrapBodyExpr(resolveBindingToExpr(bodyInner.name))?.kind === "free_object_constructor"
+      : false;
+
+    // Follow a `binding_ref` chain (through nested WITH bindings) to see if
+    // it eventually points at the iteration variable.
+    const resolvesToIterVar = (name: string): boolean => {
+      const seen = new Set<string>();
+      let cur: string | undefined = name;
+      while (cur !== undefined && !seen.has(cur)) {
+        if (cur === statement.variable) return true;
+        seen.add(cur);
+        const next = innerBindingMap.get(cur);
+        if (next && next.kind === "binding_ref") cur = next.name;
+        else break;
+      }
+      return false;
+    };
+
+    let forCombinedMult: AstMultiplicity = "duplicate";
+    if (forIterMult === "empty" || forBodyMult === "empty") forCombinedMult = "empty";
+    else if (body.kind === "insert") forCombinedMult = "unique"; // UNION of INSERTs is always UNIQUE
+    else if (forIterMult !== "duplicate" && forBodyMult === "unique") {
+      // Body multiplicity is UNIQUE; the FOR result is UNIQUE iff the body
+      // can be proven disjoint across iterations. Triggers:
+      //   - body references the iter variable directly
+      //   - body filters by `.field = iter_var`
+      //   - body is a free-object constructor (fresh identity per iter)
+      //   - body is a mutation expr (INSERTs create fresh identities)
+      const bodyRefsIter =
+        bodyInner?.kind === "binding_ref" && resolvesToIterVar(bodyInner.name);
+      const bodyIsFreeObj = bodyInner?.kind === "free_object_constructor";
+      const bodyIsInsert =
+        bodyInner?.kind === "mutation_expr" && bodyInner.statement.kind === "insert";
+      if (bodyRefsIter || bodyIsFreeObj || bodyIsInsert || isDirectIterFilter(bodyFilter)) {
+        forCombinedMult = "unique";
+      }
+    }
+    // Body resolves to a free-object value (directly or via WITH): each
+    // iteration emits a fresh identity, so the union stays UNIQUE even if
+    // the iterator has duplicates.
+    if (bodyInner?.kind === "free_object_constructor" || bodyResolvedFreeObj) forCombinedMult = "unique";
+    if (forCombinedMult === "duplicate" && isAtMostOneCard(combinedRaw)) forCombinedMult = "unique";
+
+    bindingMults.delete(statement.variable);
+    bindingCards.delete(statement.variable);
+    for (const name of seededInnerBindings) bindingMults.delete(name);
     return {
       kind: "select_expr",
       entries: [],
       currentBinding: statement.variable,
       inference: {
         cardinality: combined,
-        multiplicity: "unknown",
-        volatility: "immutable",
+        multiplicity: forCombinedMult,
+        volatility: inferStatementVolatility(statement, new Map()),
       },
     };
   }
@@ -7054,6 +8193,14 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     // `Card.name = 'Djinn'`). The lower-level `inferSelect` only catches the
     // id-equality and `LIMIT 1` shortcuts.
     let refinedInference = compiled.inference;
+    const selectBindings = new Map<string, WithBindingValue>();
+    for (const binding of statement.with ?? []) {
+      selectBindings.set(binding.name, binding.value);
+    }
+    refinedInference = {
+      ...refinedInference,
+      volatility: inferStatementVolatility(statement, selectBindings),
+    };
     if (refinedInference.cardinality === "many"
         && filterRestrictsAtMostOne(statement.filter, typeDef)) {
       refinedInference = { ...refinedInference, cardinality: "at_most_one" };
@@ -7261,7 +8408,35 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
 
   if (statement.kind === "update") {
     const pathId = createPathId();
-    const filterExpr = mergeFilters(resolvedRootType.clauses.filter, statement.filter);
+    let filterExpr = mergeFilters(resolvedRootType.clauses.filter, statement.filter);
+    // Normalize a free_expr-form filter into a predicate when it's a
+    // simple `<binding>.<field> = <literal>` comparison. This shows up in
+    // queries like `WITH X := DETACHED User UPDATE X FILTER (X.name = …)`
+    // where the user explicitly qualifies the subject by its alias.
+    if (filterExpr && filterExpr.kind === "free_expr") {
+      const e = filterExpr.expr;
+      if (e.kind === "compare" && e.op === "=") {
+        const targetName = statement.typeName;
+        const pickField = (s: FreeObjectExpr): string | undefined => {
+          if (s.kind === "path" && s.head === targetName) return s.tail;
+          if (s.kind === "field_access" && s.expr.kind === "binding_ref" && s.expr.name === targetName) return s.field;
+          if (s.kind === "field_access" && s.expr.kind === "current_item") return s.field;
+          return undefined;
+        };
+        const leftField = pickField(e.left);
+        const rightField = pickField(e.right);
+        const fieldName = leftField ?? rightField;
+        const valueSide = leftField ? e.right : (rightField ? e.left : undefined);
+        if (fieldName && valueSide && valueSide.kind === "literal") {
+          filterExpr = {
+            kind: "predicate",
+            target: { kind: "field", field: fieldName },
+            op: "=",
+            value: valueSide.value,
+          };
+        }
+      }
+    }
     let predicateFilter: FieldEqPredicate | undefined;
     if (filterExpr) {
       if (filterExpr.kind !== "predicate") {
@@ -7369,6 +8544,11 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         condition: p.condition.kind === "always" ? undefined : JSON.stringify(p.condition),
         errmessage: p.errmessage,
       })),
+      inference: {
+        cardinality: predicateFilter ? "at_most_one" : "many",
+        multiplicity: "unique",
+        volatility: "modifying",
+      },
     };
   }
 
@@ -7414,13 +8594,23 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       condition: p.condition.kind === "always" ? undefined : JSON.stringify(p.condition),
       errmessage: p.errmessage,
     })),
+    inference: {
+      cardinality: deletePredicateFilter ? "at_most_one" : "many",
+      multiplicity: "unique",
+      volatility: "modifying",
+    },
   };
 };
 
 const isDirectIdEqualityFilter = (filter: FilterExprIR | undefined): boolean =>
   Boolean(filter && filter.kind === "field" && filter.column === "id" && filter.op === "=");
 
-const inferSelect = (isIdFiltered: boolean, limit: number | undefined, selectedColumns: Set<string>): InferenceResult => {
+const inferSelect = (
+  isIdFiltered: boolean,
+  limit: number | undefined,
+  selectedColumns: Set<string>,
+  volatility: InferenceResult["volatility"] = "immutable",
+): InferenceResult => {
   let cardinality: InferenceResult["cardinality"] = "many";
   if (limit === 0) {
     cardinality = "empty";
@@ -7431,7 +8621,7 @@ const inferSelect = (isIdFiltered: boolean, limit: number | undefined, selectedC
   return {
     cardinality,
     multiplicity: selectedColumns.has("id") ? "unique" : "duplicate",
-    volatility: "immutable",
+    volatility,
   };
 };
 

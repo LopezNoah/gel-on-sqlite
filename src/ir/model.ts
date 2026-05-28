@@ -686,6 +686,10 @@ export type SelectExprIREntry<D extends Depth = 4> =
       bindingName: string;
       field: string;
     }
+  | {
+      kind: "global_ref";
+      name: string;
+    }
   | (D extends 0
       ? never
       : {
