@@ -1558,7 +1558,7 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
         expr: {
           kind: "index_expr",
           expr: source,
-          index: literalToSet(expr.index),
+          index: expr.indexExpr ? compileFreeObjectExpr(expr.indexExpr, ctx) : literalToSet(expr.index),
         },
         pathId: defaultPathId("index_access"),
         typeref: unknownTypeRef("std::anytype"),
@@ -1576,8 +1576,8 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
         expr: {
           kind: "slice_expr",
           expr: source,
-          start: expr.start === undefined ? undefined : literalToSet(expr.start),
-          end: expr.end === undefined ? undefined : literalToSet(expr.end),
+          start: expr.startExpr ? compileFreeObjectExpr(expr.startExpr, ctx) : expr.start === undefined ? undefined : literalToSet(expr.start),
+          end: expr.endExpr ? compileFreeObjectExpr(expr.endExpr, ctx) : expr.end === undefined ? undefined : literalToSet(expr.end),
         },
         pathId: defaultPathId("slice_access"),
         typeref: source.typeref,

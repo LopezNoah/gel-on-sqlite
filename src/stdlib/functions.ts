@@ -326,12 +326,18 @@ export const executeStdlibFunction = (name: string, args: RuntimeFunctionArg[]):
       return new RegExp(source, flags).test(subject);
     }
     case "std::re_match": {
-      const pattern = String(args[0] ?? "");
-      const subject = String(args[1] ?? "");
-      const { source, flags } = parseEdgeQLRegex(pattern);
-      const match = new RegExp(source, flags).exec(subject);
-      if (!match) return [];
-      return match.length === 1 ? [match[0]] : match.slice(1);
+      const patterns = toStringList(args[0]);
+      const subjects = toStringList(args[1]);
+      const out: unknown[] = [];
+      for (const pattern of patterns) {
+        const { source, flags } = parseEdgeQLRegex(pattern);
+        for (const subject of subjects) {
+          const match = new RegExp(source, flags).exec(subject);
+          if (!match) continue;
+          out.push(match.length === 1 ? [match[0]] : match.slice(1));
+        }
+      }
+      return out;
     }
     case "std::re_match_all": {
       const pattern = String(args[0] ?? "");
@@ -375,6 +381,7 @@ export const executeStdlibFunction = (name: string, args: RuntimeFunctionArg[]):
     case "std::range_unpack":
     case "std::array_unpack": {
       const value = args[0];
+      if (value === null || value === undefined) return [];
       if (typeof value === "object" && value !== null && "kind" in value) {
         return [...value.values];
       }
@@ -390,7 +397,26 @@ export const executeStdlibFunction = (name: string, args: RuntimeFunctionArg[]):
         : typeof raw === "object" && raw !== null && "kind" in raw
           ? [...raw.values]
           : [];
-      const idx = toNumber(args[1]);
+      if (arr.length === 0 && typeof raw === "object" && raw !== null && "kind" in raw && raw.kind === "set") {
+        return [];
+      }
+      const indexes = toNumberList(args[1]);
+      if (indexes.length > 1) {
+        const values = arr.some(Array.isArray)
+          ? arr.flatMap((item) => Array.isArray(item)
+            ? indexes.map((idx) => item[idx < 0 ? item.length + idx : idx] ?? null).filter((v) => v !== null && v !== undefined)
+            : [])
+          : indexes.map((idx) => arr[idx < 0 ? arr.length + idx : idx] ?? null).filter((v) => v !== null && v !== undefined);
+        return values.sort((a, b) => String(a).localeCompare(String(b)));
+      }
+      const idx = indexes[0] ?? 0;
+      if (arr.length > 0 && Array.isArray(arr[0])) {
+        return arr.map((item) => {
+          const tuple = item as unknown as unknown[];
+          return tuple[idx < 0 ? tuple.length + idx : idx] ?? null;
+        }).filter((value) => value !== null && value !== undefined)
+          .sort((a, b) => String(a).localeCompare(String(b)));
+      }
       const normalized = idx < 0 ? arr.length + idx : idx;
       if (normalized < 0 || normalized >= arr.length) {
         return args.length > 2 ? extractScalar(args[2]) ?? null : null;
@@ -437,10 +463,17 @@ export const executeStdlibFunction = (name: string, args: RuntimeFunctionArg[]):
       return args[0] === null ? 0 : 1;
     }
     case "std::array_agg": {
-      if (typeof args[0] === "object" && args[0] !== null && "kind" in args[0]) {
-        return [...args[0].values];
+      const value = args[0];
+      if (typeof value === "object" && value !== null && "kind" in value) {
+        return [...value.values];
       }
-      return [args[0] as ScalarValue];
+      // Multi-property fields materialize to a plain JS array of elements.
+      // EdgeQL `array_agg(<multi-set>)` should fold those elements directly
+      // into the resulting array, not wrap the set in an extra layer.
+      if (Array.isArray(value)) {
+        return [...value];
+      }
+      return value == null ? [] : [value as ScalarValue];
     }
     case "std::str_lower":
       return String(extractScalar(args[0]) ?? "").toLowerCase();

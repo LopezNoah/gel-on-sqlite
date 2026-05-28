@@ -2627,22 +2627,25 @@ class Parser {
 
         if (this.peek().kind === "colon") {
           this.consume();
-          let end: number | undefined;
+          let end: number | FreeObjectExpr | undefined;
           if (this.peek().kind === "number") {
             end = this.parseNumberLexeme(this.consume().lexeme);
+          } else if (this.peek().kind !== "rbracket") {
+            end = this.parseFreeObjectExpr();
           }
           this.expect("rbracket", "Expected ']' after slice access");
           expr = {
             kind: "slice_access",
             expr,
             start: undefined,
-            end,
+            end: typeof end === "number" ? end : undefined,
+            endExpr: typeof end === "number" ? undefined : end,
           };
           continue;
         }
 
         const startToken = this.peek();
-        let start: number | undefined;
+        let start: number | FreeObjectExpr | undefined;
         let startSign = 1;
         if (startToken.kind === "minus" && this.peekNth(1).kind === "number") {
           this.consume();
@@ -2652,11 +2655,13 @@ class Parser {
         }
         if (this.peek().kind === "number") {
           start = startSign * this.parseNumberLexeme(this.consume().lexeme);
+        } else if (this.peek().kind !== "colon") {
+          start = this.parseFreeObjectExpr();
         }
 
         if (this.peek().kind === "colon") {
           this.consume();
-          let end: number | undefined;
+          let end: number | FreeObjectExpr | undefined;
           let endSign = 1;
           if (this.peek().kind === "minus" && this.peekNth(1).kind === "number") {
             this.consume();
@@ -2666,13 +2671,17 @@ class Parser {
           }
           if (this.peek().kind === "number") {
             end = endSign * this.parseNumberLexeme(this.consume().lexeme);
+          } else if (this.peek().kind !== "rbracket") {
+            end = this.parseFreeObjectExpr();
           }
           this.expect("rbracket", "Expected ']' after slice access");
           expr = {
             kind: "slice_access",
             expr,
-            start,
-            end,
+            start: typeof start === "number" ? start : undefined,
+            end: typeof end === "number" ? end : undefined,
+            startExpr: typeof start === "number" ? undefined : start,
+            endExpr: typeof end === "number" ? undefined : end,
           };
           continue;
         }
@@ -2684,7 +2693,8 @@ class Parser {
         expr = {
           kind: "index_access",
           expr,
-          index: start,
+          index: typeof start === "number" ? start : 0,
+          indexExpr: typeof start === "number" ? undefined : start,
         };
         continue;
       }
@@ -4810,6 +4820,7 @@ class Parser {
         || (this.isNameToken(lookahead) && this.peekNext().kind === "dot")
         || (this.isNameToken(lookahead) && this.peekNext().kind === "backward_link")
         || (this.isNameToken(lookahead) && this.peekNext().kind === "at")
+        || (this.isNameToken(lookahead) && this.peekNext().kind === "lparen")
         || lookahead.kind === "kw_select"
         || lookahead.kind === "kw_with"
         || lookahead.kind === "kw_for"
@@ -4904,6 +4915,23 @@ class Parser {
     if (this.isNameToken(this.peek()) && this.peekNext().kind === "lparen") {
       const expr = this.parseFreeObjectExpr();
       return { kind: "free_expr", expr };
+    }
+    // `.field.NUMBER` is a tuple-element access (`.t.0`), which the simple
+    // field-target parser can't consume — route to free_expr for the runtime
+    // evaluator.
+    {
+      let scan = this.index;
+      if (this.tokens[scan]?.kind === "dot") scan += 1;
+      if (this.isNameToken(this.tokens[scan] as Token)) {
+        scan += 1;
+        while (this.tokens[scan]?.kind === "dot" && this.isNameToken(this.tokens[scan + 1] as Token)) {
+          scan += 2;
+        }
+        if (this.tokens[scan]?.kind === "dot" && this.tokens[scan + 1]?.kind === "number") {
+          const expr = this.parseFreeObjectExpr();
+          return { kind: "free_expr", expr };
+        }
+      }
     }
     const beforeTarget = this.index;
     const target = this.parseFilterTarget();
@@ -5022,9 +5050,20 @@ class Parser {
       throw new AppError("E_SYNTAX", "Expected filter operator (=, !=, like, ilike, IN, NOT IN)", ...this.posPair(token));
     }
 
-    if (this.peek().kind === "lt" || this.peek().kind === "lparen") {
-      // Complex RHS like `<int64>v.0` or `(x)` — rewind to predicate start and
-      // parse as free_expr so the runtime evaluator handles it.
+    if (
+      this.peek().kind === "lt"
+      || this.peek().kind === "lparen"
+      || this.peek().kind === "lbrace"
+      || this.peek().kind === "lbracket"
+      // `name(...)` on the RHS is a function call — readFilterValue would
+      // truncate at the name and leave the `(...)` for the caller, which
+      // then errors with "Unexpected tokens after statement".
+      || (this.isNameToken(this.peek()) && this.peekNext().kind === "lparen")
+    ) {
+      // Complex RHS like `<int64>v.0`, `(x)`, a set literal `{a, b}`, an
+      // array literal `[a, b]`, or a function call — rewind to the predicate
+      // start and parse the whole predicate as a free expression so the
+      // runtime evaluator handles it.
       this.index = beforeTarget;
       const expr = this.parseFreeObjectExpr();
       return { kind: "free_expr", expr };
@@ -5887,8 +5926,50 @@ class Parser {
       orderBy.push({ field: cursor.field, direction: cursor.direction, then: undefined });
       cursor = cursor.then;
     }
+    // Shape-element FILTER comes in three forms from parseFilter:
+    //  - free_expr: the expression is already there to evaluate.
+    //  - predicate: `Item.tag_set1 > 'p'` — rebuild as a compare against the
+    //    referenced path so the runtime materializer can evaluate it per
+    //    element.
+    //  - other (and/or/not) — leave undefined for now; not yet needed by the
+    //    multi-property shape modifier path.
+    let whereExpr: FreeObjectExpr | undefined;
+    if (clauses.filter) {
+      if (clauses.filter.kind === "free_expr") {
+        whereExpr = clauses.filter.expr;
+      } else if (
+        clauses.filter.kind === "predicate"
+        && clauses.filter.target.kind === "field"
+        && (
+          clauses.filter.op === "="
+          || clauses.filter.op === "!="
+          || clauses.filter.op === "<"
+          || clauses.filter.op === "<="
+          || clauses.filter.op === ">"
+          || clauses.filter.op === ">="
+        )
+        && (typeof clauses.filter.value === "string"
+          || typeof clauses.filter.value === "number"
+          || typeof clauses.filter.value === "boolean"
+          || clauses.filter.value === null)
+      ) {
+        const fieldPath = clauses.filter.target.field;
+        const dotIndex = fieldPath.indexOf(".");
+        const headName = dotIndex >= 0 ? fieldPath.slice(0, dotIndex) : "__current__";
+        const tail = dotIndex >= 0 ? fieldPath.slice(dotIndex + 1) : fieldPath;
+        const path: FreeObjectExpr = dotIndex >= 0
+          ? { kind: "path", head: headName, tail, steps: undefined }
+          : { kind: "field_access", expr: { kind: "current_item" }, field: tail, optional: false };
+        whereExpr = {
+          kind: "compare",
+          op: clauses.filter.op,
+          left: path,
+          right: { kind: "literal", value: clauses.filter.value },
+        };
+      }
+    }
     return {
-      where: clauses.filter?.kind === "free_expr" ? clauses.filter.expr : undefined,
+      where: whereExpr,
       orderBy: orderBy.length > 0 ? orderBy : undefined,
       offset: clauses.offset,
       limit: clauses.limit,

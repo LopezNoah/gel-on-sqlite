@@ -781,6 +781,11 @@ const compileShapeScalarValueSQL = (
       return `json_array(${(parts as string[]).join(", ")})`;
     }
     if (node.kind === "function_call") {
+      // `count(.multi)` / `count((SELECT _ := .multi FILTER …))` in a
+      // shape-scalar / ORDER BY context. Mirror the filter-side lowering so
+      // ORDER BY count(...) doesn't require the parsed-runtime fallback.
+      const countMulti = compileMultiFieldCountInShape(node);
+      if (countMulti) return countMulti;
       const argSqls: string[] = [];
       for (const arg of node.call.args) {
         if (arg.kind !== "expr") return null;
@@ -790,6 +795,83 @@ const compileShapeScalarValueSQL = (
       }
       const fnName = node.call.name.includes("::") ? node.call.name : `std::${node.call.name}`;
       return lowerStdlibFunctionSql(target, fnName, argSqls);
+    }
+    return null;
+  };
+
+  const compileMultiFieldCountInShape = (node: FreeObjectExpr): string | null => {
+    if (node.kind !== "function_call") return null;
+    if (node.call.name !== "count" && node.call.name !== "std::count") return null;
+    if (node.call.args.length !== 1) return null;
+    const arg = node.call.args[0];
+    if (arg.kind !== "expr") return null;
+    const isSubjectFieldAccess = (e: FreeObjectExpr): string | null => {
+      if (e.kind !== "field_access") return null;
+      if (e.field.startsWith("@")) return null;
+      if (!isCurrentRow(e.expr)) return null;
+      return e.field;
+    };
+    const renderFieldCount = (column: string, elemFilter: string | null): string => {
+      const col = `${sourceAlias}.${quoteIdent(column)}`;
+      const where = elemFilter ? ` WHERE ${elemFilter}` : "";
+      return `(SELECT COUNT(*) FROM json_each(IFNULL(${col}, '[]')) __c${where})`;
+    };
+    const inner = arg.expr;
+    const bareField = isSubjectFieldAccess(inner);
+    if (bareField !== null) {
+      return renderFieldCount(bareField, null);
+    }
+    if (inner.kind !== "select_expr_subquery") return null;
+    if (inner.limit !== undefined || inner.offset !== undefined || inner.orderBy) return null;
+    const iterField = isSubjectFieldAccess(inner.expr);
+    if (iterField === null) return null;
+    if (!inner.filter) {
+      return renderFieldCount(iterField, null);
+    }
+    const filterExpr = inner.filter;
+    const alias = inner.alias;
+    const isAliasRef = (x: FreeObjectExpr): boolean =>
+      alias !== undefined && x.kind === "binding_ref" && x.name === alias;
+    if (filterExpr.kind === "in_expr") {
+      if (!isAliasRef(filterExpr.left)) return null;
+      const setSide = filterExpr.right;
+      const values: unknown[] = setSide.kind === "set_literal"
+        ? setSide.values
+        : setSide.kind === "literal" ? [setSide.value] : null as unknown as unknown[];
+      if (!values) return null;
+      const valid = values.every((v) => typeof v === "string" || typeof v === "number"
+        || typeof v === "boolean" || v === null);
+      if (!valid) return null;
+      const placeholders = values.map(() => "?").join(", ");
+      params.push(...values.map((v) => encodeParam(v as ScalarValue)));
+      const op = filterExpr.op === "in" ? "IN" : "NOT IN";
+      return renderFieldCount(iterField, `__c.value ${op} (${placeholders})`);
+    }
+    if (filterExpr.kind === "compare"
+      && (filterExpr.op === "=" || filterExpr.op === "!="
+        || filterExpr.op === "<" || filterExpr.op === "<="
+        || filterExpr.op === ">" || filterExpr.op === ">=")) {
+      const literal = (side: FreeObjectExpr): ScalarValue | null =>
+        side.kind === "literal" && (typeof side.value === "string"
+          || typeof side.value === "number" || typeof side.value === "boolean"
+          || side.value === null) ? (side.value as ScalarValue) : null;
+      let value: ScalarValue | null = null;
+      let op: string = filterExpr.op;
+      if (isAliasRef(filterExpr.left)) {
+        value = literal(filterExpr.right);
+      } else if (isAliasRef(filterExpr.right)) {
+        value = literal(filterExpr.left);
+        op = filterExpr.op === "<" ? ">"
+          : filterExpr.op === "<=" ? ">="
+          : filterExpr.op === ">" ? "<"
+          : filterExpr.op === ">=" ? "<="
+          : filterExpr.op;
+      } else {
+        return null;
+      }
+      if (value === null && filterExpr.op !== "=" && filterExpr.op !== "!=") return null;
+      params.push(encodeParam(value));
+      return renderFieldCount(iterField, `__c.value ${op} ?`);
     }
     return null;
   };
@@ -1367,6 +1449,22 @@ const compileFilterExprSQL = (
     return `${column} ${op} (${placeholders})`;
   }
 
+  if (filter.kind === "multi_field_in") {
+    // EdgeQL set-cross-product semantics: any element of the multi-property
+    // matching any literal in `values` makes the filter true. SQLite stores
+    // multi-properties as a JSON TEXT array; iterate them with `json_each`.
+    const column = filterColumnSql(filter.column, sourceAlias, linkPropertyAlias);
+    if (filter.values.length === 0) {
+      // `x IN <empty>` → false, `x NOT IN <empty>` → true (EdgeQL empty
+      // propagation collapses to no-match for the `in` case).
+      return filter.op === "in" ? "0" : "1";
+    }
+    const placeholders = filter.values.map(() => "?").join(", ");
+    params.push(...filter.values.map((v) => encodeParam(v)));
+    const inner = `SELECT 1 FROM json_each(${column}) WHERE ${column} IS NOT NULL AND json_each.value IN (${placeholders})`;
+    return filter.op === "in" ? `EXISTS (${inner})` : `NOT EXISTS (${inner})`;
+  }
+
   if (filter.kind === "self_in_select") {
     const sourceAliasInner = "s_in";
     const filterColumns = collectFieldFilterColumns(filter.filter).filter((column) => column !== "id");
@@ -1637,6 +1735,37 @@ const compileScalarExprSQL = (
     const args = expr.args.map((arg) => compileScalarExprSQL(arg, sourceAlias, params));
     return wrapScalarFn(expr.name, args.join(", "));
   }
+  if (expr.kind === "multi_field_array_agg") {
+    // EdgeQL `array_agg(.multi ORDER BY .multi <dir>)` lowered to the JSON
+    // string of the sorted elements. Wrapping the column with `IFNULL(…, '[]')`
+    // keeps `json_each` happy on NULL multi-properties (the empty case),
+    // and the outer `IFNULL(json_group_array(...), '[]')` produces `'[]'`
+    // when the iterator yielded no rows — matching `array_agg({}) = []`
+    // semantics so empty-vs-empty compares equal.
+    const col = `${sourceAlias}.${quoteIdent(expr.column)}`;
+    const dir = expr.direction === "desc" ? "DESC" : "ASC";
+    return `(SELECT IFNULL(json_group_array(__v.value), '[]') FROM (SELECT value FROM json_each(IFNULL(${col}, '[]')) ORDER BY value ${dir}) __v)`;
+  }
+  if (expr.kind === "multi_field_count") {
+    // EdgeQL `count(.multi)` / `count((SELECT _ := .multi FILTER …))` —
+    // lower to `COUNT(*)` over `json_each(IFNULL(col, '[]'))` plus an
+    // optional WHERE clause derived from the inner FILTER expression.
+    const col = `${sourceAlias}.${quoteIdent(expr.column)}`;
+    let where = "";
+    const ef = expr.elementFilter;
+    if (ef) {
+      if (ef.kind === "in") {
+        const placeholders = ef.values.map(() => "?").join(", ");
+        params.push(...ef.values.map((v) => encodeParam(v)));
+        const op = ef.op === "in" ? "IN" : "NOT IN";
+        where = ` WHERE __c.value ${op} (${placeholders})`;
+      } else {
+        params.push(encodeParam(ef.value));
+        where = ` WHERE __c.value ${ef.op} ?`;
+      }
+    }
+    return `(SELECT COUNT(*) FROM json_each(IFNULL(${col}, '[]')) __c${where})`;
+  }
   const leftSql = compileScalarExprSQL(expr.left, sourceAlias, params);
   const rightSql = compileScalarExprSQL(expr.right, sourceAlias, params);
   if (expr.op === "//") {
@@ -1659,6 +1788,10 @@ const collectFieldFilterColumns = (filter: FilterExprIR | undefined): string[] =
   }
 
   if (filter.kind === "field_in") {
+    return [filter.column];
+  }
+
+  if (filter.kind === "multi_field_in") {
     return [filter.column];
   }
 
@@ -1734,6 +1867,8 @@ const collectScalarExprColumns = (expr: ScalarExprIR): string[] => {
   if (expr.kind === "neg") return collectScalarExprColumns(expr.expr);
   if (expr.kind === "index_access") return collectScalarExprColumns(expr.value);
   if (expr.kind === "fn_call") return expr.args.flatMap(collectScalarExprColumns);
+  if (expr.kind === "multi_field_array_agg") return [expr.column];
+  if (expr.kind === "multi_field_count") return [expr.column];
   return [...collectScalarExprColumns(expr.left), ...collectScalarExprColumns(expr.right)];
 };
 

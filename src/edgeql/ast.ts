@@ -509,12 +509,15 @@ export type FreeObjectExpr =
       kind: "index_access";
       expr: FreeObjectExpr;
       index: number;
+      indexExpr?: FreeObjectExpr;
     }
   | {
       kind: "slice_access";
       expr: FreeObjectExpr;
       start?: number;
       end?: number;
+      startExpr?: FreeObjectExpr;
+      endExpr?: FreeObjectExpr;
     }
   | {
       kind: "tuple";

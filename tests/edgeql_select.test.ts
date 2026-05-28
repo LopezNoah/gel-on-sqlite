@@ -2012,7 +2012,7 @@ describe("TestEdgeQLSelect", () => {
     );
   });
 
-  it.skip("test_edgeql_select_polymorphic_09 [xerror: Known collation issue on Heroku Postgres]", () => {
+  it("test_edgeql_select_polymorphic_09", () => {
     assertQueryResult(
       h,
       `
@@ -9375,7 +9375,7 @@ describe("TestEdgeQLSelect", () => {
     );
   });
 
-  it.skip("test_edgeql_select_expr_objects_04a [xerror: Known collation issue on Heroku Postgres]", () => {
+  it("test_edgeql_select_expr_objects_04a", () => {
     assertQueryResult(
       h,
       `
@@ -10895,8 +10895,13 @@ describe("TestEdgeQLSelect", () => {
     }
   });
 
-  it.skip("test_edgeql_select_tid_position_01", () => {
-    let res = queryRows<Record<string, any>>(h, "\n            SELECT Issue {\n              *, lol := 1, sigh := 2,\n            };\n        ");
+  it("test_edgeql_select_tid_position_01", () => {
+    let res = queryRows<Record<string, any>>(h, `
+      SELECT Issue {
+        *,
+        lol := 1,
+        sigh := 2,
+      };`);
     let val = res[0];
     let ptrs = Object.keys(val.__dataclass_fields__);
     expect(ptrs[0]).toEqual("__tid__");
@@ -10937,8 +10942,25 @@ describe("TestEdgeQLSelect", () => {
     expect(ptrs[0]).toEqual("__tid__");
   });
 
-  it.skip("test_edgeql_select_tid_position_06 [xerror: a linkprop related ISE! This one is kind of screwy. *An* issue is that the FOR loop over a single link is hiding the linkprop (despite our `needs_link_table` based efforts). But: 1. This code obviously ought to work, though you could argue about whether the link property should be in the shape. 2. If the link prop was specified explicitly in the shape, that ought to work (per our paper semantics, at least!). 3. It only passes the frontend for bad reasons, though! If we name the field `owner2` we get a \"has no property\" error!!]", () => {
-    let res = queryRows<Record<string, any>>(h, "\n            FOR issue IN Issue SELECT issue {\n              *,\n              owner := (for owner in issue.owner select owner { * }),\n              lol := 1, sigh := 2,\n            };\n        ");
+  /*
+  a linkprop related ISE! This one is kind of screwy. 
+    *An* issue is that the FOR loop over a single link is hiding the linkprop
+    (despite our `needs_link_table` based efforts). But:
+    1. This code obviously ought to work, though you could argue about whether
+      the link property should be in the shape.
+    2. If the link prop was specified explicitly in the shape, that ought to
+       work (per our paper semantics, at least!).
+    3. It only passes the frontend for bad reasons, though! If we name the
+       field `owner2` we get a \"has no property\" error!!
+  */
+  it.skip("test_edgeql_select_tid_position_06", () => {
+    let res = queryRows<Record<string, any>>(h, 
+      `FOR issue IN Issue SELECT issue {
+        *,
+        owner := (for owner in issue.owner select owner { * }),
+        lol := 1,
+        sigh := 2,            
+      };`);
     let val = res[0];
     let owner = val.owner;
     let ptrs = Object.keys(owner.__dataclass_fields__);

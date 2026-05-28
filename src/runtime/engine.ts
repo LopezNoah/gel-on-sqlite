@@ -1263,10 +1263,24 @@ const tryRuntimeSelectExprEvaluationAst = (
           return Array.isArray(evaluated) && !exprIsTupleValue(value) && value.kind !== "array_literal_expr" ? evaluated : [evaluated];
         });
       case "array_literal_expr":
-        return expr.values.flatMap((value) => {
-          const evaluated = evalExpr(value, env) as ScalarValue | ScalarValue[];
-          return Array.isArray(evaluated) && value.kind !== "tuple" ? evaluated : [evaluated as ScalarValue];
-        });
+        {
+          const evaluated = expr.values.map((value) => ({
+            source: value,
+            value: evalExpr(value, env),
+          })).map((entry) => ({
+            ...entry,
+            setLike: Array.isArray(entry.value) && !exprIsTupleValue(entry.source) && entry.source.kind !== "array_literal_expr",
+          }));
+          if (!evaluated.some((entry) => entry.setLike)) return evaluated.map((entry) => entry.value);
+          const sets = evaluated.map((entry) => {
+            if (!entry.setLike) return [entry.value];
+            return [...(entry.value as unknown[])].sort((a, b) => String(a).localeCompare(String(b)));
+          });
+          return sets.reduce<unknown[][]>(
+            (rows, items) => rows.flatMap((row) => items.map((item) => [...row, item])),
+            [[]],
+          );
+        }
       case "unary": {
         const value = evalExpr(expr.expr, env);
         const apply = (item: unknown): ScalarValue => {
@@ -1527,9 +1541,8 @@ const tryRuntimeSelectExprEvaluationAst = (
       }
       case "index_access": {
         const value = evalExpr(expr.expr, env);
-        const indexPath = Number.isInteger(expr.index)
-          ? [expr.index]
-          : String(expr.index).split(".").map((part) => Number(part)).filter((part) => Number.isInteger(part));
+        const rawIndex = expr.indexExpr ? evalExpr(expr.indexExpr, env) : expr.index;
+        const indexPath = Array.isArray(rawIndex) ? rawIndex.filter((item): item is number => Number.isInteger(item)) : Number.isInteger(rawIndex) ? [rawIndex as number] : [];
         // The reference EdgeQL diagnostic uses a category prefix specific to the
         // source kind: "array index", "string index", or "JSON index".
         const indexErrorCategory = (item: unknown): string => {
@@ -1564,10 +1577,22 @@ const tryRuntimeSelectExprEvaluationAst = (
           }
           return current;
         };
+        const readOneIndex = (item: unknown, index: number): unknown => {
+          const prior = indexPath.splice(0, indexPath.length, index);
+          const result = readIndex(item);
+          indexPath.splice(0, indexPath.length, ...prior);
+          return result;
+        };
         if (typeof value === "string") {
           return readIndex(value);
         }
         if (Array.isArray(value)) {
+          if (indexPath.length > 1) {
+            return indexPath.flatMap((index) => {
+              const item = readOneIndex(value, index);
+              return Array.isArray(item) && expr.expr.kind === "array_literal_expr" ? item : item == null ? [] : [item];
+            });
+          }
           if (value.length > 0 && Array.isArray(value[0])) {
             const sourceIsSetOfTuples = expr.expr.kind === "tuple"
               && expr.expr.values.some((slot) => {
@@ -1599,6 +1624,21 @@ const tryRuntimeSelectExprEvaluationAst = (
           return value.map(readIndex);
         }
         return null;
+      }
+      case "slice_access": {
+        const value = evalExpr(expr.expr, env);
+        const startValue = expr.startExpr ? evalExpr(expr.startExpr, env) : expr.start;
+        const endValue = expr.endExpr ? evalExpr(expr.endExpr, env) : expr.end;
+        const starts = Array.isArray(startValue) ? startValue.filter((item): item is number => Number.isInteger(item)) : [startValue].filter((item): item is number => Number.isInteger(item));
+        const ends = Array.isArray(endValue) ? endValue.filter((item): item is number => Number.isInteger(item)) : [endValue].filter((item): item is number => Number.isInteger(item));
+        const sliceOne = (source: unknown, start: number | undefined, end: number | undefined): unknown => {
+          if (!Array.isArray(source) && typeof source !== "string") return null;
+          return source.slice(start, end);
+        };
+        if (starts.length > 0) {
+          return starts.map((start) => sliceOne(value, start, ends[0])).filter((item) => item !== null);
+        }
+        return sliceOne(value, undefined, ends[0]);
       }
       case "field_access": {
         const value = evalExpr(expr.expr, env);
@@ -1666,12 +1706,13 @@ const tryRuntimeSelectExprEvaluationAst = (
             return [...computed.expr.values];
           }
           if (computed?.kind === "property" && computed.expr.kind === "link_aggregate") {
+            const aggregateExpr = computed.expr;
             const sourceEnv = new Map(env);
             sourceEnv.set("__computed_source__", row);
             const linked = evalExpr({
               kind: "field_access",
               expr: { kind: "binding_ref", name: "__computed_source__" },
-              field: computed.expr.link,
+              field: aggregateExpr.link,
               optional: false,
             }, sourceEnv);
             const linkItems = Array.isArray(linked)
@@ -1683,12 +1724,12 @@ const tryRuntimeSelectExprEvaluationAst = (
               const value = evalExpr({
                 kind: "field_access",
                 expr: { kind: "binding_ref", name: "__computed_link__" },
-                field: computed.expr.field,
+                field: aggregateExpr.field,
                 optional: false,
               }, linkEnv);
               return Array.isArray(value) ? value : value === null || value === undefined ? [] : [value];
             });
-            return evaluateRuntimeAggregate(computed.expr.functionName, values);
+            return evaluateRuntimeAggregate(aggregateExpr.functionName, values);
           }
           return null;
         };
@@ -2017,6 +2058,28 @@ const tryRuntimeSelectExprEvaluationAst = (
           }
         }
         return out;
+      }
+      case "in_expr": {
+        // `x IN set_of_y` — true iff `x` equals any element of the set
+        // produced by evaluating `right`. EdgeQL semantics: scalar IN
+        // empty-set is false (not empty). When `left` is itself set-valued,
+        // emit one boolean per `left` element.
+        const left = evalExpr(expr.left, env);
+        const right = evalExpr(expr.right, env);
+        const rightItems = Array.isArray(right) ? right : right === null || right === undefined ? [] : [right];
+        const leftIsSet = Array.isArray(left);
+        const leftItems = leftIsSet ? left : [left];
+        const comparable = (v: unknown): unknown => (v && typeof v === "object" && !Array.isArray(v)
+          && typeof (v as { id?: unknown }).id === "string") ? (v as { id: string }).id : v;
+        const checkOne = (item: unknown): boolean => {
+          const target = comparable(item);
+          const has = rightItems.some((candidate) => comparable(candidate) === target);
+          return expr.op === "not_in" ? !has : has;
+        };
+        if (!leftIsSet) {
+          return checkOne(left);
+        }
+        return leftItems.map(checkOne);
       }
       case "and": {
         const left = evalExpr(expr.left, env);
@@ -3674,15 +3737,44 @@ const tryEvaluateParsedRuntimeSelect = (
       // per-row evaluation:
       //   * A two-or-more deep chain (`Issue.status.name`) — link traversal.
       //   * Access on a `select_expr_subquery` source (`(SELECT X).field`).
+      //   * Multi-property reference inside a tuple/array literal — the SQL
+      //     path emits `json_array(t.col)` which wraps the JSON-encoded
+      //     multi value as one element instead of iterating. EdgeQL needs
+      //     cartesian-product semantics here.
       // A simple `current_item.field` / `Issue.field` (depth 1, source is the
       // subject) stays on the SQL path.
       if (inner.kind === "field_access") {
         if (inner.expr.kind === "field_access") return true;
         if (inner.expr.kind === "select_expr_subquery") return true;
+        // Subject-scoped reference to a multi property — only needs the
+        // parsed runtime when the access participates in tuple/array
+        // construction (handled below); a bare `.tag_set1` shape element
+        // stays on SQL via the existing materializer.
       }
       if (inner.kind === "tuple" || inner.kind === "set_expr" || inner.kind === "array_literal_expr") {
+        // EdgeQL cartesian semantics: a multi-property reference inside a
+        // tuple/array constructor expands across each element. The SQL
+        // lowering emits `json_array(t.col)` which doesn't expand — route
+        // such constructions through the parsed runtime.
+        const isMultiFieldAccess = (e: FreeObjectExpr): boolean => {
+          if (e.kind !== "field_access") return false;
+          if (e.field.startsWith("@")) return false;
+          const subjectRoot = e.expr.kind === "current_item"
+            || (e.expr.kind === "select"
+              && (e.expr.typeName === statement.typeName
+                || e.expr.typeName === statement.typeName.split("::").at(-1)))
+            || (e.expr.kind === "binding_ref"
+              && (e.expr.name === statement.typeName
+                || e.expr.name === statement.typeName.split("::").at(-1)));
+          if (!subjectRoot) return false;
+          const typeName = qualifyRuntimeTypeName(statement.typeName, statement.withModule ?? "default");
+          const fieldDef = findFieldDef(schema, typeName, e.field);
+          return Boolean(fieldDef?.multi);
+        };
+        if (inner.kind === "tuple" || inner.kind === "array_literal_expr" || inner.values.some(isMultiFieldAccess)) return true;
         return inner.values.some((value) => needsParsedRuntime(value));
       }
+      if (inner.kind === "index_access" || inner.kind === "slice_access") return true;
       if (inner.kind === "concat") return inner.parts.some((part) => needsParsedRuntime(part));
       if (inner.kind === "cast") {
         return needsParsedRuntime(inner.expr);
@@ -3706,6 +3798,16 @@ const tryEvaluateParsedRuntimeSelect = (
     || expr.kind === "subquery";
   function shapeNeedsParsedRuntime(shape: ShapeElement[]): boolean {
     return shape.some((element) => {
+      if (element.kind === "field") {
+        // Shape modifiers on a (multi-)property field — `tags ORDER BY ...
+        // LIMIT N`, `tags FILTER ...` — are applied by the parsed-runtime
+        // materializer; the SQL path doesn't reach into the JSON-encoded
+        // multi value.
+        return Boolean(element.where)
+          || Boolean(element.orderBy && element.orderBy.length > 0)
+          || element.limit !== undefined
+          || element.offset !== undefined;
+      }
       if (element.kind === "computed") {
         return computedNeedsParsedRuntime(element.expr);
       }
@@ -3770,10 +3872,138 @@ const tryEvaluateParsedRuntimeSelect = (
     }
     return false;
   };
+  // Helpers used by the lowering checks below. The shape we detect mirrors
+  // the `arrayAggOnSubjectMulti` pattern in semantic.ts: an `array_agg`
+  // around a subject-scoped field_access, optionally ordered by the same
+  // field. The subject root may surface as `current_item`, `select{Subject}`,
+  // or a binding_ref (depending on how the user wrote `Item.tag_set1` vs
+  // `.tag_set1`). We match the field/base pair structurally rather than
+  // resolving the subject type — semantic.ts validates the multi-ness.
+  const subjectScopedField = (e: FreeObjectExpr): string | undefined => {
+    if (e.kind !== "field_access") return undefined;
+    if (e.field.startsWith("@")) return undefined;
+    if (e.expr.kind === "current_item") return e.field;
+    if (e.expr.kind === "select") return e.field;
+    if (e.expr.kind === "binding_ref") return e.field;
+    return undefined;
+  };
+  const isArrayAggOfCurrentItemMulti = (e: FreeObjectExpr): boolean => {
+    if (e.kind !== "function_call") return false;
+    if (e.call.name !== "array_agg" && e.call.name !== "std::array_agg") return false;
+    if (e.call.args.length !== 1) return false;
+    const arg = e.call.args[0];
+    if (arg.kind !== "expr") return false;
+    const inner = arg.expr;
+    if (inner.kind !== "select_expr_subquery") return false;
+    if (inner.filter || inner.limit !== undefined || inner.offset !== undefined) return false;
+    const srcField = subjectScopedField(inner.expr);
+    if (srcField === undefined) return false;
+    if (inner.orderBy) {
+      const orderField = subjectScopedField(inner.orderBy.expr);
+      if (orderField !== srcField) return false;
+    }
+    return true;
+  };
+  const isArrayLiteralOfScalars = (e: FreeObjectExpr): boolean =>
+    e.kind === "array_literal_expr"
+    && e.values.every((v) => v.kind === "literal");
+  // `count(.multi)` / `count((SELECT _ := .multi FILTER _ IN/op …))` is
+  // lowered to `multi_field_count` SQL via `compileMultiFieldElementFilter`.
+  const isLoweredCountOfMulti = (e: FreeObjectExpr): boolean => {
+    if (e.kind !== "function_call") return false;
+    if (e.call.name !== "count" && e.call.name !== "std::count") return false;
+    if (e.call.args.length !== 1) return false;
+    const arg = e.call.args[0];
+    if (arg.kind !== "expr") return false;
+    const inner = arg.expr;
+    if (subjectScopedField(inner) !== undefined) return true;
+    if (inner.kind !== "select_expr_subquery") return false;
+    if (inner.limit !== undefined || inner.offset !== undefined || inner.orderBy) return false;
+    if (subjectScopedField(inner.expr) === undefined) return false;
+    if (!inner.filter) return true;
+    const f = inner.filter;
+    const alias = inner.alias;
+    const isAliasRef = (x: FreeObjectExpr): boolean =>
+      alias !== undefined && x.kind === "binding_ref" && x.name === alias;
+    if (f.kind === "in_expr" && isAliasRef(f.left)
+      && (f.right.kind === "literal" || f.right.kind === "set_literal")) return true;
+    if (f.kind === "compare" && (f.op === "=" || f.op === "!=" || f.op === "<" || f.op === "<=" || f.op === ">" || f.op === ">=")
+      && (isAliasRef(f.left) || isAliasRef(f.right))) return true;
+    return false;
+  };
+
   const freeExprNeedsParsedRuntime = (expr: FreeObjectExpr, inNot = false): boolean => {
     if (expr.kind === "for_expr") return true;
     if (expr.kind === "is_type") return true;
+    // `array_agg(.multi ORDER BY .multi) = array_agg(...) / [literal]` is
+    // lowered to SQL via `multi_field_array_agg` — don't route those compares
+    // (or their function_call children) to the parsed runtime.
+    if (expr.kind === "compare" && (expr.op === "=" || expr.op === "!=")) {
+      const leftAgg = isArrayAggOfCurrentItemMulti(expr.left);
+      const rightAgg = isArrayAggOfCurrentItemMulti(expr.right);
+      if (leftAgg && rightAgg) return false;
+      if (leftAgg && isArrayLiteralOfScalars(expr.right)) return false;
+      if (rightAgg && isArrayLiteralOfScalars(expr.left)) return false;
+    }
+    // Lowered `count(.multi)` / `count((SELECT _ := .multi FILTER …))` —
+    // compared against a literal scalar these compile to a plain SQL
+    // `expr_compare` with the `multi_field_count` ScalarExpr, so don't
+    // drag them back into the parsed-runtime path.
+    if (expr.kind === "compare") {
+      const leftCount = isLoweredCountOfMulti(expr.left);
+      const rightCount = isLoweredCountOfMulti(expr.right);
+      const isScalarLiteral = (e: FreeObjectExpr): boolean =>
+        e.kind === "literal"
+        && (typeof e.value === "number" || typeof e.value === "string"
+          || typeof e.value === "boolean" || e.value === null);
+      if ((leftCount && isScalarLiteral(expr.right))
+        || (rightCount && isScalarLiteral(expr.left))) {
+        return false;
+      }
+    }
     if (expr.kind === "function_call") return true;
+    // `x IN <free_expr>` keeps the runtime path when the SQL filter
+    // compiler can't recognise either side as a multi-property literal /
+    // current-item field. `compileFreeExprFilter` handles the lowered
+    // patterns directly; anything else (e.g. `'a' IN (SELECT ...)`) still
+    // needs the AST evaluator.
+    if (expr.kind === "in_expr") {
+      const isMultiFieldAccess = (e: FreeObjectExpr): boolean =>
+        e.kind === "field_access" && e.expr.kind === "current_item" && !e.field.startsWith("@");
+      const isLiteralOrSet = (e: FreeObjectExpr): boolean =>
+        e.kind === "literal" || e.kind === "set_literal";
+      const handled = (isMultiFieldAccess(expr.left) && isLiteralOrSet(expr.right))
+        || (isMultiFieldAccess(expr.right) && isLiteralOrSet(expr.left));
+      if (!handled) return true;
+    }
+    // Compares with set/array literals still route to the runtime when the
+    // SQL lowering can't pattern-match the field side. Patterns covered in
+    // semantic.ts:
+    //   * `.multi = {…}` / `.multi = X` → `multi_field_in`
+    //   * `.array = [literal]` → `field` IR with JSON-stringified value
+    //   * `array_agg(.multi ORDER BY .multi) = array_agg(...) / [literal]`
+    //     → `expr_compare` with `multi_field_array_agg` ScalarExprIR
+    if (expr.kind === "compare"
+      && (expr.left.kind === "set_literal" || expr.right.kind === "set_literal"
+        || expr.left.kind === "array_literal_expr" || expr.right.kind === "array_literal_expr")) {
+      const isCurrentItemField = (e: FreeObjectExpr): boolean =>
+        e.kind === "field_access" && e.expr.kind === "current_item" && !e.field.startsWith("@");
+      const isArrayAggCall = (e: FreeObjectExpr): boolean =>
+        e.kind === "function_call"
+        && (e.call.name === "array_agg" || e.call.name === "std::array_agg");
+      const setLiteralSide = expr.left.kind === "set_literal" ? expr.left : expr.right.kind === "set_literal" ? expr.right : undefined;
+      const arrayLiteralSide = expr.left.kind === "array_literal_expr" ? expr.left : expr.right.kind === "array_literal_expr" ? expr.right : undefined;
+      const setLiteralIsAllScalars = !setLiteralSide || setLiteralSide.values.every((v) =>
+        typeof v === "string" || typeof v === "number" || typeof v === "boolean" || v === null);
+      const arrayLiteralIsAllScalars = !arrayLiteralSide || arrayLiteralSide.values.every((v) => v.kind === "literal");
+      const handledSide = isCurrentItemField(expr.left) || isCurrentItemField(expr.right)
+        || isArrayAggCall(expr.left) || isArrayAggCall(expr.right);
+      const lowered = handledSide
+        && (expr.op === "=" || expr.op === "!=")
+        && setLiteralIsAllScalars
+        && arrayLiteralIsAllScalars;
+      if (!lowered) return true;
+    }
     // EdgeQL: `NOT {}` evaluates to `{}` (empty propagation), so a row
     // whose optional path is empty is excluded by `FILTER NOT (...)`. The
     // SQL `NOT EXISTS` returns TRUE for empty, which would include those
@@ -3821,6 +4051,14 @@ const tryEvaluateParsedRuntimeSelect = (
   // a link (i.e. could be empty per-row). Such filters require EdgeQL set
   // semantics that the SQL path can't express. Combined with AND/OR/NOT
   // empty-propagation, we route the whole filter through the parsed runtime.
+  const isMultiField = (fieldName: string): boolean => {
+    if (fieldName.includes(".")) return false;
+    const subjectQualified = qualifyType(statement.typeName);
+    const subjectType = schema.getType(subjectQualified);
+    if (!subjectType) return false;
+    const field = subjectType.fields.find((f) => f.name === fieldName);
+    return Boolean(field?.multi);
+  };
   const filterTouchesOptionalPath = (filter: SelectStatement["filter"]): boolean => {
     if (!filter) return false;
     if (filter.kind === "and" || filter.kind === "or") {
@@ -3835,6 +4073,85 @@ const tryEvaluateParsedRuntimeSelect = (
     }
     return false;
   };
+  // FILTER `.shape_computed_name op X` — the SQL path doesn't know about
+  // shape-defined computeds (they're projected after rows are selected),
+  // so route through the parsed runtime which can evaluate them on demand.
+  const shapeComputedNames = new Set<string>(
+    statement.shape
+      .filter((element) => element.kind === "computed")
+      .map((element) => (element as { name: string }).name),
+  );
+  // Guard against infinite recursion when a shape computed's body refers to
+  // an outer field that this same evaluator interprets as the computed
+  // itself (`(SELECT Item).computed_link` patterns surface as nested
+  // shape-computed dispatches on the same name).
+  const shapeComputedInProgress = new Set<string>();
+  const exprReferencesShapeComputed = (expr: FreeObjectExpr): boolean => {
+    if (expr.kind === "field_access"
+      && expr.expr.kind === "current_item"
+      && !expr.field.startsWith("@")
+      && shapeComputedNames.has(expr.field)) {
+      return true;
+    }
+    if (expr.kind === "path"
+      && shapeComputedNames.has(expr.tail)) {
+      return true;
+    }
+    if ("expr" in expr && expr.expr) {
+      const inner = expr.expr as FreeObjectExpr;
+      if (typeof inner === "object" && inner !== null && "kind" in inner) {
+        if (exprReferencesShapeComputed(inner)) return true;
+      }
+    }
+    if ("left" in expr && "right" in expr) {
+      if (exprReferencesShapeComputed(expr.left as FreeObjectExpr)
+        || exprReferencesShapeComputed(expr.right as FreeObjectExpr)) {
+        return true;
+      }
+    }
+    if (expr.kind === "function_call") {
+      for (const arg of expr.call.args) {
+        if (arg.kind === "expr" && exprReferencesShapeComputed(arg.expr)) return true;
+      }
+    }
+    if (expr.kind === "tuple" || expr.kind === "set_expr" || expr.kind === "array_literal_expr") {
+      return expr.values.some((v) => exprReferencesShapeComputed(v));
+    }
+    if (expr.kind === "concat") return expr.parts.some((p) => exprReferencesShapeComputed(p));
+    return false;
+  };
+  const filterTargetsShapeComputed = (filter: SelectStatement["filter"]): boolean => {
+    if (!filter) return false;
+    if (filter.kind === "and" || filter.kind === "or") {
+      return filterTargetsShapeComputed(filter.left) || filterTargetsShapeComputed(filter.right);
+    }
+    if (filter.kind === "not") return filterTargetsShapeComputed(filter.expr);
+    if ((filter.kind === "predicate" || filter.kind === "in_predicate")
+      && filter.target.kind === "field"
+      && !filter.target.field.includes(".")
+      && shapeComputedNames.has(filter.target.field)) {
+      return true;
+    }
+    if (filter.kind === "free_expr") {
+      return exprReferencesShapeComputed(filter.expr);
+    }
+    return false;
+  };
+  // `.multi_property = <single literal>` reaches into the JSON-encoded set
+  // on the row. The SQL `field` lowering compares the raw JSON string
+  // against a scalar (never matches), so route those through the parsed
+  // runtime. The `in_predicate` form is lowered to `multi_field_in` IR.
+  const filterTouchesMultiProperty = (filter: SelectStatement["filter"]): boolean => {
+    if (!filter) return false;
+    if (filter.kind === "and" || filter.kind === "or") {
+      return filterTouchesMultiProperty(filter.left) || filterTouchesMultiProperty(filter.right);
+    }
+    if (filter.kind === "not") return filterTouchesMultiProperty(filter.expr);
+    if (filter.kind === "predicate" && filter.target.kind === "field") {
+      return isMultiField(filter.target.field);
+    }
+    return false;
+  };
   const filterContainsBoolOp = (filter: SelectStatement["filter"]): boolean => {
     if (!filter) return false;
     if (filter.kind === "and" || filter.kind === "or" || filter.kind === "not") return true;
@@ -3842,6 +4159,8 @@ const tryEvaluateParsedRuntimeSelect = (
   };
   const filterNeedsParsedRuntime = (filter: SelectStatement["filter"], inNot = false): boolean => {
     if (!filter) return false;
+    if (filterTouchesMultiProperty(filter)) return true;
+    if (filterTargetsShapeComputed(filter)) return true;
     // EdgeQL: a multi-clause filter with dotted-path predicates needs
     // EdgeQL set semantics (empty propagation) that the SQL path can't
     // express. Route the whole filter through the parsed runtime.
@@ -3858,10 +4177,14 @@ const tryEvaluateParsedRuntimeSelect = (
 
   // ORDER BY with an expression form (e.g. `len(.body)`) can't be lowered to
   // SQL — the semantic stage drops it from the IR. Route through the parsed
-  // runtime so we can sort per-row instead.
+  // runtime so we can sort per-row instead. The `count(.multi)` /
+  // `count((SELECT _ := .multi FILTER …))` patterns are lowered to SQL in
+  // `compileShapeScalarValueSQL`, so leave those on the SQL path.
   const orderByNeedsParsedRuntime = (orderBy: SelectStatement["orderBy"]): boolean => {
     if (!orderBy) return false;
-    if (orderBy.expr) return true;
+    if (orderBy.expr) {
+      if (!isLoweredCountOfMulti(orderBy.expr)) return true;
+    }
     return orderByNeedsParsedRuntime(orderBy.then);
   };
   if (
@@ -4369,15 +4692,24 @@ const tryEvaluateParsedRuntimeSelect = (
   };
 
   const innerExprProducesMultiSet = (expr: FreeObjectExpr): boolean => {
+    if (expr.kind === "tuple" || expr.kind === "array_literal_expr" || expr.kind === "slice_access") return true;
+    if (expr.kind === "index_access") return innerExprProducesMultiSet(expr.expr);
     if (expr.kind === "field_access") {
       // Field access on a type scope where the field is a multi link
-      // (e.g. `Issue.time_spent_log`) produces a multi-set. Detect that
-      // explicitly so downstream callers don't unwrap a single-element
-      // result back to a scalar.
+      // (e.g. `Issue.time_spent_log`) or multi property (`Item.tag_set1`)
+      // produces a multi-set. Detect that explicitly so downstream callers
+      // don't unwrap a single-element result back to a scalar.
       if (expr.expr.kind === "select") {
         const typeName = qualifyRuntimeTypeName(expr.expr.typeName, statement.withModule ?? "default");
         const linkDef = findRuntimeLinkDef(schema, typeName, expr.field);
         if (linkDef?.link.multi) return true;
+        const fieldDef = findFieldDef(schema, typeName, expr.field);
+        if (fieldDef?.multi) return true;
+      }
+      if (expr.expr.kind === "current_item") {
+        // The current_item's source type isn't known here; the caller's
+        // context already established it's the outer subject — fall through
+        // and treat as recursive.
       }
       return innerExprProducesMultiSet(expr.expr);
     }
@@ -4390,6 +4722,13 @@ const tryEvaluateParsedRuntimeSelect = (
     if (expr.kind === "set_expr") return true;
     if (expr.kind === "distinct") return innerExprProducesMultiSet(expr.expr);
     if (expr.kind === "shape_projection") return innerExprProducesMultiSet(expr.expr);
+    // `array_unpack(...)` / `range_unpack(...)` produce a set of array
+    // elements — single-element results must stay wrapped in an array.
+    if (expr.kind === "function_call"
+      && (expr.call.name === "array_unpack" || expr.call.name === "std::array_unpack"
+        || expr.call.name === "range_unpack" || expr.call.name === "std::range_unpack")) {
+      return true;
+    }
     // Comparisons (?=, ?!=, =, !=, etc.) inherit multi-ness from their
     // operands — `multi ?= scalar` produces N booleans.
     if (expr.kind === "compare") {
@@ -4630,6 +4969,20 @@ const tryEvaluateParsedRuntimeSelect = (
         }
         return bound;
       }
+      if (env.outerRows && expr.typeName === statement.typeName) {
+        const qualifiedType = qualifyType(expr.typeName);
+        const assignable = new Set(schema.listConcreteTypesAssignableTo(qualifiedType).map((typeDef) => qualifiedTypeName(typeDef)));
+        for (let i = env.outerRows.length - 1; i >= 0; i -= 1) {
+          const outer = env.outerRows[i]!;
+          const outerType = rowTypeName(outer.row, outer.rowType);
+          if (outerType !== qualifiedType && !assignable.has(outerType)) continue;
+          if (expr.clauses.filter) {
+            const passes = evalFilter(outer.row, outerType, expr.clauses.filter, { ...env, row: outer.row, rowType: outerType });
+            return passes ? outer.row : [];
+          }
+          return outer.row;
+        }
+      }
       if (env.row) {
         const qualifiedType = qualifyType(expr.typeName);
         const rowType = rowTypeName(env.row, env.rowType);
@@ -4669,6 +5022,17 @@ const tryEvaluateParsedRuntimeSelect = (
       return env.row ? readBacklink(env.row, rowTypeName(env.row, env.rowType), expr.link, expr.sourceType, expr.sourceTypeExpr) : [];
     }
     if (expr.kind === "field_access") {
+      // Multi-properties, arrays, and tuples are all stored as JSON text in
+      // the row. Materialize them so set semantics (`IN`, `count(...)`,
+      // element-wise `=`, …) see the actual elements rather than the raw
+      // JSON string. `set_11`-style `array_agg(...) = array_agg(...)` over
+      // empty sets is a known regression; tests that depend on raw JSON-
+      // string equality from non-materialized field reads need a different
+      // path to pass once `array_agg` returns a true single-value array.
+      const readStoredField = (row: ParsedRuntimeRow, sourceType: string): unknown => {
+        const raw = row[expr.field] ?? null;
+        return materializeFieldValue(schema, sourceType, expr.field, raw);
+      };
       if (env.iterationPath && env.row) {
         const innerPath = extractIterationPath(expr.expr);
         if (
@@ -4678,7 +5042,7 @@ const tryEvaluateParsedRuntimeSelect = (
           && innerPath.steps.every((s, i) => s === env.iterationPath!.steps[i])
         ) {
           const row = env.row as ParsedRuntimeRow;
-          if (Object.prototype.hasOwnProperty.call(row, expr.field)) return row[expr.field] ?? null;
+          if (Object.prototype.hasOwnProperty.call(row, expr.field)) return readStoredField(row, rowTypeName(row, env.rowType));
           const sourceType = rowTypeName(row, env.rowType);
           const linked = readForwardLink(row, sourceType, expr.field);
           return linked.length > 0 ? linked : null;
@@ -4688,8 +5052,8 @@ const tryEvaluateParsedRuntimeSelect = (
       const read = (item: unknown): unknown => {
         if (!item || typeof item !== "object" || Array.isArray(item)) return null;
         const row = item as ParsedRuntimeRow;
-        if (Object.prototype.hasOwnProperty.call(row, expr.field)) return row[expr.field] ?? null;
         const sourceType = rowTypeName(row, env.rowType);
+        if (Object.prototype.hasOwnProperty.call(row, expr.field)) return readStoredField(row, sourceType);
         const linked = readForwardLink(row, sourceType, expr.field);
         if (linked.length > 0) {
           return linked;
@@ -4702,16 +5066,49 @@ const tryEvaluateParsedRuntimeSelect = (
           return [...computed.expr.values];
         }
         if (computed?.kind === "property" && computed.expr.kind === "link_aggregate") {
-          const linkRows = readForwardLink(row, sourceType, computed.expr.link);
-          const fieldValues = readPresentFieldValues(linkRows, computed.expr.field) ?? linkRows.flatMap((linkRow) => {
-            const value = readForwardLink(linkRow, rowTypeName(linkRow), computed.expr.field);
+          const aggregateExpr = computed.expr;
+          const linkRows = readForwardLink(row, sourceType, aggregateExpr.link);
+          const fieldValues = readPresentFieldValues(linkRows, aggregateExpr.field) ?? linkRows.flatMap((linkRow) => {
+            const value = readForwardLink(linkRow, rowTypeName(linkRow), aggregateExpr.field);
             return value.length > 0 ? value : [];
           });
-          return evaluateRuntimeAggregate(computed.expr.functionName, fieldValues);
+          return evaluateRuntimeAggregate(aggregateExpr.functionName, fieldValues);
+        }
+        // Shape-level computed (e.g. `unique := count(...)` declared in
+        // the outer SELECT shape) referenced from within a FILTER. The
+        // computed value isn't on the row yet — evaluate the shape
+        // element's expression against the current row on demand.
+        const shapeComputed = statement.shape.find((element) =>
+          element.kind === "computed" && element.name === expr.field);
+        if (shapeComputed && shapeComputed.kind === "computed"
+          && !shapeComputedInProgress.has(expr.field)) {
+          // Bind the subject type name so the shape expression's
+          // `Item.tag_set1` resolves to *this* row's tag_set1.
+          const innerBindings = new Map(env.bindings);
+          innerBindings.set(statement.typeName, [row]);
+          const shortType = statement.typeName.includes("::")
+            ? statement.typeName.split("::").at(-1)
+            : undefined;
+          if (shortType) innerBindings.set(shortType, [row]);
+          const innerEnv = withInnerRow(env, row, rowTypeName(row, env.rowType), { bindings: innerBindings });
+          shapeComputedInProgress.add(expr.field);
+          try {
+            return evalComputed(shapeComputed.expr, innerEnv, Boolean(shapeComputed.multi));
+          } finally {
+            shapeComputedInProgress.delete(expr.field);
+          }
         }
         return null;
       };
       if (Array.isArray(base)) {
+        if (base.length === 1 && isRecordRow(base[0])) {
+          const sourceType = rowTypeName(base[0], env.rowType);
+          const field = findFieldDef(schema, sourceType, expr.field);
+          const link = findRuntimeLinkDef(schema, sourceType, expr.field);
+          if (!field?.multi && !link?.link.multi) {
+            return read(base[0]);
+          }
+        }
         return base.flatMap((item) => {
           const value = read(item);
           return Array.isArray(value) ? value : value === null || value === undefined ? [] : [value];
@@ -4779,6 +5176,37 @@ const tryEvaluateParsedRuntimeSelect = (
       }
       return false;
     }
+    const exprIsArrayField = (value: FreeObjectExpr): boolean => {
+      if (value.kind !== "field_access") return false;
+      const base = evalFreeExpr(value.expr, env);
+      const baseRow = Array.isArray(base) ? base[0] : base;
+      const sourceType = isRecordRow(baseRow) ? rowTypeName(baseRow, env.rowType) : env.rowType;
+      return Boolean(sourceType && findFieldDef(schema, sourceType, value.field)?.collection?.kind === "array");
+    };
+    const exprProducesSet = (value: FreeObjectExpr): boolean => {
+      if (value.kind === "tuple" || value.kind === "array_literal_expr" || value.kind === "set_expr" || value.kind === "for_expr" || value.kind === "backlink_path") return true;
+      if (value.kind === "index_access" || value.kind === "slice_access") return exprProducesSet(value.expr);
+      if (value.kind !== "field_access") return false;
+      const base = evalFreeExpr(value.expr, env);
+      const baseRow = Array.isArray(base) ? base[0] : base;
+      const sourceType = isRecordRow(baseRow) ? rowTypeName(baseRow, env.rowType) : env.rowType;
+      if (!sourceType) return false;
+      const field = findFieldDef(schema, sourceType, value.field);
+      if (field?.multi) return true;
+      const link = findRuntimeLinkDef(schema, sourceType, value.field);
+      return Boolean(link?.link.multi);
+    };
+    if (expr.kind === "array_literal_expr") {
+      const evaluated = expr.values.map((value) => ({ expr: value, value: evalFreeExpr(value, env) }));
+      const sets = evaluated.map((entry) => Array.isArray(entry.value) && exprProducesSet(entry.expr) && !exprIsArrayField(entry.expr) ? entry.value : [entry.value]);
+      if (!sets.some((items) => items.length !== 1)) {
+        return evaluated.map((entry) => entry.value);
+      }
+      return sets.reduce<unknown[][]>(
+        (rows, items) => rows.flatMap((row) => items.map((item) => [...row, item])),
+        [[]],
+      );
+    }
     if (expr.kind === "compare") {
       const left = evalFreeExpr(expr.left, env);
       const right = evalFreeExpr(expr.right, env);
@@ -4820,11 +5248,57 @@ const tryEvaluateParsedRuntimeSelect = (
         const comparableRight = comparable(rightItem);
         if (expr.op === "=") return comparableLeft === comparableRight;
         if (expr.op === "!=") return comparableLeft !== comparableRight;
+        // String operands compare lexicographically; everything else
+        // promotes to Number (matches EdgeQL int/float ordering).
+        if (typeof leftItem === "string" && typeof rightItem === "string") {
+          const cmp = leftItem.localeCompare(rightItem);
+          if (expr.op === ">") return cmp > 0;
+          if (expr.op === ">=") return cmp >= 0;
+          if (expr.op === "<=") return cmp <= 0;
+          return cmp < 0;
+        }
         if (expr.op === ">") return Number(leftItem) > Number(rightItem);
         if (expr.op === ">=") return Number(leftItem) >= Number(rightItem);
         if (expr.op === "<=") return Number(leftItem) <= Number(rightItem);
         return Number(leftItem) < Number(rightItem);
       }));
+    }
+    if (expr.kind === "in_expr") {
+      // `x IN set_y` / `x NOT IN set_y`: true iff `x` equals any element of
+      // the set produced by `right`. EdgeQL set semantics: when `left` is
+      // multi, emit one boolean per element so the surrounding filter
+      // expands to per-element matches.
+      //
+      // Multi-property fields are stored as JSON-text in the row and
+      // field_access returns them raw to keep array/tuple equality working.
+      // For the RHS of `IN`, that text needs to be parsed into the actual
+      // set of elements; otherwise `'plastic' IN .tag_set1` checks against
+      // the literal string `'["plastic","round"]'`.
+      const materializeMultiSet = (e: FreeObjectExpr, value: unknown): unknown => {
+        if (typeof value !== "string") return value;
+        if (e.kind !== "field_access") return value;
+        const row = env.row as ParsedRuntimeRow | undefined;
+        const sourceType = row ? rowTypeName(row, env.rowType) : env.rowType;
+        if (!sourceType) return value;
+        const field = findFieldDef(schema, sourceType, e.field);
+        if (!field?.multi) return value;
+        return materializeFieldValue(schema, sourceType, e.field, value);
+      };
+      const left = evalFreeExpr(expr.left, env);
+      const right = materializeMultiSet(expr.right, evalFreeExpr(expr.right, env));
+      const rightItems = Array.isArray(right) ? right : right === null || right === undefined ? [] : [right];
+      const comparable = (value: unknown): unknown => isRecordRow(value) && typeof value.id === "string" ? value.id : value;
+      const leftIsSet = Array.isArray(left);
+      const leftItems = leftIsSet ? left : [left];
+      const checkOne = (item: unknown): boolean => {
+        const target = comparable(item);
+        const has = rightItems.some((candidate) => comparable(candidate) === target);
+        return expr.op === "not_in" ? !has : has;
+      };
+      if (!leftIsSet) {
+        return checkOne(left);
+      }
+      return leftItems.map(checkOne);
     }
     if (expr.kind === "and") {
       return Boolean(evalFreeExpr(expr.left, env)) && Boolean(evalFreeExpr(expr.right, env));
@@ -4915,31 +5389,87 @@ const tryEvaluateParsedRuntimeSelect = (
       return results;
     }
     if (expr.kind === "index_access") {
+      const rawIndex = expr.indexExpr ? evalFreeExpr(expr.indexExpr, env) : expr.index;
+      const indexes = Array.isArray(rawIndex) ? rawIndex.filter((item): item is number => Number.isInteger(item)) : Number.isInteger(rawIndex) ? [rawIndex as number] : [];
+      const firstIndex = indexes[0] ?? 0;
       if (expr.expr.kind === "binding_ref") {
         const bound = env.bindings.get(expr.expr.name);
         const tupleValue = bound?.length === 1 && Object.prototype.hasOwnProperty.call(bound[0]!, "__scalar")
           ? bound[0]!.__scalar
           : undefined;
         if (Array.isArray(tupleValue)) {
-          return tupleValue[expr.index] ?? null;
+          return tupleValue[firstIndex] ?? null;
         }
       }
       const base = evalFreeExpr(expr.expr, env);
-      const readIndex = (item: unknown): unknown => {
+      const readIndex = (item: unknown, index = firstIndex): unknown => {
         if (typeof item === "string") {
-          return item[expr.index] ?? null;
+          return item[index] ?? null;
         }
         if (Array.isArray(item)) {
-          return item[expr.index] ?? null;
+          return item[index] ?? null;
         }
         return null;
       };
+      if (indexes.length > 1) {
+        const values = Array.isArray(base) && !exprIsArrayField(expr.expr)
+          ? base.flatMap((item) => indexes.map((index) => readIndex(item, index)).filter((value) => value !== null && value !== undefined))
+          : indexes.map((index) => readIndex(base, index)).filter((value) => value !== null && value !== undefined);
+        return values.sort((a, b) => String(a).localeCompare(String(b)));
+      }
+      // A field_access into a shape-defined tuple computed (`.n1.0` where
+      // `n1 := (a, b)`) returns the tuple as a single array — index_access
+      // should yield the element at `index`, not strindex into each
+      // sub-string. Detect that pattern via the shape declaration.
+      const computedExprIsTuple = (e: ComputedExpr | FreeObjectExpr): boolean => {
+        if (e.kind === "tuple") return true;
+        if (e.kind === "select_expr") return computedExprIsTuple(e.expr);
+        return false;
+      };
+      if (expr.expr.kind === "field_access"
+        && expr.expr.expr.kind === "current_item"
+        && !expr.expr.field.startsWith("@")) {
+        const shapeElem = statement.shape.find((element) =>
+          element.kind === "computed" && element.name === (expr.expr as { field: string }).field);
+        if (shapeElem && shapeElem.kind === "computed" && computedExprIsTuple(shapeElem.expr)) {
+          return Array.isArray(base) ? (base[firstIndex] ?? null) : null;
+        }
+      }
       if (Array.isArray(base)) {
+        if (base.length === 0 && (expr.expr.kind === "array_literal_expr" || expr.expr.kind === "tuple")) return [];
+        if (expr.expr.kind === "tuple" && !(base.length > 0 && Array.isArray(base[0]))) {
+          return readIndex(base);
+        }
+        if (exprIsArrayField(expr.expr) || expr.expr.kind === "array_literal_expr" && !(base.length > 0 && Array.isArray(base[0]))) {
+          return readIndex(base);
+        }
         return base
           .map((item) => readIndex(item))
-          .filter((value) => value !== null && value !== undefined);
+          .filter((value) => value !== null && value !== undefined)
+          .sort((a, b) => String(a).localeCompare(String(b)));
       }
       return readIndex(base);
+    }
+    if (expr.kind === "slice_access") {
+      const base = evalFreeExpr(expr.expr, env);
+      const rawStart = expr.startExpr ? evalFreeExpr(expr.startExpr, env) : expr.start;
+      const rawEnd = expr.endExpr ? evalFreeExpr(expr.endExpr, env) : expr.end;
+      const starts = Array.isArray(rawStart) ? rawStart.filter((item): item is number => Number.isInteger(item)) : rawStart === undefined ? [undefined] : Number.isInteger(rawStart) ? [rawStart as number] : [undefined];
+      const end = Array.isArray(rawEnd) ? rawEnd.find((item): item is number => Number.isInteger(item)) : Number.isInteger(rawEnd) ? rawEnd as number : undefined;
+      const sliceOne = (item: unknown, start: number | undefined): unknown => Array.isArray(item) || typeof item === "string" ? item.slice(start, end) : null;
+      const compareSlices = (a: unknown, b: unknown): number => {
+        const alen = Array.isArray(a) || typeof a === "string" ? a.length : 0;
+        const blen = Array.isArray(b) || typeof b === "string" ? b.length : 0;
+        if (alen !== blen) return alen - blen;
+        return JSON.stringify(a).localeCompare(JSON.stringify(b));
+      };
+      if (Array.isArray(base) && !exprIsArrayField(expr.expr)) {
+        return base.flatMap((item) => starts.map((start) => sliceOne(item, start)).filter((value) => value !== null))
+          .sort(compareSlices);
+      }
+      const values = starts.map((start) => sliceOne(base, start)).filter((value) => value !== null);
+      if (starts.length > 1) return values.sort(compareSlices);
+      return values[0] ?? null;
     }
     if (expr.kind === "coalesce") {
       const left = evalFreeExpr(expr.left, env);
@@ -5000,10 +5530,26 @@ const tryEvaluateParsedRuntimeSelect = (
         if (expr.filter) {
           const iterationPath = extractIterationPath(expr.expr) ?? extractCurrentItemIterationPath(expr.expr, subqueryEnv);
           const iterationSource = expr.expr;
+          // EdgeQL `SELECT <binding> FILTER ...` rebinds the iteration name to
+          // the current element inside the FILTER (and ORDER BY) — without
+          // this, `(SELECT I2 FILTER I2 != Item)` evaluates I2 as the full
+          // bound set even when iterating a single I2.
+          const iterationBindingName = expr.expr.kind === "binding_ref" ? expr.expr.name : undefined;
           items = items.filter((item) => {
             const bindings = new Map(subqueryEnv.bindings);
-            if (expr.alias && isRecordRow(item)) {
-              bindings.set(expr.alias, [item]);
+            if (expr.alias) {
+              // EdgeQL `SELECT _ := <set>` binds `_` to *each* element of
+              // the iterated set; for scalar elements the binding shows up
+              // in the filter expression's evaluator as a singleton-array
+              // binding ref.
+              if (isRecordRow(item)) {
+                bindings.set(expr.alias, [item]);
+              } else {
+                bindings.set(expr.alias, [{ __scalar: item } as ParsedRuntimeRow]);
+              }
+            }
+            if (iterationBindingName !== undefined && isRecordRow(item)) {
+              bindings.set(iterationBindingName, [item]);
             }
             const itemEnv = isRecordRow(item)
               ? withInnerRow(subqueryEnv, item, rowTypeName(item, subqueryEnv.rowType), { bindings, iterationPath, iterationSource })
@@ -5013,11 +5559,39 @@ const tryEvaluateParsedRuntimeSelect = (
           });
         }
         if (expr.orderBy) {
-          items.sort((a, b) => compareByExprOrder(expr.orderBy!, a, b, subqueryEnv, expr.alias));
+          // EdgeQL `SELECT X ORDER BY X` (and the equivalent `array_agg(X
+          // ORDER BY X)` form) sorts by the iteration variable itself. When
+          // the orderBy expression is structurally identical to the
+          // iteration source, compare items directly — the generic
+          // `compareByExprOrder` would otherwise re-evaluate the source on
+          // every item and return the same set, leaving items unordered.
+          const orderBy = expr.orderBy;
+          if (freeExprStructurallyEqual(orderBy.expr, expr.expr)) {
+            const direction = orderBy.direction === "desc" ? -1 : 1;
+            items.sort((a, b) => {
+              const cmp = typeof a === "number" && typeof b === "number"
+                ? a === b ? 0 : a < b ? -1 : 1
+                : String(a ?? "").localeCompare(String(b ?? ""));
+              return cmp * direction;
+            });
+          } else {
+            items.sort((a, b) => compareByExprOrder(orderBy, a, b, subqueryEnv, expr.alias));
+          }
         }
         const offset = expr.offset ?? 0;
         items = expr.limit === undefined ? items.slice(offset) : items.slice(offset, offset + expr.limit);
-        if (expr.expr.kind === "binding_ref" && items.every(isRecordRow)) {
+        // FOR-loop iteration counting needs `{}` placeholder rows when the
+        // binding is being enumerated for cardinality (e.g. inside a body
+        // that doesn't read the row's columns). When a downstream
+        // expression *does* read a column on the result (`(SELECT I2 FILTER
+        // …).tag_set1`), we need to keep the original row data. Detect the
+        // column-access case via the filter expression — if the filter
+        // produced cross-row references (which our `iterationBindingName`
+        // bound to the iterated row), preserve the data; otherwise drop to
+        // empty placeholders so legacy expr_objects-style FOR/array_agg
+        // tests stay happy.
+        if (expr.expr.kind === "binding_ref" && items.every(isRecordRow)
+          && !expr.filter) {
           value = items.map(() => ({}));
           return value;
         }
@@ -5202,6 +5776,7 @@ const tryEvaluateParsedRuntimeSelect = (
         value = items;
       }
       if (multi) return Array.isArray(value) ? value : [value];
+      if (expr.expr.kind === "array_literal_expr" || expr.expr.kind === "slice_access") return value;
       if (!Array.isArray(value)) return value;
       const innerProducesSet = expr.clauses?.limit === undefined && innerExprProducesMultiSet(expr.expr);
       if (innerProducesSet) return value;
@@ -5222,7 +5797,7 @@ const tryEvaluateParsedRuntimeSelect = (
         return null;
       }
       if (Object.prototype.hasOwnProperty.call(env.row, expr.field)) {
-        return env.row[expr.field] ?? null;
+        return materializeFieldValue(schema, rowTypeName(env.row, env.rowType), expr.field, env.row[expr.field]);
       }
       const rows = readForwardLink(env.row, rowTypeName(env.row, env.rowType), expr.field);
       return multi ? rows : rows.length === 1 ? rows[0] : rows;
@@ -5277,8 +5852,8 @@ const tryEvaluateParsedRuntimeSelect = (
     }
     for (const element of shape) {
       if (element.kind === "field") {
-        let value = row[element.name] ?? null;
         const fieldDef = fieldByName.get(element.name);
+        let value = materializeFieldValue(schema, qualifiedFieldType, element.name, row[element.name] ?? null);
         // Multi-cardinality scalar properties (`multi tags: str`) are stored
         // as JSON-encoded strings; decode them into arrays for output.
         if (fieldDef?.multi && typeof value === "string") {
@@ -5290,6 +5865,71 @@ const tryEvaluateParsedRuntimeSelect = (
           }
         } else if (fieldDef?.multi && value === null) {
           value = [];
+        }
+        // Shape modifiers on multi-property scalars:
+        //   tags FILTER tags > 'p' ORDER BY tags DESC LIMIT 1 OFFSET 0
+        // applies element-wise on the decoded JS array. The `where` clause
+        // and ordering reference the per-element value as a path through
+        // the subject (`Item.tag_set1`), so we expose the element as
+        // `__current__` and as the subject's tail field while evaluating.
+        if (fieldDef?.multi && Array.isArray(value)) {
+          // Evaluate per-element. Inside the modifiers, `Item.tag_set1` /
+          // `.tag_set1` must refer to *the current element*, not the full
+          // multi-property set; we re-encode the field as a single-element
+          // JSON array so the materializer-driven readStoredField yields
+          // `[item]`, and clamp the iteration to that one element.
+          const subjectAlias = typeName.split("::").at(-1) ?? typeName;
+          const subjectBinding = typeName;
+          const elementEnv = { ...env, row, rowType: typeName } as ParsedRuntimeEnv;
+          const evalElement = (item: unknown, expr: FreeObjectExpr): unknown => {
+            const itemRow: ParsedRuntimeRow = {
+              ...row,
+              [element.name]: JSON.stringify([item]),
+              __scalar: item,
+            } as ParsedRuntimeRow;
+            const itemBindings = new Map(elementEnv.bindings);
+            itemBindings.set(subjectAlias, [itemRow]);
+            if (subjectBinding !== subjectAlias) {
+              itemBindings.set(subjectBinding, [itemRow]);
+            }
+            const itemEnv: ParsedRuntimeEnv = { ...elementEnv, row: itemRow, bindings: itemBindings };
+            return evalFreeExpr(expr, itemEnv);
+          };
+          if (element.where) {
+            const whereExpr = element.where;
+            value = (value as unknown[]).filter((item) => {
+              const result = evalElement(item, whereExpr);
+              if (Array.isArray(result)) return result.some(Boolean);
+              return Boolean(result);
+            });
+          }
+          if (element.orderBy && element.orderBy.length > 0) {
+            const orderClauses = element.orderBy;
+            value = [...(value as unknown[])].sort((a, b) => {
+              for (const clause of orderClauses) {
+                const orderExpr = clause.expr;
+                const av = orderExpr ? evalElement(a, orderExpr) : a;
+                const bv = orderExpr ? evalElement(b, orderExpr) : b;
+                const aScalar = Array.isArray(av) ? av[0] : av;
+                const bScalar = Array.isArray(bv) ? bv[0] : bv;
+                const direction = clause.direction === "desc" ? -1 : 1;
+                let cmp: number;
+                if (typeof aScalar === "number" && typeof bScalar === "number") {
+                  cmp = aScalar === bScalar ? 0 : aScalar < bScalar ? -1 : 1;
+                } else {
+                  cmp = String(aScalar ?? "").localeCompare(String(bScalar ?? ""));
+                }
+                if (cmp !== 0) return cmp * direction;
+              }
+              return 0;
+            });
+          }
+          if (element.offset !== undefined) {
+            value = (value as unknown[]).slice(element.offset);
+          }
+          if (element.limit !== undefined) {
+            value = (value as unknown[]).slice(0, element.limit);
+          }
         }
         out[element.name] = value;
       } else if (element.kind === "computed") {
@@ -5503,11 +6143,25 @@ const tryEvaluateParsedRuntimeSelect = (
       const values = filter.values.kind === "set_literal" ? filter.values.values : undefined;
       if (!values) return true;
       const target = filter.target.field;
-      const actualIn = target === "__type__.name"
+      let actualIn = target === "__type__.name"
         ? rowTypeName(row, typeName)
         : target.includes(".")
           ? resolveDottedFieldValue(row, target)
           : row[target];
+      // Multi-properties are stored as JSON-text; parse into the actual
+      // element set so the `Array.isArray` branch below applies.
+      if (!target.includes(".") && typeof actualIn === "string") {
+        const fieldDef = schema.getType(qualifyType(typeName))?.fields.find((f) => f.name === target);
+        if (fieldDef?.multi) {
+          actualIn = materializeFieldValue(schema, qualifyType(typeName), target, actualIn);
+        }
+      }
+      if (!target.includes(".") && actualIn === null) {
+        const fieldDef = schema.getType(qualifyType(typeName))?.fields.find((f) => f.name === target);
+        if (fieldDef?.multi) {
+          actualIn = [];
+        }
+      }
       // EdgeQL set semantics: an empty operand propagates as empty so the
       // surrounding AND/OR/NOT can short-circuit to "no match" for this row.
       if (Array.isArray(actualIn)) {
@@ -5519,11 +6173,38 @@ const tryEvaluateParsedRuntimeSelect = (
       const hasValue = values.includes(actualIn as ScalarValue);
       return filter.op === "not_in" ? !hasValue : hasValue;
     }
-    const actual = filter.target.field === "__type__.name"
+    let actual = filter.target.field === "__type__.name"
       ? rowTypeName(row, typeName)
       : filter.target.field.includes(".")
         ? resolveDottedFieldValue(row, filter.target.field)
         : row[filter.target.field];
+    // `.shape_computed > X` — the row doesn't carry the shape-level
+    // computed yet, so evaluate the outer SELECT's computed expression on
+    // demand. Matches the field_access shape-computed path in evalFreeExpr.
+    if ((actual === undefined || actual === null)
+      && filter.target.kind === "field"
+      && !filter.target.field.includes(".")
+      && filter.target.field !== "__type__.name") {
+      const targetField = filter.target.field;
+      const shapeComputed = statement.shape.find((element) =>
+        element.kind === "computed" && element.name === targetField);
+      if (shapeComputed && shapeComputed.kind === "computed"
+        && !shapeComputedInProgress.has(filter.target.field)) {
+        // Bind the subject type name to the current row so references like
+        // `Item.tag_set1` inside the computed body resolve to *this* row.
+        const innerBindings = new Map(env.bindings);
+        innerBindings.set(typeName, [row]);
+        const shortType = typeName.includes("::") ? typeName.split("::").at(-1) : undefined;
+        if (shortType) innerBindings.set(shortType, [row]);
+        const innerEnv = withInnerRow(env, row, typeName, { bindings: innerBindings });
+        shapeComputedInProgress.add(filter.target.field);
+        try {
+          actual = evalComputed(shapeComputed.expr, innerEnv, Boolean(shapeComputed.multi));
+        } finally {
+          shapeComputedInProgress.delete(filter.target.field);
+        }
+      }
+    }
     if (Array.isArray(expected)) {
       return filter.op === "=" ? expected.includes(actual as ScalarValue) : !expected.includes(actual as ScalarValue);
     }
@@ -6372,6 +7053,31 @@ const isSchemaIntrospectionSelect = (statement: Statement): boolean => {
     && (statement.withModule === "schema" || statement.typeName.startsWith("schema::"));
 };
 
+const selectHasSetDerivedComputedShape = (statement: Statement): boolean => {
+  const exprNeedsSetSemantics = (expr: FreeObjectExpr | ComputedExpr): boolean => {
+    if (expr.kind === "array_literal_expr" || expr.kind === "tuple" || expr.kind === "index_access" || expr.kind === "slice_access") return true;
+    if (expr.kind === "select_expr") return exprNeedsSetSemantics(expr.expr);
+    if (expr.kind === "function_call") {
+      return expr.call.args.some((arg) => arg.kind === "expr" && exprNeedsSetSemantics(arg.expr));
+    }
+    if (expr.kind === "field_access" || expr.kind === "select_expr_subquery" || expr.kind === "distinct" || expr.kind === "cast" || expr.kind === "exists" || expr.kind === "not" || expr.kind === "unary" || expr.kind === "shape_projection") {
+      return exprNeedsSetSemantics(expr.expr);
+    }
+    if (expr.kind === "set_expr") return expr.values.some(exprNeedsSetSemantics);
+    if (expr.kind === "compare" || expr.kind === "in_expr" || expr.kind === "math" || expr.kind === "logical" || expr.kind === "and" || expr.kind === "or" || expr.kind === "coalesce") {
+      return exprNeedsSetSemantics(expr.left) || exprNeedsSetSemantics(expr.right);
+    }
+    if (expr.kind === "if_else") return exprNeedsSetSemantics(expr.condition) || exprNeedsSetSemantics(expr.thenExpr) || exprNeedsSetSemantics(expr.elseExpr);
+    return false;
+  };
+  const shapeNeedsSetSemantics = (shape: ShapeElement[]): boolean => shape.some((element) => {
+    if (element.kind === "computed") return exprNeedsSetSemantics(element.expr);
+    if ((element.kind === "link" || element.kind === "backlink") && element.shape) return shapeNeedsSetSemantics(element.shape);
+    return false;
+  });
+  return statement.kind === "select" && shapeNeedsSetSemantics(statement.shape);
+};
+
 const schemaObjectTypeQueryNeedsRuntimeBypass = (query: string): boolean => {
   const tokens = tryTokenize(query);
   if (!tokens) return false;
@@ -6441,6 +7147,7 @@ export const executeQuery = (
       && compiledTrace.sql.loweringMode === "single_statement"
       && compiledTrace.result.kind === "select"
       && (compiledTrace.result.rows?.length ?? 0) > 0
+      && !selectHasSetDerivedComputedShape(compiledTrace.ast)
     ) {
       return compiledTrace.result;
     }
@@ -7975,6 +8682,16 @@ const evaluateSelectExprShapeEntry = (
   return current;
 };
 
+const freeExprHasCollectionDerivation = (expr: FreeObjectExpr): boolean => {
+  if (expr.kind === "array_literal_expr" || expr.kind === "tuple" || expr.kind === "index_access" || expr.kind === "slice_access" || expr.kind === "function_call") return true;
+  if (expr.kind === "field_access" || expr.kind === "select_expr_subquery" || expr.kind === "distinct" || expr.kind === "cast" || expr.kind === "exists" || expr.kind === "not" || expr.kind === "unary" || expr.kind === "shape_projection") return freeExprHasCollectionDerivation(expr.expr);
+  if (expr.kind === "set_expr") return expr.values.some(freeExprHasCollectionDerivation);
+  if (expr.kind === "compare" || expr.kind === "in_expr" || expr.kind === "math" || expr.kind === "logical" || expr.kind === "and" || expr.kind === "or" || expr.kind === "coalesce") return freeExprHasCollectionDerivation(expr.left) || freeExprHasCollectionDerivation(expr.right);
+  if (expr.kind === "if_else") return freeExprHasCollectionDerivation(expr.condition) || freeExprHasCollectionDerivation(expr.thenExpr) || freeExprHasCollectionDerivation(expr.elseExpr);
+  if (expr.kind === "concat") return expr.parts.some(freeExprHasCollectionDerivation);
+  return false;
+};
+
 const materializeSelectRow = (
   db: SQLiteDatabase,
   schema: SchemaSnapshot,
@@ -8072,7 +8789,8 @@ const materializeSelectRow = (
         }
       } else if (element.expr.kind === "select_expr") {
         const loweredAlias = computedValueAlias(element.pathId);
-        if (Object.prototype.hasOwnProperty.call(row, loweredAlias) && row[loweredAlias] !== null && row[loweredAlias] !== undefined) {
+        if (!freeExprHasCollectionDerivation(element.expr.expr)
+          && Object.prototype.hasOwnProperty.call(row, loweredAlias) && row[loweredAlias] !== null && row[loweredAlias] !== undefined) {
           const raw = row[loweredAlias];
           if (typeof raw === "string"
             && (raw === "true" || raw === "false" || raw === "null"
@@ -8154,7 +8872,7 @@ const materializeFieldValue = (
     return value;
   }
 
-  if (field.multi) {
+      if (field.multi) {
     if (value === null || value === undefined) {
       return [];
     }
@@ -8167,7 +8885,7 @@ const materializeFieldValue = (
       if (!Array.isArray(parsed)) {
         return [];
       }
-      return parsed.map((item) => coerceScalarForOutput(field.type, item));
+      return parsed.map((item) => coerceScalarForOutput(field.type, item)).sort((a, b) => String(a).localeCompare(String(b)));
     } catch {
       return [];
     }
