@@ -14,7 +14,7 @@
 // `expr_tuple_16` queries. Phases 2-3 add ObjectType, ScalarType, Pointer,
 // Tuple, Constraint, Annotation, Index, Function, etc. with their links.
 
-import type { AliasDef, AnnotationDef, ConstraintDef, FieldDef, FunctionDef, LinkDef, ScalarValue, TypeDef } from "../types.js";
+import type { AliasDef, AnnotationDef, ConstraintDef, FieldDef, FunctionDef, LinkDef, TypeDef } from "../types.js";
 import type { ScalarTypeDeclaration } from "./scalar.js";
 import type { SchemaSnapshot } from "./schema.js";
 import { qualifiedTypeName } from "./schema.js";

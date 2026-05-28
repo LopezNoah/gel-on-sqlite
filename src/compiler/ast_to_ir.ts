@@ -4,6 +4,7 @@ import type {
   Statement as EdgeQLStatement,
   ComputedExpr,
   FreeObjectExpr,
+  FunctionCallArgExpr,
   SelectStatement,
   SelectFreeStatement,
   InsertStatement,
@@ -17,6 +18,8 @@ import type {
   FilterExpr,
   FilterTarget,
   FilterValue,
+  OrderExpr,
+  OrderExprChain,
   PathStep as EdgeQLPathStep,
 } from "../edgeql/ast.js";
 import type {
@@ -995,6 +998,189 @@ const tryResolveSchemaAliasSet = (ctx: IRCompileContext, name: string): Set | un
   }
 };
 
+// Convert a function-call argument AST node into a plain FreeObjectExpr so it
+// can stand in for a parameter reference during UDF body inlining. Mirrors the
+// per-kind argument handling in the `function_call` IR-build case.
+const functionCallArgToFreeObjectExpr = (arg: FunctionCallArgExpr): FreeObjectExpr => {
+  if (arg && typeof arg === "object" && "kind" in arg) {
+    if (arg.kind === "expr") return arg.expr;
+    if (arg.kind === "literal") return { kind: "literal", value: arg.value };
+    if (arg.kind === "field_ref") return { kind: "binding_ref", name: arg.field };
+    if (arg.kind === "binding_ref") return { kind: "binding_ref", name: arg.name };
+    if (arg.kind === "function_call") return { kind: "function_call", call: arg.call };
+    if (arg.kind === "parameter") return { kind: "parameter", name: arg.name, castType: arg.castType } as FreeObjectExpr;
+    // set_literal / array_literal already match FreeObjectExpr kinds.
+    return arg as FreeObjectExpr;
+  }
+  return { kind: "literal", value: null };
+};
+
+// Substitute `binding_ref` nodes (by name) inside a FreeObjectExpr tree with
+// replacement expressions. Used to inline a UDF body at AST-build time:
+// `foo(x: int64) using (x * x)` called as `foo(N)` rewrites the parsed body
+// `binding_ref(x) * binding_ref(x)` to `<N> * <N>`. Returns the expr unchanged
+// when no parameter reference is present (or the kind isn't handled — in that
+// case the inliner skips body attachment and the call falls back to runtime).
+const substituteBindingRefsInFreeObjectExpr = (
+  expr: FreeObjectExpr,
+  substitutions: Map<string, FreeObjectExpr>,
+): FreeObjectExpr => {
+  const rec = (e: FreeObjectExpr): FreeObjectExpr => substituteBindingRefsInFreeObjectExpr(e, substitutions);
+  switch (expr.kind) {
+    case "binding_ref": {
+      const replacement = substitutions.get(expr.name);
+      return replacement ?? expr;
+    }
+    case "literal":
+    case "current_item":
+    case "enum_path":
+    case "backlink_path":
+      return expr;
+    case "set_expr":
+    case "tuple":
+    case "array_literal_expr":
+      return { ...expr, values: expr.values.map(rec) };
+    case "distinct":
+    case "cast":
+    case "exists":
+    case "not":
+    case "unary":
+    case "shape_projection":
+    case "field_access":
+    case "index_access":
+    case "slice_access":
+      return { ...expr, expr: rec(expr.expr) } as FreeObjectExpr;
+    case "compare":
+    case "in_expr":
+    case "math":
+    case "logical":
+    case "and":
+    case "or":
+    case "coalesce":
+      return { ...expr, left: rec(expr.left), right: rec(expr.right) } as FreeObjectExpr;
+    case "if_else":
+      return { ...expr, thenExpr: rec(expr.thenExpr), condition: rec(expr.condition), elseExpr: rec(expr.elseExpr) };
+    case "function_call":
+      return {
+        ...expr,
+        call: {
+          ...expr.call,
+          args: expr.call.args.map((arg) => {
+            if (!arg || typeof arg !== "object" || !("kind" in arg)) return arg;
+            if (arg.kind === "expr") {
+              return { ...arg, expr: rec(arg.expr) };
+            }
+            // The body AST can hold a parameter reference directly as a
+            // binding_ref-shaped FunctionCallArgExpr (not wrapped in `expr`).
+            // Substitute by name so nested `inner(x)` calls inside a UDF
+            // body pick up the inlined parameter binding.
+            if (arg.kind === "binding_ref" && substitutions.has(arg.name)) {
+              const replacement = substitutions.get(arg.name)!;
+              if (replacement.kind === "binding_ref") return { kind: "binding_ref", name: replacement.name };
+              if (replacement.kind === "literal") return { kind: "literal", value: replacement.value };
+              if (replacement.kind === "function_call") return { kind: "function_call", call: replacement.call };
+              return { kind: "expr", expr: replacement };
+            }
+            if (arg.kind === "function_call") {
+              const inner = rec({ kind: "function_call", call: arg.call });
+              if (inner.kind === "function_call") return { kind: "function_call", call: inner.call };
+              return { kind: "expr", expr: inner };
+            }
+            return arg;
+          }),
+        },
+      };
+    case "for_expr":
+      return { ...expr, iterator: rec(expr.iterator), body: rec(expr.body) };
+    default:
+      return expr;
+  }
+};
+
+// Unwrap nested `select_expr` / `select_expr_subquery` wrappers around a body
+// expression. UDF bodies parse as `select_expr { expr: <body> }`; the wrapper
+// has no effect on the value and gets in the way of inlining.
+const unwrapTrivialSelectWrapper = (expr: FreeObjectExpr): FreeObjectExpr | undefined => {
+  let cursor: FreeObjectExpr = expr;
+  while (true) {
+    if (cursor.kind === "select_expr_subquery") {
+      cursor = cursor.expr;
+      continue;
+    }
+    return cursor;
+  }
+};
+
+// Attempt to build an inlined-body Set for a user-defined function call. The
+// body becomes the SQL compiler's expression to lower, with parameters
+// substituted by the call's argument expressions. Returns undefined when:
+//   - the function isn't a user-defined expr-body UDF in the current schema,
+//   - more than one overload matches (we don't have type info at AST→IR time
+//     to disambiguate; let the runtime path handle it), or
+//   - the body uses AST kinds the substitution walker doesn't cover.
+const tryBuildInlinedUDFBody = (
+  callName: string,
+  args: FunctionCallArgExpr[],
+  ctx: IRCompileContext,
+): Set | undefined => {
+  if (!ctx.schema) return undefined;
+  const dividerIdx = callName.lastIndexOf("::");
+  const moduleName = dividerIdx >= 0 ? callName.slice(0, dividerIdx) : ctx.module;
+  const shortName = dividerIdx >= 0 ? callName.slice(dividerIdx + 2) : callName;
+  // Skip well-known stdlib modules — those are handled by lowerStdlibFunctionSql.
+  if (moduleName === "std" || moduleName === "math" || moduleName === "cal") return undefined;
+  const matches = ctx.schema.listFunctions().filter((fn) =>
+    fn.module === moduleName && fn.name === shortName,
+  );
+  if (matches.length !== 1) return undefined;
+  const fn = matches[0];
+  if (fn.body.kind !== "query") return undefined;
+  // Only inline when the call's arity exactly fills the parameter list, so
+  // each parameter gets a substitution (no defaults / optional gaps to fill).
+  if (fn.params.length !== args.length) return undefined;
+  if (fn.params.some((p) => p.variadic)) return undefined;
+  let parsed: EdgeQLStatement;
+  try {
+    parsed = parseEdgeQL(fn.body.query);
+  } catch {
+    return undefined;
+  }
+  if (parsed.kind !== "select_expr") return undefined;
+  const bodyExpr = unwrapTrivialSelectWrapper(parsed.expr);
+  if (!bodyExpr) return undefined;
+  // Compile each call argument to IR exactly once and bind it to a fresh
+  // name in a child scope. Replacing param refs with `binding_ref(unique)`
+  // means every occurrence in the body resolves (via resolveBinding) to
+  // the SAME Set object — which is the signal the SQL co-iteration pass
+  // uses to recognize "all `x` references share a source". Without this,
+  // `foo(x: int64) using (x*x)` called with `{1,2,3}` would compile two
+  // independent union IR nodes for the two `x` references and produce a
+  // Cartesian product (9 rows) instead of co-iteration (3 rows).
+  const inlineCtx = childScope(ctx);
+  const substitutions = new Map<string, FreeObjectExpr>();
+  for (let i = 0; i < fn.params.length; i += 1) {
+    const param = fn.params[i];
+    const argExpr = functionCallArgToFreeObjectExpr(args[i]);
+    let argIR: Set;
+    try {
+      argIR = compileFreeObjectExpr(argExpr, ctx);
+    } catch {
+      return undefined;
+    }
+    const uniqueName = `__udf_inline__${shortName}__${param.name}__${inlineCallCounter++}`;
+    bindValue(inlineCtx, uniqueName, argIR);
+    substitutions.set(param.name, { kind: "binding_ref", name: uniqueName });
+  }
+  const substituted = substituteBindingRefsInFreeObjectExpr(bodyExpr, substitutions);
+  try {
+    return compileFreeObjectExpr(substituted, inlineCtx);
+  } catch {
+    return undefined;
+  }
+};
+
+let inlineCallCounter = 0;
+
 const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompileContext): Set => {
   const resolveHeadSet = (name: string): Set => {
     const bound = resolveBinding(ctx, name);
@@ -1077,9 +1263,17 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
     }
 
     case "select": {
-      const aliasSet = tryResolveSchemaAliasSet(ctx, expr.typeName);
-      const typeref = aliasSet ? aliasSet.typeref : resolveTypeRef(ctx, expr.typeName);
-      const root = aliasSet ?? setFromTypeRoot(typeref);
+      const scoped = withBindings(ctx, expr.clauses._withBindings);
+      const bound = resolveBinding(scoped, expr.typeName);
+      const aliasSet = bound ? undefined : tryResolveSchemaAliasSet(scoped, expr.typeName);
+      const typeref = bound?.typeref ?? aliasSet?.typeref ?? resolveTypeRef(scoped, expr.typeName);
+      let root = bound ?? aliasSet ?? setFromTypeRoot(typeref);
+      if (expr.shape.length > 0) {
+        root = {
+          ...root,
+          shape: compileShape(root, expr.shape, scoped),
+        };
+      }
       const clauses = expr.clauses;
       const hasClauses = clauses && (
         clauses.filter !== undefined
@@ -1090,23 +1284,14 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
       if (!hasClauses) {
         return root;
       }
-      const where = clauses?.filter ? compileFilterExpr(clauses.filter, root, ctx) : undefined;
+      const where = clauses?.filter ? compileFilterExpr(clauses.filter, root, scoped) : undefined;
       return {
         kind: "set",
         expr: {
           kind: "select_expr",
           result: root,
           where,
-          orderBy: clauses?.orderBy
-            ? [{
-              kind: "sort_expr",
-              path: clauses.orderBy.expr
-                ? compileFreeObjectExpr(clauses.orderBy.expr, ctx)
-                : compileFreeObjectExpr({ kind: "field_access", expr: { kind: "binding_ref", name: "__current__" }, field: clauses.orderBy.field, optional: false }, ctx),
-              direction: clauses.orderBy.direction,
-              nonesOrder: "last",
-            }]
-            : undefined,
+          orderBy: clauses?.orderBy ? compileSelectOrderExprChain(clauses.orderBy, scoped) : undefined,
           offset: clauses?.offset === undefined ? undefined : literalToSet(clauses.offset),
           limit: clauses?.limit === undefined ? undefined : literalToSet(clauses.limit),
           implicitWrapper: false,
@@ -1125,16 +1310,22 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
     }
 
     case "select_expr_subquery": {
-      const inner = compileFreeObjectExpr(expr.expr, ctx);
+      const scoped = withBindings(ctx, expr.clauses?._withBindings);
+      const inner = compileFreeObjectExpr(expr.expr, scoped);
+      // `SELECT alias := X ORDER BY alias` binds `alias` to `X` for the
+      // duration of the SELECT's modifiers; the FILTER / ORDER BY clauses
+      // need to resolve that name back to the inner expression.
+      const clauseCtx = expr.alias ? childScope(scoped) : scoped;
+      if (expr.alias) {
+        bindValue(clauseCtx, expr.alias, inner);
+      }
       return {
         kind: "set",
         expr: {
           kind: "select_expr",
           result: inner,
-          where: expr.filter ? compileFreeObjectExpr(expr.filter, ctx) : undefined,
-          orderBy: expr.orderBy
-            ? [{ kind: "sort_expr", path: compileFreeObjectExpr(expr.orderBy.expr, ctx), direction: expr.orderBy.direction, nonesOrder: "last" }]
-            : undefined,
+          where: expr.filter ? compileFreeObjectExpr(expr.filter, clauseCtx) : undefined,
+          orderBy: expr.orderBy ? compileOrderExprChain(expr.orderBy, clauseCtx) : undefined,
           offset: expr.offset === undefined ? undefined : literalToSet(expr.offset),
           limit: expr.limit === undefined ? undefined : literalToSet(expr.limit),
           implicitWrapper: false,
@@ -1641,6 +1832,12 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
         }
         return literalToSet(null);
       });
+      // Inline expr-body UDFs at AST→IR time so the SQL compiler can lower
+      // the call as if the body were written inline (substituting parameter
+      // references with the actual argument expressions). Falls back to a
+      // body-less function_call IR when the function isn't a known UDF or
+      // the body shape isn't supported — the runtime path picks that up.
+      const inlinedBody = tryBuildInlinedUDFBody(expr.call.name, expr.call.args, ctx);
       return {
         kind: "set",
         expr: {
@@ -1650,6 +1847,7 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
           volatility: "stable",
           typeref: unknownTypeRef("std::anytype"),
           preservesUpperCardinality: false,
+          body: inlinedBody,
           extras: {
             backendName: expr.call.name,
             funcPolymorphic: false,
@@ -1969,14 +2167,27 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
 
     case "array_literal_expr": {
       const values = expr.values.map((value) => compileFreeObjectExpr(value, ctx));
+      const elementType = values[0]?.typeref ?? { id: "std::anytype", nameHint: "anytype", module: "std", isView: false, isScalar: false, isAbstract: false } as TypeRef;
+      const arrayTypeRef: TypeRef = {
+        kind: "type_ref",
+        id: `array<${elementType.id}>`,
+        nameHint: `array<${elementType.nameHint}>`,
+        module: "std",
+        isView: false,
+        isScalar: false,
+        isAbstract: false,
+        collection: "array",
+        subtypes: [elementType],
+      };
       return {
         kind: "set",
         expr: {
-          kind: "array_constructor",
-          args: values,
-        } as never,
+          kind: "array",
+          elements: values,
+          typeref: arrayTypeRef,
+        },
         pathId: defaultPathId("array_literal"),
-        typeref: values[0]?.typeref ?? { id: "array", name: "array", isScalar: false },
+        typeref: arrayTypeRef,
         shape: [],
         isBinding: false,
         isMaterializedRef: false,
@@ -1993,14 +2204,39 @@ const compileOrderBy = (statement: Extract<EdgeQLStatement, { kind: "select_expr
   if (!statement.orderBy) {
     return undefined;
   }
-  return [
-    {
+  return compileOrderExprChain(statement.orderBy, ctx);
+};
+
+const compileOrderExprChain = (orderBy: OrderExprChain, ctx: IRCompileContext): SortExpr[] => {
+  const out: SortExpr[] = [];
+  let cursor: OrderExprChain | undefined = orderBy;
+  while (cursor) {
+    out.push({
       kind: "sort_expr",
-      path: compileFreeObjectExpr(statement.orderBy.expr, ctx),
-      direction: statement.orderBy.direction,
+      path: compileFreeObjectExpr(cursor.expr, ctx),
+      direction: cursor.direction,
       nonesOrder: "last",
-    },
-  ];
+    });
+    cursor = cursor.then;
+  }
+  return out;
+};
+
+const compileSelectOrderExprChain = (orderBy: OrderExpr, ctx: IRCompileContext): SortExpr[] => {
+  const out: SortExpr[] = [];
+  let cursor: OrderExpr | undefined = orderBy;
+  while (cursor) {
+    out.push({
+      kind: "sort_expr",
+      path: cursor.expr
+        ? compileFreeObjectExpr(cursor.expr, ctx)
+        : compileFreeObjectExpr({ kind: "field_access", expr: { kind: "binding_ref", name: "__current__" }, field: cursor.field, optional: false }, ctx),
+      direction: cursor.direction,
+      nonesOrder: cursor.nullsPosition ?? "last",
+    });
+    cursor = cursor.then;
+  }
+  return out;
 };
 
 const statementBase = (ctx: IRCompileContext) => ({

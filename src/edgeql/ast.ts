@@ -163,7 +163,7 @@ export interface ArrayLiteralValue {
 }
 
 export type TupleLiteralElementValue = ScalarValue | TupleLiteralElementArray | TupleLiteralElementObject;
-export interface TupleLiteralElementArray extends Array<TupleLiteralElementValue> {}
+export type TupleLiteralElementArray = Array<TupleLiteralElementValue>;
 export interface TupleLiteralElementObject {
   [key: string]: TupleLiteralElementValue;
 }
@@ -433,6 +433,12 @@ export type FreeObjectExpr =
   | {
       kind: "set_expr";
       values: FreeObjectExpr[];
+    }
+  | {
+      kind: "set_op";
+      op: "intersect" | "except";
+      left: FreeObjectExpr;
+      right: FreeObjectExpr;
     }
   | {
       kind: "distinct";
