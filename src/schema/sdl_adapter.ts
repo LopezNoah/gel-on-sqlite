@@ -1270,6 +1270,15 @@ const parseComputedLinkExpr = (text: string): Extract<ComputedDef, { kind: "link
     };
   }
 
+  const selectBacklinkMatch = /^select\s+\.<([A-Za-z_][A-Za-z0-9_]*)(?:\[\s*is\s+([A-Za-z_][A-Za-z0-9_:]*)\s*\])?(?:\s+limit\s+\d+)?$/i.exec(trimmed);
+  if (selectBacklinkMatch) {
+    return {
+      kind: "backlink",
+      link: selectBacklinkMatch[1],
+      sourceType: selectBacklinkMatch[2],
+    };
+  }
+
   const selectMatch = /^select\s+\.([A-Za-z_][A-Za-z0-9_]*)(?:\s+filter\s+\.([A-Za-z_][A-Za-z0-9_]*)\s*(=|!=|like|ilike)\s*(.+))?(?:\s+order\s+by\s+\.[A-Za-z_][A-Za-z0-9_]*)?(?:\s+limit\s+\d+)?$/i.exec(trimmed);
   if (selectMatch) {
     const expr: Extract<ComputedDef, { kind: "link" }>["expr"] = { kind: "link_ref", link: selectMatch[1] };
@@ -1692,7 +1701,7 @@ const convertPropertyMember = (
   }
 
   const multi = node.cardinality === "multi";
-  const required = multi ? false : node.required === true;
+  const required = node.required === true;
   const hasDefault = body?.default !== null && body?.default !== undefined;
 
   return {
@@ -1754,7 +1763,7 @@ const convertLinkMember = (
     kind: "link",
     name: qualifiedNameToString(node.name),
     target: normalizeLinkTargetType(moduleName, declaredType),
-    required: multi ? false : node.required === true,
+    required: node.required === true,
     multi,
     overloaded: node.overloaded,
     hasDefault: body?.default !== null && body?.default !== undefined,
@@ -1793,7 +1802,7 @@ const convertInferredLinkMember = (
     kind: "link",
     name: qualifiedNameToString(node.name),
     target: normalizeLinkTargetType(moduleName, declaredType),
-    required: multi ? false : node.required === true,
+    required: node.required === true,
     multi,
     overloaded: node.overloaded,
     hasDefault: body?.default !== null && body?.default !== undefined,
@@ -1867,7 +1876,7 @@ const convertDeclarationToMember = (
           throw err;
         }
       }
-      unsupported("Property or link declaration requires a declared type");
+      throw unsupported("Property or link declaration requires a declared type");
     }
     const scalarResolution = extractCollectionType(declaredType) ? { scalar: "json" as const } : scalarRegistry.resolve(declaredType, moduleName);
     const inferredLink =
@@ -1916,6 +1925,7 @@ const convertTypeDeclaration = (
   const annotations: AnnotationDef[] = [];
   const indexes: Array<{ expr: string }> = [];
   const members: TypeMember[] = [];
+  const typeConstraints: Array<{ name: string; exprText: string; fieldRefs: string[]; delegated?: boolean }> = [];
 
   for (const declaration of node.body?.declarations ?? []) {
     if (declaration.kind === "AnnotationAssignment") {
@@ -1931,6 +1941,30 @@ const convertTypeDeclaration = (
           throw err;
         }
       }
+      continue;
+    }
+
+    if (declaration.kind === "ConstraintDeclaration" && !declaration.abstract) {
+      // Type-level constraint: capture the constraint name and the `ON (...)`
+      // expression text. We extract `.X` field references so cardinality
+      // inference can check whether a filter pins all of them. Only minimal
+      // metadata is retained — the full expression isn't evaluated here.
+      const constraintName = normalizeConstraintName(typeModuleName, qualifiedNameToString(declaration.name));
+      const exprText = declaration.onExpr?.text ?? "";
+      const fieldRefs: string[] = [];
+      const seen = new Set<string>();
+      // Match `.X` references inside the expression (e.g. `.first`, `.last`).
+      // Reject link-property `@x` shapes; we only care about own-field refs.
+      const refRegex = /(?<![A-Za-z0-9_])\.([A-Za-z_][A-Za-z0-9_]*)/g;
+      let match: RegExpExecArray | null;
+      while ((match = refRegex.exec(exprText)) !== null) {
+        const name = match[1];
+        if (!seen.has(name)) {
+          seen.add(name);
+          fieldRefs.push(name);
+        }
+      }
+      typeConstraints.push({ name: constraintName, exprText, fieldRefs, delegated: declaration.delegated });
       continue;
     }
 
@@ -1959,6 +1993,7 @@ const convertTypeDeclaration = (
     members,
     triggers: [],
     accessPolicies: [],
+    typeConstraints,
   };
 };
 

@@ -469,6 +469,9 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
       mutationRewrites: mutationRewrites.length ? mutationRewrites : undefined,
       triggers: typeDecl.triggers.length ? [...typeDecl.triggers] : undefined,
       accessPolicies: typeDecl.accessPolicies.length ? [...typeDecl.accessPolicies] : undefined,
+      typeConstraints: (typeDecl.typeConstraints ?? []).length
+        ? (typeDecl.typeConstraints ?? []).map((c) => ({ ...c, fieldRefs: [...c.fieldRefs], delegated: c.delegated }))
+        : undefined,
     };
   });
 };

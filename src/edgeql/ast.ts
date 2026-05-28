@@ -118,6 +118,10 @@ export type FilterExpr =
             name: string;
           }
         | {
+            kind: "expr_set";
+            values: FreeObjectExpr[];
+          }
+        | {
             kind: "backlink_property_ref";
             link: string;
             sourceType?: string;
@@ -159,7 +163,7 @@ export interface ArrayLiteralValue {
 }
 
 export type TupleLiteralElementValue = ScalarValue | TupleLiteralElementArray | TupleLiteralElementObject;
-export interface TupleLiteralElementArray extends Array<TupleLiteralElementValue> {}
+export type TupleLiteralElementArray = Array<TupleLiteralElementValue>;
 export interface TupleLiteralElementObject {
   [key: string]: TupleLiteralElementValue;
 }
@@ -431,6 +435,12 @@ export type FreeObjectExpr =
       values: FreeObjectExpr[];
     }
   | {
+      kind: "set_op";
+      op: "intersect" | "except";
+      left: FreeObjectExpr;
+      right: FreeObjectExpr;
+    }
+  | {
       kind: "distinct";
       expr: FreeObjectExpr;
     }
@@ -499,12 +509,15 @@ export type FreeObjectExpr =
       kind: "index_access";
       expr: FreeObjectExpr;
       index: number;
+      indexExpr?: FreeObjectExpr;
     }
   | {
       kind: "slice_access";
       expr: FreeObjectExpr;
       start?: number;
       end?: number;
+      startExpr?: FreeObjectExpr;
+      endExpr?: FreeObjectExpr;
     }
   | {
       kind: "tuple";
@@ -525,6 +538,16 @@ export type FreeObjectExpr =
   | {
       kind: "compare";
       op: "=" | "!=" | ">" | "<" | ">=" | "<=" | "?=" | "?!=" | "like" | "ilike";
+      left: FreeObjectExpr;
+      right: FreeObjectExpr;
+    }
+  | {
+      // EdgeQL `expr IN set` / `expr NOT IN set` — true iff `left` equals any
+      // element of `right`. `right` is set-valued (a set literal, subquery,
+      // path, …). The semantic and IR layers desugar the literal-RHS case to
+      // an OR-chain of `=` comparisons; non-literal RHS is not yet supported.
+      kind: "in_expr";
+      op: "in" | "not_in";
       left: FreeObjectExpr;
       right: FreeObjectExpr;
     }

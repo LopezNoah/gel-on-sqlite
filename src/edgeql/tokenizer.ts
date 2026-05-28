@@ -360,12 +360,6 @@ for (const keyword of CURRENT_RESERVED_KEYWORDS) {
   }
 }
 
-const isDigit = (c: string): boolean => c >= "0" && c <= "9";
-const isAlpha = (c: string): boolean =>
-  (c >= "a" && c <= "z") || (c >= "A" && c <= "Z") || c === "_";
-const isAlphaNumeric = (c: string): boolean => isAlpha(c) || isDigit(c);
-const isIdentStart = (c: string): boolean => isAlpha(c);
-const isIdentPart = (c: string): boolean => isAlphaNumeric(c);
 
 // Character code constants for the hot tokenizer paths. Using charCodeAt
 // avoids allocating one-character strings for every byte of input.
@@ -426,37 +420,6 @@ const isIdentPartCC = (cc: number): boolean =>
   (cc >= CC_A && cc <= CC_Z) ||
   (cc >= CC_0 && cc <= CC_9) ||
   cc === CC_UNDERSCORE;
-
-type FixedToken = readonly [lexeme: string, kind: TokenKind];
-
-const FIXED_TOKENS_BY_START: Partial<Record<string, readonly FixedToken[]>> = {
-  ".": [
-    [".?>", "optional_link"],
-    [".<", "backward_link"],
-  ],
-  "-": [
-    ["->", "arrow"],
-    ["-=", "sub_assign"],
-  ],
-  "+": [
-    ["+=", "add_assign"],
-    ["++", "concat"],
-  ],
-  "/": [["//", "floor_div"]],
-  "*": [["**", "double_splat"]],
-  ":": [
-    [":=", "assign"],
-    ["::", "coloncolon"],
-  ],
-  "!": [["!=", "not_equals"]],
-  "<": [["<=", "lte"]],
-  ">": [[">=", "gte"]],
-  "?": [
-    ["??", "coalesce"],
-    ["?=", "not_distinct_from"],
-    ["?!=", "distinct_from"],
-  ],
-};
 
 // Internal implementation; returns both the token list and the lineStarts table
 // the parser needs for offset → line/column resolution. Public `tokenize` and

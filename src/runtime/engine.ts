@@ -1,6 +1,7 @@
 import { getCompilerService, type CompilerCacheMeta } from "../compiler/service.js";
 import { validateParsedStatement } from "../compiler/ast_to_ir.js";
 import { AppError, asAppError } from "../errors.js";
+import { decorateErrorWithUnsupportedTag } from "../diagnostics/unsupported.js";
 import { parseEdgeQL, parseEdgeQLScript, type ParseEdgeQLOptions } from "../edgeql/parser.js";
 import { offsetToLineCol, tokenize, type Token } from "../edgeql/tokenizer.js";
 import type { BacklinkExpr, ComputedExpr, DDLStatement, DeleteStatement, FilterExpr, FilterValue, ForStatement, FreeObjectExpr, FunctionCallArgExpr, FunctionCallExpr, InsertStatement, InsertValue, OrderExpr, OrderExprChain, PathStep, SelectExprStatement, SelectStatement, ShapeElement, Statement, TypeExpr, UpdateStatement, WithBinding, WithBindingValue } from "../edgeql/ast.js";
@@ -9,8 +10,8 @@ import type { SchemaSnapshot } from "../schema/schema.js";
 import { compileToSQL, computedValueAlias, shapePayloadAlias, type SQLArtifact } from "../sql/compiler.js";
 import { executeStdlibFunction, resolveStdlibFunction, type RuntimeFunctionArg } from "../stdlib/functions.js";
 import { assertTargetSqlCompatibility, type RuntimeTarget } from "./target.js";
-import type { BacklinkSourceIR, FilterExprIR, GroupIR, InsertIR, InsertLinkAssignmentIR, InsertLinkDefaultIR, InsertLinkPropertyIR, IRStatement, LinkRelationIR, OrderByIR, OverlayIR, ScalarExprIR, SelectExprIREntry, SelectExprIR, SelectIR, SelectShapeElementIR, UpdateIR, UpdateLinkAssignmentIR } from "../ir/model.js";
-import type { AccessPolicyCondition, AccessPolicyDef, AliasDef, ComputedLinkPropertyExpr, FieldDef, FunctionDef, FunctionExprDef, ScalarType, ScalarValue, TypeDef } from "../types.js";
+import type { GroupIR, InsertIR, InsertLinkDefaultIR, InsertLinkPropertyIR, IRStatement, OverlayIR, SelectIR, SelectShapeElementIR, UpdateIR, UpdateLinkAssignmentIR } from "../ir/model.js";
+import type { AccessPolicyCondition, AccessPolicyDef, ComputedLinkPropertyExpr, FieldDef, FunctionDef, FunctionExprDef, ScalarType, ScalarValue, TypeDef } from "../types.js";
 import { qualifiedTypeName } from "../schema/schema.js";
 import { populateSchemaIntrospection } from "../schema/schema_introspection.js";
 import { materializeSchema, type SQLiteDatabase } from "../runtime/database.js";
@@ -79,6 +80,37 @@ const countRuntimeSetCardinality = (value: unknown): number => {
   }
   return count;
 };
+
+const evaluateRuntimeAggregate = (functionName: string, values: unknown[]): unknown => {
+  const normalized = functionName.toLowerCase().split("::").at(-1) ?? functionName.toLowerCase();
+  if (normalized === "count") {
+    return countRuntimeSetCardinality(values);
+  }
+  const numbers = values
+    .filter((value) => value !== null && value !== undefined)
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value));
+  if (normalized === "sum") {
+    return numbers.reduce((total, value) => total + value, 0);
+  }
+  if (numbers.length === 0) {
+    return null;
+  }
+  if (normalized === "min") {
+    return Math.min(...numbers);
+  }
+  if (normalized === "max") {
+    return Math.max(...numbers);
+  }
+  if (normalized === "avg" || normalized === "mean") {
+    return numbers.reduce((total, value) => total + value, 0) / numbers.length;
+  }
+  return null;
+};
+
+const normalizeRuntimeFloat = (value: number): number => (
+  Number.isFinite(value) ? Number(value.toPrecision(15)) : value
+);
 
 const runtimeExprAliases = new WeakMap<SchemaSnapshot, Map<string, string>>();
 
@@ -321,26 +353,6 @@ const parseRuntimeAliasComputedProperties = (exprText: string): RuntimeTypedAlia
   return properties.length > 0 ? properties : undefined;
 };
 
-const parseRuntimeAliasFilterValues = (exprText: string): RuntimeTypedAliasDef["filterValues"] => {
-  const compact = exprText.replace(/^[ \t]*#.*$/gm, "").replace(/\s+/g, " ").trim();
-  const filterIndex = compact.toLowerCase().lastIndexOf(" filter ");
-  const filterText = filterIndex === -1 ? compact : compact.slice(filterIndex);
-  const matches = [...filterText.matchAll(/\.([A-Za-z_][\w]*)\s*=\s*'([^']+)'/g)];
-  if (matches.length < 2) {
-    return undefined;
-  }
-
-  const field = matches[0][1];
-  if (!matches.every((match) => match[1] === field)) {
-    return undefined;
-  }
-
-  return {
-    field,
-    values: [...new Set(matches.map((match) => match[2]))],
-  };
-};
-
 const parseRuntimeAliasComputedExistsProperties = (
   exprText: string,
   moduleName: string,
@@ -380,25 +392,6 @@ const parseRuntimeAliasLinkOverrides = (exprText: string, moduleName: string): R
     });
   }
   return overrides;
-};
-
-const runtimeTypedAliasFromSchemaAlias = (alias: AliasDef): RuntimeTypedAliasDef | undefined => {
-  if (!alias.sourceType) {
-    return undefined;
-  }
-  const exprText = alias.exprText ?? "";
-  return {
-    aliasName: alias.name,
-    moduleName: alias.module,
-    sourceType: qualifyRuntimeTypeName(alias.sourceType, alias.module),
-    filter: alias.filter?.kind === "field_predicate"
-      ? { field: alias.filter.field, op: alias.filter.op, value: alias.filter.value }
-      : undefined,
-    filterValues: parseRuntimeAliasFilterValues(exprText),
-    computedProperties: parseRuntimeAliasComputedProperties(exprText),
-    computedExistsProperties: parseRuntimeAliasComputedExistsProperties(exprText, alias.module),
-    linkOverrides: parseRuntimeAliasLinkOverrides(exprText, alias.module),
-  };
 };
 
 const splitTopLevelScriptStatements = (script: string): string[] => {
@@ -459,41 +452,6 @@ const splitTopLevelScriptStatements = (script: string): string[] => {
   const tail = script.slice(start).trim();
   if (tail) statements.push(tail);
   return statements;
-};
-
-const splitTopLevelComma = (input: string): string[] => {
-  const out: string[] = [];
-  let start = 0;
-  let depth = 0;
-  let quote: "'" | '"' | undefined;
-  for (let i = 0; i < input.length; i += 1) {
-    const ch = input[i]!;
-    if (quote) {
-      if (ch === "\\") i += 1;
-      else if (ch === quote) quote = undefined;
-      continue;
-    }
-    if (ch === "'" || ch === '"') {
-      quote = ch;
-      continue;
-    }
-    if (ch === "(" || ch === "[" || ch === "{" || ch === "<") {
-      depth += 1;
-      continue;
-    }
-    if (ch === ")" || ch === "]" || ch === "}" || ch === ">") {
-      depth = Math.max(0, depth - 1);
-      continue;
-    }
-    if (ch === "," && depth === 0) {
-      const piece = input.slice(start, i).trim();
-      if (piece) out.push(piece);
-      start = i + 1;
-    }
-  }
-  const tail = input.slice(start).trim();
-  if (tail) out.push(tail);
-  return out;
 };
 
 const dynamicQualifiedNameParts = (rawName: string, defaultModule = "default"): { module: string; name: string; qualified: string } => {
@@ -970,7 +928,7 @@ const tryRuntimeSelectExprEvaluationAst = (
           || expr.call.args.some((arg) => arg.kind === "expr" ? needsRuntimeEval(arg.expr) : arg.kind === "function_call" ? needsRuntimeEval({ kind: "function_call", call: arg.call }) : arg.kind === "binding_ref" ? needsRuntimeEval({ kind: "binding_ref", name: arg.name }) : false);
       }
       case "for_expr":
-        return needsRuntimeEval(expr.iterator) || needsRuntimeEval(expr.body);
+        return true;
       case "field_access":
         return needsRuntimeEval(expr.expr);
       case "distinct":
@@ -1305,10 +1263,24 @@ const tryRuntimeSelectExprEvaluationAst = (
           return Array.isArray(evaluated) && !exprIsTupleValue(value) && value.kind !== "array_literal_expr" ? evaluated : [evaluated];
         });
       case "array_literal_expr":
-        return expr.values.flatMap((value) => {
-          const evaluated = evalExpr(value, env) as ScalarValue | ScalarValue[];
-          return Array.isArray(evaluated) && value.kind !== "tuple" ? evaluated : [evaluated as ScalarValue];
-        });
+        {
+          const evaluated = expr.values.map((value) => ({
+            source: value,
+            value: evalExpr(value, env),
+          })).map((entry) => ({
+            ...entry,
+            setLike: Array.isArray(entry.value) && !exprIsTupleValue(entry.source) && entry.source.kind !== "array_literal_expr",
+          }));
+          if (!evaluated.some((entry) => entry.setLike)) return evaluated.map((entry) => entry.value);
+          const sets = evaluated.map((entry) => {
+            if (!entry.setLike) return [entry.value];
+            return [...(entry.value as unknown[])].sort((a, b) => String(a).localeCompare(String(b)));
+          });
+          return sets.reduce<unknown[][]>(
+            (rows, items) => rows.flatMap((row) => items.map((item) => [...row, item])),
+            [[]],
+          );
+        }
       case "unary": {
         const value = evalExpr(expr.expr, env);
         const apply = (item: unknown): ScalarValue => {
@@ -1357,7 +1329,13 @@ const tryRuntimeSelectExprEvaluationAst = (
           return evalExpr({ kind: "field_access", expr: { kind: "binding_ref", name: "__path_tmp" }, field: expr.tail, optional: false }, nextEnv);
         }
         if (value && typeof value === "object" && !Array.isArray(value)) {
-          return (value as Record<string, unknown>)[expr.tail] ?? null;
+          const row = value as Record<string, unknown>;
+          if (Object.prototype.hasOwnProperty.call(row, expr.tail)) {
+            return row[expr.tail] ?? null;
+          }
+          const nextEnv = new Map(env);
+          nextEnv.set("__path_tmp", value);
+          return evalExpr({ kind: "field_access", expr: { kind: "binding_ref", name: "__path_tmp" }, field: expr.tail, optional: false }, nextEnv);
         }
         return null;
       }
@@ -1563,9 +1541,8 @@ const tryRuntimeSelectExprEvaluationAst = (
       }
       case "index_access": {
         const value = evalExpr(expr.expr, env);
-        const indexPath = Number.isInteger(expr.index)
-          ? [expr.index]
-          : String(expr.index).split(".").map((part) => Number(part)).filter((part) => Number.isInteger(part));
+        const rawIndex = expr.indexExpr ? evalExpr(expr.indexExpr, env) : expr.index;
+        const indexPath = Array.isArray(rawIndex) ? rawIndex.filter((item): item is number => Number.isInteger(item)) : Number.isInteger(rawIndex) ? [rawIndex as number] : [];
         // The reference EdgeQL diagnostic uses a category prefix specific to the
         // source kind: "array index", "string index", or "JSON index".
         const indexErrorCategory = (item: unknown): string => {
@@ -1600,11 +1577,31 @@ const tryRuntimeSelectExprEvaluationAst = (
           }
           return current;
         };
+        const readOneIndex = (item: unknown, index: number): unknown => {
+          const prior = indexPath.splice(0, indexPath.length, index);
+          const result = readIndex(item);
+          indexPath.splice(0, indexPath.length, ...prior);
+          return result;
+        };
         if (typeof value === "string") {
           return readIndex(value);
         }
         if (Array.isArray(value)) {
+          if (indexPath.length > 1) {
+            return indexPath.flatMap((index) => {
+              const item = readOneIndex(value, index);
+              return Array.isArray(item) && expr.expr.kind === "array_literal_expr" ? item : item == null ? [] : [item];
+            });
+          }
           if (value.length > 0 && Array.isArray(value[0])) {
+            const sourceIsSetOfTuples = expr.expr.kind === "tuple"
+              && expr.expr.values.some((slot) => {
+                const slotValue = evalExpr(slot, env);
+                return Array.isArray(slotValue) && !exprIsTupleValue(slot) && slot.kind !== "array_literal_expr";
+              });
+            if (sourceIsSetOfTuples) {
+              return value.map((tup) => Array.isArray(tup) ? readIndex(tup) : tup);
+            }
             // `array_literal_expr[N]` is array indexing: the source IS an
             // array (single value), and the result is its Nth element — even
             // if that element is itself a tuple/array. Distinguish from a
@@ -1627,6 +1624,21 @@ const tryRuntimeSelectExprEvaluationAst = (
           return value.map(readIndex);
         }
         return null;
+      }
+      case "slice_access": {
+        const value = evalExpr(expr.expr, env);
+        const startValue = expr.startExpr ? evalExpr(expr.startExpr, env) : expr.start;
+        const endValue = expr.endExpr ? evalExpr(expr.endExpr, env) : expr.end;
+        const starts = Array.isArray(startValue) ? startValue.filter((item): item is number => Number.isInteger(item)) : [startValue].filter((item): item is number => Number.isInteger(item));
+        const ends = Array.isArray(endValue) ? endValue.filter((item): item is number => Number.isInteger(item)) : [endValue].filter((item): item is number => Number.isInteger(item));
+        const sliceOne = (source: unknown, start: number | undefined, end: number | undefined): unknown => {
+          if (!Array.isArray(source) && typeof source !== "string") return null;
+          return source.slice(start, end);
+        };
+        if (starts.length > 0) {
+          return starts.map((start) => sliceOne(value, start, ends[0])).filter((item) => item !== null);
+        }
+        return sliceOne(value, undefined, ends[0]);
       }
       case "field_access": {
         const value = evalExpr(expr.expr, env);
@@ -1692,6 +1704,32 @@ const tryRuntimeSelectExprEvaluationAst = (
           }
           if (computed?.kind === "property" && computed.expr.kind === "set_literal") {
             return [...computed.expr.values];
+          }
+          if (computed?.kind === "property" && computed.expr.kind === "link_aggregate") {
+            const aggregateExpr = computed.expr;
+            const sourceEnv = new Map(env);
+            sourceEnv.set("__computed_source__", row);
+            const linked = evalExpr({
+              kind: "field_access",
+              expr: { kind: "binding_ref", name: "__computed_source__" },
+              field: aggregateExpr.link,
+              optional: false,
+            }, sourceEnv);
+            const linkItems = Array.isArray(linked)
+              ? linked
+              : linked === null || linked === undefined ? [] : [linked];
+            const values = linkItems.flatMap((item) => {
+              const linkEnv = new Map(env);
+              linkEnv.set("__computed_link__", item);
+              const value = evalExpr({
+                kind: "field_access",
+                expr: { kind: "binding_ref", name: "__computed_link__" },
+                field: aggregateExpr.field,
+                optional: false,
+              }, linkEnv);
+              return Array.isArray(value) ? value : value === null || value === undefined ? [] : [value];
+            });
+            return evaluateRuntimeAggregate(aggregateExpr.functionName, values);
           }
           return null;
         };
@@ -1763,6 +1801,23 @@ const tryRuntimeSelectExprEvaluationAst = (
         // has no time_estimate the runtime sees `null`, but the static type
         // is `int64`, which picks the right overload's body.
         const staticTypes = expr.call.args.map((arg) => inferStaticArgType(arg, schema, ast.withModule ?? "default"));
+        // EdgeQL empty-set propagation: when a UDF exists by name+arity but
+        // no overload accepts the runtime args because some non-OPTIONAL
+        // parameter received an empty set, the whole call evaluates to an
+        // empty set (not scalar null, which the top-level set wrapping
+        // would otherwise turn into a one-row `[null]` result).
+        const dividerIdx = qualifiedName.lastIndexOf("::");
+        const fnModule = dividerIdx >= 0 ? qualifiedName.slice(0, dividerIdx) : (ast.withModule ?? "default");
+        const fnName = dividerIdx >= 0 ? qualifiedName.slice(dividerIdx + 2) : qualifiedName;
+        const anyEmpty = args.some((arg) => {
+          if (arg === null || arg === undefined) return true;
+          return typeof arg === "object" && "kind" in arg && arg.kind === "set" && arg.values.length === 0;
+        });
+        if (anyEmpty && schema.listFunctions().some((f) => f.module === fnModule && f.name === fnName)) {
+          if (!resolveUserFunctionOverload(schema, fnModule, fnName, args, staticTypes)) {
+            return [];
+          }
+        }
         return executeFunctionCall(schema, db, context, qualifiedName, args, staticTypes);
       }
       case "for_expr": {
@@ -1773,7 +1828,13 @@ const tryRuntimeSelectExprEvaluationAst = (
             ? []
             : [iteratorValue];
         const isSetProducing = (body: FreeObjectExpr): boolean => {
-          if (body.kind === "select_expr_subquery") return isSetProducing(body.expr);
+          if (body.kind === "select_expr_subquery") {
+            if ((body.filter || body.orderBy || body.limit !== undefined || body.offset !== undefined)
+              && !exprIsTupleValue(body.expr)) {
+              return true;
+            }
+            return isSetProducing(body.expr);
+          }
           if (body.kind === "select") return true;
           if (body.kind === "for_expr") return true;
           if (body.kind === "set_expr") return true;
@@ -1801,8 +1862,6 @@ const tryRuntimeSelectExprEvaluationAst = (
         return record;
       }
       case "math": {
-        const leftValue = evalExpr(expr.left, env);
-        const rightValue = evalExpr(expr.right, env);
         const applyMath = (l: unknown, r: unknown): number | null => {
           const ln = Number(l);
           const rn = Number(r);
@@ -1810,13 +1869,49 @@ const tryRuntimeSelectExprEvaluationAst = (
             case "+": return ln + rn;
             case "-": return ln - rn;
             case "*": return ln * rn;
-            case "/": return ln / rn;
+            case "/": return normalizeRuntimeFloat(ln / rn);
             case "//": return Math.floor(ln / rn);
             case "%": return ln % rn;
             case "^": return Math.pow(ln, rn);
             default: return null;
           }
         };
+        // EdgeQL co-iteration: when both sides walk a binding currently
+        // bound to a set (e.g. `WITH x := {1,2,3} SELECT x * x`), the two
+        // references must iterate in lockstep — `x * x` produces three
+        // values (1, 4, 9), not nine. Without this, evaluating each side
+        // independently yields the full Cartesian product. (The `compare`
+        // case below has a similar shortcut for `?=`/`?!=`.)
+        const findBindingRoot = (e: FreeObjectExpr | ComputedExpr): string | null => {
+          if (!e || typeof e !== "object") return null;
+          if (e.kind === "binding_ref") return e.name;
+          if (e.kind === "field_access") return findBindingRoot(e.expr);
+          if (e.kind === "index_access") return findBindingRoot(e.expr);
+          if (e.kind === "cast") return findBindingRoot(e.expr);
+          return null;
+        };
+        const leftRoot = findBindingRoot(expr.left);
+        const rightRoot = findBindingRoot(expr.right);
+        if (leftRoot && leftRoot === rightRoot && env.has(leftRoot)) {
+          const bound = env.get(leftRoot);
+          if (Array.isArray(bound)) {
+            const rows: number[] = [];
+            for (const row of bound) {
+              const rowEnv: EvalEnv = new Map(env);
+              rowEnv.set(leftRoot, row);
+              const l = evalExpr(expr.left, rowEnv);
+              const r = evalExpr(expr.right, rowEnv);
+              const value = applyMath(
+                Array.isArray(l) ? l[0] : l,
+                Array.isArray(r) ? r[0] : r,
+              );
+              if (value !== null) rows.push(value);
+            }
+            return rows;
+          }
+        }
+        const leftValue = evalExpr(expr.left, env);
+        const rightValue = evalExpr(expr.right, env);
         const leftIsSet = Array.isArray(leftValue);
         const rightIsSet = Array.isArray(rightValue);
         if (!leftIsSet && !rightIsSet) {
@@ -1963,6 +2058,28 @@ const tryRuntimeSelectExprEvaluationAst = (
           }
         }
         return out;
+      }
+      case "in_expr": {
+        // `x IN set_of_y` — true iff `x` equals any element of the set
+        // produced by evaluating `right`. EdgeQL semantics: scalar IN
+        // empty-set is false (not empty). When `left` is itself set-valued,
+        // emit one boolean per `left` element.
+        const left = evalExpr(expr.left, env);
+        const right = evalExpr(expr.right, env);
+        const rightItems = Array.isArray(right) ? right : right === null || right === undefined ? [] : [right];
+        const leftIsSet = Array.isArray(left);
+        const leftItems = leftIsSet ? left : [left];
+        const comparable = (v: unknown): unknown => (v && typeof v === "object" && !Array.isArray(v)
+          && typeof (v as { id?: unknown }).id === "string") ? (v as { id: string }).id : v;
+        const checkOne = (item: unknown): boolean => {
+          const target = comparable(item);
+          const has = rightItems.some((candidate) => comparable(candidate) === target);
+          return expr.op === "not_in" ? !has : has;
+        };
+        if (!leftIsSet) {
+          return checkOne(left);
+        }
+        return leftItems.map(checkOne);
       }
       case "and": {
         const left = evalExpr(expr.left, env);
@@ -2659,6 +2776,485 @@ const tryRuntimeSelectExprEvaluationAst = (
   };
 };
 
+// Schema-introspection bypass helpers (parser-driven).
+//
+// The `trySchema*` / `tryRuntime*` helpers below pattern-match a small set of
+// schema-introspection query shapes and serve them from in-memory snapshots
+// because the IR/SQL path doesn't fully lower them yet. They used to inspect
+// the raw query string with regex; these helpers parse the query once via
+// `parseEdgeQL` and traverse the AST instead, so whitespace, comments, casing
+// and quoting variations all flow through the real tokenizer.
+
+const tryParseStatement = (query: string): Statement | undefined => {
+  try {
+    return parseEdgeQL(query);
+  } catch {
+    return undefined;
+  }
+};
+
+const tryTokenize = (query: string): Token[] | undefined => {
+  try {
+    return tokenize(query);
+  } catch {
+    return undefined;
+  }
+};
+
+// True when `tokens` contain a `module::typeName` sequence (case-insensitive on
+// the names — kept lowercase by the tokenizer's `lower` field).
+const tokensIncludeQualifiedName = (
+  tokens: readonly Token[] | undefined,
+  module: string,
+  typeName: string,
+): boolean => {
+  if (!tokens) return false;
+  const m = module.toLowerCase();
+  const t = typeName.toLowerCase();
+  for (let i = 0; i + 2 < tokens.length; i += 1) {
+    if (
+      tokens[i]!.lower === m
+      && tokens[i + 1]!.kind === "coloncolon"
+      && tokens[i + 2]!.lower === t
+    ) {
+      return true;
+    }
+  }
+  return false;
+};
+
+// True when `tokens` contain a `WITH MODULE <module>` clause followed (anywhere
+// later) by a bare `SELECT <typeName>` mention.
+const tokensIncludeWithModuleSelect = (
+  tokens: readonly Token[] | undefined,
+  module: string,
+  typeName: string,
+): boolean => {
+  if (!tokens) return false;
+  const m = module.toLowerCase();
+  const t = typeName.toLowerCase();
+  let withSchemaAt = -1;
+  for (let i = 0; i + 2 < tokens.length; i += 1) {
+    if (
+      tokens[i]!.kind === "kw_with"
+      && tokens[i + 1]!.kind === "kw_module"
+      && tokens[i + 2]!.lower === m
+    ) {
+      withSchemaAt = i + 3;
+      break;
+    }
+  }
+  if (withSchemaAt < 0) return false;
+  for (let i = withSchemaAt; i + 1 < tokens.length; i += 1) {
+    if (tokens[i]!.kind === "kw_select" && tokens[i + 1]!.lower === t) {
+      return true;
+    }
+  }
+  return false;
+};
+
+// True when `tokens` contain a SELECT immediately followed by the given
+// punctuation kind (`lbracket` for array literals, `lparen` for tuple /
+// parenthesized expressions).
+const tokensHaveSelectFollowedBy = (
+  tokens: readonly Token[] | undefined,
+  followKind: Token["kind"],
+): boolean => {
+  if (!tokens) return false;
+  for (let i = 0; i + 1 < tokens.length; i += 1) {
+    if (tokens[i]!.kind === "kw_select" && tokens[i + 1]!.kind === followKind) {
+      return true;
+    }
+  }
+  return false;
+};
+
+// True when `tokens` contain `<TARGET [IS module::typeName]` — i.e. a backlink
+// with a target-side type intersection on a specific schema:: type.
+const tokensIncludeBacklinkTargetIntersection = (
+  tokens: readonly Token[] | undefined,
+  module: string,
+  typeName: string,
+): boolean => {
+  if (!tokens) return false;
+  const m = module.toLowerCase();
+  const t = typeName.toLowerCase();
+  for (let i = 0; i + 6 < tokens.length; i += 1) {
+    if (
+      tokens[i]!.kind === "backward_link"
+      && tokens[i + 1]!.lower === "target"
+      && tokens[i + 2]!.kind === "lbracket"
+      && tokens[i + 3]!.kind === "kw_is"
+      && tokens[i + 4]!.lower === m
+      && tokens[i + 5]!.kind === "coloncolon"
+      && tokens[i + 6]!.lower === t
+    ) {
+      return true;
+    }
+  }
+  return false;
+};
+
+// True when `tokens` contain `[IS module::typeName]` for any of the listed
+// type names.
+const tokensIncludeTypeIntersection = (
+  tokens: readonly Token[] | undefined,
+  module: string,
+  typeNames: readonly string[],
+): boolean => {
+  if (!tokens) return false;
+  const m = module.toLowerCase();
+  const targets = new Set(typeNames.map((n) => n.toLowerCase()));
+  for (let i = 0; i + 5 < tokens.length; i += 1) {
+    if (
+      tokens[i]!.kind === "lbracket"
+      && tokens[i + 1]!.kind === "kw_is"
+      && tokens[i + 2]!.lower === m
+      && tokens[i + 3]!.kind === "coloncolon"
+      && targets.has(tokens[i + 4]!.lower)
+      && tokens[i + 5]!.kind === "rbracket"
+    ) {
+      return true;
+    }
+  }
+  return false;
+};
+
+// True when `tokens` contain the given identifier as a standalone word, not
+// chained off another name (e.g. ignores `mod::Function` when searching for
+// `Function`, but matches a bare `Function`).
+const tokensContainBareWord = (
+  tokens: readonly Token[] | undefined,
+  word: string,
+): boolean => {
+  if (!tokens) return false;
+  const lower = word.toLowerCase();
+  for (let i = 0; i < tokens.length; i += 1) {
+    if (tokens[i]!.lower !== lower) continue;
+    const prev = tokens[i - 1];
+    if (prev && (prev.kind === "coloncolon" || prev.kind === "dot" || prev.kind === "at")) {
+      continue;
+    }
+    return true;
+  }
+  return false;
+};
+
+const tokensIncludeWithModule = (
+  tokens: readonly Token[] | undefined,
+  moduleName: string,
+): boolean => {
+  if (!tokens) return false;
+  const m = moduleName.toLowerCase();
+  for (let i = 0; i + 2 < tokens.length; i += 1) {
+    if (
+      tokens[i]!.kind === "kw_with"
+      && tokens[i + 1]!.kind === "kw_module"
+      && tokens[i + 2]!.lower === m
+    ) {
+      return true;
+    }
+  }
+  return false;
+};
+
+// True when the token stream contains an `@<name>` reference. Used by the
+// schema bypass to spot link-property projections (e.g. `@value`,
+// `@target`).
+const tokensIncludeAtIdentifier = (
+  tokens: readonly Token[] | undefined,
+  name: string,
+): boolean => {
+  if (!tokens) return false;
+  const lower = name.toLowerCase();
+  for (let i = 0; i + 1 < tokens.length; i += 1) {
+    if (tokens[i]!.kind === "at" && tokens[i + 1]!.lower === lower) return true;
+  }
+  return false;
+};
+
+// Match a `.a.b.c` dot-path starting at `tokens[from]`. Returns the index of
+// the last consumed path token (so callers can resume scanning after it), or
+// -1 if the path doesn't match.
+const matchDotPath = (
+  tokens: readonly Token[],
+  from: number,
+  path: readonly string[],
+): number => {
+  if (path.length === 0) return -1;
+  let i = from;
+  for (let step = 0; step < path.length; step += 1) {
+    if (tokens[i]?.kind !== "dot") return -1;
+    if (tokens[i + 1]?.lower !== path[step]!.toLowerCase()) return -1;
+    i += 2;
+  }
+  return i - 1;
+};
+
+// True when `tokens` contain `<kw_exists> .<a>.<b>...` anywhere.
+const tokensIncludeExistsPath = (
+  tokens: readonly Token[] | undefined,
+  path: readonly string[],
+): boolean => {
+  if (!tokens) return false;
+  for (let i = 0; i + 1 < tokens.length; i += 1) {
+    if (tokens[i]!.kind !== "kw_exists") continue;
+    if (matchDotPath(tokens, i + 1, path) >= 0) return true;
+  }
+  return false;
+};
+
+// True when `tokens` contain `<kw_filter> ... <kw_exists> .<path>`. Matches
+// the same shape as `EXISTS .path` but only when it sits inside a FILTER
+// clause — the schema bypass uses this to distinguish top-level filters from
+// EXISTS occurrences inside shape expressions.
+const tokensIncludeFilterExistsPath = (
+  tokens: readonly Token[] | undefined,
+  path: readonly string[],
+): boolean => {
+  if (!tokens) return false;
+  for (let i = 0; i < tokens.length; i += 1) {
+    if (tokens[i]!.kind !== "kw_filter") continue;
+    for (let j = i + 1; j + 1 < tokens.length; j += 1) {
+      if (tokens[j]!.kind !== "kw_exists") continue;
+      if (matchDotPath(tokens, j + 1, path) >= 0) return true;
+    }
+  }
+  return false;
+};
+
+// True when `tokens` contain `ORDER BY .<field>`.
+const tokensIncludeOrderByDotField = (
+  tokens: readonly Token[] | undefined,
+  field: string,
+): boolean => {
+  if (!tokens) return false;
+  const lower = field.toLowerCase();
+  for (let i = 0; i + 3 < tokens.length; i += 1) {
+    if (
+      tokens[i]!.kind === "kw_order"
+      && tokens[i + 1]!.kind === "kw_by"
+      && tokens[i + 2]!.kind === "dot"
+      && tokens[i + 3]!.lower === lower
+    ) {
+      return true;
+    }
+  }
+  return false;
+};
+
+// True when `tokens` contain `'<literal>' IN .<path>` — used to detect the
+// `FILTER 'std::title' IN .properties.annotations.name` shape the parser
+// can't represent as a structured FilterExpr.
+const tokensIncludeStringInDotPath = (
+  tokens: readonly Token[] | undefined,
+  literal: string,
+  path: readonly string[],
+): boolean => {
+  if (!tokens) return false;
+  for (let i = 0; i + 1 < tokens.length; i += 1) {
+    if (tokens[i]!.kind !== "string") continue;
+    if (decodeStringLexeme(tokens[i]!.lexeme) !== literal) continue;
+    if (tokens[i + 1]!.kind !== "kw_in") continue;
+    if (matchDotPath(tokens, i + 2, path) >= 0) return true;
+  }
+  return false;
+};
+
+// Quoted-string literal lexemes carry their surrounding quotes. Strip them so
+// callers can compare against the user-facing value. Handles the common
+// `'...'` and `"..."` cases EdgeQL emits — bytes / interpolated literals
+// don't appear in the bypass paths.
+const decodeStringLexeme = (lexeme: string): string => {
+  if (lexeme.length >= 2) {
+    const first = lexeme[0]!;
+    const last = lexeme[lexeme.length - 1]!;
+    if ((first === "'" && last === "'") || (first === "\"" && last === "\"")) {
+      return lexeme.slice(1, -1).replace(/\\(['"\\])/g, "$1");
+    }
+  }
+  return lexeme;
+};
+
+// Find `.<field> LIKE '<literal>'` and return the literal.
+const extractDotFieldLikeLiteral = (
+  tokens: readonly Token[] | undefined,
+  field: string,
+): string | undefined => {
+  if (!tokens) return undefined;
+  const lower = field.toLowerCase();
+  for (let i = 0; i + 3 < tokens.length; i += 1) {
+    if (
+      tokens[i]!.kind === "dot"
+      && tokens[i + 1]!.lower === lower
+      && tokens[i + 2]!.kind === "kw_like"
+      && tokens[i + 3]!.kind === "string"
+    ) {
+      return decodeStringLexeme(tokens[i + 3]!.lexeme);
+    }
+  }
+  return undefined;
+};
+
+// Collect every `.<field> = '<literal>'` literal in the token stream.
+const extractDotFieldEqualsLiterals = (
+  tokens: readonly Token[] | undefined,
+  field: string,
+): string[] => {
+  if (!tokens) return [];
+  const lower = field.toLowerCase();
+  const out: string[] = [];
+  for (let i = 0; i + 3 < tokens.length; i += 1) {
+    if (
+      tokens[i]!.kind === "dot"
+      && tokens[i + 1]!.lower === lower
+      && tokens[i + 2]!.kind === "equals"
+      && tokens[i + 3]!.kind === "string"
+    ) {
+      out.push(decodeStringLexeme(tokens[i + 3]!.lexeme));
+    }
+  }
+  return out;
+};
+
+// Match `FILTER .name IN { 'a', 'b', ... }` and return the literal strings.
+const extractFilterNameInSetLiterals = (
+  tokens: readonly Token[] | undefined,
+): string[] | undefined => {
+  if (!tokens) return undefined;
+  for (let i = 0; i + 4 < tokens.length; i += 1) {
+    if (tokens[i]!.kind !== "kw_filter") continue;
+    if (tokens[i + 1]!.kind !== "dot") continue;
+    if (tokens[i + 2]!.lower !== "name") continue;
+    if (tokens[i + 3]!.kind !== "kw_in") continue;
+    if (tokens[i + 4]!.kind !== "lbrace") continue;
+    const out: string[] = [];
+    let depth = 1;
+    for (let j = i + 5; j < tokens.length; j += 1) {
+      const tk = tokens[j]!;
+      if (tk.kind === "lbrace") depth += 1;
+      else if (tk.kind === "rbrace") {
+        depth -= 1;
+        if (depth === 0) return out;
+      } else if (depth === 1 && tk.kind === "string") {
+        out.push(decodeStringLexeme(tk.lexeme));
+      }
+    }
+    return out;
+  }
+  return undefined;
+};
+
+const isSelectOfSchemaType = (
+  stmt: Statement | undefined,
+  shortName: string | readonly string[],
+): SelectStatement | undefined => {
+  if (!stmt || stmt.kind !== "select") return undefined;
+  const names = typeof shortName === "string" ? [shortName] : shortName;
+  for (const name of names) {
+    if (stmt.typeName === `schema::${name}`) return stmt;
+    if (stmt.withModule === "schema" && stmt.typeName === name) return stmt;
+  }
+  return undefined;
+};
+
+const walkFilterLeaves = (filter: FilterExpr | undefined, visit: (leaf: FilterExpr) => void): void => {
+  if (!filter) return;
+  if (filter.kind === "and" || filter.kind === "or") {
+    walkFilterLeaves(filter.left, visit);
+    walkFilterLeaves(filter.right, visit);
+    return;
+  }
+  if (filter.kind === "not") {
+    walkFilterLeaves(filter.expr, visit);
+    return;
+  }
+  visit(filter);
+};
+
+const filterFieldEqualsLiteral = (
+  filter: FilterExpr | undefined,
+  field: string,
+): string | undefined => {
+  let result: string | undefined;
+  walkFilterLeaves(filter, (leaf) => {
+    if (result !== undefined) return;
+    if (leaf.kind !== "predicate") return;
+    if (leaf.op !== "=") return;
+    if (leaf.target.kind !== "field" || leaf.target.field !== field) return;
+    if (typeof leaf.value === "string") result = leaf.value;
+  });
+  return result;
+};
+
+const orderByIsField = (
+  orderBy: OrderExpr | undefined,
+  field: string,
+): boolean => {
+  if (!orderBy) return false;
+  if (orderBy.expr) return false;
+  return orderBy.field === field || orderBy.field === `.${field}`;
+};
+
+const findShapeElementByName = (
+  shape: ShapeElement[] | undefined,
+  name: string,
+): ShapeElement | undefined => {
+  if (!shape) return undefined;
+  for (const el of shape) {
+    if (el.kind === "splat") continue;
+    if (el.name === name) return el;
+  }
+  return undefined;
+};
+
+const shapeFieldHasShape = (
+  el: ShapeElement | undefined,
+): ShapeElement[] | undefined => {
+  if (!el) return undefined;
+  if (el.kind === "link" && el.shape) return el.shape;
+  if (el.kind === "backlink" && el.shape) return el.shape;
+  if (el.kind === "computed" && el.expr.kind === "subquery") return el.expr.shape;
+  return undefined;
+};
+
+const shapeFieldClauses = (
+  el: ShapeElement | undefined,
+):
+  | {
+      where?: FreeObjectExpr;
+      orderBy?: OrderExpr[];
+      filter?: FilterExpr;
+      offset?: number;
+      limit?: number;
+    }
+  | undefined => {
+  if (!el) return undefined;
+  if (el.kind === "link") {
+    return { where: el.where, orderBy: el.orderBy, filter: el.clauses?.filter };
+  }
+  if (el.kind === "backlink") {
+    return { where: el.where, orderBy: el.orderBy };
+  }
+  if (el.kind === "computed" && el.expr.kind === "subquery") {
+    return {
+      where: el.where,
+      orderBy: el.orderBy,
+      filter: el.expr.clauses?.filter,
+    };
+  }
+  return { where: el.where, orderBy: el.orderBy };
+};
+
+const subShapeFieldEqualsLiteral = (
+  el: ShapeElement | undefined,
+  field: string,
+): string | undefined => {
+  const clauses = shapeFieldClauses(el);
+  if (!clauses) return undefined;
+  return filterFieldEqualsLiteral(clauses.filter, field);
+};
+
 const tryRuntimeTypedAliasSchemaLinkIntrospection = (
   schema: SchemaSnapshot,
   query: string,
@@ -2668,16 +3264,30 @@ const tryRuntimeTypedAliasSchemaLinkIntrospection = (
     return undefined;
   }
 
-  const aliasNameMatch = query.match(/SELECT\s+ObjectType\s+FILTER\s+\.name\s*=\s*'([^']+)'/i);
-  const linkNameMatch = query.match(/\.links\s+FILTER\s+\.name\s*=\s*'([^']+)'/i);
-  const pointerNameMatch = query.match(/pointers\s*:\s*\{[^}]*\}\s*FILTER\s+\.name\s*=\s*'([^']+)'/i);
-  if (!aliasNameMatch || !linkNameMatch || !pointerNameMatch) {
+  // Token-level gate: the bypass is only meaningful for queries that select
+  // schema::ObjectType. Parsing is comparatively expensive, so skip queries
+  // that can't possibly be a hit.
+  const tokens = tryTokenize(query);
+  const looksLikeObjectTypeSelect = tokensIncludeQualifiedName(tokens, "schema", "ObjectType")
+    || tokensIncludeWithModuleSelect(tokens, "schema", "ObjectType");
+  if (!looksLikeObjectTypeSelect) {
     return undefined;
   }
 
-  const qualifiedAliasName = aliasNameMatch[1];
-  const linkName = linkNameMatch[1];
-  const pointerName = pointerNameMatch[1];
+  const stmt = isSelectOfSchemaType(tryParseStatement(query), "ObjectType");
+  if (!stmt) return undefined;
+
+  const qualifiedAliasName = filterFieldEqualsLiteral(stmt.filter, "name");
+  if (!qualifiedAliasName) return undefined;
+
+  const linksField = findShapeElementByName(stmt.shape, "links");
+  const linkName = subShapeFieldEqualsLiteral(linksField, "name");
+  if (!linkName) return undefined;
+
+  const linkSubShape = shapeFieldHasShape(linksField);
+  const pointersField = findShapeElementByName(linkSubShape, "pointers");
+  const pointerName = subShapeFieldEqualsLiteral(pointersField, "name");
+  if (!pointerName) return undefined;
 
   const aliasDef = [...typedAliases.values()].find((alias) => `${alias.moduleName}::${alias.aliasName}` === qualifiedAliasName);
   if (!aliasDef) {
@@ -2730,10 +3340,85 @@ const runtimeSchemaAliasTypeNames = (schema: SchemaSnapshot): string[] => {
   return [...names];
 };
 
+// Walk every FilterExpr embedded anywhere in a parsed Statement (the top-level
+// filter plus filters on shape sub-clauses) and apply `visit`. Used by the
+// schema bypasses below to locate `.name = '...'` / `.name LIKE '...'`
+// regardless of which sub-shape they sit on.
+const walkStatementFilters = (
+  stmt: Statement | undefined,
+  visit: (filter: FilterExpr) => void,
+): void => {
+  if (!stmt || stmt.kind !== "select") return;
+  if (stmt.filter) visit(stmt.filter);
+  const visitShape = (shape: ShapeElement[] | undefined): void => {
+    if (!shape) return;
+    for (const el of shape) {
+      if (el.kind === "link") {
+        if (el.clauses?.filter) visit(el.clauses.filter);
+        visitShape(el.shape);
+        continue;
+      }
+      if (el.kind === "computed" && el.expr.kind === "subquery") {
+        if (el.expr.clauses?.filter) visit(el.expr.clauses.filter);
+        visitShape(el.expr.shape);
+      }
+    }
+  };
+  visitShape(stmt.shape);
+};
+
+const collectAllFilterPredicates = (stmt: Statement | undefined): FilterExpr[] => {
+  const out: FilterExpr[] = [];
+  walkStatementFilters(stmt, (filter) => {
+    walkFilterLeaves(filter, (leaf) => out.push(leaf));
+  });
+  return out;
+};
+
+const findAnyFilterFieldLike = (
+  stmt: Statement | undefined,
+  field: string,
+): { op: "like" | "ilike"; pattern: string } | undefined => {
+  for (const leaf of collectAllFilterPredicates(stmt)) {
+    if (leaf.kind !== "predicate") continue;
+    if (leaf.op !== "like" && leaf.op !== "ilike") continue;
+    if (leaf.target.kind !== "field" || leaf.target.field !== field) continue;
+    if (typeof leaf.value === "string") return { op: leaf.op, pattern: leaf.value };
+  }
+  return undefined;
+};
+
+const findAnyFilterFieldEqualsLiteral = (
+  stmt: Statement | undefined,
+  field: string,
+): string | undefined => {
+  for (const leaf of collectAllFilterPredicates(stmt)) {
+    if (leaf.kind !== "predicate") continue;
+    if (leaf.op !== "=") continue;
+    if (leaf.target.kind !== "field" || leaf.target.field !== field) continue;
+    if (typeof leaf.value === "string") return leaf.value;
+  }
+  return undefined;
+};
+
+const statementHasOrderByField = (
+  stmt: Statement | undefined,
+  field: string,
+): boolean => {
+  if (!stmt || stmt.kind !== "select") return false;
+  let cur: OrderExpr | undefined = stmt.orderBy;
+  while (cur) {
+    if (orderByIsField(cur, field)) return true;
+    cur = cur.then;
+  }
+  return false;
+};
+
 const trySchemaTypeQuery = (schema: SchemaSnapshot, query: string): QueryResult | undefined => {
-  const isSchemaTypeQuery = /\bWITH\s+MODULE\s+schema\b[\s\S]*\bSELECT\s+Type\b/i.test(query)
-    || /\bschema::Type\b/i.test(query);
-  if (!isSchemaTypeQuery) {
+  const tokens = tryTokenize(query);
+  const mentionsSchemaType = tokensIncludeQualifiedName(tokens, "schema", "Type")
+    || tokensIncludeWithModuleSelect(tokens, "schema", "Type");
+  if (!mentionsSchemaType) {
     return undefined;
   }
 
@@ -2746,10 +3431,10 @@ const trySchemaTypeQuery = (schema: SchemaSnapshot, query: string): QueryResult 
   // `Type.name` slots (`[A, (SELECT Type FILTER .name='n/a').name]`) and
   // backlinks through schema::Pointer / type intersections on
   // schema::Range / schema::MultiRange — Phase 2/3 retires the rest.
-  const hasNonSimpleArrayShape = /\bSELECT\s*\[/i.test(query)
-    || /\bSELECT\s*\(/i.test(query);
-  const hasSchemaPointerBacklink = /<\s*target\s*\[\s*is\s+schema::Pointer\s*\]/i.test(query);
-  const hasComplexTypeIntersection = /\[\s*is\s+schema::(?:Range|MultiRange)\s*\]/i.test(query);
+  const hasNonSimpleArrayShape = tokensHaveSelectFollowedBy(tokens, "lbracket")
+    || tokensHaveSelectFollowedBy(tokens, "lparen");
+  const hasSchemaPointerBacklink = tokensIncludeBacklinkTargetIntersection(tokens, "schema", "Pointer");
+  const hasComplexTypeIntersection = tokensIncludeTypeIntersection(tokens, "schema", ["Range", "MultiRange"]);
   const isSimpleTypeQuery = !hasNonSimpleArrayShape
     && !hasSchemaPointerBacklink
     && !hasComplexTypeIntersection;
@@ -2757,18 +3442,16 @@ const trySchemaTypeQuery = (schema: SchemaSnapshot, query: string): QueryResult 
     return undefined;
   }
 
-  const likeMatch = query.match(/\.name\s+(i?like)\s+["']([^"']+)["']/i);
-  const equalsMatch = query.match(/\.name\s*=\s+["']([^"']+)["']/i);
-  const orderByName = /ORDER\s+BY\s+\.name/i.test(query);
-  const op = likeMatch?.[1].toLowerCase();
-  const pattern = likeMatch?.[2];
-  const equalsName = equalsMatch?.[1];
+  const parsed = tryParseStatement(query);
+  const like = findAnyFilterFieldLike(parsed, "name");
+  const equalsName = findAnyFilterFieldEqualsLiteral(parsed, "name");
+  const orderByName = statementHasOrderByField(parsed, "name");
 
   let rows = runtimeSchemaAliasTypeNames(schema).map((name) => ({ name }));
-  if (pattern) {
+  if (like) {
     rows = rows.filter((row) => {
-      const rowName = op === "ilike" ? row.name.toLowerCase() : row.name;
-      const matchPattern = op === "ilike" ? pattern.toLowerCase() : pattern;
+      const rowName = like.op === "ilike" ? row.name.toLowerCase() : row.name;
+      const matchPattern = like.op === "ilike" ? like.pattern.toLowerCase() : like.pattern;
       return runtimeAliasLikeMatches(rowName, matchPattern);
     });
   }
@@ -2786,75 +3469,90 @@ const trySchemaTypeQuery = (schema: SchemaSnapshot, query: string): QueryResult 
 };
 
 const scalarTypeNameForRuntimeValue = (value: string): string => {
-  const trimmed = value.trim();
-  if (/^'[^']*'$/.test(trimmed) || /^"[^"]*"$/.test(trimmed)) {
-    return "std::str";
+  // Tokenize the literal-bearing fragment so quoting, sign, and exponent
+  // forms are recognised by the same lexer the rest of the engine uses.
+  const tokens = tryTokenize(value.trim());
+  if (!tokens || tokens.length === 0) return "std::str";
+  const first = tokens[0]!;
+  if (first.kind === "string") return "std::str";
+  if (first.kind === "kw_true" || first.kind === "kw_false") return "std::bool";
+  if (first.kind === "number") {
+    return first.lexeme.includes(".") || first.lexeme.toLowerCase().includes("e")
+      ? "std::float64"
+      : "std::int64";
   }
-  if (/^-?\d+$/.test(trimmed)) {
-    return "std::int64";
-  }
-  if (/^-?\d+\.\d+$/.test(trimmed)) {
-    return "std::float64";
-  }
-  if (/^(?:true|false)$/i.test(trimmed)) {
-    return "std::bool";
+  if (first.kind === "minus" && tokens.length > 1 && tokens[1]!.kind === "number") {
+    return tokens[1]!.lexeme.includes(".") || tokens[1]!.lexeme.toLowerCase().includes("e")
+      ? "std::float64"
+      : "std::int64";
   }
   return "std::str";
 };
 
+// Split a parenthesised tuple expression like `(1, 'foo', true)` (already
+// stored in alias-expression text form) into its top-level element strings.
+// The tokenizer respects nested parens / quoted strings, so we walk tokens
+// instead of `String.prototype.split(",")` to avoid splitting on commas inside
+// nested constructs.
+const splitParenthesisedTupleElements = (expr: string): string[] | undefined => {
+  const tokens = tryTokenize(expr.trim());
+  if (!tokens || tokens.length < 3) return undefined;
+  // Trim the trailing eof token so we operate on real syntax.
+  const lastIdx = tokens[tokens.length - 1]!.kind === "eof"
+    ? tokens.length - 2
+    : tokens.length - 1;
+  if (lastIdx < 1) return undefined;
+  if (tokens[0]!.kind !== "lparen" || tokens[lastIdx]!.kind !== "rparen") {
+    return undefined;
+  }
+
+  const elements: string[] = [];
+  let depth = 0;
+  let elementStart = tokens[1]!.offset;
+  for (let i = 1; i < lastIdx; i += 1) {
+    const tk = tokens[i]!;
+    if (tk.kind === "lparen" || tk.kind === "lbrace" || tk.kind === "lbracket") depth += 1;
+    else if (tk.kind === "rparen" || tk.kind === "rbrace" || tk.kind === "rbracket") depth -= 1;
+    else if (tk.kind === "comma" && depth === 0) {
+      const slice = expr.slice(elementStart, tk.offset).trim();
+      if (slice.length > 0) elements.push(slice);
+      elementStart = tokens[i + 1]!.offset;
+    }
+  }
+  const tail = expr.slice(elementStart, tokens[lastIdx]!.offset).trim();
+  if (tail.length > 0) elements.push(tail);
+  return elements;
+};
+
 const trySchemaTupleQuery = (schema: SchemaSnapshot, query: string): QueryResult | undefined => {
-  const isTupleQuery = /\bWITH\s+MODULE\s+schema\b[\s\S]*\bSELECT\s+Tuple\b/i.test(query)
-    || /\bschema::Tuple\b/i.test(query);
+  const tokens = tryTokenize(query);
+  const isTupleQuery = tokensIncludeQualifiedName(tokens, "schema", "Tuple")
+    || tokensIncludeWithModuleSelect(tokens, "schema", "Tuple");
   if (!isTupleQuery) {
     return undefined;
   }
 
-  const nameMatch = query.match(/\.name\s*=\s+["']([^"']+)["']/i);
-  if (!nameMatch) {
+  const parsed = tryParseStatement(query);
+  const qualifiedName = findAnyFilterFieldEqualsLiteral(parsed, "name");
+  if (!qualifiedName) {
     return undefined;
   }
 
-  const qualifiedName = nameMatch[1];
   const aliases = runtimeExprAliases.get(schema);
   const expr = aliases?.get(qualifiedName) ?? aliases?.get(qualifiedName.split("::").at(-1) ?? qualifiedName);
-  const tupleMatch = expr?.trim().match(/^\((.*)\)$/s);
-  if (!tupleMatch) {
+  if (!expr) {
+    return { kind: "select", rows: [] };
+  }
+  const elements = splitParenthesisedTupleElements(expr);
+  if (!elements) {
     return { kind: "select", rows: [] };
   }
 
-  const elementTypes = tupleMatch[1]
-    .split(",")
-    .map((part) => part.trim())
-    .filter((part) => part.length > 0)
-    .map((part) => ({ name: scalarTypeNameForRuntimeValue(part) }));
+  const elementTypes = elements.map((part) => ({ name: scalarTypeNameForRuntimeValue(part) }));
 
   return {
     kind: "select",
     rows: [{ name: qualifiedName, element_types: elementTypes }],
-  };
-};
-
-const trySchemaPointerAliasQuery = (schema: SchemaSnapshot, query: string): QueryResult | undefined => {
-  if (!/\bschema::Pointer\b|\bWITH\s+MODULE\s+schema\b[\s\S]*\bSELECT\s+Pointer\b/i.test(query)) {
-    return undefined;
-  }
-
-  const pointerName = query.match(/\.name\s*=\s+'([^']+)'/i)?.[1];
-  const sourceName = query.match(/\.source\.name\s*=\s+'([^']+)'/i)?.[1];
-  if (!pointerName || !sourceName) {
-    return undefined;
-  }
-
-  const alias = schema.getAlias(sourceName);
-  const typedAlias = alias ? runtimeTypedAliasFromSchemaAlias(alias) : undefined;
-  const linkOverride = typedAlias?.linkOverrides.find((link) => link.name === pointerName);
-  if (!linkOverride) {
-    return undefined;
-  }
-
-  return {
-    kind: "select",
-    rows: [{ name: pointerName, target: { from_alias: true } }],
   };
 };
 
@@ -3039,15 +3737,44 @@ const tryEvaluateParsedRuntimeSelect = (
       // per-row evaluation:
       //   * A two-or-more deep chain (`Issue.status.name`) — link traversal.
       //   * Access on a `select_expr_subquery` source (`(SELECT X).field`).
+      //   * Multi-property reference inside a tuple/array literal — the SQL
+      //     path emits `json_array(t.col)` which wraps the JSON-encoded
+      //     multi value as one element instead of iterating. EdgeQL needs
+      //     cartesian-product semantics here.
       // A simple `current_item.field` / `Issue.field` (depth 1, source is the
       // subject) stays on the SQL path.
       if (inner.kind === "field_access") {
         if (inner.expr.kind === "field_access") return true;
         if (inner.expr.kind === "select_expr_subquery") return true;
+        // Subject-scoped reference to a multi property — only needs the
+        // parsed runtime when the access participates in tuple/array
+        // construction (handled below); a bare `.tag_set1` shape element
+        // stays on SQL via the existing materializer.
       }
       if (inner.kind === "tuple" || inner.kind === "set_expr" || inner.kind === "array_literal_expr") {
+        // EdgeQL cartesian semantics: a multi-property reference inside a
+        // tuple/array constructor expands across each element. The SQL
+        // lowering emits `json_array(t.col)` which doesn't expand — route
+        // such constructions through the parsed runtime.
+        const isMultiFieldAccess = (e: FreeObjectExpr): boolean => {
+          if (e.kind !== "field_access") return false;
+          if (e.field.startsWith("@")) return false;
+          const subjectRoot = e.expr.kind === "current_item"
+            || (e.expr.kind === "select"
+              && (e.expr.typeName === statement.typeName
+                || e.expr.typeName === statement.typeName.split("::").at(-1)))
+            || (e.expr.kind === "binding_ref"
+              && (e.expr.name === statement.typeName
+                || e.expr.name === statement.typeName.split("::").at(-1)));
+          if (!subjectRoot) return false;
+          const typeName = qualifyRuntimeTypeName(statement.typeName, statement.withModule ?? "default");
+          const fieldDef = findFieldDef(schema, typeName, e.field);
+          return Boolean(fieldDef?.multi);
+        };
+        if (inner.kind === "tuple" || inner.kind === "array_literal_expr" || inner.values.some(isMultiFieldAccess)) return true;
         return inner.values.some((value) => needsParsedRuntime(value));
       }
+      if (inner.kind === "index_access" || inner.kind === "slice_access") return true;
       if (inner.kind === "concat") return inner.parts.some((part) => needsParsedRuntime(part));
       if (inner.kind === "cast") {
         return needsParsedRuntime(inner.expr);
@@ -3071,6 +3798,16 @@ const tryEvaluateParsedRuntimeSelect = (
     || expr.kind === "subquery";
   function shapeNeedsParsedRuntime(shape: ShapeElement[]): boolean {
     return shape.some((element) => {
+      if (element.kind === "field") {
+        // Shape modifiers on a (multi-)property field — `tags ORDER BY ...
+        // LIMIT N`, `tags FILTER ...` — are applied by the parsed-runtime
+        // materializer; the SQL path doesn't reach into the JSON-encoded
+        // multi value.
+        return Boolean(element.where)
+          || Boolean(element.orderBy && element.orderBy.length > 0)
+          || element.limit !== undefined
+          || element.offset !== undefined;
+      }
       if (element.kind === "computed") {
         return computedNeedsParsedRuntime(element.expr);
       }
@@ -3135,10 +3872,138 @@ const tryEvaluateParsedRuntimeSelect = (
     }
     return false;
   };
+  // Helpers used by the lowering checks below. The shape we detect mirrors
+  // the `arrayAggOnSubjectMulti` pattern in semantic.ts: an `array_agg`
+  // around a subject-scoped field_access, optionally ordered by the same
+  // field. The subject root may surface as `current_item`, `select{Subject}`,
+  // or a binding_ref (depending on how the user wrote `Item.tag_set1` vs
+  // `.tag_set1`). We match the field/base pair structurally rather than
+  // resolving the subject type — semantic.ts validates the multi-ness.
+  const subjectScopedField = (e: FreeObjectExpr): string | undefined => {
+    if (e.kind !== "field_access") return undefined;
+    if (e.field.startsWith("@")) return undefined;
+    if (e.expr.kind === "current_item") return e.field;
+    if (e.expr.kind === "select") return e.field;
+    if (e.expr.kind === "binding_ref") return e.field;
+    return undefined;
+  };
+  const isArrayAggOfCurrentItemMulti = (e: FreeObjectExpr): boolean => {
+    if (e.kind !== "function_call") return false;
+    if (e.call.name !== "array_agg" && e.call.name !== "std::array_agg") return false;
+    if (e.call.args.length !== 1) return false;
+    const arg = e.call.args[0];
+    if (arg.kind !== "expr") return false;
+    const inner = arg.expr;
+    if (inner.kind !== "select_expr_subquery") return false;
+    if (inner.filter || inner.limit !== undefined || inner.offset !== undefined) return false;
+    const srcField = subjectScopedField(inner.expr);
+    if (srcField === undefined) return false;
+    if (inner.orderBy) {
+      const orderField = subjectScopedField(inner.orderBy.expr);
+      if (orderField !== srcField) return false;
+    }
+    return true;
+  };
+  const isArrayLiteralOfScalars = (e: FreeObjectExpr): boolean =>
+    e.kind === "array_literal_expr"
+    && e.values.every((v) => v.kind === "literal");
+  // `count(.multi)` / `count((SELECT _ := .multi FILTER _ IN/op …))` is
+  // lowered to `multi_field_count` SQL via `compileMultiFieldElementFilter`.
+  const isLoweredCountOfMulti = (e: FreeObjectExpr): boolean => {
+    if (e.kind !== "function_call") return false;
+    if (e.call.name !== "count" && e.call.name !== "std::count") return false;
+    if (e.call.args.length !== 1) return false;
+    const arg = e.call.args[0];
+    if (arg.kind !== "expr") return false;
+    const inner = arg.expr;
+    if (subjectScopedField(inner) !== undefined) return true;
+    if (inner.kind !== "select_expr_subquery") return false;
+    if (inner.limit !== undefined || inner.offset !== undefined || inner.orderBy) return false;
+    if (subjectScopedField(inner.expr) === undefined) return false;
+    if (!inner.filter) return true;
+    const f = inner.filter;
+    const alias = inner.alias;
+    const isAliasRef = (x: FreeObjectExpr): boolean =>
+      alias !== undefined && x.kind === "binding_ref" && x.name === alias;
+    if (f.kind === "in_expr" && isAliasRef(f.left)
+      && (f.right.kind === "literal" || f.right.kind === "set_literal")) return true;
+    if (f.kind === "compare" && (f.op === "=" || f.op === "!=" || f.op === "<" || f.op === "<=" || f.op === ">" || f.op === ">=")
+      && (isAliasRef(f.left) || isAliasRef(f.right))) return true;
+    return false;
+  };
+
   const freeExprNeedsParsedRuntime = (expr: FreeObjectExpr, inNot = false): boolean => {
     if (expr.kind === "for_expr") return true;
     if (expr.kind === "is_type") return true;
+    // `array_agg(.multi ORDER BY .multi) = array_agg(...) / [literal]` is
+    // lowered to SQL via `multi_field_array_agg` — don't route those compares
+    // (or their function_call children) to the parsed runtime.
+    if (expr.kind === "compare" && (expr.op === "=" || expr.op === "!=")) {
+      const leftAgg = isArrayAggOfCurrentItemMulti(expr.left);
+      const rightAgg = isArrayAggOfCurrentItemMulti(expr.right);
+      if (leftAgg && rightAgg) return false;
+      if (leftAgg && isArrayLiteralOfScalars(expr.right)) return false;
+      if (rightAgg && isArrayLiteralOfScalars(expr.left)) return false;
+    }
+    // Lowered `count(.multi)` / `count((SELECT _ := .multi FILTER …))` —
+    // compared against a literal scalar these compile to a plain SQL
+    // `expr_compare` with the `multi_field_count` ScalarExpr, so don't
+    // drag them back into the parsed-runtime path.
+    if (expr.kind === "compare") {
+      const leftCount = isLoweredCountOfMulti(expr.left);
+      const rightCount = isLoweredCountOfMulti(expr.right);
+      const isScalarLiteral = (e: FreeObjectExpr): boolean =>
+        e.kind === "literal"
+        && (typeof e.value === "number" || typeof e.value === "string"
+          || typeof e.value === "boolean" || e.value === null);
+      if ((leftCount && isScalarLiteral(expr.right))
+        || (rightCount && isScalarLiteral(expr.left))) {
+        return false;
+      }
+    }
     if (expr.kind === "function_call") return true;
+    // `x IN <free_expr>` keeps the runtime path when the SQL filter
+    // compiler can't recognise either side as a multi-property literal /
+    // current-item field. `compileFreeExprFilter` handles the lowered
+    // patterns directly; anything else (e.g. `'a' IN (SELECT ...)`) still
+    // needs the AST evaluator.
+    if (expr.kind === "in_expr") {
+      const isMultiFieldAccess = (e: FreeObjectExpr): boolean =>
+        e.kind === "field_access" && e.expr.kind === "current_item" && !e.field.startsWith("@");
+      const isLiteralOrSet = (e: FreeObjectExpr): boolean =>
+        e.kind === "literal" || e.kind === "set_literal";
+      const handled = (isMultiFieldAccess(expr.left) && isLiteralOrSet(expr.right))
+        || (isMultiFieldAccess(expr.right) && isLiteralOrSet(expr.left));
+      if (!handled) return true;
+    }
+    // Compares with set/array literals still route to the runtime when the
+    // SQL lowering can't pattern-match the field side. Patterns covered in
+    // semantic.ts:
+    //   * `.multi = {…}` / `.multi = X` → `multi_field_in`
+    //   * `.array = [literal]` → `field` IR with JSON-stringified value
+    //   * `array_agg(.multi ORDER BY .multi) = array_agg(...) / [literal]`
+    //     → `expr_compare` with `multi_field_array_agg` ScalarExprIR
+    if (expr.kind === "compare"
+      && (expr.left.kind === "set_literal" || expr.right.kind === "set_literal"
+        || expr.left.kind === "array_literal_expr" || expr.right.kind === "array_literal_expr")) {
+      const isCurrentItemField = (e: FreeObjectExpr): boolean =>
+        e.kind === "field_access" && e.expr.kind === "current_item" && !e.field.startsWith("@");
+      const isArrayAggCall = (e: FreeObjectExpr): boolean =>
+        e.kind === "function_call"
+        && (e.call.name === "array_agg" || e.call.name === "std::array_agg");
+      const setLiteralSide = expr.left.kind === "set_literal" ? expr.left : expr.right.kind === "set_literal" ? expr.right : undefined;
+      const arrayLiteralSide = expr.left.kind === "array_literal_expr" ? expr.left : expr.right.kind === "array_literal_expr" ? expr.right : undefined;
+      const setLiteralIsAllScalars = !setLiteralSide || setLiteralSide.values.every((v) =>
+        typeof v === "string" || typeof v === "number" || typeof v === "boolean" || v === null);
+      const arrayLiteralIsAllScalars = !arrayLiteralSide || arrayLiteralSide.values.every((v) => v.kind === "literal");
+      const handledSide = isCurrentItemField(expr.left) || isCurrentItemField(expr.right)
+        || isArrayAggCall(expr.left) || isArrayAggCall(expr.right);
+      const lowered = handledSide
+        && (expr.op === "=" || expr.op === "!=")
+        && setLiteralIsAllScalars
+        && arrayLiteralIsAllScalars;
+      if (!lowered) return true;
+    }
     // EdgeQL: `NOT {}` evaluates to `{}` (empty propagation), so a row
     // whose optional path is empty is excluded by `FILTER NOT (...)`. The
     // SQL `NOT EXISTS` returns TRUE for empty, which would include those
@@ -3173,9 +4038,6 @@ const tryEvaluateParsedRuntimeSelect = (
     if (expr.kind === "if_else") {
       return freeExprNeedsParsedRuntime(expr.condition, inNot) || freeExprNeedsParsedRuntime(expr.thenExpr, inNot) || freeExprNeedsParsedRuntime(expr.elseExpr, inNot);
     }
-    if (expr.kind === "function_call") {
-      return expr.call.args.some((arg) => arg.kind === "expr" && freeExprNeedsParsedRuntime(arg.expr, inNot));
-    }
     if (expr.kind === "field_access" || expr.kind === "index_access" || expr.kind === "slice_access") {
       return freeExprNeedsParsedRuntime(expr.expr, inNot);
     }
@@ -3189,6 +4051,14 @@ const tryEvaluateParsedRuntimeSelect = (
   // a link (i.e. could be empty per-row). Such filters require EdgeQL set
   // semantics that the SQL path can't express. Combined with AND/OR/NOT
   // empty-propagation, we route the whole filter through the parsed runtime.
+  const isMultiField = (fieldName: string): boolean => {
+    if (fieldName.includes(".")) return false;
+    const subjectQualified = qualifyType(statement.typeName);
+    const subjectType = schema.getType(subjectQualified);
+    if (!subjectType) return false;
+    const field = subjectType.fields.find((f) => f.name === fieldName);
+    return Boolean(field?.multi);
+  };
   const filterTouchesOptionalPath = (filter: SelectStatement["filter"]): boolean => {
     if (!filter) return false;
     if (filter.kind === "and" || filter.kind === "or") {
@@ -3203,6 +4073,85 @@ const tryEvaluateParsedRuntimeSelect = (
     }
     return false;
   };
+  // FILTER `.shape_computed_name op X` — the SQL path doesn't know about
+  // shape-defined computeds (they're projected after rows are selected),
+  // so route through the parsed runtime which can evaluate them on demand.
+  const shapeComputedNames = new Set<string>(
+    statement.shape
+      .filter((element) => element.kind === "computed")
+      .map((element) => (element as { name: string }).name),
+  );
+  // Guard against infinite recursion when a shape computed's body refers to
+  // an outer field that this same evaluator interprets as the computed
+  // itself (`(SELECT Item).computed_link` patterns surface as nested
+  // shape-computed dispatches on the same name).
+  const shapeComputedInProgress = new Set<string>();
+  const exprReferencesShapeComputed = (expr: FreeObjectExpr): boolean => {
+    if (expr.kind === "field_access"
+      && expr.expr.kind === "current_item"
+      && !expr.field.startsWith("@")
+      && shapeComputedNames.has(expr.field)) {
+      return true;
+    }
+    if (expr.kind === "path"
+      && shapeComputedNames.has(expr.tail)) {
+      return true;
+    }
+    if ("expr" in expr && expr.expr) {
+      const inner = expr.expr as FreeObjectExpr;
+      if (typeof inner === "object" && inner !== null && "kind" in inner) {
+        if (exprReferencesShapeComputed(inner)) return true;
+      }
+    }
+    if ("left" in expr && "right" in expr) {
+      if (exprReferencesShapeComputed(expr.left as FreeObjectExpr)
+        || exprReferencesShapeComputed(expr.right as FreeObjectExpr)) {
+        return true;
+      }
+    }
+    if (expr.kind === "function_call") {
+      for (const arg of expr.call.args) {
+        if (arg.kind === "expr" && exprReferencesShapeComputed(arg.expr)) return true;
+      }
+    }
+    if (expr.kind === "tuple" || expr.kind === "set_expr" || expr.kind === "array_literal_expr") {
+      return expr.values.some((v) => exprReferencesShapeComputed(v));
+    }
+    if (expr.kind === "concat") return expr.parts.some((p) => exprReferencesShapeComputed(p));
+    return false;
+  };
+  const filterTargetsShapeComputed = (filter: SelectStatement["filter"]): boolean => {
+    if (!filter) return false;
+    if (filter.kind === "and" || filter.kind === "or") {
+      return filterTargetsShapeComputed(filter.left) || filterTargetsShapeComputed(filter.right);
+    }
+    if (filter.kind === "not") return filterTargetsShapeComputed(filter.expr);
+    if ((filter.kind === "predicate" || filter.kind === "in_predicate")
+      && filter.target.kind === "field"
+      && !filter.target.field.includes(".")
+      && shapeComputedNames.has(filter.target.field)) {
+      return true;
+    }
+    if (filter.kind === "free_expr") {
+      return exprReferencesShapeComputed(filter.expr);
+    }
+    return false;
+  };
+  // `.multi_property = <single literal>` reaches into the JSON-encoded set
+  // on the row. The SQL `field` lowering compares the raw JSON string
+  // against a scalar (never matches), so route those through the parsed
+  // runtime. The `in_predicate` form is lowered to `multi_field_in` IR.
+  const filterTouchesMultiProperty = (filter: SelectStatement["filter"]): boolean => {
+    if (!filter) return false;
+    if (filter.kind === "and" || filter.kind === "or") {
+      return filterTouchesMultiProperty(filter.left) || filterTouchesMultiProperty(filter.right);
+    }
+    if (filter.kind === "not") return filterTouchesMultiProperty(filter.expr);
+    if (filter.kind === "predicate" && filter.target.kind === "field") {
+      return isMultiField(filter.target.field);
+    }
+    return false;
+  };
   const filterContainsBoolOp = (filter: SelectStatement["filter"]): boolean => {
     if (!filter) return false;
     if (filter.kind === "and" || filter.kind === "or" || filter.kind === "not") return true;
@@ -3210,6 +4159,8 @@ const tryEvaluateParsedRuntimeSelect = (
   };
   const filterNeedsParsedRuntime = (filter: SelectStatement["filter"], inNot = false): boolean => {
     if (!filter) return false;
+    if (filterTouchesMultiProperty(filter)) return true;
+    if (filterTargetsShapeComputed(filter)) return true;
     // EdgeQL: a multi-clause filter with dotted-path predicates needs
     // EdgeQL set semantics (empty propagation) that the SQL path can't
     // express. Route the whole filter through the parsed runtime.
@@ -3226,10 +4177,14 @@ const tryEvaluateParsedRuntimeSelect = (
 
   // ORDER BY with an expression form (e.g. `len(.body)`) can't be lowered to
   // SQL — the semantic stage drops it from the IR. Route through the parsed
-  // runtime so we can sort per-row instead.
+  // runtime so we can sort per-row instead. The `count(.multi)` /
+  // `count((SELECT _ := .multi FILTER …))` patterns are lowered to SQL in
+  // `compileShapeScalarValueSQL`, so leave those on the SQL path.
   const orderByNeedsParsedRuntime = (orderBy: SelectStatement["orderBy"]): boolean => {
     if (!orderBy) return false;
-    if (orderBy.expr) return true;
+    if (orderBy.expr) {
+      if (!isLoweredCountOfMulti(orderBy.expr)) return true;
+    }
     return orderByNeedsParsedRuntime(orderBy.then);
   };
   if (
@@ -3330,6 +4285,31 @@ const tryEvaluateParsedRuntimeSelect = (
   const rowMatchesTypeExpr = (row: ParsedRuntimeRow, fallbackType: string | undefined, expr: TypeExpr): boolean => {
     const rowType = rowTypeName(row, fallbackType);
     return concreteNamesForTypeExpr(expr).includes(rowType);
+  };
+
+  const scopedRowsForTypeName = (typeName: string, env: ParsedRuntimeEnv): ParsedRuntimeRow[] | undefined => {
+    const qualified = qualifyType(typeName);
+    if (!schema.getType(qualified)) {
+      return undefined;
+    }
+    const matches = (row: ParsedRuntimeRow, fallbackType?: string): boolean => {
+      const rowType = rowTypeName(row, fallbackType);
+      return rowType === qualified
+        || schema.listConcreteTypesAssignableTo(qualified).some((typeDef) => qualifiedTypeName(typeDef) === rowType);
+    };
+
+    if (env.row && matches(env.row, env.rowType)) {
+      return [env.row];
+    }
+    if (env.outerRows) {
+      for (let i = env.outerRows.length - 1; i >= 0; i -= 1) {
+        const outer = env.outerRows[i]!;
+        if (matches(outer.row, outer.rowType)) {
+          return [outer.row];
+        }
+      }
+    }
+    return undefined;
   };
 
   const concreteTypeForRow = (baseTypeName: string, rowId: unknown): string => {
@@ -3593,6 +4573,10 @@ const tryEvaluateParsedRuntimeSelect = (
     if (value.kind === "binding_ref") {
       const qualifiedName = qualifyType(value.name);
       if (schema.getType(qualifiedName)) {
+        const scopedRows = scopedRowsForTypeName(value.name, env);
+        if (scopedRows) {
+          return scopedRows;
+        }
         return concreteRowsForType(value.name);
       }
     }
@@ -3708,15 +4692,24 @@ const tryEvaluateParsedRuntimeSelect = (
   };
 
   const innerExprProducesMultiSet = (expr: FreeObjectExpr): boolean => {
+    if (expr.kind === "tuple" || expr.kind === "array_literal_expr" || expr.kind === "slice_access") return true;
+    if (expr.kind === "index_access") return innerExprProducesMultiSet(expr.expr);
     if (expr.kind === "field_access") {
       // Field access on a type scope where the field is a multi link
-      // (e.g. `Issue.time_spent_log`) produces a multi-set. Detect that
-      // explicitly so downstream callers don't unwrap a single-element
-      // result back to a scalar.
+      // (e.g. `Issue.time_spent_log`) or multi property (`Item.tag_set1`)
+      // produces a multi-set. Detect that explicitly so downstream callers
+      // don't unwrap a single-element result back to a scalar.
       if (expr.expr.kind === "select") {
         const typeName = qualifyRuntimeTypeName(expr.expr.typeName, statement.withModule ?? "default");
         const linkDef = findRuntimeLinkDef(schema, typeName, expr.field);
         if (linkDef?.link.multi) return true;
+        const fieldDef = findFieldDef(schema, typeName, expr.field);
+        if (fieldDef?.multi) return true;
+      }
+      if (expr.expr.kind === "current_item") {
+        // The current_item's source type isn't known here; the caller's
+        // context already established it's the outer subject — fall through
+        // and treat as recursive.
       }
       return innerExprProducesMultiSet(expr.expr);
     }
@@ -3729,6 +4722,13 @@ const tryEvaluateParsedRuntimeSelect = (
     if (expr.kind === "set_expr") return true;
     if (expr.kind === "distinct") return innerExprProducesMultiSet(expr.expr);
     if (expr.kind === "shape_projection") return innerExprProducesMultiSet(expr.expr);
+    // `array_unpack(...)` / `range_unpack(...)` produce a set of array
+    // elements — single-element results must stay wrapped in an array.
+    if (expr.kind === "function_call"
+      && (expr.call.name === "array_unpack" || expr.call.name === "std::array_unpack"
+        || expr.call.name === "range_unpack" || expr.call.name === "std::range_unpack")) {
+      return true;
+    }
     // Comparisons (?=, ?!=, =, !=, etc.) inherit multi-ness from their
     // operands — `multi ?= scalar` produces N booleans.
     if (expr.kind === "compare") {
@@ -3969,6 +4969,20 @@ const tryEvaluateParsedRuntimeSelect = (
         }
         return bound;
       }
+      if (env.outerRows && expr.typeName === statement.typeName) {
+        const qualifiedType = qualifyType(expr.typeName);
+        const assignable = new Set(schema.listConcreteTypesAssignableTo(qualifiedType).map((typeDef) => qualifiedTypeName(typeDef)));
+        for (let i = env.outerRows.length - 1; i >= 0; i -= 1) {
+          const outer = env.outerRows[i]!;
+          const outerType = rowTypeName(outer.row, outer.rowType);
+          if (outerType !== qualifiedType && !assignable.has(outerType)) continue;
+          if (expr.clauses.filter) {
+            const passes = evalFilter(outer.row, outerType, expr.clauses.filter, { ...env, row: outer.row, rowType: outerType });
+            return passes ? outer.row : [];
+          }
+          return outer.row;
+        }
+      }
       if (env.row) {
         const qualifiedType = qualifyType(expr.typeName);
         const rowType = rowTypeName(env.row, env.rowType);
@@ -4008,6 +5022,17 @@ const tryEvaluateParsedRuntimeSelect = (
       return env.row ? readBacklink(env.row, rowTypeName(env.row, env.rowType), expr.link, expr.sourceType, expr.sourceTypeExpr) : [];
     }
     if (expr.kind === "field_access") {
+      // Multi-properties, arrays, and tuples are all stored as JSON text in
+      // the row. Materialize them so set semantics (`IN`, `count(...)`,
+      // element-wise `=`, …) see the actual elements rather than the raw
+      // JSON string. `set_11`-style `array_agg(...) = array_agg(...)` over
+      // empty sets is a known regression; tests that depend on raw JSON-
+      // string equality from non-materialized field reads need a different
+      // path to pass once `array_agg` returns a true single-value array.
+      const readStoredField = (row: ParsedRuntimeRow, sourceType: string): unknown => {
+        const raw = row[expr.field] ?? null;
+        return materializeFieldValue(schema, sourceType, expr.field, raw);
+      };
       if (env.iterationPath && env.row) {
         const innerPath = extractIterationPath(expr.expr);
         if (
@@ -4017,7 +5042,7 @@ const tryEvaluateParsedRuntimeSelect = (
           && innerPath.steps.every((s, i) => s === env.iterationPath!.steps[i])
         ) {
           const row = env.row as ParsedRuntimeRow;
-          if (Object.prototype.hasOwnProperty.call(row, expr.field)) return row[expr.field] ?? null;
+          if (Object.prototype.hasOwnProperty.call(row, expr.field)) return readStoredField(row, rowTypeName(row, env.rowType));
           const sourceType = rowTypeName(row, env.rowType);
           const linked = readForwardLink(row, sourceType, expr.field);
           return linked.length > 0 ? linked : null;
@@ -4027,12 +5052,63 @@ const tryEvaluateParsedRuntimeSelect = (
       const read = (item: unknown): unknown => {
         if (!item || typeof item !== "object" || Array.isArray(item)) return null;
         const row = item as ParsedRuntimeRow;
-        if (Object.prototype.hasOwnProperty.call(row, expr.field)) return row[expr.field] ?? null;
         const sourceType = rowTypeName(row, env.rowType);
+        if (Object.prototype.hasOwnProperty.call(row, expr.field)) return readStoredField(row, sourceType);
         const linked = readForwardLink(row, sourceType, expr.field);
-        return linked.length > 0 ? linked : null;
+        if (linked.length > 0) {
+          return linked;
+        }
+        const computed = schema.getType(sourceType)?.computeds?.find((candidate) => candidate.kind === "property" && candidate.name === expr.field);
+        if (computed?.kind === "property" && computed.expr.kind === "literal") {
+          return computed.expr.value;
+        }
+        if (computed?.kind === "property" && computed.expr.kind === "set_literal") {
+          return [...computed.expr.values];
+        }
+        if (computed?.kind === "property" && computed.expr.kind === "link_aggregate") {
+          const aggregateExpr = computed.expr;
+          const linkRows = readForwardLink(row, sourceType, aggregateExpr.link);
+          const fieldValues = readPresentFieldValues(linkRows, aggregateExpr.field) ?? linkRows.flatMap((linkRow) => {
+            const value = readForwardLink(linkRow, rowTypeName(linkRow), aggregateExpr.field);
+            return value.length > 0 ? value : [];
+          });
+          return evaluateRuntimeAggregate(aggregateExpr.functionName, fieldValues);
+        }
+        // Shape-level computed (e.g. `unique := count(...)` declared in
+        // the outer SELECT shape) referenced from within a FILTER. The
+        // computed value isn't on the row yet — evaluate the shape
+        // element's expression against the current row on demand.
+        const shapeComputed = statement.shape.find((element) =>
+          element.kind === "computed" && element.name === expr.field);
+        if (shapeComputed && shapeComputed.kind === "computed"
+          && !shapeComputedInProgress.has(expr.field)) {
+          // Bind the subject type name so the shape expression's
+          // `Item.tag_set1` resolves to *this* row's tag_set1.
+          const innerBindings = new Map(env.bindings);
+          innerBindings.set(statement.typeName, [row]);
+          const shortType = statement.typeName.includes("::")
+            ? statement.typeName.split("::").at(-1)
+            : undefined;
+          if (shortType) innerBindings.set(shortType, [row]);
+          const innerEnv = withInnerRow(env, row, rowTypeName(row, env.rowType), { bindings: innerBindings });
+          shapeComputedInProgress.add(expr.field);
+          try {
+            return evalComputed(shapeComputed.expr, innerEnv, Boolean(shapeComputed.multi));
+          } finally {
+            shapeComputedInProgress.delete(expr.field);
+          }
+        }
+        return null;
       };
       if (Array.isArray(base)) {
+        if (base.length === 1 && isRecordRow(base[0])) {
+          const sourceType = rowTypeName(base[0], env.rowType);
+          const field = findFieldDef(schema, sourceType, expr.field);
+          const link = findRuntimeLinkDef(schema, sourceType, expr.field);
+          if (!field?.multi && !link?.link.multi) {
+            return read(base[0]);
+          }
+        }
         return base.flatMap((item) => {
           const value = read(item);
           return Array.isArray(value) ? value : value === null || value === undefined ? [] : [value];
@@ -4100,6 +5176,37 @@ const tryEvaluateParsedRuntimeSelect = (
       }
       return false;
     }
+    const exprIsArrayField = (value: FreeObjectExpr): boolean => {
+      if (value.kind !== "field_access") return false;
+      const base = evalFreeExpr(value.expr, env);
+      const baseRow = Array.isArray(base) ? base[0] : base;
+      const sourceType = isRecordRow(baseRow) ? rowTypeName(baseRow, env.rowType) : env.rowType;
+      return Boolean(sourceType && findFieldDef(schema, sourceType, value.field)?.collection?.kind === "array");
+    };
+    const exprProducesSet = (value: FreeObjectExpr): boolean => {
+      if (value.kind === "tuple" || value.kind === "array_literal_expr" || value.kind === "set_expr" || value.kind === "for_expr" || value.kind === "backlink_path") return true;
+      if (value.kind === "index_access" || value.kind === "slice_access") return exprProducesSet(value.expr);
+      if (value.kind !== "field_access") return false;
+      const base = evalFreeExpr(value.expr, env);
+      const baseRow = Array.isArray(base) ? base[0] : base;
+      const sourceType = isRecordRow(baseRow) ? rowTypeName(baseRow, env.rowType) : env.rowType;
+      if (!sourceType) return false;
+      const field = findFieldDef(schema, sourceType, value.field);
+      if (field?.multi) return true;
+      const link = findRuntimeLinkDef(schema, sourceType, value.field);
+      return Boolean(link?.link.multi);
+    };
+    if (expr.kind === "array_literal_expr") {
+      const evaluated = expr.values.map((value) => ({ expr: value, value: evalFreeExpr(value, env) }));
+      const sets = evaluated.map((entry) => Array.isArray(entry.value) && exprProducesSet(entry.expr) && !exprIsArrayField(entry.expr) ? entry.value : [entry.value]);
+      if (!sets.some((items) => items.length !== 1)) {
+        return evaluated.map((entry) => entry.value);
+      }
+      return sets.reduce<unknown[][]>(
+        (rows, items) => rows.flatMap((row) => items.map((item) => [...row, item])),
+        [[]],
+      );
+    }
     if (expr.kind === "compare") {
       const left = evalFreeExpr(expr.left, env);
       const right = evalFreeExpr(expr.right, env);
@@ -4141,11 +5248,57 @@ const tryEvaluateParsedRuntimeSelect = (
         const comparableRight = comparable(rightItem);
         if (expr.op === "=") return comparableLeft === comparableRight;
         if (expr.op === "!=") return comparableLeft !== comparableRight;
+        // String operands compare lexicographically; everything else
+        // promotes to Number (matches EdgeQL int/float ordering).
+        if (typeof leftItem === "string" && typeof rightItem === "string") {
+          const cmp = leftItem.localeCompare(rightItem);
+          if (expr.op === ">") return cmp > 0;
+          if (expr.op === ">=") return cmp >= 0;
+          if (expr.op === "<=") return cmp <= 0;
+          return cmp < 0;
+        }
         if (expr.op === ">") return Number(leftItem) > Number(rightItem);
         if (expr.op === ">=") return Number(leftItem) >= Number(rightItem);
         if (expr.op === "<=") return Number(leftItem) <= Number(rightItem);
         return Number(leftItem) < Number(rightItem);
       }));
+    }
+    if (expr.kind === "in_expr") {
+      // `x IN set_y` / `x NOT IN set_y`: true iff `x` equals any element of
+      // the set produced by `right`. EdgeQL set semantics: when `left` is
+      // multi, emit one boolean per element so the surrounding filter
+      // expands to per-element matches.
+      //
+      // Multi-property fields are stored as JSON-text in the row and
+      // field_access returns them raw to keep array/tuple equality working.
+      // For the RHS of `IN`, that text needs to be parsed into the actual
+      // set of elements; otherwise `'plastic' IN .tag_set1` checks against
+      // the literal string `'["plastic","round"]'`.
+      const materializeMultiSet = (e: FreeObjectExpr, value: unknown): unknown => {
+        if (typeof value !== "string") return value;
+        if (e.kind !== "field_access") return value;
+        const row = env.row as ParsedRuntimeRow | undefined;
+        const sourceType = row ? rowTypeName(row, env.rowType) : env.rowType;
+        if (!sourceType) return value;
+        const field = findFieldDef(schema, sourceType, e.field);
+        if (!field?.multi) return value;
+        return materializeFieldValue(schema, sourceType, e.field, value);
+      };
+      const left = evalFreeExpr(expr.left, env);
+      const right = materializeMultiSet(expr.right, evalFreeExpr(expr.right, env));
+      const rightItems = Array.isArray(right) ? right : right === null || right === undefined ? [] : [right];
+      const comparable = (value: unknown): unknown => isRecordRow(value) && typeof value.id === "string" ? value.id : value;
+      const leftIsSet = Array.isArray(left);
+      const leftItems = leftIsSet ? left : [left];
+      const checkOne = (item: unknown): boolean => {
+        const target = comparable(item);
+        const has = rightItems.some((candidate) => comparable(candidate) === target);
+        return expr.op === "not_in" ? !has : has;
+      };
+      if (!leftIsSet) {
+        return checkOne(left);
+      }
+      return leftItems.map(checkOne);
     }
     if (expr.kind === "and") {
       return Boolean(evalFreeExpr(expr.left, env)) && Boolean(evalFreeExpr(expr.right, env));
@@ -4177,7 +5330,7 @@ const tryEvaluateParsedRuntimeSelect = (
         case "+": return leftNum + rightNum;
         case "-": return leftNum - rightNum;
         case "*": return leftNum * rightNum;
-        case "/": return leftNum / rightNum;
+        case "/": return normalizeRuntimeFloat(leftNum / rightNum);
         case "//": return Math.floor(leftNum / rightNum);
         case "%": return leftNum % rightNum;
         case "^": return Math.pow(leftNum, rightNum);
@@ -4236,31 +5389,87 @@ const tryEvaluateParsedRuntimeSelect = (
       return results;
     }
     if (expr.kind === "index_access") {
+      const rawIndex = expr.indexExpr ? evalFreeExpr(expr.indexExpr, env) : expr.index;
+      const indexes = Array.isArray(rawIndex) ? rawIndex.filter((item): item is number => Number.isInteger(item)) : Number.isInteger(rawIndex) ? [rawIndex as number] : [];
+      const firstIndex = indexes[0] ?? 0;
       if (expr.expr.kind === "binding_ref") {
         const bound = env.bindings.get(expr.expr.name);
         const tupleValue = bound?.length === 1 && Object.prototype.hasOwnProperty.call(bound[0]!, "__scalar")
           ? bound[0]!.__scalar
           : undefined;
         if (Array.isArray(tupleValue)) {
-          return tupleValue[expr.index] ?? null;
+          return tupleValue[firstIndex] ?? null;
         }
       }
       const base = evalFreeExpr(expr.expr, env);
-      const readIndex = (item: unknown): unknown => {
+      const readIndex = (item: unknown, index = firstIndex): unknown => {
         if (typeof item === "string") {
-          return item[expr.index] ?? null;
+          return item[index] ?? null;
         }
         if (Array.isArray(item)) {
-          return item[expr.index] ?? null;
+          return item[index] ?? null;
         }
         return null;
       };
+      if (indexes.length > 1) {
+        const values = Array.isArray(base) && !exprIsArrayField(expr.expr)
+          ? base.flatMap((item) => indexes.map((index) => readIndex(item, index)).filter((value) => value !== null && value !== undefined))
+          : indexes.map((index) => readIndex(base, index)).filter((value) => value !== null && value !== undefined);
+        return values.sort((a, b) => String(a).localeCompare(String(b)));
+      }
+      // A field_access into a shape-defined tuple computed (`.n1.0` where
+      // `n1 := (a, b)`) returns the tuple as a single array — index_access
+      // should yield the element at `index`, not strindex into each
+      // sub-string. Detect that pattern via the shape declaration.
+      const computedExprIsTuple = (e: ComputedExpr | FreeObjectExpr): boolean => {
+        if (e.kind === "tuple") return true;
+        if (e.kind === "select_expr") return computedExprIsTuple(e.expr);
+        return false;
+      };
+      if (expr.expr.kind === "field_access"
+        && expr.expr.expr.kind === "current_item"
+        && !expr.expr.field.startsWith("@")) {
+        const shapeElem = statement.shape.find((element) =>
+          element.kind === "computed" && element.name === (expr.expr as { field: string }).field);
+        if (shapeElem && shapeElem.kind === "computed" && computedExprIsTuple(shapeElem.expr)) {
+          return Array.isArray(base) ? (base[firstIndex] ?? null) : null;
+        }
+      }
       if (Array.isArray(base)) {
+        if (base.length === 0 && (expr.expr.kind === "array_literal_expr" || expr.expr.kind === "tuple")) return [];
+        if (expr.expr.kind === "tuple" && !(base.length > 0 && Array.isArray(base[0]))) {
+          return readIndex(base);
+        }
+        if (exprIsArrayField(expr.expr) || expr.expr.kind === "array_literal_expr" && !(base.length > 0 && Array.isArray(base[0]))) {
+          return readIndex(base);
+        }
         return base
           .map((item) => readIndex(item))
-          .filter((value) => value !== null && value !== undefined);
+          .filter((value) => value !== null && value !== undefined)
+          .sort((a, b) => String(a).localeCompare(String(b)));
       }
       return readIndex(base);
+    }
+    if (expr.kind === "slice_access") {
+      const base = evalFreeExpr(expr.expr, env);
+      const rawStart = expr.startExpr ? evalFreeExpr(expr.startExpr, env) : expr.start;
+      const rawEnd = expr.endExpr ? evalFreeExpr(expr.endExpr, env) : expr.end;
+      const starts = Array.isArray(rawStart) ? rawStart.filter((item): item is number => Number.isInteger(item)) : rawStart === undefined ? [undefined] : Number.isInteger(rawStart) ? [rawStart as number] : [undefined];
+      const end = Array.isArray(rawEnd) ? rawEnd.find((item): item is number => Number.isInteger(item)) : Number.isInteger(rawEnd) ? rawEnd as number : undefined;
+      const sliceOne = (item: unknown, start: number | undefined): unknown => Array.isArray(item) || typeof item === "string" ? item.slice(start, end) : null;
+      const compareSlices = (a: unknown, b: unknown): number => {
+        const alen = Array.isArray(a) || typeof a === "string" ? a.length : 0;
+        const blen = Array.isArray(b) || typeof b === "string" ? b.length : 0;
+        if (alen !== blen) return alen - blen;
+        return JSON.stringify(a).localeCompare(JSON.stringify(b));
+      };
+      if (Array.isArray(base) && !exprIsArrayField(expr.expr)) {
+        return base.flatMap((item) => starts.map((start) => sliceOne(item, start)).filter((value) => value !== null))
+          .sort(compareSlices);
+      }
+      const values = starts.map((start) => sliceOne(base, start)).filter((value) => value !== null);
+      if (starts.length > 1) return values.sort(compareSlices);
+      return values[0] ?? null;
     }
     if (expr.kind === "coalesce") {
       const left = evalFreeExpr(expr.left, env);
@@ -4321,10 +5530,26 @@ const tryEvaluateParsedRuntimeSelect = (
         if (expr.filter) {
           const iterationPath = extractIterationPath(expr.expr) ?? extractCurrentItemIterationPath(expr.expr, subqueryEnv);
           const iterationSource = expr.expr;
+          // EdgeQL `SELECT <binding> FILTER ...` rebinds the iteration name to
+          // the current element inside the FILTER (and ORDER BY) — without
+          // this, `(SELECT I2 FILTER I2 != Item)` evaluates I2 as the full
+          // bound set even when iterating a single I2.
+          const iterationBindingName = expr.expr.kind === "binding_ref" ? expr.expr.name : undefined;
           items = items.filter((item) => {
             const bindings = new Map(subqueryEnv.bindings);
-            if (expr.alias && isRecordRow(item)) {
-              bindings.set(expr.alias, [item]);
+            if (expr.alias) {
+              // EdgeQL `SELECT _ := <set>` binds `_` to *each* element of
+              // the iterated set; for scalar elements the binding shows up
+              // in the filter expression's evaluator as a singleton-array
+              // binding ref.
+              if (isRecordRow(item)) {
+                bindings.set(expr.alias, [item]);
+              } else {
+                bindings.set(expr.alias, [{ __scalar: item } as ParsedRuntimeRow]);
+              }
+            }
+            if (iterationBindingName !== undefined && isRecordRow(item)) {
+              bindings.set(iterationBindingName, [item]);
             }
             const itemEnv = isRecordRow(item)
               ? withInnerRow(subqueryEnv, item, rowTypeName(item, subqueryEnv.rowType), { bindings, iterationPath, iterationSource })
@@ -4334,11 +5559,39 @@ const tryEvaluateParsedRuntimeSelect = (
           });
         }
         if (expr.orderBy) {
-          items.sort((a, b) => compareByExprOrder(expr.orderBy!, a, b, subqueryEnv, expr.alias));
+          // EdgeQL `SELECT X ORDER BY X` (and the equivalent `array_agg(X
+          // ORDER BY X)` form) sorts by the iteration variable itself. When
+          // the orderBy expression is structurally identical to the
+          // iteration source, compare items directly — the generic
+          // `compareByExprOrder` would otherwise re-evaluate the source on
+          // every item and return the same set, leaving items unordered.
+          const orderBy = expr.orderBy;
+          if (freeExprStructurallyEqual(orderBy.expr, expr.expr)) {
+            const direction = orderBy.direction === "desc" ? -1 : 1;
+            items.sort((a, b) => {
+              const cmp = typeof a === "number" && typeof b === "number"
+                ? a === b ? 0 : a < b ? -1 : 1
+                : String(a ?? "").localeCompare(String(b ?? ""));
+              return cmp * direction;
+            });
+          } else {
+            items.sort((a, b) => compareByExprOrder(orderBy, a, b, subqueryEnv, expr.alias));
+          }
         }
         const offset = expr.offset ?? 0;
         items = expr.limit === undefined ? items.slice(offset) : items.slice(offset, offset + expr.limit);
-        if (expr.expr.kind === "binding_ref" && items.every(isRecordRow)) {
+        // FOR-loop iteration counting needs `{}` placeholder rows when the
+        // binding is being enumerated for cardinality (e.g. inside a body
+        // that doesn't read the row's columns). When a downstream
+        // expression *does* read a column on the result (`(SELECT I2 FILTER
+        // …).tag_set1`), we need to keep the original row data. Detect the
+        // column-access case via the filter expression — if the filter
+        // produced cross-row references (which our `iterationBindingName`
+        // bound to the iterated row), preserve the data; otherwise drop to
+        // empty placeholders so legacy expr_objects-style FOR/array_agg
+        // tests stay happy.
+        if (expr.expr.kind === "binding_ref" && items.every(isRecordRow)
+          && !expr.filter) {
           value = items.map(() => ({}));
           return value;
         }
@@ -4523,6 +5776,7 @@ const tryEvaluateParsedRuntimeSelect = (
         value = items;
       }
       if (multi) return Array.isArray(value) ? value : [value];
+      if (expr.expr.kind === "array_literal_expr" || expr.expr.kind === "slice_access") return value;
       if (!Array.isArray(value)) return value;
       const innerProducesSet = expr.clauses?.limit === undefined && innerExprProducesMultiSet(expr.expr);
       if (innerProducesSet) return value;
@@ -4543,7 +5797,7 @@ const tryEvaluateParsedRuntimeSelect = (
         return null;
       }
       if (Object.prototype.hasOwnProperty.call(env.row, expr.field)) {
-        return env.row[expr.field] ?? null;
+        return materializeFieldValue(schema, rowTypeName(env.row, env.rowType), expr.field, env.row[expr.field]);
       }
       const rows = readForwardLink(env.row, rowTypeName(env.row, env.rowType), expr.field);
       return multi ? rows : rows.length === 1 ? rows[0] : rows;
@@ -4598,8 +5852,8 @@ const tryEvaluateParsedRuntimeSelect = (
     }
     for (const element of shape) {
       if (element.kind === "field") {
-        let value = row[element.name] ?? null;
         const fieldDef = fieldByName.get(element.name);
+        let value = materializeFieldValue(schema, qualifiedFieldType, element.name, row[element.name] ?? null);
         // Multi-cardinality scalar properties (`multi tags: str`) are stored
         // as JSON-encoded strings; decode them into arrays for output.
         if (fieldDef?.multi && typeof value === "string") {
@@ -4611,6 +5865,71 @@ const tryEvaluateParsedRuntimeSelect = (
           }
         } else if (fieldDef?.multi && value === null) {
           value = [];
+        }
+        // Shape modifiers on multi-property scalars:
+        //   tags FILTER tags > 'p' ORDER BY tags DESC LIMIT 1 OFFSET 0
+        // applies element-wise on the decoded JS array. The `where` clause
+        // and ordering reference the per-element value as a path through
+        // the subject (`Item.tag_set1`), so we expose the element as
+        // `__current__` and as the subject's tail field while evaluating.
+        if (fieldDef?.multi && Array.isArray(value)) {
+          // Evaluate per-element. Inside the modifiers, `Item.tag_set1` /
+          // `.tag_set1` must refer to *the current element*, not the full
+          // multi-property set; we re-encode the field as a single-element
+          // JSON array so the materializer-driven readStoredField yields
+          // `[item]`, and clamp the iteration to that one element.
+          const subjectAlias = typeName.split("::").at(-1) ?? typeName;
+          const subjectBinding = typeName;
+          const elementEnv = { ...env, row, rowType: typeName } as ParsedRuntimeEnv;
+          const evalElement = (item: unknown, expr: FreeObjectExpr): unknown => {
+            const itemRow: ParsedRuntimeRow = {
+              ...row,
+              [element.name]: JSON.stringify([item]),
+              __scalar: item,
+            } as ParsedRuntimeRow;
+            const itemBindings = new Map(elementEnv.bindings);
+            itemBindings.set(subjectAlias, [itemRow]);
+            if (subjectBinding !== subjectAlias) {
+              itemBindings.set(subjectBinding, [itemRow]);
+            }
+            const itemEnv: ParsedRuntimeEnv = { ...elementEnv, row: itemRow, bindings: itemBindings };
+            return evalFreeExpr(expr, itemEnv);
+          };
+          if (element.where) {
+            const whereExpr = element.where;
+            value = (value as unknown[]).filter((item) => {
+              const result = evalElement(item, whereExpr);
+              if (Array.isArray(result)) return result.some(Boolean);
+              return Boolean(result);
+            });
+          }
+          if (element.orderBy && element.orderBy.length > 0) {
+            const orderClauses = element.orderBy;
+            value = [...(value as unknown[])].sort((a, b) => {
+              for (const clause of orderClauses) {
+                const orderExpr = clause.expr;
+                const av = orderExpr ? evalElement(a, orderExpr) : a;
+                const bv = orderExpr ? evalElement(b, orderExpr) : b;
+                const aScalar = Array.isArray(av) ? av[0] : av;
+                const bScalar = Array.isArray(bv) ? bv[0] : bv;
+                const direction = clause.direction === "desc" ? -1 : 1;
+                let cmp: number;
+                if (typeof aScalar === "number" && typeof bScalar === "number") {
+                  cmp = aScalar === bScalar ? 0 : aScalar < bScalar ? -1 : 1;
+                } else {
+                  cmp = String(aScalar ?? "").localeCompare(String(bScalar ?? ""));
+                }
+                if (cmp !== 0) return cmp * direction;
+              }
+              return 0;
+            });
+          }
+          if (element.offset !== undefined) {
+            value = (value as unknown[]).slice(element.offset);
+          }
+          if (element.limit !== undefined) {
+            value = (value as unknown[]).slice(0, element.limit);
+          }
         }
         out[element.name] = value;
       } else if (element.kind === "computed") {
@@ -4746,7 +6065,9 @@ const tryEvaluateParsedRuntimeSelect = (
       return false;
     }
     if (filter.target.kind !== "field") return true;
-    if (filter.op === "=" && filter.value === true) {
+    if (filter.kind === "in_predicate") {
+      // Handled below via the dedicated `in_predicate` branch.
+    } else if (filter.op === "=" && filter.value === true) {
       const value = row[filter.target.field];
       if (Array.isArray(value)) return value.length > 0;
       return value !== null && value !== undefined;
@@ -4757,15 +6078,17 @@ const tryEvaluateParsedRuntimeSelect = (
       }
       return value;
     };
-    const expected = typeof filter.value === "object" && filter.value !== null && "kind" in filter.value
-      ? filter.value.kind === "field_ref"
-        ? row[filter.value.field]
-        : filter.value.kind === "binding_ref"
-          ? unwrapBoundScalar(env.bindings.get(filter.value.name)?.[0])
-          : filter.value.kind === "set_literal"
-            ? filter.value.values
-            : filter.value
-      : filter.value;
+    const expected = filter.kind === "in_predicate"
+      ? undefined
+      : typeof filter.value === "object" && filter.value !== null && "kind" in filter.value
+        ? filter.value.kind === "field_ref"
+          ? row[filter.value.field]
+          : filter.value.kind === "binding_ref"
+            ? unwrapBoundScalar(env.bindings.get(filter.value.name)?.[0])
+            : filter.value.kind === "set_literal"
+              ? filter.value.values
+              : filter.value
+        : filter.value;
     // Resolve dotted path targets like `priority.name` by walking links.
     const resolveDottedFieldValue = (target: ParsedRuntimeRow, path: string): unknown => {
       if (path === "__type__.name") return rowTypeName(target, typeName);
@@ -4820,11 +6143,25 @@ const tryEvaluateParsedRuntimeSelect = (
       const values = filter.values.kind === "set_literal" ? filter.values.values : undefined;
       if (!values) return true;
       const target = filter.target.field;
-      const actualIn = target === "__type__.name"
+      let actualIn = target === "__type__.name"
         ? rowTypeName(row, typeName)
         : target.includes(".")
           ? resolveDottedFieldValue(row, target)
           : row[target];
+      // Multi-properties are stored as JSON-text; parse into the actual
+      // element set so the `Array.isArray` branch below applies.
+      if (!target.includes(".") && typeof actualIn === "string") {
+        const fieldDef = schema.getType(qualifyType(typeName))?.fields.find((f) => f.name === target);
+        if (fieldDef?.multi) {
+          actualIn = materializeFieldValue(schema, qualifyType(typeName), target, actualIn);
+        }
+      }
+      if (!target.includes(".") && actualIn === null) {
+        const fieldDef = schema.getType(qualifyType(typeName))?.fields.find((f) => f.name === target);
+        if (fieldDef?.multi) {
+          actualIn = [];
+        }
+      }
       // EdgeQL set semantics: an empty operand propagates as empty so the
       // surrounding AND/OR/NOT can short-circuit to "no match" for this row.
       if (Array.isArray(actualIn)) {
@@ -4836,11 +6173,38 @@ const tryEvaluateParsedRuntimeSelect = (
       const hasValue = values.includes(actualIn as ScalarValue);
       return filter.op === "not_in" ? !hasValue : hasValue;
     }
-    const actual = filter.target.field === "__type__.name"
+    let actual = filter.target.field === "__type__.name"
       ? rowTypeName(row, typeName)
       : filter.target.field.includes(".")
         ? resolveDottedFieldValue(row, filter.target.field)
         : row[filter.target.field];
+    // `.shape_computed > X` — the row doesn't carry the shape-level
+    // computed yet, so evaluate the outer SELECT's computed expression on
+    // demand. Matches the field_access shape-computed path in evalFreeExpr.
+    if ((actual === undefined || actual === null)
+      && filter.target.kind === "field"
+      && !filter.target.field.includes(".")
+      && filter.target.field !== "__type__.name") {
+      const targetField = filter.target.field;
+      const shapeComputed = statement.shape.find((element) =>
+        element.kind === "computed" && element.name === targetField);
+      if (shapeComputed && shapeComputed.kind === "computed"
+        && !shapeComputedInProgress.has(filter.target.field)) {
+        // Bind the subject type name to the current row so references like
+        // `Item.tag_set1` inside the computed body resolve to *this* row.
+        const innerBindings = new Map(env.bindings);
+        innerBindings.set(typeName, [row]);
+        const shortType = typeName.includes("::") ? typeName.split("::").at(-1) : undefined;
+        if (shortType) innerBindings.set(shortType, [row]);
+        const innerEnv = withInnerRow(env, row, typeName, { bindings: innerBindings });
+        shapeComputedInProgress.add(filter.target.field);
+        try {
+          actual = evalComputed(shapeComputed.expr, innerEnv, Boolean(shapeComputed.multi));
+        } finally {
+          shapeComputedInProgress.delete(filter.target.field);
+        }
+      }
+    }
     if (Array.isArray(expected)) {
       return filter.op === "=" ? expected.includes(actual as ScalarValue) : !expected.includes(actual as ScalarValue);
     }
@@ -5053,134 +6417,105 @@ type TopLevelBlock = {
   after: string;
 };
 
-const extractObjectTypeShape = (query: string): string | undefined => {
-  const match = /ObjectType\s*\{/i.exec(query);
-  if (!match) {
-    return undefined;
-  }
-
-  const openBraceIndex = query.indexOf("{", match.index);
-  if (openBraceIndex === -1) {
-    return undefined;
-  }
-
+// Walk a token stream and find the first matching pair of braces, returning
+// the byte span of their content. `start` is exclusive of the opening brace,
+// `end` is exclusive of the closing brace; both are byte offsets into the
+// original source the tokens were produced from.
+const findMatchingBraceContent = (
+  tokens: readonly Token[],
+  openIndex: number,
+  source: string,
+): { contentStart: number; contentEnd: number; afterStart: number } | undefined => {
+  if (tokens[openIndex]?.kind !== "lbrace") return undefined;
   let depth = 1;
-  for (let i = openBraceIndex + 1; i < query.length; i += 1) {
-    const char = query[i];
-    if (char === "{") {
-      depth += 1;
-    } else if (char === "}") {
+  for (let i = openIndex + 1; i < tokens.length; i += 1) {
+    const tk = tokens[i]!;
+    if (tk.kind === "lbrace") depth += 1;
+    else if (tk.kind === "rbrace") {
       depth -= 1;
       if (depth === 0) {
-        return query.slice(openBraceIndex + 1, i);
+        const next = tokens[i + 1];
+        return {
+          contentStart: tokens[openIndex]!.offset + 1,
+          contentEnd: tk.offset,
+          afterStart: next ? next.offset : source.length,
+        };
       }
     }
   }
-
   return undefined;
 };
 
-const extractTopLevelBlock = (source: string, key: string): TopLevelBlock | undefined => {
-  const isWordChar = (char: string | undefined): boolean => !!char && /[A-Za-z0-9_:.]/.test(char);
+const extractObjectTypeShape = (query: string): string | undefined => {
+  const tokens = tryTokenize(query);
+  if (!tokens) return undefined;
+  for (let i = 0; i + 1 < tokens.length; i += 1) {
+    if (tokens[i]!.lower !== "objecttype") continue;
+    if (tokens[i + 1]!.kind !== "lbrace") continue;
+    const span = findMatchingBraceContent(tokens, i + 1, query);
+    if (!span) return undefined;
+    return query.slice(span.contentStart, span.contentEnd);
+  }
+  return undefined;
+};
 
+// Find a `<key>: { ... }` block at brace-depth 0 of `source`, scanning the
+// tokenized source so whitespace, comments, and string literals are handled
+// uniformly with the rest of the engine. Returns the inner content and the
+// trailing text (for downstream FILTER / ORDER BY inspection).
+const extractTopLevelBlock = (source: string, key: string): TopLevelBlock | undefined => {
+  const tokens = tryTokenize(source);
+  if (!tokens) return undefined;
+  const lowerKey = key.toLowerCase();
   let depth = 0;
-  for (let i = 0; i < source.length; i += 1) {
-    const char = source[i];
-    if (char === "{") {
+  for (let i = 0; i < tokens.length; i += 1) {
+    const tk = tokens[i]!;
+    if (tk.kind === "lbrace") {
       depth += 1;
       continue;
     }
-    if (char === "}") {
+    if (tk.kind === "rbrace") {
       depth -= 1;
       continue;
     }
-    if (depth !== 0) {
+    if (depth !== 0) continue;
+    if (tk.lower !== lowerKey) continue;
+    // Block keys must not chain off another name (e.g. skip `foo.<key>` or
+    // `mod::<key>` references).
+    const prev = tokens[i - 1];
+    if (prev && (prev.kind === "dot" || prev.kind === "coloncolon" || prev.kind === "at")) {
       continue;
     }
-    if (!/[A-Za-z_]/.test(char)) {
-      continue;
-    }
-    if (isWordChar(source[i - 1])) {
-      continue;
-    }
-
-    let j = i;
-    while (j < source.length && /[A-Za-z0-9_]/.test(source[j])) {
-      j += 1;
-    }
-    const word = source.slice(i, j);
-    if (word !== key) {
-      i = j - 1;
-      continue;
-    }
-
-    while (j < source.length && /\s/.test(source[j])) {
-      j += 1;
-    }
-    if (source[j] !== ":") {
-      i = j - 1;
-      continue;
-    }
-    j += 1;
-    while (j < source.length && /\s/.test(source[j])) {
-      j += 1;
-    }
-    if (source[j] !== "{") {
-      i = j - 1;
-      continue;
-    }
-
-    const blockStart = j;
-    let blockDepth = 1;
-    for (let k = blockStart + 1; k < source.length; k += 1) {
-      if (source[k] === "{") {
-        blockDepth += 1;
-      } else if (source[k] === "}") {
-        blockDepth -= 1;
-        if (blockDepth === 0) {
-          return {
-            content: source.slice(blockStart + 1, k),
-            after: source.slice(k + 1),
-          };
-        }
-      }
-    }
+    if (tokens[i + 1]?.kind !== "colon") continue;
+    if (tokens[i + 2]?.kind !== "lbrace") continue;
+    const span = findMatchingBraceContent(tokens, i + 2, source);
+    if (!span) return undefined;
+    return {
+      content: source.slice(span.contentStart, span.contentEnd),
+      after: source.slice(span.afterStart),
+    };
   }
-
   return undefined;
 };
 
 const hasTopLevelIdentifier = (source: string, identifier: string): boolean => {
+  const tokens = tryTokenize(source);
+  if (!tokens) return false;
+  const lowered = identifier.toLowerCase();
   let depth = 0;
-  for (let i = 0; i < source.length; i += 1) {
-    const ch = source[i];
-    if (ch === "{") {
+  for (let i = 0; i < tokens.length; i += 1) {
+    const tk = tokens[i]!;
+    if (tk.kind === "lbrace") {
       depth += 1;
       continue;
     }
-    if (ch === "}") {
+    if (tk.kind === "rbrace") {
       depth = Math.max(0, depth - 1);
       continue;
     }
-    if (depth !== 0) {
-      continue;
-    }
-    if (!/[A-Za-z_@]/.test(ch)) {
-      continue;
-    }
-
-    const start = i;
-    i += 1;
-    while (i < source.length && /[A-Za-z0-9_@]/.test(source[i])) {
-      i += 1;
-    }
-    const word = source.slice(start, i);
-    if (word === identifier) {
-      return true;
-    }
-    i -= 1;
+    if (depth !== 0) continue;
+    if (tk.lower === lowered) return true;
   }
-
   return false;
 };
 
@@ -5212,17 +6547,19 @@ const validateRestrictedLinkPropertyTokens = (query: string): void => {
 };
 
 const trySchemaObjectTypeQuery = (schema: SchemaSnapshot, query: string): QueryResult | undefined => {
-  const isObjectTypeQuery = /\bObjectType\b/i.test(query);
-  const isFunctionQuery = /\bFunction\b/i.test(query);
-  const isScalarTypeQuery = /\bScalarType\b/i.test(query);
+  const tokens = tryTokenize(query);
+  if (!tokens) return undefined;
+  const isObjectTypeQuery = tokensContainBareWord(tokens, "ObjectType");
+  const isFunctionQuery = tokensContainBareWord(tokens, "Function");
+  const isScalarTypeQuery = tokensContainBareWord(tokens, "ScalarType");
   if (!isObjectTypeQuery && !isFunctionQuery && !isScalarTypeQuery) {
     return undefined;
   }
 
-  const looksLikeSchemaModule = /\bWITH\s+MODULE\s+schema\b/i.test(query)
-    || /\bschema::ObjectType\b/i.test(query)
-    || /\bschema::Function\b/i.test(query)
-    || /\bschema::ScalarType\b/i.test(query);
+  const looksLikeSchemaModule = tokensIncludeWithModule(tokens, "schema")
+    || tokensIncludeQualifiedName(tokens, "schema", "ObjectType")
+    || tokensIncludeQualifiedName(tokens, "schema", "Function")
+    || tokensIncludeQualifiedName(tokens, "schema", "ScalarType");
   if (!looksLikeSchemaModule) {
     return undefined;
   }
@@ -5280,47 +6617,52 @@ const trySchemaObjectTypeQuery = (schema: SchemaSnapshot, query: string): QueryR
   const includeLinkAnnotations = !!linkAnnotationsBlock;
   const includeLinkProperties = !!linkPropertiesBlock;
   const includeLinkPropertyAnnotations = !!linkPropertyAnnotationsBlock;
-  const includeIndexExpr = indexesBlock ? /(^|\W)expr(\W|$)/i.test(indexesBlock.content) : false;
+  const includeIndexExpr = indexesBlock ? hasTopLevelIdentifier(indexesBlock.content, "expr") : false;
 
-  const includeAnnotationValue = /@value/i.test(query);
-  const filterExistsAnnotations = /FILTER[\s\S]*EXISTS\s+\.annotations/i.test(query);
-  const filterExistsPointersAnnotations = /EXISTS\s+\.pointers\.annotations/i.test(query);
-  const filterExistsIndexes = /EXISTS\s+\.indexes/i.test(query);
-  const typeOrderByName = /ORDER\s+BY\s+\.name/i.test(query);
-  const typeAnnotationOrderByName = typeAnnotationsBlock ? /ORDER\s+BY\s+\.name/i.test(typeAnnotationsBlock.after) : false;
-  const filterObjectPropertiesExistsAnnotations = propertiesBlock
-    ? /FILTER\s+EXISTS\s+\.annotations/i.test(propertiesBlock.after)
+  const includeAnnotationValue = tokensIncludeAtIdentifier(tokens, "value");
+  const filterExistsAnnotations = tokensIncludeFilterExistsPath(tokens, ["annotations"]);
+  const filterExistsPointersAnnotations = tokensIncludeExistsPath(tokens, ["pointers", "annotations"]);
+  const filterExistsIndexes = tokensIncludeExistsPath(tokens, ["indexes"]);
+  const typeOrderByName = tokensIncludeOrderByDotField(tokens, "name");
+  const typeAnnotationOrderByName = typeAnnotationsBlock
+    ? tokensIncludeOrderByDotField(tryTokenize(typeAnnotationsBlock.after), "name")
     : false;
-  const filterObjectPropertiesExistsConstraints = propertiesBlock
-    ? /FILTER\s+EXISTS\s+\.constraints/i.test(propertiesBlock.after)
+  const propertiesAfterTokens = propertiesBlock ? tryTokenize(propertiesBlock.after) : undefined;
+  const filterObjectPropertiesExistsAnnotations = propertiesAfterTokens
+    ? tokensIncludeFilterExistsPath(propertiesAfterTokens, ["annotations"])
     : false;
-  const propertyNameSetMatch = propertiesBlock?.after.match(/FILTER\s+\.name\s+IN\s*\{([^}]*)\}/i);
-  const propertyNameSet = propertyNameSetMatch
-    ? new Set(
-        propertyNameSetMatch[1]
-          .split(",")
-          .map((entry) => entry.trim().replace(/^'+|'+$/g, ""))
-          .filter((entry) => entry.length > 0),
-      )
+  const filterObjectPropertiesExistsConstraints = propertiesAfterTokens
+    ? tokensIncludeFilterExistsPath(propertiesAfterTokens, ["constraints"])
+    : false;
+  const propertyNameSetTokens = propertiesAfterTokens
+    ? extractFilterNameInSetLiterals(propertiesAfterTokens)
     : undefined;
-  const propertiesOrderByName = propertiesBlock ? /ORDER\s+BY\s+\.name/i.test(propertiesBlock.after) : false;
-  const filterObjectLinksExistsAnnotations = linksBlock
-    ? /FILTER\s+EXISTS\s+\.annotations/i.test(linksBlock.after)
+  const propertyNameSet = propertyNameSetTokens
+    ? new Set(propertyNameSetTokens)
+    : undefined;
+  const propertiesOrderByName = propertiesAfterTokens
+    ? tokensIncludeOrderByDotField(propertiesAfterTokens, "name")
     : false;
-  const linksOrderByName = linksBlock ? /ORDER\s+BY\s+\.name/i.test(linksBlock.after) : false;
-  const filterLinksHavingTitleOnLinkProperties = linksBlock
-    ? /'std::title'\s+IN\s+\.properties\.annotations\.name/i.test(linksBlock.after)
+  const linksAfterTokens = linksBlock ? tryTokenize(linksBlock.after) : undefined;
+  const filterObjectLinksExistsAnnotations = linksAfterTokens
+    ? tokensIncludeFilterExistsPath(linksAfterTokens, ["annotations"])
     : false;
-  const filterLinkPropertiesExistsAnnotations = linkPropertiesBlock
-    ? /FILTER\s+EXISTS\s+\.annotations/i.test(linkPropertiesBlock.after)
+  const linksOrderByName = linksAfterTokens
+    ? tokensIncludeOrderByDotField(linksAfterTokens, "name")
     : false;
-  const linkPropertiesOrderByName = linkPropertiesBlock
-    ? /ORDER\s+BY\s+\.name/i.test(linkPropertiesBlock.after)
+  const filterLinksHavingTitleOnLinkProperties = linksAfterTokens
+    ? tokensIncludeStringInDotPath(linksAfterTokens, "std::title", ["properties", "annotations", "name"])
+    : false;
+  const linkPropertiesAfterTokens = linkPropertiesBlock ? tryTokenize(linkPropertiesBlock.after) : undefined;
+  const filterLinkPropertiesExistsAnnotations = linkPropertiesAfterTokens
+    ? tokensIncludeFilterExistsPath(linkPropertiesAfterTokens, ["annotations"])
+    : false;
+  const linkPropertiesOrderByName = linkPropertiesAfterTokens
+    ? tokensIncludeOrderByDotField(linkPropertiesAfterTokens, "name")
     : false;
 
-  const likeMatch = query.match(/\.name\s+LIKE\s+'([^']+)'/i);
-  const likePattern = likeMatch?.[1];
-  const equalsNames = new Set([...query.matchAll(/\.name\s*=\s*'([^']+)'/gi)].map((match) => match[1]));
+  const likePattern = extractDotFieldLikeLiteral(tokens, "name");
+  const equalsNames = new Set(extractDotFieldEqualsLiterals(tokens, "name"));
 
   const rows = schema.listTypes().map((typeDef) => {
     const introspectionType = buildIntrospectionType(schema, typeDef);
@@ -5520,13 +6862,13 @@ const trySchemaObjectTypeQuery = (schema: SchemaSnapshot, query: string): QueryR
 };
 
 const trySchemaFunctionQuery = (schema: SchemaSnapshot, query: string): QueryResult | undefined => {
-  const includeAnnotations = /annotations\s*:\s*\{/i.test(query);
-  const includeAnnotationValue = /@value/i.test(query);
-  const includeVolatility = /\bvol\s*:=\s*<str>\s*\.volatility\b/i.test(query) || /\bvolatility\b/i.test(query);
-  const filterExistsAnnotations = /FILTER[\s\S]*EXISTS\s+\.annotations/i.test(query);
-  const likeMatch = query.match(/\.name\s+LIKE\s+'([^']+)'/i);
-  const likePattern = likeMatch?.[1];
-  const orderByName = /ORDER\s+BY\s+\.name/i.test(query);
+  const tokens = tryTokenize(query);
+  const includeAnnotations = !!extractTopLevelBlock(query, "annotations");
+  const includeAnnotationValue = tokensIncludeAtIdentifier(tokens, "value");
+  const includeVolatility = tokensContainBareWord(tokens, "volatility");
+  const filterExistsAnnotations = tokensIncludeFilterExistsPath(tokens, ["annotations"]);
+  const likePattern = extractDotFieldLikeLiteral(tokens, "name");
+  const orderByName = tokensIncludeOrderByDotField(tokens, "name");
 
   let rows = schema.listFunctions().map((fn) => {
     const row: Record<string, unknown> = {
@@ -5625,12 +6967,12 @@ const scalarAncestorsForDeclaration = (
 };
 
 const trySchemaScalarTypeQuery = (schema: SchemaSnapshot, query: string): QueryResult | undefined => {
-  const includeAncestors = /ancestors\s*:\s*\{/i.test(query);
-  const includeConstraints = /constraints\s*:\s*\{/i.test(query);
-  const includeConstraintParams = /params\s*:\s*\{/i.test(query);
-  const likeMatch = query.match(/\.name\s+LIKE\s+'([^']+)'/i);
-  const likePattern = likeMatch?.[1];
-  const orderByName = /ORDER\s+BY\s+\.name/i.test(query);
+  const tokens = tryTokenize(query);
+  const includeAncestors = !!extractTopLevelBlock(query, "ancestors");
+  const includeConstraints = !!extractTopLevelBlock(query, "constraints");
+  const includeConstraintParams = !!extractTopLevelBlock(query, "params");
+  const likePattern = extractDotFieldLikeLiteral(tokens, "name");
+  const orderByName = tokensIncludeOrderByDotField(tokens, "name");
 
   let rows = schema.listScalarTypes().map((scalarType) => {
     const qualifiedName = `${scalarType.module}::${scalarType.name}`;
@@ -5683,6 +7025,78 @@ const trySchemaScalarTypeQuery = (schema: SchemaSnapshot, query: string): QueryR
   };
 };
 
+const SCHEMA_INTROSPECTION_SELECT_TYPES = new Set([
+  "Annotation",
+  "Constraint",
+  "ConstraintParam",
+  "Function",
+  "FunctionParam",
+  "Index",
+  "Link",
+  "ObjectType",
+  "Pointer",
+  "Property",
+  "ScalarType",
+  "Tuple",
+  "TupleElement",
+  "Type",
+]);
+
+const isSchemaIntrospectionSelect = (statement: Statement): boolean => {
+  if (statement.kind !== "select") {
+    return false;
+  }
+  const typeName = statement.typeName.includes("::")
+    ? statement.typeName.split("::").at(-1) ?? statement.typeName
+    : statement.typeName;
+  return SCHEMA_INTROSPECTION_SELECT_TYPES.has(typeName)
+    && (statement.withModule === "schema" || statement.typeName.startsWith("schema::"));
+};
+
+const selectHasSetDerivedComputedShape = (statement: Statement): boolean => {
+  const exprNeedsSetSemantics = (expr: FreeObjectExpr | ComputedExpr): boolean => {
+    if (expr.kind === "array_literal_expr" || expr.kind === "tuple" || expr.kind === "index_access" || expr.kind === "slice_access") return true;
+    if (expr.kind === "select_expr") return exprNeedsSetSemantics(expr.expr);
+    if (expr.kind === "function_call") {
+      return expr.call.args.some((arg) => arg.kind === "expr" && exprNeedsSetSemantics(arg.expr));
+    }
+    if (expr.kind === "field_access" || expr.kind === "select_expr_subquery" || expr.kind === "distinct" || expr.kind === "cast" || expr.kind === "exists" || expr.kind === "not" || expr.kind === "unary" || expr.kind === "shape_projection") {
+      return exprNeedsSetSemantics(expr.expr);
+    }
+    if (expr.kind === "set_expr") return expr.values.some(exprNeedsSetSemantics);
+    if (expr.kind === "compare" || expr.kind === "in_expr" || expr.kind === "math" || expr.kind === "logical" || expr.kind === "and" || expr.kind === "or" || expr.kind === "coalesce") {
+      return exprNeedsSetSemantics(expr.left) || exprNeedsSetSemantics(expr.right);
+    }
+    if (expr.kind === "if_else") return exprNeedsSetSemantics(expr.condition) || exprNeedsSetSemantics(expr.thenExpr) || exprNeedsSetSemantics(expr.elseExpr);
+    return false;
+  };
+  const shapeNeedsSetSemantics = (shape: ShapeElement[]): boolean => shape.some((element) => {
+    if (element.kind === "computed") return exprNeedsSetSemantics(element.expr);
+    if ((element.kind === "link" || element.kind === "backlink") && element.shape) return shapeNeedsSetSemantics(element.shape);
+    return false;
+  });
+  return statement.kind === "select" && shapeNeedsSetSemantics(statement.shape);
+};
+
+const schemaObjectTypeQueryNeedsRuntimeBypass = (query: string): boolean => {
+  const tokens = tryTokenize(query);
+  if (!tokens) return false;
+  const isObjectTypeQuery = tokensIncludeWithModuleSelect(tokens, "schema", "ObjectType")
+    || tokensIncludeQualifiedName(tokens, "schema", "ObjectType");
+  if (!isObjectTypeQuery) return false;
+  // Pattern 1: `IN .properties.annotations.name` (a backlink-style filter).
+  for (let i = 0; i + 1 < tokens.length; i += 1) {
+    if (tokens[i]!.kind !== "kw_in") continue;
+    if (matchDotPath(tokens, i + 1, ["properties", "annotations", "name"]) >= 0) return true;
+  }
+  // Pattern 2: `constraints: { ... annotations: ... }` nested shape.
+  const constraintsBlock = extractTopLevelBlock(query, "constraints");
+  if (constraintsBlock && extractTopLevelBlock(constraintsBlock.content, "annotations")) {
+    return true;
+  }
+  return false;
+};
+
 export const executeQuery = (
   db: SQLiteDatabase,
   schema: SchemaSnapshot,
@@ -5691,13 +7105,12 @@ export const executeQuery = (
 ): QueryResult => {
   const dbg = process.env.GEL_DEBUG_RUNTIME === "1";
   // HACK (not using SQL): the block below short-circuits on a series of
-  // string-matched / AST-shape patterns and returns results without ever
-  // touching the IR/SQL pipeline. Each `tryRuntime*` / `trySchema*` helper
-  // covers a class of query the compiler can't lower yet (schema-link
-  // introspection, schema pointer/tuple/type/object-type queries). These
-  // should be pushed into ast_to_ir + sql/gel_ir_compiler so a single SQL
-  // path handles them.
-  // Schema-introspection regex bypasses run BEFORE the AST evaluator
+  // tokenizer/AST shape patterns and returns results without ever touching
+  // the IR/SQL pipeline. Each `tryRuntime*` / `trySchema*` helper covers a
+  // class of query the compiler can't lower yet (schema-link introspection,
+  // schema pointer/tuple/type/object-type queries). These should be pushed
+  // into ast_to_ir + sql/gel_ir_compiler so a single SQL path handles them.
+  // Schema-introspection bypasses run BEFORE the AST evaluator
   // (tryRuntimeSelectExprEvaluation) because the AST path otherwise consumes
   // these queries and produces empty/wrong results — the parser now accepts
   // `kw_schema` as a name, but the IR/SQL pipeline still has no `schema::*`
@@ -5706,11 +7119,6 @@ export const executeQuery = (
   const runtimeAliasSchemaResult = tryRuntimeTypedAliasSchemaLinkIntrospection(schema, query);
   if (runtimeAliasSchemaResult) {
     return runtimeAliasSchemaResult;
-  }
-
-  const schemaPointerAliasResult = trySchemaPointerAliasQuery(schema, query);
-  if (schemaPointerAliasResult) {
-    return schemaPointerAliasResult;
   }
 
   const schemaTupleResult = trySchemaTupleQuery(schema, query);
@@ -5725,9 +7133,26 @@ export const executeQuery = (
 
   const rewrittenQuery = injectRuntimeAliasBinding(schema, query);
   validateRestrictedLinkPropertyTokens(rewrittenQuery);
-  const schemaQueryResult = trySchemaObjectTypeQuery(schema, rewrittenQuery);
-  if (schemaQueryResult) {
-    return schemaQueryResult;
+  if (schemaObjectTypeQueryNeedsRuntimeBypass(rewrittenQuery)) {
+    const schemaQueryResult = trySchemaObjectTypeQuery(schema, rewrittenQuery);
+    if (schemaQueryResult) {
+      return schemaQueryResult;
+    }
+  }
+
+  try {
+    const compiledTrace = executeQueryWithTrace(db, schema, rewrittenQuery, securityContext);
+    if (
+      compiledTrace.ast.kind === "select_expr"
+      && compiledTrace.sql.loweringMode === "single_statement"
+      && compiledTrace.result.kind === "select"
+      && (compiledTrace.result.rows?.length ?? 0) > 0
+      && !selectHasSetDerivedComputedShape(compiledTrace.ast)
+    ) {
+      return compiledTrace.result;
+    }
+  } catch {
+    // Unsupported select expressions still fall through to the runtime evaluator.
   }
 
   const runtimeSelectExprEvaluationResult = tryRuntimeSelectExprEvaluation(db, schema, query, securityContext);
@@ -5770,6 +7195,10 @@ export const executeQuery = (
     }
   }
 
+  if (isSchemaIntrospectionSelect(parsedQuery)) {
+    return executeQueryWithTrace(db, schema, rewrittenQuery, securityContext).result;
+  }
+
   // HACK (not using SQL): tryEvaluateParsedRuntimeSelect is a ~2k-line AST
   // interpreter that handles every shape/expression the IR/SQL path can't
   // express yet (filtered/ordered/limited links in shapes, multi-step
@@ -5802,7 +7231,7 @@ export const executeScript = (
     // SELECT schema::Type FILTER .name = 'newAlias' picks them up. Both
     // typed (schema.addAlias) and runtime expr aliases (runtimeExprAliases
     // WeakMap) must be included — listAllRuntimeAliasNames merges both.
-    populateSchemaIntrospection(db, schema, listAllRuntimeAliasNames(schema));
+    populateSchemaIntrospection(db, schema, listAllRuntimeAliasNames(schema), runtimeExprAliases.get(schema));
     return { kind: "insert", changes: 0 };
   }
   return executeQueryUnitWithTrace(db, schema, script, securityContext, parserOptions).result;
@@ -5820,6 +7249,21 @@ export const executeQueryWithTrace = (
     const runtimeTarget = resolvedRuntimeTarget(context, db);
     const compilerService = getCompilerService();
     const ast = parseEdgeQL(query);
+    if (ast.kind === "configure") {
+      // CONFIGURE has no SQLite analogue — return an empty insert-like result
+      // so callers that fire it from `.query()` don't have to pre-filter or
+      // catch the compile-time "Statement kind 'configure' requires
+      // typeName" raised by the strict typed-mutation pipeline.
+      return {
+        ast,
+        ir: { kind: "select", rows: [] } as unknown as IRStatement,
+        sql: { sql: "", params: [], loweringMode: "single_statement" } as SQLArtifact,
+        compiler: { key: "configure-noop", status: "miss", stats: { hits: 0, misses: 0, size: 0 } },
+        sqlTrail: [],
+        overlays: [],
+        result: { kind: "insert", changes: 0 },
+      };
+    }
     validateParsedStatement(ast, { schema, module: ast.withModule });
     const statementType = statementTypeOf(ast);
     enforceBuiltinPermissions(context, statementType, ast.pos.line, ast.pos.column);
@@ -5850,131 +7294,9 @@ export const executeQueryWithTrace = (
           : [materializeFreeObjectRow(db, schema, ir.entries, context, sqlTrail)],
       };
     } else if (ir.kind === "select_expr") {
-      // HACK (not using SQL): everything that follows up to the `result = ...`
-      // assignment is a routing table that decides — based on shape sniffing
-      // of the first IR entry — whether the compiled SQL is trustworthy. If
-      // it isn't, we throw the SQL away and call `materializeSelectExprRows`
-      // (the IR interpreter). Each of these conditions
-      // (compareNeedsRuntimeFromFilter/Coalesce, tupleCastNeedsRuntime,
-      // isShapeOrObject) represents a known bug in gel_ir_compiler /
-      // sql/compiler that needs the SQL output to be correct end-to-end so
-      // the bypass can be deleted.
-      const firstEntry = ir.entries[0];
-      // `?=` / `?!=` where ONE side wraps a filtered subquery AND the OTHER
-      // side has an outer type reference (e.g. `field_access(select(Issue), …)`)
-      // needs runtime evaluation: the compiled SQL hoists the inner
-      // subquery's filter onto the outer JOIN row, so the outer iteration
-      // gets restricted by the inner filter. Cases with no outer LCP (a
-      // constant or simple scalar on the other side) compile correctly to
-      // SQL via `(SELECT … WHERE …) IS …` and do not need this bypass.
-      const containsSelectExprSubquery = (e: SelectExprIREntry | undefined): boolean => {
-        if (!e || typeof e !== "object") return false;
-        if (e.kind === "select_expr_subquery") return true;
-        if (e.kind === "field_access") return containsSelectExprSubquery(e.value);
-        if (e.kind === "cast" || e.kind === "not" || e.kind === "distinct" || e.kind === "exists" || e.kind === "shape_projection") {
-          return containsSelectExprSubquery((e as { value?: SelectExprIREntry; expr?: SelectExprIREntry }).value
-            ?? (e as { expr?: SelectExprIREntry }).expr);
-        }
-        if (e.kind === "coalesce" || e.kind === "math" || e.kind === "compare" || e.kind === "and" || e.kind === "or") {
-          return containsSelectExprSubquery((e as { left: SelectExprIREntry }).left)
-            || containsSelectExprSubquery((e as { right: SelectExprIREntry }).right);
-        }
-        if (e.kind === "set_expr" || e.kind === "tuple" || e.kind === "array_literal_expr") {
-          return (e.values as SelectExprIREntry[]).some(containsSelectExprSubquery);
-        }
-        if (e.kind === "concat") {
-          return (e.parts as SelectExprIREntry[]).some(containsSelectExprSubquery);
-        }
-        return false;
-      };
-      const containsOuterSelect = (e: SelectExprIREntry | undefined): boolean => {
-        if (!e || typeof e !== "object") return false;
-        if (e.kind === "select_expr_subquery") return false;
-        if (e.kind === "select" || e.kind === "path_steps") return true;
-        if (e.kind === "field_access") return containsOuterSelect(e.value);
-        if (e.kind === "cast" || e.kind === "not" || e.kind === "distinct" || e.kind === "exists" || e.kind === "shape_projection") {
-          return containsOuterSelect((e as { value?: SelectExprIREntry; expr?: SelectExprIREntry }).value
-            ?? (e as { expr?: SelectExprIREntry }).expr);
-        }
-        if (e.kind === "coalesce" || e.kind === "math" || e.kind === "compare" || e.kind === "and" || e.kind === "or") {
-          return containsOuterSelect((e as { left: SelectExprIREntry }).left)
-            || containsOuterSelect((e as { right: SelectExprIREntry }).right);
-        }
-        if (e.kind === "set_expr" || e.kind === "tuple" || e.kind === "array_literal_expr") {
-          return (e.values as SelectExprIREntry[]).some(containsOuterSelect);
-        }
-        if (e.kind === "concat") {
-          return (e.parts as SelectExprIREntry[]).some(containsOuterSelect);
-        }
-        return false;
-      };
-      const compareNeedsRuntimeFromFilter = (firstEntry?.kind === "compare")
-        && (firstEntry.op === "?=" || firstEntry.op === "?!=")
-        && (
-          (containsSelectExprSubquery(firstEntry.left) && containsOuterSelect(firstEntry.right))
-          || (containsSelectExprSubquery(firstEntry.right) && containsOuterSelect(firstEntry.left))
-        );
-
-      // `?=` / `?!=` with a `coalesce` inside either side whose operands
-      // reference an outer LCP needs the runtime: the compiled SQL flattens
-      // `X ?? Y` to a SQL COALESCE over a single join row (e.g.
-      // `COALESCE(g0.time_estimate, g0.time_estimate)` for
-      // `Issue.time_estimate ?? Issue.related_to.time_estimate`), losing the
-      // per-Issue dependency on `related_to`. Coalesce over constants or
-      // simple scalars (`1 ?= (2 ?? 3)`) compiles to a correct
-      // `COALESCE(?, ?)` in SQL and does not need this bypass.
-      const containsCoalesceOverOuterRefs = (e: SelectExprIREntry | undefined): boolean => {
-        if (!e || typeof e !== "object") return false;
-        if (e.kind === "coalesce") {
-          return containsOuterSelect((e as { left: SelectExprIREntry }).left)
-            || containsOuterSelect((e as { right: SelectExprIREntry }).right);
-        }
-        if (e.kind === "field_access") return containsCoalesceOverOuterRefs(e.value);
-        if (e.kind === "cast" || e.kind === "not" || e.kind === "distinct" || e.kind === "exists" || e.kind === "shape_projection") {
-          return containsCoalesceOverOuterRefs((e as { value?: SelectExprIREntry; expr?: SelectExprIREntry }).value
-            ?? (e as { expr?: SelectExprIREntry }).expr);
-        }
-        if (e.kind === "math" || e.kind === "compare" || e.kind === "and" || e.kind === "or") {
-          return containsCoalesceOverOuterRefs((e as { left: SelectExprIREntry }).left)
-            || containsCoalesceOverOuterRefs((e as { right: SelectExprIREntry }).right);
-        }
-        if (e.kind === "set_expr" || e.kind === "tuple" || e.kind === "array_literal_expr") {
-          return (e.values as SelectExprIREntry[]).some(containsCoalesceOverOuterRefs);
-        }
-        if (e.kind === "concat") {
-          return (e.parts as SelectExprIREntry[]).some(containsCoalesceOverOuterRefs);
-        }
-        return false;
-      };
-      const compareNeedsRuntimeFromCoalesce = (firstEntry?.kind === "compare")
-        && (firstEntry.op === "?=" || firstEntry.op === "?!=")
-        && (containsCoalesceOverOuterRefs(firstEntry.left) || containsCoalesceOverOuterRefs(firstEntry.right));
-
-      // `<tuple<...>>X` cast over a non-literal source (alias, column ref,
-      // function call, set/union, etc.) still needs runtime reshape: the
-      // SQL emit only handles literal `tuple` sources (where the source
-      // elements are visible in the IR and can be re-emitted with the
-      // target's shape). Literal-source casts compile via gel_ir_compiler's
-      // type_cast→tuple branch.
-      const tupleCastNeedsRuntime = firstEntry?.kind === "cast"
-        && parseTupleCastSlots((firstEntry as { castType: string }).castType) !== null
-        && (firstEntry as { value?: SelectExprIREntry }).value?.kind !== "tuple";
-      const isShapeOrObject = firstEntry
-        && (firstEntry.kind === "shape_projection"
-          || firstEntry.kind === "select"
-          || firstEntry.kind === "path_steps"
-          || firstEntry.kind === "field_access"
-          || firstEntry.kind === "select_expr_subquery"
-          || firstEntry.kind === "array_literal_expr"
-          || compareNeedsRuntimeFromFilter
-          || compareNeedsRuntimeFromCoalesce
-          || tupleCastNeedsRuntime);
-      const sqlIsRunnable = compiled.usesGelIrSql && sqlArtifact.loweringMode === "single_statement";
       result = {
         kind: "select",
-        rows: sqlIsRunnable && !isShapeOrObject
-          ? runGelSelectExprSQL(db, sqlArtifact)
-          : materializeSelectExprRows(db, schema, ir, context, sqlTrail),
+        rows: runGelSelectExprSQL(db, sqlArtifact),
       };
     } else if (ir.kind === "group") {
       // HACK (not using SQL): GROUP is executed by runGroupIR, which
@@ -6014,7 +7336,7 @@ export const executeQueryWithTrace = (
       result,
     };
   } catch (err) {
-    throw asAppError(err);
+    throw asAppError(decorateErrorWithUnsupportedTag(err, query));
   }
 };
 
@@ -6157,8 +7479,17 @@ export const executeQueryUnitWithTrace = (
       if (ast.kind === "ddl") {
         if (ast.action === "create" && ast.objectKind === "function" && ast.functionDecl) {
           applyParsedFunctionDDL(schema, ast, parserOptions.defaultModule ?? "default");
+          populateSchemaIntrospection(db, schema, listAllRuntimeAliasNames(schema), runtimeExprAliases.get(schema));
           compilerService.clear();
         }
+        continue;
+      }
+      if (ast.kind === "configure") {
+        // Session/instance/database CONFIGURE statements (e.g. `CONFIGURE
+        // SESSION SET allow_user_specified_id := true`) don't have a SQLite
+        // analogue — sqlite-ts has no equivalent session-config knobs to
+        // mutate. Treat them as no-ops so scripts that use them for parity
+        // with upstream still execute their following DML.
         continue;
       }
 
@@ -6197,21 +7528,9 @@ export const executeQueryUnitWithTrace = (
             : [materializeFreeObjectRow(db, schema, ir.entries, context, sqlTrail)],
         };
     } else if (ir.kind === "select_expr") {
-        // HACK (not using SQL): same `runnable vs. materialize` dispatch as
-        // executeQueryWithTrace's select_expr branch — when the IR/SQL path
-        // isn't trusted (non-single_statement lowering, !usesGelIrSql, or
-        // tuple-cast reshape over a non-literal source), we throw the SQL
-        // away and interpret in TS via materializeSelectExprRows.
-        const firstEntry = ir.entries[0];
-        const needsRuntimeExpr = firstEntry?.kind === "cast"
-          && parseTupleCastSlots((firstEntry as { castType: string }).castType) !== null
-          && (firstEntry as { value?: SelectExprIREntry }).value?.kind !== "tuple";
-        const sqlIsRunnable = compiled.usesGelIrSql && sqlArtifact.loweringMode === "single_statement" && !needsRuntimeExpr;
         result = {
           kind: "select",
-          rows: sqlIsRunnable
-            ? runGelSelectExprSQL(db, sqlArtifact)
-            : materializeSelectExprRows(db, schema, ir, context, sqlTrail),
+          rows: runGelSelectExprSQL(db, sqlArtifact),
         };
       } else if (ir.kind === "group") {
         result = {
@@ -6244,7 +7563,7 @@ export const executeQueryUnitWithTrace = (
       result: traces.length > 0 ? traces[traces.length - 1].result : { kind: "insert", changes: 0 },
     };
   } catch (err) {
-    throw asAppError(err);
+    throw asAppError(decorateErrorWithUnsupportedTag(err, script));
   }
 };
 
@@ -6566,15 +7885,26 @@ const executeForLoop = (
       pos: ast.pos,
     };
 
+    // The compile-to-SQL path can't lower bodies that need the AST runtime
+    // (UDF calls, alias subqueries with link-property shapes, etc.) — it
+    // emits stub SQL that returns a single NULL row. Try the AST evaluator
+    // first; it iterates per-binding in JS and routes UDF calls through
+    // executeFunctionCall. `tryRuntimeSelectExprEvaluationAst` returns
+    // undefined when the body doesn't need runtime eval, so plain FOR loops
+    // still fall through to the SQL path below.
+    const runtimeResult = tryRuntimeSelectExprEvaluationAst(db, schema, syntheticAst, context);
+
     const compiled = compilerService.compile(schema, syntheticAst, { overlays, globals: context.globals, target: runtimeTarget });
     const ir = compiled.ir;
     const sqlArtifact = compiled.sql;
     assertTargetSqlCompatibility(sqlArtifact.sql, runtimeTarget);
     const sqlTrail: SQLArtifact[] = [sqlArtifact];
 
-    const rows = ir.kind === "select_expr"
-      ? materializeSelectExprRows(db, schema, ir, context, sqlTrail)
-      : [];
+    const rows = runtimeResult?.kind === "select"
+      ? runtimeResult.rows
+      : ir.kind === "select_expr"
+        ? runGelSelectExprSQL(db, sqlArtifact)
+        : [];
 
     const currentOverlays = extractOverlays(ir);
     traces.push({
@@ -6623,7 +7953,7 @@ const executeForLoop = (
     const sqlTrail: SQLArtifact[] = [sqlArtifact];
 
     const rows = ir.kind === "select_expr"
-      ? materializeSelectExprRows(db, schema, ir, context, sqlTrail)
+      ? runGelSelectExprSQL(db, sqlArtifact)
       : [];
 
     const currentOverlays = extractOverlays(ir);
@@ -6839,38 +8169,6 @@ const coerceUnknownToScalar = (value: unknown): ScalarValue | undefined => {
 // Sentinel marker for an empty set during free-expression evaluation. In
 // EdgeQL semantics, `{}` and a NULL-valued field are both empty sets.
 const SHAPE_EMPTY_SET = Symbol("empty_set");
-const TUPLE_MULTI_ROW_MARKER = Symbol.for("gel.selectExpr.tupleMultiRow");
-
-// EdgeQL-style ordering: tuples compare element-wise, numbers compare
-// numerically, strings via localeCompare. Returns negative/zero/positive.
-const compareEdgeQLValues = (a: unknown, b: unknown): number => {
-  if (a === b) return 0;
-  const aNull = a === null || a === undefined;
-  const bNull = b === null || b === undefined;
-  if (aNull && bNull) return 0;
-  if (aNull) return -1;
-  if (bNull) return 1;
-  if (Array.isArray(a) && Array.isArray(b)) {
-    const len = Math.min(a.length, b.length);
-    for (let i = 0; i < len; i += 1) {
-      const cmp = compareEdgeQLValues(a[i], b[i]);
-      if (cmp !== 0) return cmp;
-    }
-    return a.length - b.length;
-  }
-  if (typeof a === "number" && typeof b === "number") {
-    return a < b ? -1 : a > b ? 1 : 0;
-  }
-  if (typeof a === "boolean" && typeof b === "boolean") {
-    return a === b ? 0 : a ? 1 : -1;
-  }
-  // Plain lexicographic comparison (matches PG's default text ordering and
-  // the engine's pre-existing string sort behavior) — `localeCompare` would
-  // pick a locale-dependent collation that mixes uppercase and lowercase.
-  const aStr = String(a);
-  const bStr = String(b);
-  return aStr < bStr ? -1 : aStr > bStr ? 1 : 0;
-};
 
 // Whether the FreeObjectExpr can produce more than one value (set semantics).
 // Used to decide if the shape's evaluator output should be wrapped as an array.
@@ -7164,8 +8462,10 @@ const tryEvaluateBacklinkShapeExpr = (
   // Peel the wrappers down to the for_expr we recognise.
   let cursor: FreeObjectExpr = expr;
   let projectedShape: ShapeElement[] | undefined;
-  if (cursor.kind === "select_expr") {
-    cursor = cursor.expr;
+  // `shapeEl.expr` can be a ComputedExpr's `select_expr` wrapper at runtime
+  // (the static type FreeObjectExpr doesn't include it); peel it through.
+  if ((cursor as { kind: string }).kind === "select_expr") {
+    cursor = (cursor as unknown as { expr: FreeObjectExpr }).expr;
   }
 
   // EXISTS over a backlink-derived set. EdgeQL's `EXISTS X` is the
@@ -7238,7 +8538,7 @@ const tryEvaluateBacklinkShapeExpr = (
         continue;
       }
       if (shapeEl.kind === "computed") {
-        const value = evaluateSelectExprShapeEntry(db, schema, shapeEl.expr, entry.row, entry.typeName);
+        const value = evaluateSelectExprShapeEntry(db, schema, shapeEl.expr as unknown as FreeObjectExpr, entry.row, entry.typeName);
         out[shapeEl.name] = value;
         continue;
       }
@@ -7382,6 +8682,16 @@ const evaluateSelectExprShapeEntry = (
   return current;
 };
 
+const freeExprHasCollectionDerivation = (expr: FreeObjectExpr): boolean => {
+  if (expr.kind === "array_literal_expr" || expr.kind === "tuple" || expr.kind === "index_access" || expr.kind === "slice_access" || expr.kind === "function_call") return true;
+  if (expr.kind === "field_access" || expr.kind === "select_expr_subquery" || expr.kind === "distinct" || expr.kind === "cast" || expr.kind === "exists" || expr.kind === "not" || expr.kind === "unary" || expr.kind === "shape_projection") return freeExprHasCollectionDerivation(expr.expr);
+  if (expr.kind === "set_expr") return expr.values.some(freeExprHasCollectionDerivation);
+  if (expr.kind === "compare" || expr.kind === "in_expr" || expr.kind === "math" || expr.kind === "logical" || expr.kind === "and" || expr.kind === "or" || expr.kind === "coalesce") return freeExprHasCollectionDerivation(expr.left) || freeExprHasCollectionDerivation(expr.right);
+  if (expr.kind === "if_else") return freeExprHasCollectionDerivation(expr.condition) || freeExprHasCollectionDerivation(expr.thenExpr) || freeExprHasCollectionDerivation(expr.elseExpr);
+  if (expr.kind === "concat") return expr.parts.some(freeExprHasCollectionDerivation);
+  return false;
+};
+
 const materializeSelectRow = (
   db: SQLiteDatabase,
   schema: SchemaSnapshot,
@@ -7479,7 +8789,8 @@ const materializeSelectRow = (
         }
       } else if (element.expr.kind === "select_expr") {
         const loweredAlias = computedValueAlias(element.pathId);
-        if (Object.prototype.hasOwnProperty.call(row, loweredAlias) && row[loweredAlias] !== null && row[loweredAlias] !== undefined) {
+        if (!freeExprHasCollectionDerivation(element.expr.expr)
+          && Object.prototype.hasOwnProperty.call(row, loweredAlias) && row[loweredAlias] !== null && row[loweredAlias] !== undefined) {
           const raw = row[loweredAlias];
           if (typeof raw === "string"
             && (raw === "true" || raw === "false" || raw === "null"
@@ -7561,7 +8872,7 @@ const materializeFieldValue = (
     return value;
   }
 
-  if (field.multi) {
+      if (field.multi) {
     if (value === null || value === undefined) {
       return [];
     }
@@ -7574,7 +8885,7 @@ const materializeFieldValue = (
       if (!Array.isArray(parsed)) {
         return [];
       }
-      return parsed.map((item) => coerceScalarForOutput(field.type, item));
+      return parsed.map((item) => coerceScalarForOutput(field.type, item)).sort((a, b) => String(a).localeCompare(String(b)));
     } catch {
       return [];
     }
@@ -7808,13 +9119,8 @@ const runGroupIR = (
 ): Record<string, unknown>[] => {
   // HACK (not using SQL): GROUP source rows are gathered by trying
   // tryRuntimeSelectExprEvaluationAst → tryEvaluateParsedRuntimeSelect →
-  // compile+runSelectIR/materializeSelectExprRows, then grouped in TS below.
-  // The IR/SQL compile is the last-resort fallback because it rejects shapes
-  // that touch backlinks. GROUP should be a first-class IR/SQL operation.
-  // Materialise the source rows by routing through whichever runtime path
-  // matches the source AST kind. The strict IR/SQL compile rejects shape
-  // entries that touch backlinks (`count(.owners)`), so we prefer the parsed
-  // runtimes; the IR path is the last-resort fallback.
+  // compile+runSelectIR/runGelSelectExprSQL, then grouped in TS below.
+  // GROUP should be a first-class IR/SQL operation.
   let rows: Record<string, unknown>[] = [];
   const tryExpr = ir.source.kind === "select_expr"
     ? tryRuntimeSelectExprEvaluationAst(db, schema, ir.source, context)
@@ -7838,7 +9144,7 @@ const runGroupIR = (
           rows = runSelectIR(db, schema, sourceCompiled.ir, context, sourceCompiled.sql, sqlTrail);
         } else if (sourceCompiled.ir.kind === "select_expr") {
           sqlTrail.push(sourceCompiled.sql);
-          const exprRows = materializeSelectExprRows(db, schema, sourceCompiled.ir, context, sqlTrail);
+          const exprRows = runGelSelectExprSQL(db, sourceCompiled.sql);
           rows = exprRows.filter((row): row is Record<string, unknown> => row !== null && typeof row === "object");
         }
       } catch {
@@ -8004,7 +9310,7 @@ const evalGroupRowExpr = (
         case "+": return left + right;
         case "-": return left - right;
         case "*": return left * right;
-        case "/": return right === 0 ? null : left / right;
+        case "/": return right === 0 ? null : normalizeRuntimeFloat(left / right);
         case "%": return right === 0 ? null : left % right;
         default: return null;
       }
@@ -8279,2316 +9585,6 @@ const materializeFreeObjectRow = (
   return out;
 };
 
-// Parse a `tuple<...>` cast type string into per-slot specs. Returns null
-// if `castType` isn't a tuple cast. Each slot has an optional `name` (set
-// when the cast type uses `name: T` syntax); slot types are returned as
-// raw strings — the cast applies field reshape rather than type coercion,
-// so the inner type isn't inspected here.
-const parseTupleCastSlots = (castType: string): { name?: string; type: string }[] | null => {
-  const m = /^(?:default::)?tuple<(.*)>$/.exec(castType.trim());
-  if (!m) return null;
-  const inner = m[1];
-  const slots: { name?: string; type: string }[] = [];
-  let depth = 0;
-  let start = 0;
-  for (let i = 0; i <= inner.length; i += 1) {
-    const c = inner[i];
-    if (c === "<") depth += 1;
-    else if (c === ">") depth -= 1;
-    if ((c === "," && depth === 0) || i === inner.length) {
-      const part = inner.slice(start, i).trim();
-      start = i + 1;
-      if (part.length === 0) continue;
-      let colonIdx = -1;
-      let d = 0;
-      for (let j = 0; j < part.length; j += 1) {
-        if (part[j] === "<") d += 1;
-        else if (part[j] === ">") d -= 1;
-        else if (part[j] === ":" && d === 0) { colonIdx = j; break; }
-      }
-      if (colonIdx > 0) {
-        slots.push({ name: part.slice(0, colonIdx).trim(), type: part.slice(colonIdx + 1).trim() });
-      } else {
-        slots.push({ type: part });
-      }
-    }
-  }
-  return slots;
-};
-
-// Reshape a single tuple value to match a `tuple<...>` cast.
-//
-// EdgeQL tuple casts project fields positionally: a named-tuple source is
-// laid out in field-declaration order, then mapped slot-by-slot into the
-// target. The cast itself is a structural rename / re-projection, not a
-// per-element type coercion.
-const reshapeForTupleCast = (
-  value: unknown,
-  slots: { name?: string; type: string }[],
-): unknown => {
-  if (value === null || value === undefined) return value;
-  const targetIsNamed = slots.every((s) => s.name !== undefined);
-  if (Array.isArray(value)) {
-    if (targetIsNamed) {
-      const out: Record<string, unknown> = {};
-      slots.forEach((slot, i) => { out[slot.name!] = value[i] ?? null; });
-      return out;
-    }
-    return value.slice(0, slots.length);
-  }
-  if (typeof value === "object") {
-    const obj = value as Record<string, unknown>;
-    const sourceKeys = Object.keys(obj);
-    if (targetIsNamed) {
-      const out: Record<string, unknown> = {};
-      slots.forEach((slot, i) => {
-        const sourceKey = sourceKeys[i];
-        out[slot.name!] = sourceKey !== undefined ? (obj[sourceKey] ?? null) : null;
-      });
-      return out;
-    }
-    return sourceKeys.slice(0, slots.length).map((k) => obj[k] ?? null);
-  }
-  return value;
-};
-
-// HACK (not using SQL): evaluateSelectExprEntry is the IR interpreter — a
-// ~2k-line switch over SelectExprIREntry kinds that re-implements EdgeQL
-// semantics (LCP iteration, coalesce, compare, cast, set/tuple/array ops,
-// shape projection, exists/distinct, function calls, …) in TS. Anything we
-// can compile to SQL via sql/gel_ir_compiler should never reach here.
-const evaluateSelectExprEntry = (
-  schema: SchemaSnapshot,
-  db: SQLiteDatabase,
-  context: SecurityContext,
-  entry: SelectExprIREntry,
-  sqlTrail: SQLArtifact[],
-  evalContext?: {
-    currentBinding?: string;
-    currentValue?: unknown;
-    bindings?: Record<string, unknown>;
-    // Hint for LCP iteration: if present, the LCP path uses this to pre-sort
-    // subject rows so that the outer ORDER BY (applied later in
-    // materializeSelectExprRows) sees rows in the correct sequence. Without
-    // this, the outer sort can't reorder per-row booleans because it has no
-    // way to recover the originating subject row.
-    parentOrderBy?: { value: SelectExprIREntry; direction?: "asc" | "desc" };
-  },
-): unknown => {
-  const resolveFieldAccessValue = (item: unknown, field: string): unknown => {
-    if (!item || typeof item !== "object" || Array.isArray(item)) {
-      return null;
-    }
-
-    const row = item as Record<string, unknown>;
-    if (Object.prototype.hasOwnProperty.call(row, field)) {
-      return row[field] ?? null;
-    }
-
-    if (typeof row.id !== "string") {
-      return null;
-    }
-
-    const id = row.id;
-    const globalType = db
-      .prepare(`SELECT ${quoteIdent("type_name")} AS ${quoteIdent("type_name")} FROM ${quoteIdent("__gel_global_ids")} WHERE ${quoteIdent("id")} = ?`)
-      .all(id)[0] as { type_name?: unknown } | undefined;
-    if (!globalType || typeof globalType.type_name !== "string") {
-      return null;
-    }
-
-    const sourceTypeName = resolveRuntimeStoredTypeName(schema, globalType.type_name);
-    const sourceType = schema.getType(sourceTypeName);
-    if (!sourceType) {
-      return null;
-    }
-
-    const property = findFieldDef(schema, sourceTypeName, field);
-    if (property) {
-      const sourceTable = tableNameForType(sourceTypeName);
-      const sourceRow = readRowById(db, sourceTable, id);
-      return materializeFieldValue(schema, sourceTypeName, field, sourceRow?.[field] ?? null);
-    }
-
-    const computed = sourceType.computeds?.find((candidate) => candidate.kind === "property" && candidate.name === field);
-    if (computed && computed.kind === "property") {
-      const sourceTable = tableNameForType(sourceTypeName);
-      const sourceRow = readRowById(db, sourceTable, id) ?? row;
-
-      if (computed.expr.kind === "literal") {
-        return computed.expr.value;
-      }
-      if (computed.expr.kind === "set_literal") {
-        return [...computed.expr.values];
-      }
-      if (computed.expr.kind === "field_ref") {
-        return sourceRow?.[computed.expr.field] ?? null;
-      }
-      if (computed.expr.kind === "concat") {
-        return computed.expr.parts
-          .map((part) => (
-            part.kind === "literal"
-              ? String(part.value ?? "")
-              : String(sourceRow?.[part.field] ?? "")
-          ))
-          .join("");
-      }
-      if (computed.expr.kind === "function_call") {
-        return executeFunctionCall(schema, db, context, computed.expr.name, computed.expr.args as RuntimeFunctionArg[]);
-      }
-      if (computed.expr.kind === "link_aggregate") {
-        const aggregate = computed.expr;
-        const sourceRow = readRowById(db, tableNameForType(sourceTypeName), id) ?? row;
-        const targets = resolveFieldAccessValue({ ...sourceRow, id }, aggregate.link);
-        const targetRows = Array.isArray(targets) ? targets : targets ? [targets] : [];
-        if (aggregate.functionName === "sum") {
-          return targetRows.reduce((total, target) => {
-            if (!target || typeof target !== "object" || Array.isArray(target)) {
-              return total;
-            }
-            const targetRow = target as Record<string, unknown>;
-            return total + Number(targetRow[aggregate.field] ?? targetRow[`@${aggregate.field}`] ?? 0);
-          }, 0);
-        }
-        return 0;
-      }
-      return null;
-    }
-
-    const computedLink = sourceType.computeds?.find((candidate) => candidate.kind === "link" && candidate.name === field);
-    if (computedLink && computedLink.kind === "link" && computedLink.expr.kind === "backlink") {
-      return resolveBacklinkPathValue(item, computedLink.expr.link, computedLink.expr.sourceType);
-    }
-
-    const resolvedLink = findRuntimeLinkDef(schema, sourceTypeName, field);
-    if (!resolvedLink) {
-      return null;
-    }
-
-    const loadTargetById = (targetId: unknown): Record<string, unknown> | null => {
-      if (typeof targetId !== "string") {
-        return null;
-      }
-      const targetType = db
-        .prepare(`SELECT ${quoteIdent("type_name")} AS ${quoteIdent("type_name")} FROM ${quoteIdent("__gel_global_ids")} WHERE ${quoteIdent("id")} = ?`)
-        .all(targetId)[0] as { type_name?: unknown } | undefined;
-      if (!targetType || typeof targetType.type_name !== "string") {
-        return null;
-      }
-      const resolvedTargetTypeName = resolveRuntimeStoredTypeName(schema, targetType.type_name);
-      const targetTable = tableNameForType(resolvedTargetTypeName);
-      const loaded = readRowById(db, targetTable, targetId);
-      if (!loaded) {
-        return null;
-      }
-      return { ...loaded, __source_type: resolvedTargetTypeName };
-    };
-
-    const targetRowsWithProps: Array<{ targetId: string; properties: Record<string, unknown> }> = [];
-    const linkDef = resolvedLink.link;
-    const usesLinkTable = Boolean(linkDef.multi) || (linkDef.properties?.length ?? 0) > 0;
-
-    if (usesLinkTable) {
-      const storageOwner = resolveLinkStorageOwner(schema, sourceType, linkDef);
-      const ownerTable = tableNameForType(qualifiedTypeName(storageOwner));
-      const linkTable = `${ownerTable}__${linkDef.name.toLowerCase()}`;
-      const rows = db
-        .prepare(`SELECT * FROM ${quoteIdent(linkTable)} WHERE ${quoteIdent("source")} = ?`)
-        .all(id) as Array<Record<string, unknown> & { target?: unknown }>;
-      for (const row of rows) {
-        if (typeof row.target === "string") {
-          const properties: Record<string, unknown> = {};
-          for (const property of linkDef.properties ?? []) {
-            properties[`@${property.name}`] = row[property.name] ?? null;
-          }
-          targetRowsWithProps.push({ targetId: row.target, properties });
-        }
-      }
-    } else {
-      const sourceRow = readRowById(db, tableNameForType(sourceTypeName), id);
-      const inlineColumn = `${linkDef.name}_id`;
-      const targetId = sourceRow?.[inlineColumn];
-      if (typeof targetId === "string") {
-        targetRowsWithProps.push({ targetId, properties: {} });
-      }
-    }
-
-    const loadedTargets = targetRowsWithProps
-      .map(({ targetId, properties }) => {
-        const target = loadTargetById(targetId);
-        if (!target) {
-          return null;
-        }
-        const computedProperties = Object.fromEntries((linkDef.computedProperties ?? []).map((property) => [
-          `@${property.name}`,
-          evaluateComputedLinkPropertyExpr(property.computedExpr, target, properties),
-        ]));
-        return { ...target, ...properties, ...computedProperties };
-      })
-      .filter((row): row is Record<string, unknown> => row !== null);
-
-    if (linkDef.multi) {
-      return loadedTargets;
-    }
-    return loadedTargets[0] ?? null;
-  };
-
-  const resolveBacklinkPathValue = (item: unknown, link: string, sourceTypeFilter?: string, sourceTypeExpr?: TypeExpr): unknown[] => {
-    if (!item || typeof item !== "object" || Array.isArray(item)) {
-      return [];
-    }
-    const target = item as Record<string, unknown>;
-    if (typeof target.id !== "string") {
-      return [];
-    }
-    const targetTypeName = typeof target.__source_type === "string"
-      ? target.__source_type
-      : (() => {
-          const row = db.prepare(`SELECT ${quoteIdent("type_name")} AS ${quoteIdent("type_name")} FROM ${quoteIdent("__gel_global_ids")} WHERE ${quoteIdent("id")} = ?`).all(target.id)[0] as { type_name?: unknown } | undefined;
-          return typeof row?.type_name === "string" ? resolveRuntimeStoredTypeName(schema, row.type_name) : undefined;
-        })();
-    const sourceTypes = sourceTypeExpr
-      ? schema.listTypes().filter((typeDef) => !typeDef.abstract && rowMatchesTypeExpr(qualifiedTypeName(typeDef), sourceTypeExpr))
-      : sourceTypeFilter
-        ? schema.listConcreteTypesAssignableTo(qualifyRuntimeTypeName(sourceTypeFilter))
-        : schema.listTypes();
-    const out: Record<string, unknown>[] = [];
-    for (const sourceType of sourceTypes) {
-      const sourceTypeName = qualifiedTypeName(sourceType);
-      const resolved = findRuntimeLinkDef(schema, sourceTypeName, link);
-      if (!resolved) {
-        continue;
-      }
-      const targetNames = normalizeLinkTargetNames(resolved.link.targetType, sourceType.module ?? "default");
-      const canTarget = targetNames.some((candidate) => {
-        if (candidate === targetTypeName) {
-          return true;
-        }
-        return schema.listConcreteTypesAssignableTo(candidate).some((typeDef) => qualifiedTypeName(typeDef) === targetTypeName);
-      });
-      if (!canTarget) {
-        continue;
-      }
-      const sourceTable = tableNameForType(sourceTypeName);
-      if (resolved.link.multi || (resolved.link.properties?.length ?? 0) > 0) {
-        const owner = resolveLinkStorageOwner(schema, sourceType, resolved.link);
-        const linkTable = `${tableNameForType(qualifiedTypeName(owner))}__${resolved.link.name.toLowerCase()}`;
-        const rows = db.prepare(`SELECT s.*, l.* FROM ${quoteIdent(sourceTable)} s JOIN ${quoteIdent(linkTable)} l ON l.${quoteIdent("source")} = s.${quoteIdent("id")} WHERE l.${quoteIdent("target")} = ?`).all(target.id) as Record<string, unknown>[];
-        for (const row of rows) {
-          const props = Object.fromEntries((resolved.link.properties ?? []).map((property) => [`@${property.name}`, row[property.name] ?? null]));
-          out.push({ ...row, ...props, __source_type: sourceTypeName });
-        }
-      } else {
-        const rows = db.prepare(`SELECT * FROM ${quoteIdent(sourceTable)} WHERE ${quoteIdent(`${resolved.link.name}_id`)} = ?`).all(target.id) as Record<string, unknown>[];
-        out.push(...rows.map((row) => ({ ...row, __source_type: sourceTypeName })));
-      }
-    }
-    return out;
-  };
-
-  const resolvePathStepTypeName = (name: string): string => {
-    const qualified = qualifyRuntimeTypeName(name);
-    if (schema.getType(qualified) || schema.listConcreteTypesAssignableTo(qualified).length > 0) {
-      return qualified;
-    }
-
-    const stdQualified = qualifyRuntimeTypeName(name, "std");
-    if (schema.getType(stdQualified) || schema.listConcreteTypesAssignableTo(stdQualified).length > 0) {
-      return stdQualified;
-    }
-
-    return qualified;
-  };
-
-  const rowMatchesTypeName = (sourceTypeName: string, targetName: string): boolean => {
-    const qualifiedTarget = resolvePathStepTypeName(targetName);
-    return sourceTypeName === qualifiedTarget
-      || schema.listConcreteTypesAssignableTo(qualifiedTarget).some((candidate) => qualifiedTypeName(candidate) === sourceTypeName);
-  };
-
-  const rowMatchesTypeExpr = (sourceTypeName: string, expr: TypeExpr): boolean => {
-    if (expr.kind === "type_name") {
-      return rowMatchesTypeName(sourceTypeName, expr.name);
-    }
-    if (expr.kind === "type_union") {
-      return rowMatchesTypeExpr(sourceTypeName, expr.left) || rowMatchesTypeExpr(sourceTypeName, expr.right);
-    }
-    return rowMatchesTypeExpr(sourceTypeName, expr.left) && rowMatchesTypeExpr(sourceTypeName, expr.right);
-  };
-
-  const readPathRootRows = (name: string): Array<Record<string, unknown> & { __source_type: string }> => {
-    const rootTypeName = resolvePathStepTypeName(name);
-    const rootType = schema.getType(rootTypeName);
-    const concreteTypes = schema.listConcreteTypesAssignableTo(rootTypeName);
-    const sourceTypes = concreteTypes.length > 0 ? concreteTypes : rootType ? [rootType] : [];
-    const rows: Array<Record<string, unknown> & { __source_type: string }> = [];
-
-    for (const sourceType of sourceTypes) {
-      const sourceTypeName = qualifiedTypeName(sourceType);
-      const table = tableNameForType(sourceTypeName);
-      const selected = db.prepare(`SELECT * FROM ${quoteIdent(table)}`).all() as Record<string, unknown>[];
-      rows.push(...selected.map((row) => ({ ...row, __source_type: sourceTypeName })));
-    }
-
-    return rows;
-  };
-
-  const evaluatePathSteps = (
-    steps: PathStep[],
-    evalContext?: { currentValue?: unknown; bindings?: Record<string, unknown> },
-  ): unknown => {
-    const first = steps[0];
-    if (!first) {
-      return [];
-    }
-
-    let value: unknown;
-    let rest: PathStep[];
-    if (first.kind === "object_ref") {
-      value = evalContext?.bindings && first.name in evalContext.bindings
-        ? [evalContext.bindings[first.name]]
-        : readPathRootRows(first.name);
-      rest = steps.slice(1);
-    } else if (first.kind === "type_intersection" || first.kind === "ptr") {
-      // Implicit-subject path (e.g. `[is T].field` rooted at the current row).
-      value = evalContext?.currentValue ?? null;
-      rest = steps;
-    } else {
-      return [];
-    }
-    for (let i = 0; i < rest.length; i += 1) {
-      const step = rest[i]!;
-      if (step.kind === "type_intersection") {
-        const expr = step.typeExpr ?? (step.typeName ? { kind: "type_name" as const, name: step.typeName } : undefined);
-        if (expr) {
-          const items = Array.isArray(value) ? value : [value];
-          value = items.filter((item) => item && typeof item === "object" && !Array.isArray(item)
-            && typeof (item as Record<string, unknown>).__source_type === "string"
-            && rowMatchesTypeExpr((item as Record<string, unknown>).__source_type as string, expr));
-        }
-        continue;
-      }
-
-      if (step.kind !== "ptr") {
-        continue;
-      }
-
-      const nextStep = rest[i + 1];
-      if (step.name === "__type__" && nextStep?.kind === "ptr" && nextStep.name === "name") {
-        const items = Array.isArray(value) ? value : [value];
-        value = items
-          .map((item) => item && typeof item === "object" && !Array.isArray(item)
-            ? (item as Record<string, unknown>).__source_type ?? null
-            : null)
-          .filter((item) => item !== null && item !== undefined);
-        i += 1;
-        continue;
-      }
-
-      if (Array.isArray(value)) {
-        const out: unknown[] = [];
-        for (const item of value) {
-          const fieldValue = step.direction === "inbound"
-            ? resolveBacklinkPathValue(item, step.name, step.typeFilter, step.typeFilterExpr)
-            : resolveFieldAccessValue(item, step.name);
-          if (Array.isArray(fieldValue)) {
-            out.push(...fieldValue.filter((entry) => entry !== null && entry !== undefined));
-          } else if (fieldValue !== null && fieldValue !== undefined) {
-            out.push(fieldValue);
-          }
-        }
-        value = out;
-      } else {
-        value = step.direction === "inbound"
-          ? resolveBacklinkPathValue(value, step.name, step.typeFilter, step.typeFilterExpr)
-          : resolveFieldAccessValue(value, step.name);
-      }
-    }
-
-    return value;
-  };
-
-  const isTupleLikeSelectExprEntry = (value: SelectExprIREntry): boolean => {
-    if (value.kind === "tuple") {
-      return true;
-    }
-    if (value.kind === "if_else") {
-      return isTupleLikeSelectExprEntry(value.thenExpr) && isTupleLikeSelectExprEntry(value.elseExpr);
-    }
-    if (value.kind === "coalesce") {
-      return isTupleLikeSelectExprEntry(value.left) || isTupleLikeSelectExprEntry(value.right);
-    }
-    if (value.kind === "field_access" && value.value.kind === "select") {
-      const field = findFieldDef(schema, value.value.query.sourceType, value.field);
-      if (field?.collection?.kind === "tuple") return true;
-      // When the field is a computed in the inline SELECT shape whose
-      // expression is a tuple/array literal, projecting `.field` yields one
-      // tuple/array per source row — i.e. a single value, not a multi-set.
-      const inlineEl = value.value.query.shape.find(
-        (el): el is Extract<typeof el, { name: string }> =>
-          "name" in el && (el as { name: string }).name === value.field,
-      );
-      if (inlineEl && inlineEl.kind === "computed") {
-        const inner = inlineEl.expr.kind === "select_expr" ? inlineEl.expr.expr : inlineEl.expr;
-        if (inner?.kind === "tuple" || inner?.kind === "array_literal_expr") {
-          return true;
-        }
-      }
-      return false;
-    }
-    if (value.kind === "select_expr_subquery") {
-      return isTupleLikeSelectExprEntry(value.value);
-    }
-    // `array_literal_expr[N]` yields one element of the array; if those
-    // elements are themselves tuples, the result is a single tuple value.
-    if (value.kind === "index_access" && value.value.kind === "array_literal_expr") {
-      const elements = value.value.values as SelectExprIREntry[];
-      return elements.length > 0 && elements.every(isTupleLikeSelectExprEntry);
-    }
-    return false;
-  };
-
-  // Walk an expression tree looking for the deepest "select" subject that all
-  // value branches share. Returns the select node when found, else null.
-  // Used to give a tuple `(Issue.x, Issue.y)` its longest-common-prefix scope
-  // so it can iterate per Issue row instead of cartesian-producting the parts.
-  const findSelectSubjectInExpr = (expr: SelectExprIREntry): SelectExprIREntry | null => {
-    if (!expr || typeof expr !== "object") return null;
-    if (expr.kind === "select") return expr;
-    if (expr.kind === "field_access") return findSelectSubjectInExpr(expr.value);
-    if (expr.kind === "coalesce") return findSelectSubjectInExpr(expr.left)
-      ?? findSelectSubjectInExpr(expr.right);
-    if (expr.kind === "shape_projection") return findSelectSubjectInExpr(expr.value);
-    if (expr.kind === "select_expr_subquery") return findSelectSubjectInExpr(expr.value);
-    if (expr.kind === "cast") return findSelectSubjectInExpr((expr as { value: SelectExprIREntry }).value);
-    if (expr.kind === "compare") return findSelectSubjectInExpr(expr.left) ?? findSelectSubjectInExpr(expr.right);
-    if (expr.kind === "math") return findSelectSubjectInExpr((expr as { left: SelectExprIREntry }).left)
-      ?? findSelectSubjectInExpr((expr as { right: SelectExprIREntry }).right);
-    if (expr.kind === "exists" || expr.kind === "not" || expr.kind === "distinct") {
-      return findSelectSubjectInExpr((expr as { value?: SelectExprIREntry; expr?: SelectExprIREntry }).value
-        ?? (expr as { expr?: SelectExprIREntry }).expr!);
-    }
-    if (expr.kind === "tuple" || expr.kind === "set_expr" || expr.kind === "array_literal_expr") {
-      // The tuple/set/array's subject is the common subject of its non-constant
-      // values. Constants (literals etc.) don't contribute a subject but also
-      // don't disqualify one — only conflicting subjects do.
-      const subs = (expr.values as SelectExprIREntry[]).map(findSelectSubjectInExpr);
-      const first = subs.find((s) => s !== null);
-      if (!first) return null;
-      return subs.every((s) => s === null || sameSelectExprSubject(s, first)) ? first : null;
-    }
-    return null;
-  };
-
-  const sameSelectExprSubject = (left: SelectExprIREntry, right: SelectExprIREntry): boolean => {
-    if (left.kind !== right.kind) {
-      return false;
-    }
-    if (left.kind === "field_access" && right.kind === "field_access") {
-      return left.field === right.field && sameSelectExprSubject(left.value, right.value);
-    }
-    if (left.kind === "select" && right.kind === "select") {
-      return left.query.sourceType === right.query.sourceType;
-    }
-    if (left.kind === "type_field_path" && right.kind === "type_field_path") {
-      return left.typeName === right.typeName && left.field === right.field;
-    }
-    if (left.kind === "current_item" && right.kind === "current_item") {
-      return left.bindingName === right.bindingName;
-    }
-    return false;
-  };
-
-  const evaluateSelectExprEntryWithSubject = (
-    expression: SelectExprIREntry,
-    subject: SelectExprIREntry,
-    subjectValue: unknown,
-    evalState: { currentBinding?: string; currentValue?: unknown } | undefined,
-  ): unknown => {
-    if (sameSelectExprSubject(expression, subject)) {
-      return subjectValue;
-    }
-
-    // Bare `select_expr_subquery` wrappers (no filter/orderBy/limit of their
-    // own — the wrapped select carries them) are pass-throughs; unwrap so
-    // sameSelectExprSubject can match the inner select to the bound subject.
-    if (expression.kind === "select_expr_subquery") {
-      const sub = expression as { filter?: unknown; orderBy?: unknown; limit?: unknown; offset?: unknown; value: SelectExprIREntry };
-      if (sub.filter === undefined && sub.orderBy === undefined && sub.limit === undefined && sub.offset === undefined) {
-        return evaluateSelectExprEntryWithSubject(sub.value, subject, subjectValue, evalState);
-      }
-    }
-
-    if (expression.kind === "field_access") {
-      const value = evaluateSelectExprEntryWithSubject(expression.value, subject, subjectValue, evalState);
-      if (Array.isArray(value)) {
-        return value.flatMap((item) => {
-          const fieldValue = resolveFieldAccessValue(item, expression.field);
-          return Array.isArray(fieldValue) ? fieldValue : fieldValue === null || fieldValue === undefined ? [] : [fieldValue];
-        });
-      }
-      return resolveFieldAccessValue(value, expression.field);
-    }
-
-    if (expression.kind === "compare") {
-      const leftValue = evaluateSelectExprEntryWithSubject(expression.left, subject, subjectValue, evalState);
-      const rightValue = evaluateSelectExprEntryWithSubject(expression.right, subject, subjectValue, evalState);
-      const isEmpty = (v: unknown): boolean =>
-        v === null || v === undefined || (Array.isArray(v) && v.length === 0);
-      // Coalescing equality ops keep their cardinality when one side is empty.
-      if (expression.op === "?=" || expression.op === "?!=") {
-        const leftEmpty = isEmpty(leftValue);
-        const rightEmpty = isEmpty(rightValue);
-        if (leftEmpty && rightEmpty) return expression.op === "?=";
-        if (leftEmpty) {
-          const rItems = Array.isArray(rightValue) ? rightValue : [rightValue];
-          const v = expression.op === "?!=";
-          return Array.isArray(rightValue) ? rItems.map(() => v) : v;
-        }
-        if (rightEmpty) {
-          const lItems = Array.isArray(leftValue) ? leftValue : [leftValue];
-          const v = expression.op === "?!=";
-          return Array.isArray(leftValue) ? lItems.map(() => v) : v;
-        }
-        const lItems = Array.isArray(leftValue) ? leftValue : [leftValue];
-        const rItems = Array.isArray(rightValue) ? rightValue : [rightValue];
-        const out: boolean[] = [];
-        for (const l of lItems) {
-          for (const r of rItems) {
-            const eq = l === r;
-            out.push(expression.op === "?=" ? eq : !eq);
-          }
-        }
-        return (Array.isArray(leftValue) || Array.isArray(rightValue)) ? out : out[0] ?? false;
-      }
-      const leftItems = Array.isArray(leftValue) ? leftValue : [leftValue];
-      const rightItems = Array.isArray(rightValue) ? rightValue : [rightValue];
-      return leftItems.some((leftItem) => rightItems.some((rightItem) => {
-        if (expression.op === "=") return leftItem === rightItem;
-        if (expression.op === "!=") return leftItem !== rightItem;
-        if (expression.op === ">") return Number(leftItem) > Number(rightItem);
-        if (expression.op === ">=") return Number(leftItem) >= Number(rightItem);
-        if (expression.op === "<") return Number(leftItem) < Number(rightItem);
-        return Number(leftItem) <= Number(rightItem);
-      }));
-    }
-
-    if (expression.kind === "coalesce") {
-      const leftValue = evaluateSelectExprEntryWithSubject(expression.left, subject, subjectValue, evalState);
-      const isEmpty = leftValue === null
-        || leftValue === undefined
-        || (Array.isArray(leftValue) && leftValue.length === 0);
-      if (!isEmpty) return leftValue;
-      return evaluateSelectExprEntryWithSubject(expression.right, subject, subjectValue, evalState);
-    }
-
-    if (expression.kind === "set_expr") {
-      const items: unknown[] = [];
-      for (const value of expression.values) {
-        const r = evaluateSelectExprEntryWithSubject(value as SelectExprIREntry, subject, subjectValue, evalState);
-        if (r === null || r === undefined) continue;
-        if (Array.isArray(r)) items.push(...r.filter((x) => x !== null && x !== undefined));
-        else items.push(r);
-      }
-      return items;
-    }
-
-    if (expression.kind === "tuple") {
-      // Nested tuple inside an LCP iteration: each slot must inherit the
-      // bound subject value rather than re-iterating it from scratch.
-      const subTupleValues = (expression as { values: SelectExprIREntry[] }).values;
-      const slots = subTupleValues.map((slotExpr) => ({
-        value: evaluateSelectExprEntryWithSubject(slotExpr, subject, subjectValue, evalState),
-        tupleLike: isTupleLikeSelectExprEntry(slotExpr)
-          || slotExpr.kind === "array_literal_expr"
-          || (slotExpr.kind === "function_call" && (slotExpr as { functionName?: string }).functionName === "std::array_agg"),
-      }));
-      // EdgeQL tuple semantics: any empty slot makes the tuple empty.
-      const anyEmpty = slots.some((s) => s.value === null
-        || s.value === undefined
-        || (Array.isArray(s.value) && !s.tupleLike && s.value.length === 0));
-      if (anyEmpty) return [];
-      if (!slots.some((s) => Array.isArray(s.value) && !s.tupleLike)) {
-        return slots.map((s) => s.value);
-      }
-      const sets = slots.map((s) => (Array.isArray(s.value) && !s.tupleLike ? s.value : [s.value]));
-      return sets.reduce<unknown[][]>(
-        (rows, items) => rows.flatMap((row) => items.map((item) => [...row, item])),
-        [[]],
-      );
-    }
-
-    if (expression.kind === "literal") {
-      return (expression as { value: unknown }).value;
-    }
-
-    if (expression.kind === "cast") {
-      const inner = evaluateSelectExprEntryWithSubject(
-        (expression as { value: SelectExprIREntry }).value,
-        subject,
-        subjectValue,
-        evalState,
-      );
-      const castType = (expression as { castType: string }).castType;
-      // `<str>{}` is empty in EdgeQL — preserve empty/null so downstream
-      // ?? / tuples see emptiness rather than coercing to "".
-      if (inner === null || inner === undefined) return null;
-      if (Array.isArray(inner) && inner.length === 0) return inner;
-      if (castType === "str" || castType === "std::str") {
-        if (Array.isArray(inner)) return inner.map((v) => String(v ?? ""));
-        return String(inner);
-      }
-      return inner;
-    }
-
-    if (expression.kind === "math") {
-      const l = evaluateSelectExprEntryWithSubject((expression as { left: SelectExprIREntry }).left, subject, subjectValue, evalState);
-      const r = evaluateSelectExprEntryWithSubject((expression as { right: SelectExprIREntry }).right, subject, subjectValue, evalState);
-      if (l === null || l === undefined || r === null || r === undefined) return null;
-      const op = (expression as { op: string }).op;
-      const lNum = Number(l);
-      const rNum = Number(r);
-      switch (op) {
-        case "+": return lNum + rNum;
-        case "-": return lNum - rNum;
-        case "*": return lNum * rNum;
-        case "/": return rNum === 0 ? null : lNum / rNum;
-        case "//": return rNum === 0 ? null : Math.floor(lNum / rNum);
-        case "%": return rNum === 0 ? null : lNum % rNum;
-        case "^": return Math.pow(lNum, rNum);
-        default: return null;
-      }
-    }
-
-    if (expression.kind === "and") {
-      return Boolean(evaluateSelectExprEntryWithSubject(expression.left, subject, subjectValue, evalState))
-        && Boolean(evaluateSelectExprEntryWithSubject(expression.right, subject, subjectValue, evalState));
-    }
-    if (expression.kind === "or") {
-      return Boolean(evaluateSelectExprEntryWithSubject(expression.left, subject, subjectValue, evalState))
-        || Boolean(evaluateSelectExprEntryWithSubject(expression.right, subject, subjectValue, evalState));
-    }
-    if (expression.kind === "not") {
-      return !(evaluateSelectExprEntryWithSubject(expression.expr, subject, subjectValue, evalState));
-    }
-
-    return evaluateSelectExprEntry(schema, db, context, expression, sqlTrail, evalState);
-  };
-
-  switch (entry.kind) {
-    case "literal":
-      return entry.value;
-    case "set_literal":
-      return [...entry.values];
-    case "set_expr":
-      return (entry.values as any[]).flatMap((value) => {
-        const typedValue = value as SelectExprIREntry;
-        const item = evaluateSelectExprEntry(schema, db, context, typedValue as any, sqlTrail, evalContext);
-        return Array.isArray(item) && !isTupleLikeSelectExprEntry(typedValue) ? item : [item];
-      });
-    case "enum_path":
-      return entry.member;
-    case "current_item":
-      if (evalContext?.currentBinding === entry.bindingName) {
-        return evalContext.currentValue ?? null;
-      }
-      if (evalContext?.bindings && entry.bindingName in evalContext.bindings) {
-        return evalContext.bindings[entry.bindingName] ?? null;
-      }
-      return null;
-    case "tuple": {
-      const tupleValues = entry.values as SelectExprIREntry[];
-
-      // Longest-common-prefix iteration: when every tuple element threads
-      // through the same `select` source, EdgeDB iterates per source row
-      // rather than cartesian-producting each slot independently. Detect
-      // that here and evaluate each row with the source pre-bound, then
-      // expand any per-row multi-set slots locally.
-      const subjects = tupleValues.map(findSelectSubjectInExpr);
-      const lcpSubject = subjects[0];
-      const sharesSubject = Boolean(lcpSubject) && subjects.every(
-        (s) => s !== null && sameSelectExprSubject(s, lcpSubject!),
-      );
-      if (sharesSubject && lcpSubject) {
-        const subjectValue = evaluateSelectExprEntry(schema, db, context, lcpSubject, sqlTrail, evalContext);
-        const subjectRows = Array.isArray(subjectValue)
-          ? subjectValue
-          : (subjectValue === null || subjectValue === undefined ? [] : [subjectValue]);
-        // If the LCP source is empty, OPTIONAL operators (?? / ?=) still
-        // produce a row; fall through to the non-LCP path so each slot is
-        // evaluated globally. The slot evaluators handle the empty case.
-        if (subjectRows.length === 0) {
-          // intentionally fall through
-        } else {
-        const allRows: unknown[][] = [];
-        for (const subjectRow of subjectRows) {
-          const slots = tupleValues.map((slotExpr) => ({
-            value: evaluateSelectExprEntryWithSubject(slotExpr, lcpSubject, subjectRow, evalContext),
-            tupleLike: isTupleLikeSelectExprEntry(slotExpr)
-              || slotExpr.kind === "array_literal_expr"
-              || (slotExpr.kind === "function_call" && (slotExpr as { functionName?: string }).functionName === "std::array_agg"),
-          }));
-          // Expand multi-set slots locally (cartesian within this row only).
-          // An empty slot (null/undefined or empty multi-set) suppresses the
-          // whole row: in EdgeQL, NULL on a property is the empty set, and a
-          // tuple's cardinality is the product of its slots — any empty slot
-          // gives 0 rows. Without this, `(Issue.name, Issue.time_estimate)`
-          // keeps a `[name, null]` for Issues with no time_estimate.
-          const sets = slots.map((s) => {
-            if (s.value === null || s.value === undefined) return [];
-            if (Array.isArray(s.value) && !s.tupleLike) return s.value;
-            return [s.value];
-          });
-          const expanded = sets.reduce<unknown[][]>(
-            (rows, items) => rows.flatMap((row) => items.map((item) => [...row, item])),
-            [[]],
-          );
-          allRows.push(...expanded);
-        }
-        Object.defineProperty(allRows, TUPLE_MULTI_ROW_MARKER, {
-          value: true,
-          enumerable: false,
-          configurable: true,
-        });
-        return allRows;
-        }
-      }
-
-      const values = tupleValues.map((value) => ({
-        value: evaluateSelectExprEntry(schema, db, context, value, sqlTrail, evalContext),
-        tupleLike: isTupleLikeSelectExprEntry(value)
-          || value.kind === "array_literal_expr"
-          || (value.kind === "function_call" && (value as { functionName?: string }).functionName === "std::array_agg"),
-      }));
-      if (!values.some((entry) => Array.isArray(entry.value) && !entry.tupleLike)) {
-        return values.map((entry) => entry.value);
-      }
-      const multiRowResult = values.reduce<unknown[][]>(
-        (rows, entry) => {
-          const items = Array.isArray(entry.value) && !entry.tupleLike ? entry.value : [entry.value];
-          return rows.flatMap((row) => items.map((item) => [...row, item]));
-        },
-        [[]],
-      );
-      // Tag with a non-enumerable marker so materializeSelectExprRows can
-      // distinguish a multi-row cartesian product (which may be empty) from
-      // a single tuple value of the same shape.
-      Object.defineProperty(multiRowResult, TUPLE_MULTI_ROW_MARKER, {
-        value: true,
-        enumerable: false,
-        configurable: true,
-      });
-      return multiRowResult;
-    }
-    case "array_literal_expr": {
-      return (entry.values as unknown[]).map((value) => {
-        const typedValue = value as SelectExprIREntry;
-        return evaluateSelectExprEntry(schema, db, context, typedValue, sqlTrail, evalContext);
-      });
-    }
-    case "free_object": {
-      const record: Record<string, unknown> = {};
-      for (const item of entry.entries) {
-        record[item.name] = evaluateSelectExprEntry(schema, db, context, item.expr, sqlTrail, evalContext);
-      }
-      return record;
-    }
-    case "index_access": {
-      const value = evaluateSelectExprEntry(schema, db, context, entry.value, sqlTrail, evalContext);
-      // `array_literal_expr` evaluates to a single array value (not a set),
-      // so `[…][N]` indexes INTO the array — its element may itself be a
-      // tuple/array and must not be flattened.
-      const valueIsTuple = Array.isArray(value)
-        && (isTupleLikeSelectExprEntry(entry.value)
-          || entry.value.kind === "current_item"
-          || entry.value.kind === "index_access"
-          || entry.value.kind === "array_literal_expr");
-      const indexPath = Number.isInteger(entry.index)
-        ? [entry.index]
-        : String(entry.index).split(".").map((part) => Number(part)).filter((part) => Number.isInteger(part));
-      const readIndex = (item: unknown): unknown => {
-        let current = item;
-        for (const index of indexPath) {
-          if (typeof current === "string") {
-            current = current[index] ?? null;
-          } else if (Array.isArray(current)) {
-            current = current[index] ?? null;
-          } else {
-            return null;
-          }
-        }
-        return current;
-      };
-
-      if (Array.isArray(value) && !(typeof value === "string") && !valueIsTuple) {
-        const out: unknown[] = [];
-        for (const item of value) {
-          const indexed = readIndex(item);
-          if (indexed !== null && indexed !== undefined) {
-            out.push(indexed);
-          }
-        }
-        return out;
-      }
-
-      return readIndex(value);
-    }
-    case "exists": {
-      const value = evaluateSelectExprEntry(schema, db, context, entry.value, sqlTrail, evalContext);
-      if (Array.isArray(value)) {
-        return value.length > 0;
-      }
-      return value !== null && value !== undefined;
-    }
-    case "compare": {
-      // Deep-path LCP for `?=` / `?!=`: when LHS is a `field_access` and RHS
-      // contains the same field_access somewhere, iterate per the path's
-      // non-null subject rows, skipping rows where the deep path is empty.
-      // Example: `Issue.time_estimate ?= Issue.time_estimate * 2` iterates
-      // per non-null time_estimate (3 iterations, all false), not per Issue.
-      if ((entry.op === "?=" || entry.op === "?!=") && entry.left.kind === "field_access") {
-        if (process.env.DBG_LCP) console.log('[?= deep] entering check; left.kind=', entry.left.kind, 'right.kind=', entry.right.kind);
-        const structurallyEqualExpr = (a: SelectExprIREntry, b: SelectExprIREntry): boolean => {
-          if (a === b) return true;
-          if (a.kind !== b.kind) return false;
-          if (a.kind === "field_access" && b.kind === "field_access") {
-            return a.field === b.field && structurallyEqualExpr(a.value, b.value);
-          }
-          if (a.kind === "select" && b.kind === "select") {
-            return a.query.sourceType === b.query.sourceType;
-          }
-          return false;
-        };
-        const containsExpr = (haystack: SelectExprIREntry, needle: SelectExprIREntry): boolean => {
-          if (structurallyEqualExpr(haystack, needle)) return true;
-          switch (haystack.kind) {
-            case "field_access": return containsExpr(haystack.value, needle);
-            case "coalesce":
-            case "math":
-            case "compare":
-            case "and":
-            case "or":
-              return containsExpr((haystack as { left: SelectExprIREntry }).left, needle)
-                || containsExpr((haystack as { right: SelectExprIREntry }).right, needle);
-            case "not":
-            case "cast":
-            case "distinct":
-            case "exists":
-            case "shape_projection":
-            case "select_expr_subquery":
-              return containsExpr((haystack as { value?: SelectExprIREntry; expr?: SelectExprIREntry }).value
-                ?? (haystack as { expr?: SelectExprIREntry }).expr!, needle);
-            case "set_expr":
-            case "tuple":
-            case "array_literal_expr":
-              return (haystack.values as SelectExprIREntry[]).some((v) => containsExpr(v, needle));
-            case "concat":
-              return (haystack.parts as SelectExprIREntry[]).some((p) => containsExpr(p, needle));
-          }
-          return false;
-        };
-        const subject = findSelectSubjectInExpr(entry.left);
-        if (subject && containsExpr(entry.right, entry.left)) {
-          const subjectValue = evaluateSelectExprEntry(schema, db, context, subject, sqlTrail, evalContext);
-          const subjectRows = Array.isArray(subjectValue)
-            ? subjectValue
-            : subjectValue === null || subjectValue === undefined ? [] : [subjectValue];
-          const out: boolean[] = [];
-          for (const subjectRow of subjectRows) {
-            const lv = evaluateSelectExprEntryWithSubject(entry.left, subject, subjectRow, evalContext);
-            if (lv === null || lv === undefined || (Array.isArray(lv) && lv.length === 0)) {
-              continue;
-            }
-            const rv = evaluateSelectExprEntryWithSubject(entry.right, subject, subjectRow, evalContext);
-            const lItems = Array.isArray(lv) ? lv : [lv];
-            const rItems = Array.isArray(rv) ? rv : [rv];
-            const comparable = (v: unknown): unknown => (v && typeof v === "object" && !Array.isArray(v)
-              && typeof (v as { id?: unknown }).id === "string") ? (v as { id: string }).id : v;
-            for (const l of lItems) {
-              for (const r of rItems) {
-                const eq = comparable(l) === comparable(r);
-                out.push(entry.op === "?=" ? eq : !eq);
-              }
-            }
-          }
-          return out;
-        }
-      }
-
-      // LCP iteration for `?=` / `?!=`: when both sides thread through the
-      // SAME `select` source (same sourceType and same filter/orderBy/limit/
-      // offset), iterate per subject row and apply ?=/?!= per row rather than
-      // evaluating LHS and RHS globally as independent sets. This is the
-      // analogue of the coalesce LCP path below — needed e.g. for
-      // `WITH I := (SELECT Issue FILTER …) SELECT I.x ?!= I.y.z` where both
-      // refs to `I` inline to the same filtered subquery.
-      if (entry.op === "?=" || entry.op === "?!=") {
-        const leftSubject = findSelectSubjectInExpr(entry.left);
-        const rightSubject = findSelectSubjectInExpr(entry.right);
-        const strictSameSubject = (
-          l: SelectExprIREntry | null,
-          r: SelectExprIREntry | null,
-        ): boolean => {
-          if (!l || !r) return false;
-          if (l === r) return true;
-          if (l.kind !== "select" || r.kind !== "select") return sameSelectExprSubject(l, r);
-          if (l.query.sourceType !== r.query.sourceType) return false;
-          const lq = l.query as { filter?: unknown; orderBy?: unknown; limit?: unknown; offset?: unknown };
-          const rq = r.query as { filter?: unknown; orderBy?: unknown; limit?: unknown; offset?: unknown };
-          const sameClause = (a: unknown, b: unknown): boolean => {
-            if (a === undefined && b === undefined) return true;
-            if (a === undefined || b === undefined) return false;
-            return JSON.stringify(a) === JSON.stringify(b);
-          };
-          return sameClause(lq.filter, rq.filter)
-            && sameClause(lq.orderBy, rq.orderBy)
-            && sameClause(lq.limit, rq.limit)
-            && sameClause(lq.offset, rq.offset);
-        };
-        // LCP path B: subjects share sourceType but one is "open" (no
-        // clauses) and the other is "closed" (has at least one of
-        // filter/orderBy/limit/offset). The open side iterates; the closed
-        // side is computed once and reused per row. Example:
-        //   SELECT (SELECT Issue FILTER X).y ?= Issue.z * 2
-        // iterates per the outer free `Issue` (6 rows), with LHS evaluated
-        // once globally as an empty/non-empty set.
-        const isOpenSelectSubject = (s: SelectExprIREntry | null): boolean => {
-          if (!s || s.kind !== "select") return false;
-          const q = s.query as { filter?: unknown; orderBy?: unknown; limit?: unknown; offset?: unknown };
-          return q.filter === undefined && q.orderBy === undefined && q.limit === undefined && q.offset === undefined;
-        };
-        const sharesSourceType = leftSubject && rightSubject
-          && leftSubject.kind === "select" && rightSubject.kind === "select"
-          && leftSubject.query.sourceType === rightSubject.query.sourceType;
-        const leftOpen = isOpenSelectSubject(leftSubject);
-        const rightOpen = isOpenSelectSubject(rightSubject);
-        const useOpenLcp = sharesSourceType
-          && !strictSameSubject(leftSubject, rightSubject)
-          && (leftOpen !== rightOpen);
-        if (useOpenLcp) {
-          const openSubject = leftOpen ? leftSubject! : rightSubject!;
-          const openSide: "left" | "right" = leftOpen ? "left" : "right";
-          const openExpr = openSide === "left" ? entry.left : entry.right;
-          const closedExpr = openSide === "left" ? entry.right : entry.left;
-          const subjectValue = evaluateSelectExprEntry(schema, db, context, openSubject, sqlTrail, evalContext);
-          const subjectRows = Array.isArray(subjectValue)
-            ? subjectValue
-            : subjectValue === null || subjectValue === undefined ? [] : [subjectValue];
-          if (subjectRows.length > 0) {
-            const closedValue = evaluateSelectExprEntry(schema, db, context, closedExpr, sqlTrail, evalContext);
-            const lcpIsEmpty = (v: unknown): boolean =>
-              v === null || v === undefined || (Array.isArray(v) && v.length === 0);
-            const comparable = (v: unknown): unknown => (v && typeof v === "object" && !Array.isArray(v)
-              && typeof (v as { id?: unknown }).id === "string") ? (v as { id: string }).id : v;
-            const out: boolean[] = [];
-            for (const subjectRow of subjectRows) {
-              const openValue = evaluateSelectExprEntryWithSubject(openExpr, openSubject, subjectRow, evalContext);
-              const leftValue = openSide === "left" ? openValue : closedValue;
-              const rightValue = openSide === "right" ? openValue : closedValue;
-              const lEmpty = lcpIsEmpty(leftValue);
-              const rEmpty = lcpIsEmpty(rightValue);
-              if (lEmpty && rEmpty) { out.push(entry.op === "?="); continue; }
-              if (lEmpty) {
-                const rItems = Array.isArray(rightValue) ? rightValue : [rightValue];
-                const v = entry.op === "?!=";
-                for (let i = 0; i < rItems.length; i++) out.push(v);
-                continue;
-              }
-              if (rEmpty) {
-                const lItems = Array.isArray(leftValue) ? leftValue : [leftValue];
-                const v = entry.op === "?!=";
-                for (let i = 0; i < lItems.length; i++) out.push(v);
-                continue;
-              }
-              const lItems = Array.isArray(leftValue) ? leftValue : [leftValue];
-              const rItems = Array.isArray(rightValue) ? rightValue : [rightValue];
-              for (const l of lItems) {
-                for (const r of rItems) {
-                  const eq = comparable(l) === comparable(r);
-                  out.push(entry.op === "?=" ? eq : !eq);
-                }
-              }
-            }
-            return out;
-          }
-        }
-        if (leftSubject && rightSubject && strictSameSubject(leftSubject, rightSubject)) {
-          const subjectValue = evaluateSelectExprEntry(schema, db, context, leftSubject, sqlTrail, evalContext);
-          let subjectRows: unknown[] = Array.isArray(subjectValue)
-            ? [...subjectValue]
-            : subjectValue === null || subjectValue === undefined ? [] : [subjectValue];
-          // Pre-sort by parent ORDER BY when its expression threads through
-          // the LCP subject; the per-row scalar output (booleans here) can't
-          // carry subject context, so the outer sort can't reorder later.
-          if (evalContext?.parentOrderBy && subjectRows.length > 1) {
-            const orderSubject = findSelectSubjectInExpr(evalContext.parentOrderBy.value);
-            if (orderSubject && strictSameSubject(orderSubject, leftSubject)) {
-              const dir = evalContext.parentOrderBy.direction === "desc" ? -1 : 1;
-              const keys = new Map<unknown, unknown>();
-              for (const row of subjectRows) {
-                keys.set(row, evaluateSelectExprEntryWithSubject(evalContext.parentOrderBy.value, orderSubject, row, evalContext));
-              }
-              subjectRows.sort((a, b) => compareEdgeQLValues(keys.get(a), keys.get(b)) * dir);
-            }
-          }
-          if (subjectRows.length > 0) {
-            const comparable = (v: unknown): unknown => (v && typeof v === "object" && !Array.isArray(v)
-              && typeof (v as { id?: unknown }).id === "string") ? (v as { id: string }).id : v;
-            const lcpIsEmpty = (v: unknown): boolean =>
-              v === null || v === undefined || (Array.isArray(v) && v.length === 0);
-            const out: boolean[] = [];
-            for (const subjectRow of subjectRows) {
-              const lv = evaluateSelectExprEntryWithSubject(entry.left, leftSubject, subjectRow, evalContext);
-              const rv = evaluateSelectExprEntryWithSubject(entry.right, rightSubject, subjectRow, evalContext);
-              const lEmpty = lcpIsEmpty(lv);
-              const rEmpty = lcpIsEmpty(rv);
-              if (lEmpty && rEmpty) {
-                out.push(entry.op === "?=");
-                continue;
-              }
-              if (lEmpty) {
-                const rItems = Array.isArray(rv) ? rv : [rv];
-                const v = entry.op === "?!=";
-                for (let i = 0; i < rItems.length; i++) out.push(v);
-                continue;
-              }
-              if (rEmpty) {
-                const lItems = Array.isArray(lv) ? lv : [lv];
-                const v = entry.op === "?!=";
-                for (let i = 0; i < lItems.length; i++) out.push(v);
-                continue;
-              }
-              const lItems = Array.isArray(lv) ? lv : [lv];
-              const rItems = Array.isArray(rv) ? rv : [rv];
-              for (const l of lItems) {
-                for (const r of rItems) {
-                  const eq = comparable(l) === comparable(r);
-                  out.push(entry.op === "?=" ? eq : !eq);
-                }
-              }
-            }
-            return out;
-          }
-        }
-      }
-
-      const leftValue = evaluateSelectExprEntry(schema, db, context, entry.left, sqlTrail, evalContext);
-      const rightValue = evaluateSelectExprEntry(schema, db, context, entry.right, sqlTrail, evalContext);
-
-      const isEmpty = (v: unknown): boolean =>
-        v === null || v === undefined || (Array.isArray(v) && v.length === 0);
-
-      // Coalescing equality operators (?=, ?!=) treat empty sets as comparable
-      // values: two empties are equal; empty vs non-empty is unequal. When
-      // one side is empty and the other is a multi-set, the result has the
-      // non-empty side's cardinality (one boolean per element).
-      if (entry.op === "?=" || entry.op === "?!=") {
-        const leftEmpty = isEmpty(leftValue);
-        const rightEmpty = isEmpty(rightValue);
-        if (leftEmpty && rightEmpty) {
-          return entry.op === "?=";
-        }
-        if (leftEmpty) {
-          const rItems = Array.isArray(rightValue) ? rightValue : [rightValue];
-          const v = entry.op === "?!=";
-          return Array.isArray(rightValue) ? rItems.map(() => v) : v;
-        }
-        if (rightEmpty) {
-          const lItems = Array.isArray(leftValue) ? leftValue : [leftValue];
-          const v = entry.op === "?!=";
-          return Array.isArray(leftValue) ? lItems.map(() => v) : v;
-        }
-        const leftItems = Array.isArray(leftValue) ? leftValue : [leftValue];
-        const rightItems = Array.isArray(rightValue) ? rightValue : [rightValue];
-        const comparable = (v: unknown): unknown => (v && typeof v === "object" && !Array.isArray(v)
-          && typeof (v as { id?: unknown }).id === "string") ? (v as { id: string }).id : v;
-        const out: boolean[] = [];
-        for (const l of leftItems) {
-          for (const r of rightItems) {
-            const eq = comparable(l) === comparable(r);
-            out.push(entry.op === "?=" ? eq : !eq);
-          }
-        }
-        return (Array.isArray(leftValue) || Array.isArray(rightValue)) ? out : out[0] ?? false;
-      }
-
-      const leftItems = Array.isArray(leftValue) ? leftValue : [leftValue];
-      const rightItems = Array.isArray(rightValue) ? rightValue : [rightValue];
-      const compareOne = (left: unknown, right: unknown): boolean => {
-        if (entry.op === "=") {
-          return left === right;
-        }
-        if (entry.op === "!=") {
-          return left !== right;
-        }
-        if (entry.op === ">") {
-          return Number(left) > Number(right);
-        }
-        if (entry.op === ">=") {
-          return Number(left) >= Number(right);
-        }
-        if (entry.op === "<=") {
-          return Number(left) <= Number(right);
-        }
-        return Number(left) < Number(right);
-      };
-
-      const out: boolean[] = [];
-      for (const left of leftItems) {
-        for (const right of rightItems) {
-          out.push(compareOne(left, right));
-        }
-      }
-
-      return (Array.isArray(leftValue) || Array.isArray(rightValue)) ? out : out[0] ?? false;
-    }
-    case "and":
-    case "or": {
-      const leftValue = evaluateSelectExprEntry(schema, db, context, entry.left, sqlTrail, evalContext);
-      const rightValue = evaluateSelectExprEntry(schema, db, context, entry.right, sqlTrail, evalContext);
-      const leftItems = Array.isArray(leftValue) ? leftValue : [leftValue];
-      const rightItems = Array.isArray(rightValue) ? rightValue : [rightValue];
-      const out = leftItems.flatMap((left) => rightItems.map((right) => (
-        entry.kind === "and" ? Boolean(left) && Boolean(right) : Boolean(left) || Boolean(right)
-      )));
-      return (Array.isArray(leftValue) || Array.isArray(rightValue)) ? out : out[0] ?? false;
-    }
-    case "not": {
-      const value = evaluateSelectExprEntry(schema, db, context, entry.expr, sqlTrail, evalContext);
-      if (Array.isArray(value)) {
-        return value.map((item) => !(item));
-      }
-      return !(value);
-    }
-    case "math": {
-      const leftValue = evaluateSelectExprEntry(schema, db, context, entry.left, sqlTrail, evalContext);
-      const rightValue = evaluateSelectExprEntry(schema, db, context, entry.right, sqlTrail, evalContext);
-      const applyMath = (l: unknown, r: unknown): number | null => {
-        const ln = Number(l);
-        const rn = Number(r);
-        switch (entry.op) {
-          case "+": return ln + rn;
-          case "-": return ln - rn;
-          case "*": return ln * rn;
-          case "/": return ln / rn;
-          case "//": return Math.floor(ln / rn);
-          case "%": return ln % rn;
-          case "^": return Math.pow(ln, rn);
-          default: return null;
-        }
-      };
-      const leftIsSet = Array.isArray(leftValue);
-      const rightIsSet = Array.isArray(rightValue);
-      if (!leftIsSet && !rightIsSet) {
-        return applyMath(leftValue, rightValue);
-      }
-      const leftItems = leftIsSet ? leftValue : [leftValue];
-      const rightItems = rightIsSet ? rightValue : [rightValue];
-      const out: unknown[] = [];
-      for (const l of leftItems) {
-        for (const r of rightItems) {
-          out.push(applyMath(l, r));
-        }
-      }
-      return out;
-    }
-    case "coalesce": {
-      // Deep-path LCP: when LHS is a `field_access` (`Issue.time_estimate`)
-      // and RHS contains the SAME field_access somewhere in its tree, the
-      // LCP is at the deeper field-path level — iterate per the LHS path's
-      // non-null values instead of per the type-root. In this case the LHS
-      // is always non-empty per iteration, so the result is just LHS as a
-      // set (nulls filtered out).
-      const structurallyEqualExpr = (a: SelectExprIREntry, b: SelectExprIREntry): boolean => {
-        if (a === b) return true;
-        if (a.kind !== b.kind) return false;
-        if (a.kind === "field_access" && b.kind === "field_access") {
-          return a.field === b.field && structurallyEqualExpr(a.value, b.value);
-        }
-        if (a.kind === "select" && b.kind === "select") {
-          return a.query.sourceType === b.query.sourceType;
-        }
-        return false;
-      };
-      const containsExpr = (haystack: SelectExprIREntry, needle: SelectExprIREntry): boolean => {
-        if (structurallyEqualExpr(haystack, needle)) return true;
-        switch (haystack.kind) {
-          case "field_access": return containsExpr(haystack.value, needle);
-          case "coalesce":
-            return containsExpr(haystack.left, needle) || containsExpr(haystack.right, needle);
-          case "math":
-          case "compare":
-          case "and":
-          case "or":
-            return containsExpr(haystack.left, needle) || containsExpr(haystack.right, needle);
-          case "not":
-          case "cast":
-          case "distinct":
-          case "exists":
-          case "shape_projection":
-          case "select_expr_subquery":
-            return containsExpr((haystack as { value?: SelectExprIREntry; expr?: SelectExprIREntry }).value
-              ?? (haystack as { expr?: SelectExprIREntry }).expr!, needle);
-          case "set_expr":
-          case "tuple":
-          case "array_literal_expr":
-            return (haystack.values as SelectExprIREntry[]).some((v) => containsExpr(v, needle));
-          case "concat":
-            return (haystack.parts as SelectExprIREntry[]).some((p) => containsExpr(p, needle));
-        }
-        return false;
-      };
-      if (entry.left.kind === "field_access" && containsExpr(entry.right, entry.left)) {
-        const leftValue = evaluateSelectExprEntry(schema, db, context, entry.left, sqlTrail, evalContext);
-        const items = Array.isArray(leftValue) ? leftValue : (leftValue === null || leftValue === undefined ? [] : [leftValue]);
-        return items.filter((v) => v !== null && v !== undefined);
-      }
-
-      // Longest-common-prefix iteration: when both sides thread through the
-      // SAME (reference-identical or same pathId) `select` source, EdgeDB
-      // iterates per source row and chooses LHS-or-RHS per row, rather than
-      // treating the whole LHS as one set. Require strict identity here —
-      // matching on `sourceType` alone would collapse semantically distinct
-      // scopes like `(SELECT Issue FILTER ...)` and a plain `Issue`.
-      const leftSubject = findSelectSubjectInExpr(entry.left);
-      const rightSubject = findSelectSubjectInExpr(entry.right);
-      const strictSameSubject = (
-        l: SelectExprIREntry | null,
-        r: SelectExprIREntry | null,
-      ): boolean => {
-        if (!l || !r) return false;
-        if (l === r) return true;
-        if (l.kind !== "select" || r.kind !== "select") return sameSelectExprSubject(l, r);
-        if (l.query.sourceType !== r.query.sourceType) return false;
-        // Both must share the same scope shape — different filter/orderBy/
-        // limit/offset means semantically distinct subsets of the type even
-        // though `sameSelectExprSubject` would accept them. The IR doesn't
-        // expose binding identity for repeated references (e.g. two `Issue.X`
-        // references), so we can't cleanly distinguish `WITH I2 := Issue;
-        // SELECT Issue.x ?? I2.y` from `SELECT Issue.x ?? Issue.y` — both
-        // produce different pathIds. We err on the LCP-permissive side here.
-        const lq = l.query as { filter?: unknown; orderBy?: unknown; limit?: unknown; offset?: unknown };
-        const rq = r.query as { filter?: unknown; orderBy?: unknown; limit?: unknown; offset?: unknown };
-        const sameClause = (a: unknown, b: unknown): boolean => {
-          if (a === undefined && b === undefined) return true;
-          if (a === undefined || b === undefined) return false;
-          return JSON.stringify(a) === JSON.stringify(b);
-        };
-        return sameClause(lq.filter, rq.filter)
-          && sameClause(lq.orderBy, rq.orderBy)
-          && sameClause(lq.limit, rq.limit)
-          && sameClause(lq.offset, rq.offset);
-      };
-      if (leftSubject && rightSubject && strictSameSubject(leftSubject, rightSubject)) {
-        const subjectValue = evaluateSelectExprEntry(schema, db, context, leftSubject, sqlTrail, evalContext);
-        const subjectRows = Array.isArray(subjectValue)
-          ? subjectValue
-          : subjectValue === null || subjectValue === undefined ? [] : [subjectValue];
-        if (subjectRows.length > 0) {
-          const out: unknown[] = [];
-          // Whether to flatten a value into multiple rows depends on the IR
-          // kind of the producing expression: a `tuple`/`array_literal_expr`
-          // is a SINGLE value even when it looks like an array, while set
-          // producers (`set_expr`, `select`, multi-link field_access, …)
-          // spread their elements into separate rows.
-          const pushFromExpr = (v: unknown, expr: SelectExprIREntry): void => {
-            if (v === null || v === undefined) return;
-            if (expr.kind === "tuple" || expr.kind === "array_literal_expr") {
-              out.push(v);
-              return;
-            }
-            if (Array.isArray(v)) {
-              if (v.length > 0 && v.every((item) => Array.isArray(item))) {
-                for (const inner of v) out.push(inner);
-              } else {
-                for (const inner of v) {
-                  if (inner !== null && inner !== undefined) out.push(inner);
-                }
-              }
-              return;
-            }
-            out.push(v);
-          };
-          for (const subjectRow of subjectRows) {
-            const lv = evaluateSelectExprEntryWithSubject(entry.left, leftSubject, subjectRow, evalContext);
-            const lEmpty = lv === null || lv === undefined
-              || (Array.isArray(lv) && lv.length === 0);
-            if (!lEmpty) {
-              pushFromExpr(lv, entry.left);
-            } else {
-              const rv = evaluateSelectExprEntryWithSubject(entry.right, rightSubject, subjectRow, evalContext);
-              pushFromExpr(rv, entry.right);
-            }
-          }
-          // Tag with the multi-row marker so the outer materializer doesn't
-          // wrap this LCP-iterated set back into a single value via the
-          // coalesce-tuple single-value heuristic.
-          if (entry.left.kind === "tuple" || entry.right.kind === "tuple"
-            || entry.left.kind === "array_literal_expr" || entry.right.kind === "array_literal_expr") {
-            Object.defineProperty(out, TUPLE_MULTI_ROW_MARKER, {
-              value: true,
-              enumerable: false,
-              configurable: true,
-            });
-          }
-          return out;
-        }
-      }
-
-      const leftValue = evaluateSelectExprEntry(schema, db, context, entry.left, sqlTrail, evalContext);
-      const isEmpty = leftValue === null
-        || leftValue === undefined
-        || (Array.isArray(leftValue) && leftValue.length === 0);
-      if (!isEmpty) {
-        return leftValue;
-      }
-      return evaluateSelectExprEntry(schema, db, context, entry.right, sqlTrail, evalContext);
-    }
-    case "if_else": {
-      const thenValue = evaluateSelectExprEntry(schema, db, context, entry.thenExpr, sqlTrail, evalContext);
-      const conditionValue = evaluateSelectExprEntry(schema, db, context, entry.condition, sqlTrail, evalContext);
-      const elseValue = evaluateSelectExprEntry(schema, db, context, entry.elseExpr, sqlTrail, evalContext);
-
-      const thenItems = Array.isArray(thenValue) ? thenValue : [thenValue];
-      const elseItems = Array.isArray(elseValue) ? elseValue : [elseValue];
-      const conditionItems = Array.isArray(conditionValue) ? conditionValue : [conditionValue];
-      const out: unknown[] = [];
-
-      for (const condition of conditionItems) {
-        const truthy = Boolean(condition);
-        out.push(...(truthy ? thenItems : elseItems));
-      }
-
-      return (Array.isArray(thenValue) || Array.isArray(elseValue) || Array.isArray(conditionValue))
-        ? out
-        : (out[0] ?? null);
-    }
-    case "for_expr": {
-  // FOR-loop body expressions like `x[IS T]` need each iterator item to
-  // carry its `__source_type` so type-intersections can filter rows by
-  // their concrete type. `evaluateSelectExprEntry(... select)` strips
-  // `__source_type` via `materializeSelectRow`, so for "select" iterators
-  // we run the SQL directly and pair the raw rows with their projected
-  // form so projectOne keeps reading shape fields the usual way.
-  // FOR-loop body expressions like `x[IS T] { ba, bb }` need each iterator
-  // item to carry its full row, including every column the body may
-  // reference and `__source_type` for type-intersection filtering. The
-  // SelectIR's compiled SQL projects only the columns listed in its shape
-  // (typically just `id`), so we build a wider polymorphic SELECT here
-  // that yields every concrete column across the source tables.
-  let iteratorValue: unknown;
-  if (entry.iterator.kind === "select") {
-    const query = entry.iterator.query;
-    const sources = query.sourceTables.length > 0 ? query.sourceTables : [{ name: query.sourceType, table: query.table, columns: undefined }];
-    const allColumns = Array.from(new Set(sources.flatMap((s) => s.columns ?? ["id"])));
-    const sourceSelects = sources.map((source) => {
-      const available = source.columns && source.columns.length > 0 ? new Set(source.columns) : undefined;
-      const projection = allColumns
-        .map((column) => (!available || available.has(column)
-          ? `${quoteIdent(column)} AS ${quoteIdent(column)}`
-          : `NULL AS ${quoteIdent(column)}`))
-        .join(", ");
-      return `SELECT '${source.name}' AS ${quoteIdent("__source_type")}, ${projection} FROM ${quoteIdent(source.table)}`;
-    });
-    const sql = sourceSelects.length === 1 ? sourceSelects[0]! : sourceSelects.join(" UNION ALL ");
-    sqlTrail.push({ sql, params: [], loweringMode: "single_statement" });
-    iteratorValue = db.prepare(sql).all() as Record<string, unknown>[];
-  } else {
-    iteratorValue = evaluateSelectExprEntry(schema, db, context, entry.iterator, sqlTrail, evalContext);
-  }
-  let iteratorItems: unknown[] = Array.isArray(iteratorValue) ? iteratorValue : [iteratorValue];
-  if (entry.optional && iteratorItems.length === 0) {
-    iteratorItems = [null];
-  }
-  const out: unknown[] = [];
-  const bodyProducesTupleValue = isTupleLikeSelectExprEntry(entry.body);
-
-  for (const item of iteratorItems) {
-    const newBindings = { ...evalContext?.bindings, [entry.variable]: item };
-
-    const loopContext = {
-      currentBinding: entry.variable,
-      currentValue: item,
-      bindings: newBindings,
-    };
-
-    if (entry.filter) {
-      const filterValue = evaluateSelectExprEntry(
-        schema,
-        db,
-        context,
-        entry.filter,
-        sqlTrail,
-        loopContext,
-      );
-
-      const passes = Array.isArray(filterValue)
-        ? filterValue.some(Boolean)
-        : Boolean(filterValue);
-
-      if (!passes) {
-        continue;
-      }
-    }
-
-    const bodyValue = evaluateSelectExprEntry(
-      schema,
-      db,
-      context,
-      entry.body,
-      sqlTrail,
-      loopContext,
-    );
-
-    if (Array.isArray(bodyValue) && !bodyProducesTupleValue) {
-      out.push(...bodyValue);
-    } else if (
-      bodyProducesTupleValue
-      && Array.isArray(bodyValue)
-      && bodyValue.length > 0
-      && bodyValue.every((row) => Array.isArray(row))
-    ) {
-      out.push(...bodyValue);
-    } else if (bodyValue === null || bodyValue === undefined) {
-      // empty body — contributes nothing
-    } else {
-      out.push(bodyValue);
-    }
-  }
-
-  if (entry.body.kind === "backlink_path") {
-    return [...new Map(out
-      .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
-      .map((row) => [typeof row.id === "string" ? row.id : JSON.stringify(row), row] as const))
-      .values()];
-  }
-
-  return out;
-}
-    case "current_item_field": {
-      if (evalContext?.currentBinding !== entry.bindingName) {
-        if (evalContext?.bindings && entry.bindingName in evalContext.bindings) {
-          const currentValue = evalContext.bindings[entry.bindingName];
-          if (currentValue && typeof currentValue === "object" && !Array.isArray(currentValue)) {
-            const row = currentValue as Record<string, unknown>;
-            if (Object.prototype.hasOwnProperty.call(row, entry.field)) {
-              return row[entry.field] ?? null;
-            }
-            return resolveFieldAccessValue(row, entry.field);
-          }
-          return null;
-        }
-        return null;
-      }
-      const currentValue = evalContext.currentValue;
-      if (currentValue && typeof currentValue === "object" && !Array.isArray(currentValue)) {
-        const row = currentValue as Record<string, unknown>;
-        if (Object.prototype.hasOwnProperty.call(row, entry.field)) {
-          return row[entry.field] ?? null;
-        }
-        return resolveFieldAccessValue(row, entry.field);
-      }
-      return null;
-    }
-    case "distinct": {
-      const value = evaluateSelectExprEntry(schema, db, context, entry.value, sqlTrail, evalContext);
-      if (!Array.isArray(value)) {
-        return value;
-      }
-
-      const seen = new Set<string>();
-      const out: unknown[] = [];
-      for (const item of value) {
-        const key =
-          item && typeof item === "object" && !Array.isArray(item) && typeof (item as Record<string, unknown>).id === "string"
-            ? `id:${String((item as Record<string, unknown>).id)}`
-            : JSON.stringify(item);
-        if (seen.has(key)) {
-          continue;
-        }
-        seen.add(key);
-        out.push(item);
-      }
-      return out;
-    }
-    case "path_steps": {
-      return evaluatePathSteps(entry.steps, evalContext);
-    }
-    case "type_name": {
-      const current = evalContext?.currentValue;
-      if (current && typeof current === "object" && !Array.isArray(current)) {
-        const sourceTypeName = (current as Record<string, unknown>).__source_type;
-        if (typeof sourceTypeName === "string") {
-          return sourceTypeName;
-        }
-      }
-      return entry.sourceType || null;
-    }
-    case "polymorphic_field_ref": {
-      const current = evalContext?.currentValue;
-      if (!current || typeof current !== "object" || Array.isArray(current)) {
-        return null;
-      }
-      const row = current as Record<string, unknown>;
-      const rowTypeName = typeof row.__source_type === "string" ? row.__source_type : undefined;
-      const concretes = entry.concreteSourceTypes && entry.concreteSourceTypes.length > 0
-        ? entry.concreteSourceTypes
-        : [entry.sourceType];
-      if (!rowTypeName || !concretes.includes(rowTypeName)) {
-        return null;
-      }
-      return materializeFieldValue(schema, rowTypeName, entry.column, row[entry.column]);
-    }
-    case "field_access": {
-      const value = evaluateSelectExprEntry(schema, db, context, entry.value, sqlTrail, evalContext);
-      const readOne = (item: unknown): unknown => resolveFieldAccessValue(item, entry.field);
-      const isLinkPropertyField = entry.field.startsWith("@");
-
-      if (Array.isArray(value)) {
-        const out: unknown[] = [];
-        const seenObjectIds = new Set<string>();
-        const carriesLinkProperty = (candidate: unknown): boolean => {
-          if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
-            return false;
-          }
-          for (const key of Object.keys(candidate as Record<string, unknown>)) {
-            if (key.startsWith("@")) {
-              return true;
-            }
-          }
-          return false;
-        };
-        const pushValue = (candidate: unknown): void => {
-          if (candidate === null || candidate === undefined) {
-            return;
-          }
-          if (candidate && typeof candidate === "object" && !Array.isArray(candidate) && !carriesLinkProperty(candidate)) {
-            const rowId = (candidate as Record<string, unknown>).id;
-            if (typeof rowId === "string") {
-              if (seenObjectIds.has(rowId)) {
-                return;
-              }
-              seenObjectIds.add(rowId);
-            }
-          }
-          out.push(candidate);
-        };
-
-        const sourceItems: unknown[] = isLinkPropertyField ? value : (() => {
-          const seenSourceIds = new Set<string>();
-          const filtered: unknown[] = [];
-          for (const item of value) {
-            if (item && typeof item === "object" && !Array.isArray(item)) {
-              const itemId = (item as Record<string, unknown>).id;
-              if (typeof itemId === "string") {
-                if (seenSourceIds.has(itemId)) {
-                  continue;
-                }
-                seenSourceIds.add(itemId);
-              }
-            }
-            filtered.push(item);
-          }
-          return filtered;
-        })();
-
-        // When `entry.field` projects a tuple- or array-valued slot (e.g.
-        // `(SpecialCard { el_cost := (.element, .cost) }).el_cost`), each
-        // source row's field value is one tuple/array — not a multi-set —
-        // so we must push it as a single element rather than spreading.
-        const fieldYieldsSingleValue = isTupleLikeSelectExprEntry(entry);
-        for (const item of sourceItems) {
-          const fieldValue = readOne(item);
-          if (Array.isArray(fieldValue) && !fieldYieldsSingleValue) {
-            for (const nested of fieldValue) {
-              pushValue(nested);
-            }
-            continue;
-          }
-          pushValue(fieldValue);
-        }
-        return out;
-      }
-
-      return readOne(value);
-    }
-    case "backlink_path": {
-      return resolveBacklinkPathValue(evalContext?.currentValue, entry.link, entry.sourceType, entry.sourceTypeExpr);
-    }
-    case "shape_projection": {
-      const value = evaluateSelectExprEntry(schema, db, context, entry.value, sqlTrail, evalContext);
-      const childBinding = evalContext?.currentBinding ?? "__current__";
-      const projectOne = (item: unknown): Record<string, unknown> | null => {
-        if (!item || typeof item !== "object" || Array.isArray(item)) {
-          return null;
-        }
-        const row = item as Record<string, unknown>;
-        const projected: Record<string, unknown> = {};
-        for (const field of entry.fields) {
-          if (field.expr) {
-            const value = evaluateSelectExprEntry(schema, db, context, field.expr, sqlTrail, {
-              currentBinding: childBinding,
-              currentValue: row,
-            });
-            if (field.multi && value !== null && value !== undefined && !Array.isArray(value)) {
-              projected[field.name] = [value];
-            } else {
-              projected[field.name] = value;
-            }
-            continue;
-          }
-
-          // Use resolveFieldAccessValue so we DB-load the field when the row
-          // only carries `id` (typical for results of coalesce/select_expr
-          // that project just `id`).
-          const rawValue = field.sourceField
-            ? resolveFieldAccessValue(row, field.sourceField)
-            : null;
-          if (field.itemFields && Array.isArray(rawValue)) {
-            projected[field.name] = rawValue
-              .map((child) => {
-                if (!child || typeof child !== "object" || Array.isArray(child)) {
-                  return null;
-                }
-                const childRow = child as Record<string, unknown>;
-                const childProjected: Record<string, unknown> = {};
-                for (const itemField of field.itemFields ?? []) {
-                  if (itemField.expr) {
-                    const itemValue = evaluateSelectExprEntry(schema, db, context, itemField.expr, sqlTrail, {
-                      currentBinding: childBinding,
-                      currentValue: childRow,
-                    });
-                    const childTypeName = typeof childRow.__source_type === "string"
-                      ? childRow.__source_type
-                      : typeof childRow.__type__ === "string"
-                        ? childRow.__type__
-                        : undefined;
-                    childProjected[itemField.name] = childTypeName
-                      ? itemField.multi ? [childTypeName] : childTypeName
-                      : itemValue;
-                  } else {
-                    childProjected[itemField.name] = itemField.sourceField ? childRow[itemField.sourceField] ?? null : null;
-                  }
-                }
-                return childProjected;
-              })
-              .filter((child): child is Record<string, unknown> => child !== null);
-            continue;
-          }
-
-          projected[field.name] = rawValue;
-        }
-        return projected;
-      };
-
-      if (Array.isArray(value)) {
-        return value
-          .map((item) => projectOne(item))
-          .filter((item): item is Record<string, unknown> => !!item);
-      }
-
-      return projectOne(value);
-    }
-    case "select": {
-      const nestedSql = compileToSQL(entry.query, { target: resolvedRuntimeTarget(context, db) });
-      assertTargetSqlCompatibility(nestedSql.sql, resolvedRuntimeTarget(context, db));
-      sqlTrail.push(nestedSql);
-      const rows = runSelectIR(db, schema, entry.query, context, nestedSql, sqlTrail);
-      const seen = new Set<string>();
-      const deduped: Record<string, unknown>[] = [];
-      for (const row of rows) {
-        const key = typeof row.id === "string" ? `id:${row.id}` : JSON.stringify(row);
-        if (seen.has(key)) {
-          continue;
-        }
-        seen.add(key);
-        deduped.push(row);
-      }
-      return deduped;
-    }
-    case "mutation_expr": {
-      return executeMutationBinding(db, schema, entry.statement, context);
-    }
-    case "type_field_path": {
-      const typeDef = schema.getType(entry.typeName);
-      if (!typeDef) {
-        throw new AppError("E_SEMANTIC", `Unknown type '${entry.typeName}'`, 1, 1);
-      }
-      const field = typeDef.fields.find((f) => f.name === entry.field);
-      if (!field) {
-        const computed = typeDef.computeds?.find((computed) => computed.kind === "property" && computed.name === entry.field);
-        if (!computed || computed.kind !== "property") {
-          throw new AppError("E_SEMANTIC", `Unknown field '${entry.field}' on '${entry.typeName}'`, 1, 1);
-        }
-
-        if (computed.expr.kind === "literal") {
-          return computed.expr.value;
-        }
-        if (computed.expr.kind === "set_literal") {
-          return [...computed.expr.values];
-        }
-        if (computed.expr.kind === "field_ref") {
-          const field = computed.expr.field;
-          const rows = db.prepare(`SELECT ${quoteIdent(field)} FROM ${quoteIdent(tableNameForType(entry.typeName))}`).all();
-          return rows.map((row) => row?.[field] ?? null);
-        }
-        if (computed.expr.kind === "concat") {
-          return computed.expr.parts
-            .map((part) => {
-              if (part.kind === "literal") {
-                return String(part.value ?? "");
-              }
-              if (part.kind === "field_ref") {
-                const rows = db.prepare(`SELECT ${quoteIdent(part.field)} FROM ${quoteIdent(tableNameForType(entry.typeName))} LIMIT 1`).all();
-                return String(rows.length > 0 ? rows[0]?.[part.field] ?? "" : "");
-              }
-              return "";
-            })
-            .join("");
-        }
-        if (computed.expr.kind === "function_call") {
-          return executeFunctionCall(schema, db, context, computed.expr.name, computed.expr.args as RuntimeFunctionArg[]);
-        }
-        if (computed.expr.kind === "link_aggregate") {
-          const aggregate = computed.expr;
-          const rows = db.prepare(`SELECT * FROM ${quoteIdent(tableNameForType(entry.typeName))}`).all() as Record<string, unknown>[];
-          return rows.map((row) => {
-            if (typeof row.id !== "string") {
-              return 0;
-            }
-            const targets = resolveFieldAccessValue({ ...row, id: row.id }, aggregate.link);
-            const targetRows = Array.isArray(targets) ? targets : targets ? [targets] : [];
-            return targetRows.reduce((total, target) => {
-              if (!target || typeof target !== "object" || Array.isArray(target)) {
-                return total;
-              }
-              const targetRow = target as Record<string, unknown>;
-              return total + Number(targetRow[aggregate.field] ?? targetRow[`@${aggregate.field}`] ?? 0);
-            }, 0);
-          });
-        }
-        return null;
-      }
-      const rows = db.prepare(`SELECT ${quoteIdent(entry.field)} FROM ${quoteIdent(tableNameForType(entry.typeName))}`).all();
-      return rows.map((row) => row?.[entry.field] ?? null);
-    }
-    case "cast": {
-      const tupleSlots = parseTupleCastSlots(entry.castType);
-      if (entry.value.kind === "set_literal" || entry.value.kind === "set_expr") {
-        const setValues = evaluateSelectExprEntry(schema, db, context, entry.value, sqlTrail, evalContext);
-        if (Array.isArray(setValues)) {
-          if (tupleSlots) {
-            return setValues.map((item) => reshapeForTupleCast(item, tupleSlots));
-          }
-          return setValues;
-        }
-        const castTypeDef = schema.getType(entry.castType);
-        if (castTypeDef) {
-          const allEnumValues = castTypeDef.fields.flatMap((f) => f.enumValues ?? []);
-          if (allEnumValues.length > 0) {
-            return [setValues];
-          }
-        }
-        return [setValues];
-      }
-      const innerValue = evaluateSelectExprEntry(schema, db, context, entry.value, sqlTrail, evalContext);
-      if (tupleSlots) {
-        // The set_literal/set_expr branch above already runs through the
-        // map-reshape; here the inner is a single tuple value (an object for
-        // a named-tuple source, an array for a positional-tuple source).
-        return reshapeForTupleCast(innerValue, tupleSlots);
-      }
-      if (entry.castType === "str") {
-        if (Array.isArray(innerValue)) {
-          return innerValue.map((item) => String(item ?? ""));
-        }
-        if (innerValue === null) return "";
-        return String(innerValue);
-      }
-      if (entry.castType === "json") {
-        return JSON.stringify(innerValue);
-      }
-      if (/^(default::)?array<.*>$/.test(entry.castType)) {
-        // Cast to array<X>. EdgeDB treats JSON null cast to array as an
-        // empty array (e.g. `<array<str>>to_json('null')` ⇒ `[]`).
-        // Otherwise the value passes through unchanged.
-        if (innerValue === null || innerValue === undefined) {
-          return [];
-        }
-        if (typeof innerValue === "string") {
-          // to_json("null") materializes as the literal string 'null' when
-          // not parsed; treat that as JSON null too.
-          if (innerValue === "null") return [];
-        }
-        return innerValue;
-      }
-      const castTypeDef = schema.getType(entry.castType);
-      if (castTypeDef) {
-        const allEnumValues = castTypeDef.fields.flatMap((f) => f.enumValues ?? []);
-        if (allEnumValues.length > 0) {
-          if (innerValue === null) {
-            return null;
-          }
-          if (typeof innerValue !== "string") {
-            throw new AppError("E_SEMANTIC", `Cannot cast to enum '${entry.castType}': expected string value`, 1, 1);
-          }
-          if (!allEnumValues.includes(innerValue)) {
-            throw new AppError("E_SEMANTIC", `invalid input value for enum '${entry.castType}': "${innerValue}"`, 1, 1);
-          }
-          return innerValue;
-        }
-      }
-      throw new AppError("E_SEMANTIC", `Unsupported cast type '${entry.castType}' in select_expr`, 1, 1);
-    }
-    case "is_type": {
-      const value = evaluateSelectExprEntry(schema, db, context, entry.value, sqlTrail, evalContext);
-      const typeDef = schema.getType(entry.typeName);
-      const enumValues = typeDef?.fields.flatMap((f) => f.enumValues ?? []) ?? [];
-      const checkOne = (item: unknown): boolean => {
-        if (enumValues.length > 0) {
-          return typeof item === "string" && enumValues.includes(item);
-        }
-        return false;
-      };
-      const objectMatches = (item: unknown): boolean => {
-        if (!item || typeof item !== "object" || Array.isArray(item)) return false;
-        const sourceType = (item as Record<string, unknown>).__source_type;
-        return typeof sourceType === "string" && rowMatchesTypeName(sourceType, entry.typeName);
-      };
-      const scalarTypeCheck = (item: unknown): boolean | undefined => {
-        if (item === null || item === undefined) return undefined;
-        if (typeof item === "object") return undefined;
-        const last = entry.typeName.split("::").at(-1) ?? entry.typeName;
-        const isInt = typeof item === "number" && Number.isInteger(item);
-        const isFloat = typeof item === "number" && !Number.isInteger(item);
-        const isStr = typeof item === "string";
-        const isBool = typeof item === "boolean";
-        switch (last) {
-          case "anyscalar": return true;
-          case "anytype": return true;
-          case "anyreal": return typeof item === "number";
-          case "anyint": return isInt;
-          case "anyfloat": return isFloat;
-          case "int64":
-            return isInt;
-          case "int16":
-          case "int32":
-            return false;
-          case "float64":
-            return isFloat;
-          case "float32":
-            return false;
-          case "decimal":
-          case "bigint":
-            return false;
-          case "str":
-            return isStr;
-          case "bool":
-            return isBool;
-          case "Object":
-          case "BaseObject":
-            return false;
-          default:
-            return undefined;
-        }
-      };
-      if (enumValues.length === 0) {
-        const items = Array.isArray(value) ? value : [value];
-        if (items.length > 0 && items.every((item) => item !== null && item !== undefined && typeof item !== "object")) {
-          const results = items.map((item) => scalarTypeCheck(item) ?? false);
-          return Array.isArray(value) ? results : results[0];
-        }
-        if (Array.isArray(value)) {
-          return value.filter(objectMatches);
-        }
-        return objectMatches(value) ? value : [];
-      }
-      if (Array.isArray(value)) {
-        return value.map(checkOne);
-      }
-      return checkOne(value);
-    }
-    case "select_expr_subquery": {
-      const linkPropertyProjection = entry.value.kind === "field_access" && entry.value.field.startsWith("@")
-        ? { subject: entry.value.value, property: entry.value.field }
-        : undefined;
-      if (linkPropertyProjection && (entry.filter || entry.orderBy)) {
-        const subjectValue = evaluateSelectExprEntry(schema, db, context, linkPropertyProjection.subject, sqlTrail, evalContext);
-        let subjectRows = Array.isArray(subjectValue) ? [...subjectValue] : [subjectValue];
-        if (entry.filter) {
-          subjectRows = subjectRows.filter((row) => {
-            const filterValue = evaluateSelectExprEntryWithSubject(entry.filter!, linkPropertyProjection.subject, row, evalContext);
-            return Array.isArray(filterValue) ? filterValue.some(Boolean) : Boolean(filterValue);
-          });
-        }
-        if (entry.orderBy) {
-          subjectRows.sort((a, b) => {
-            const aKey = evaluateSelectExprEntryWithSubject(entry.orderBy!.value, linkPropertyProjection.subject, a, evalContext);
-            const bKey = evaluateSelectExprEntryWithSubject(entry.orderBy!.value, linkPropertyProjection.subject, b, evalContext);
-            if (aKey === bKey) {
-              return 0;
-            }
-            return String(aKey ?? "").localeCompare(String(bKey ?? "")) * (entry.orderBy!.direction === "desc" ? -1 : 1);
-          });
-        }
-        const offset = entry.offset ?? 0;
-        const sliced = entry.limit === undefined ? subjectRows.slice(offset) : subjectRows.slice(offset, offset + entry.limit);
-        return sliced.flatMap((row) => {
-          const value = resolveFieldAccessValue(row, linkPropertyProjection.property);
-          return Array.isArray(value) ? value : value === null || value === undefined ? [] : [value];
-        });
-      }
-
-      const shapeProjectionForFilter = entry.value.kind === "shape_projection" && (entry.filter || entry.orderBy)
-        ? entry.value
-        : undefined;
-      const sourceForEval: SelectExprIREntry = shapeProjectionForFilter
-        ? shapeProjectionForFilter.value as SelectExprIREntry
-        : entry.value;
-      const value = evaluateSelectExprEntry(schema, db, context, sourceForEval, sqlTrail, evalContext);
-      // A `tuple` expression — including the empty tuple `()` — is a single
-      // value, not a set. The empty tuple evaluates to `[]` (no slots), which
-      // is indistinguishable from "empty set" by Array.isArray alone, so we
-      // dispatch on the source IR kind. The multi-row marker is set by tuple
-      // LCP iteration when slots co-iterate; in that case spread normally.
-      const sourceIsSingleTuple = isTupleLikeSelectExprEntry(sourceForEval)
-        && !(Array.isArray(value)
-          && (value as unknown as { [k: symbol]: unknown })[TUPLE_MULTI_ROW_MARKER] === true);
-      let rows = sourceIsSingleTuple
-        ? [value]
-        : Array.isArray(value) ? [...value] : [value];
-      if (entry.filter) {
-        const currentBinding = entry.alias ?? "__current__";
-        rows = rows.filter((row) => {
-          const filterValue = evaluateSelectExprEntry(schema, db, context, entry.filter!, sqlTrail, {
-            currentBinding,
-            currentValue: row,
-            bindings: evalContext?.bindings,
-          });
-          return Array.isArray(filterValue) ? filterValue.some(Boolean) : Boolean(filterValue);
-        });
-      }
-      if (entry.orderBy) {
-        const currentBinding = entry.alias ?? evalContext?.currentBinding ?? "__current__";
-        const inferredEnumOrder = entry.orderBy.value.kind === "current_item"
-          && rows.every((item) => typeof item === "string")
-          ? (() => {
-              const values = rows as string[];
-              for (const typeDef of schema.listTypes()) {
-                const enumValues = typeDef.fields.flatMap((f) => f.enumValues ?? []);
-                if (enumValues.length === 0) {
-                  continue;
-                }
-                if (values.every((value) => enumValues.includes(value))) {
-                  return new Map(enumValues.map((enumValue, index) => [enumValue, index] as const));
-                }
-              }
-              return undefined;
-            })()
-          : undefined;
-
-        rows.sort((a, b) => {
-          const aKey = evaluateSelectExprEntry(
-            schema,
-            db,
-            context,
-            entry.orderBy!.value,
-            sqlTrail,
-            { currentBinding, currentValue: a, bindings: evalContext?.bindings },
-          );
-          const bKey = evaluateSelectExprEntry(
-            schema,
-            db,
-            context,
-            entry.orderBy!.value,
-            sqlTrail,
-            { currentBinding, currentValue: b, bindings: evalContext?.bindings },
-          );
-          if (aKey === bKey) {
-            return 0;
-          }
-          if (inferredEnumOrder && typeof aKey === "string" && typeof bKey === "string") {
-            const aIndex = inferredEnumOrder.get(aKey) ?? Number.MAX_SAFE_INTEGER;
-            const bIndex = inferredEnumOrder.get(bKey) ?? Number.MAX_SAFE_INTEGER;
-            if (aIndex === bIndex) {
-              return 0;
-            }
-            const enumDirection = entry.orderBy!.direction === "desc" ? -1 : 1;
-            return (aIndex < bIndex ? -1 : 1) * enumDirection;
-          }
-          const direction = entry.orderBy!.direction === "desc" ? -1 : 1;
-          return compareEdgeQLValues(aKey, bKey) * direction;
-        });
-      }
-      const offset = entry.offset ?? 0;
-      const sliced = entry.limit === undefined ? rows.slice(offset) : rows.slice(offset, offset + entry.limit);
-      if (shapeProjectionForFilter) {
-        const projection = shapeProjectionForFilter;
-        return sliced.map((row) => {
-          if (!row || typeof row !== "object" || Array.isArray(row)) {
-            return null;
-          }
-          return evaluateSelectExprEntry(schema, db, context, {
-            ...projection,
-            value: { kind: "current_item", bindingName: "__projection__" },
-          } as SelectExprIREntry, sqlTrail, {
-            currentBinding: "__projection__",
-            currentValue: row,
-            bindings: evalContext?.bindings,
-          });
-        }).filter((item) => item !== null);
-      }
-      return sliced;
-    }
-    case "function_call": {
-      return executeFunctionCall(
-        schema,
-        db,
-        context,
-        entry.functionName,
-        (entry.args as unknown[]).map((arg): RuntimeFunctionArg => {
-          const typedArg = arg as SelectExprIREntry;
-          const value = evaluateSelectExprEntry(schema, db, context, typedArg, sqlTrail, evalContext);
-          if (Array.isArray(value)) {
-            return { kind: "set", values: (isTupleLikeSelectExprEntry(typedArg) ? [value] : value) as ScalarValue[] };
-          }
-          return value as ScalarValue;
-        }),
-      );
-    }
-    case "concat": {
-      // Longest-common-prefix iteration: when every part threads through the
-      // same select source (e.g. `Issue.name ++ <str>Issue.time_estimate`),
-      // evaluate per-source-row and concatenate within that row. Any empty
-      // part suppresses the result for that row, matching EdgeQL semantics.
-      const partExprs = entry.parts as SelectExprIREntry[];
-      const partSubjects = partExprs.map(findSelectSubjectInExpr);
-      const firstPartSubject = partSubjects[0];
-      // Require EVERY part to share the same non-null subject. If any part
-      // has no detectable subject (filtered subquery, literal, …) we can't
-      // safely co-iterate — fall back to the cartesian path below.
-      const partsShareSubject = firstPartSubject !== null && partSubjects.every(
-        (s) => s !== null && sameSelectExprSubject(s, firstPartSubject),
-      );
-      if (firstPartSubject && partsShareSubject && !evalContext?.currentValue) {
-        const subjectValue = evaluateSelectExprEntry(schema, db, context, firstPartSubject, sqlTrail, evalContext);
-        const subjectRows = Array.isArray(subjectValue)
-          ? subjectValue
-          : subjectValue === null || subjectValue === undefined ? [] : [subjectValue];
-        if (subjectRows.length > 0) {
-          const out: unknown[] = [];
-          for (const subjectRow of subjectRows) {
-            const slotValues = partExprs.map((p) => evaluateSelectExprEntryWithSubject(p, firstPartSubject, subjectRow, evalContext));
-            let suppressed = false;
-            let accums: string[] = [""];
-            for (const slot of slotValues) {
-              const items = Array.isArray(slot) ? slot : [slot];
-              if (items.length === 0) { suppressed = true; break; }
-              const next: string[] = [];
-              for (const a of accums) {
-                for (const b of items) {
-                  if (b === null || b === undefined) { suppressed = true; break; }
-                  next.push(`${a}${String(b)}`);
-                }
-                if (suppressed) break;
-              }
-              if (suppressed) break;
-              accums = next;
-            }
-            if (!suppressed) out.push(...accums);
-          }
-          return out;
-        }
-      }
-
-      const partValues = (entry.parts as unknown[]).map((part) => {
-        const typedPart = part as SelectExprIREntry;
-        const value = evaluateSelectExprEntry(schema, db, context, typedPart, sqlTrail, evalContext);
-        return Array.isArray(value) && value.length === 1 ? value[0] : value;
-      });
-      for (let i = 0; i < partValues.length; i++) {
-        const part = partValues[i];
-        const partEntry = entry.parts[i];
-        if (part instanceof AppError) {
-          throw part;
-        }
-        if (partEntry.kind === "type_field_path") {
-          const typeDef = schema.getType(partEntry.typeName);
-          if (typeDef) {
-            const field = typeDef.fields.find((f) => f.name === partEntry.field);
-            if (field?.enumValues && field.enumValues.length > 0) {
-              const fieldType = field.enumTypeName ?? `std::${field.type}`;
-              throw new AppError("E_SEMANTIC", `operator '++' cannot be applied to operands of type 'std::str' and '${fieldType}'`, 1, 1);
-            }
-          }
-        }
-        if (Array.isArray(part)) {
-          for (const item of part) {
-            if (typeof item !== "string") {
-              throw new AppError("E_SEMANTIC", `operator '++' cannot be applied to operands of type 'std::str' and '${typeof item}'`, 1, 1);
-            }
-          }
-          continue;
-        }
-        if (typeof part !== "string") {
-          throw new AppError("E_SEMANTIC", `operator '++' cannot be applied to operands of type 'std::str' and '${typeof part}'`, 1, 1);
-        }
-      }
-      const hasMultiPart = partValues.some((p) => Array.isArray(p));
-      if (!hasMultiPart) {
-        return partValues.join("");
-      }
-      let combos: string[] = [""];
-      for (const part of partValues) {
-        const items = Array.isArray(part) ? part as string[] : [part as string];
-        const next: string[] = [];
-        for (const combo of combos) {
-          for (const item of items) {
-            next.push(combo + item);
-          }
-        }
-        combos = next;
-      }
-      return combos;
-    }
-  }
-};
-
-const materializeSelectExprRows = (
-  db: SQLiteDatabase,
-  schema: SchemaSnapshot,
-  ir: SelectExprIR,
-  context: SecurityContext,
-  sqlTrail: SQLArtifact[],
-): unknown[] => {
-  if (ir.entries.length === 0) {
-    return [];
-  }
-  const value = evaluateSelectExprEntry(schema, db, context, ir.entries[0], sqlTrail, {
-    parentOrderBy: ir.orderBy ? { value: ir.orderBy.value, direction: ir.orderBy.direction } : undefined,
-  });
-  const firstEntry = ir.entries[0];
-  const firstEntryKind = firstEntry.kind;
-  const tupleMultiRow = firstEntryKind === "tuple"
-    && Array.isArray(value)
-    && (value as unknown as { [k: symbol]: unknown })[TUPLE_MULTI_ROW_MARKER] === true;
-  // Coalesce is a single-value when both branches are structurally single
-  // values — e.g. `to_json(...) ?? []` returns one array value, not a set.
-  // We detect this by checking whether the RHS is an array literal or tuple
-  // (both are inherently single values) since the LHS shape determines the
-  // present-case shape but the empty-case falls through to RHS.
-  // A coalesce is "single-value" only when neither branch ever multiplies —
-  // e.g. `to_json(...) ?? []`. When LCP iteration produces a set of tuples
-  // (`(Issue.x, …) ?? (Issue.y, …)`), the marker is set on the result.
-  const coalesceProducesSingleValue = firstEntryKind === "coalesce"
-    && (firstEntry.right.kind === "array_literal_expr" || firstEntry.right.kind === "tuple")
-    && !(Array.isArray(value)
-      && (value as unknown as { [k: symbol]: unknown })[TUPLE_MULTI_ROW_MARKER] === true);
-  // `array_literal_expr[N]` extracts a single element from a single-array
-  // value; if that element is itself a tuple, the result is one tuple value,
-  // not a set of its slots. (e.g. `[(1,2)][0]` is the tuple `(1,2)`.)
-  const indexAccessProducesSingleTuple = firstEntryKind === "index_access"
-    && firstEntry.value.kind === "array_literal_expr";
-  const entryProducesSingleValue =
-    ((firstEntryKind === "array_literal_expr" || firstEntryKind === "tuple") && !tupleMultiRow)
-    || coalesceProducesSingleValue
-    || indexAccessProducesSingleTuple;
-  const rows = !entryProducesSingleValue && Array.isArray(value) ? [...value] : [value];
-
-  // ORDER BY is applied here in JS because the lowered SQL didn't already
-  // sort. We avoid re-running `evaluateSelectExprEntry` (which fans out one
-  // SQL per row) whenever the sort key can be read directly off a row:
-  //
-  //   * `ORDER BY <same as the SELECT entry>` — each row IS the sort key.
-  //   * `ORDER BY <slot N of the entry tuple>` — pick the slot.
-  //
-  // The fully-generic path remains as a fallback for sort keys the runtime
-  // hasn't lowered (computed paths, function calls over the row, …).
-  if (ir.orderBy) {
-    const exprStructurallyEqual = (a: SelectExprIREntry, b: SelectExprIREntry): boolean => {
-      if (a.kind !== b.kind) return false;
-      if (a.kind === "field_access" && b.kind === "field_access") {
-        return a.field === b.field && exprStructurallyEqual(a.value, b.value);
-      }
-      if (a.kind === "select" && b.kind === "select") {
-        return a.query.sourceType === b.query.sourceType;
-      }
-      if (a.kind === "cast" && b.kind === "cast") {
-        return (a as { castType: string }).castType === (b as { castType: string }).castType
-          && exprStructurallyEqual((a as { value: SelectExprIREntry }).value, (b as { value: SelectExprIREntry }).value);
-      }
-      return false;
-    };
-    const orderByValue = ir.orderBy.value;
-    // Self-sort: when `ORDER BY` matches the SELECT entry itself, the row
-    // values ARE the sort keys. (e.g. `SELECT Card.cost ORDER BY Card.cost`.)
-    if (exprStructurallyEqual(orderByValue, firstEntry)) {
-      const direction = ir.orderBy.direction === "desc" ? -1 : 1;
-      rows.sort((a, b) => compareEdgeQLValues(a, b) * direction);
-      return rows;
-    }
-    const tupleSlotIdx = firstEntry.kind === "tuple"
-      ? (firstEntry.values as SelectExprIREntry[]).findIndex((slot) => exprStructurallyEqual(slot, orderByValue))
-      : -1;
-    if (tupleSlotIdx >= 0) {
-      const direction = ir.orderBy.direction === "desc" ? -1 : 1;
-      rows.sort((a, b) => {
-        const aKey = Array.isArray(a) ? a[tupleSlotIdx] : a;
-        const bKey = Array.isArray(b) ? b[tupleSlotIdx] : b;
-        return compareEdgeQLValues(aKey, bKey) * direction;
-      });
-      return rows;
-    }
-
-    const enumOrder = ir.orderBy.value.kind === "cast"
-      ? (() => {
-          const typeDef = schema.getType(ir.orderBy!.value.castType);
-          const values = typeDef?.fields.flatMap((f) => f.enumValues ?? []) ?? [];
-          if (values.length === 0) {
-            return undefined;
-          }
-          return new Map(values.map((value, index) => [value, index] as const));
-        })()
-      : undefined;
-
-    rows.sort((a, b) => {
-      const aKey = evaluateSelectExprEntry(
-        schema,
-        db,
-        context,
-        ir.orderBy!.value,
-        sqlTrail,
-        { currentBinding: ir.currentBinding, currentValue: a },
-      );
-      const bKey = evaluateSelectExprEntry(
-        schema,
-        db,
-        context,
-        ir.orderBy!.value,
-        sqlTrail,
-        { currentBinding: ir.currentBinding, currentValue: b },
-      );
-
-      if (aKey === bKey) {
-        return 0;
-      }
-
-      const direction = ir.orderBy!.direction === "desc" ? -1 : 1;
-      if (enumOrder && typeof aKey === "string" && typeof bKey === "string") {
-        const aIndex = enumOrder.get(aKey) ?? Number.MAX_SAFE_INTEGER;
-        const bIndex = enumOrder.get(bKey) ?? Number.MAX_SAFE_INTEGER;
-        if (aIndex === bIndex) {
-          return 0;
-        }
-        return (aIndex < bIndex ? -1 : 1) * direction;
-      }
-      return compareEdgeQLValues(aKey, bKey) * direction;
-    });
-  }
-
-  return rows;
-};
-
 const runGelSelectExprSQL = (db: SQLiteDatabase, sqlArtifact: SQLArtifact): unknown[] => {
   const rows = db.prepare(sqlArtifact.sql).all(...sqlArtifact.params) as Record<string, unknown>[];
   return rows.map((row) => {
@@ -10626,8 +9622,9 @@ const inferStaticArgType = (
       // (current_item) by falling back to the caller-supplied implicit type.
       let inner: FreeObjectExpr = expr.expr;
       while (inner.kind === "field_access" || inner.kind === "cast"
-        || inner.kind === "select_expr_subquery" || inner.kind === "select_expr") {
-        inner = (inner as { expr: FreeObjectExpr }).expr;
+        || inner.kind === "select_expr_subquery"
+        || (inner as { kind: string }).kind === "select_expr") {
+        inner = (inner as unknown as { expr: FreeObjectExpr }).expr;
       }
       let typeName: string | undefined;
       if (inner.kind === "select") {
@@ -10756,12 +9753,30 @@ const executeFunctionCall = (
   args: RuntimeFunctionArg[],
   staticArgTypes?: (string | undefined)[],
 ): unknown => {
-  const builtin = resolveStdlibFunction(qualifiedName, args.length);
+  // A bareword EdgeQL call (`range(1, 5)`) in a script whose default module
+  // is `default` arrives here as `default::range`. The stdlib registry keys
+  // by the canonical module (`std::`, `math::`, `cal::`), so a literal
+  // lookup of `default::range` misses. Re-resolve under the stdlib modules
+  // first when the qualified form doesn't exist there directly.
+  let resolvedName = qualifiedName;
+  let builtin = resolveStdlibFunction(qualifiedName, args.length);
+  if (!builtin) {
+    const shortName = qualifiedName.includes("::") ? qualifiedName.split("::").pop()! : qualifiedName;
+    for (const prefix of ["std", "math", "cal"]) {
+      const candidate = `${prefix}::${shortName}`;
+      const hit = resolveStdlibFunction(candidate, args.length);
+      if (hit) {
+        builtin = hit;
+        resolvedName = candidate;
+        break;
+      }
+    }
+  }
   if (builtin) {
-    if (qualifiedName === "std::count") {
+    if (resolvedName === "std::count") {
       return countRuntimeSetCardinality(args[0]);
     }
-    return executeStdlibFunction(qualifiedName, args);
+    return executeStdlibFunction(resolvedName, args);
   }
 
   const divider = qualifiedName.lastIndexOf("::");
@@ -11449,103 +10464,6 @@ const linkJunctionFromSql = (
 };
 */
 
-const compileFilterPredicate = (lhsSql: string, op: "=" | "!=" | "<" | "<=" | ">" | ">=" | "?=" | "?!=" | "like" | "ilike"): string => {
-  if (op === "=") {
-    return `${lhsSql} = ?`;
-  }
-
-  if (op === "!=") {
-    return `${lhsSql} != ?`;
-  }
-
-  if (op === "like") {
-    return `${lhsSql} LIKE ?`;
-  }
-
-  if (op === "<" || op === "<=" || op === ">" || op === ">=") {
-    return `${lhsSql} ${op} ?`;
-  }
-
-  if (op === "?=") {
-    return `(${lhsSql} IS NULL OR ${lhsSql} = ?)`;
-  }
-
-  if (op === "?!=" ) {
-    return `(${lhsSql} IS NULL OR ${lhsSql} != ?)`;
-  }
-
-  return `LOWER(${lhsSql}) LIKE LOWER(?)`;
-};
-
-const compileNestedFilterExprSQL = (filter: FilterExprIR, params: ScalarValue[], linkPropertyAlias?: string): string => {
-  const columnExpr = (column: string): string => {
-    if (column.startsWith("@")) {
-      const alias = linkPropertyAlias ?? "t";
-      return `${alias}.${quoteIdent(column.slice(1))}`;
-    }
-    if (column === "__type__.name") {
-      return `t.${quoteIdent("__source_type")}`;
-    }
-    return `t.${quoteIdent(column)}`;
-  };
-
-  if (filter.kind === "field") {
-    params.push(filter.value);
-    return compileFilterPredicate(columnExpr(filter.column), filter.op);
-  }
-
-  if (filter.kind === "field_in") {
-    const column = columnExpr(filter.column);
-    const placeholders = filter.values.map(() => "?").join(", ");
-    params.push(...filter.values);
-    const op = filter.op === "in" ? "IN" : "NOT IN";
-    return `${column} ${op} (${placeholders})`;
-  }
-
-  if (filter.kind === "field_compare") {
-    const left = columnExpr(filter.leftColumn);
-    const right = columnExpr(filter.rightColumn);
-    if (filter.op === "=") {
-      return `${left} = ${right}`;
-    }
-    if (filter.op === "!=") {
-      return `${left} != ${right}`;
-    }
-    if (filter.op === "like") {
-      return `${left} LIKE ${right}`;
-    }
-    return `LOWER(${left}) LIKE LOWER(${right})`;
-  }
-
-  if (filter.kind === "backlink") {
-    throw new AppError("E_SQL", "Backlink filters are not supported for nested runtime link resolution");
-  }
-
-  if (filter.kind === "self_in_select") {
-    throw new AppError("E_SQL", "IN subquery filters are not supported for nested runtime link resolution");
-  }
-
-  if (filter.kind === "backlink_contains") {
-    throw new AppError("E_SQL", "Backlink membership filters are not supported for nested runtime link resolution");
-  }
-
-  if (filter.kind === "link_property_exists" || filter.kind === "link_property_compare_exists" || filter.kind === "backlink_property_compare" || filter.kind === "backlink_property_in" || filter.kind === "backlink_property_value_compare") {
-    throw new AppError("E_SQL", "Link property filters are not supported for nested runtime link resolution");
-  }
-
-  if (filter.kind === "not") {
-    return `(NOT ${compileNestedFilterExprSQL(filter.expr, params, linkPropertyAlias)})`;
-  }
-
-  if (filter.kind === "and" || filter.kind === "or") {
-    const left = compileNestedFilterExprSQL(filter.left, params, linkPropertyAlias);
-    const right = compileNestedFilterExprSQL(filter.right, params, linkPropertyAlias);
-    return filter.kind === "and" ? `(${left} AND ${right})` : `(${left} OR ${right})`;
-  }
-
-  return "1 = 1";
-};
-
 /*
 const compilePolymorphicTargetSource = (
   db: SQLiteDatabase,
@@ -12154,7 +11072,11 @@ const runWriteWithAccessPolicies = (
           .prepare(`SELECT ${quoteIdent("id")} AS ${quoteIdent("id")} FROM ${quoteIdent(ir.table)} ORDER BY rowid DESC LIMIT 1`)
           .all()[0] as { id?: unknown } | undefined;
         if (typeof inserted?.id === "string") {
-          applyInsertLinkAssignments(db, schema, ir, ast, inserted.id, context);
+          const postInsertIR = {
+            ...ir,
+            linkAssignments: ir.linkAssignments?.filter((assignment) => assignment.storage !== "inline"),
+          };
+          applyInsertLinkAssignments(db, schema, postInsertIR, ast, inserted.id, context);
         }
       }
 
@@ -12278,9 +11200,13 @@ const executeNestedInsert = (
   schema: SchemaSnapshot,
   expr: Extract<InsertValue, { kind: "insert" }>,
   context: SecurityContext,
+  parentAst?: Pick<InsertStatement, "with" | "withModule" | "withModuleAliases">,
 ): string[] => {
   const ast: InsertStatement = {
     kind: "insert",
+    with: parentAst?.with,
+    withModule: parentAst?.withModule,
+    withModuleAliases: parentAst?.withModuleAliases,
     typeName: expr.typeName,
     values: expr.values,
     pos: { line: 1, column: 1 },
@@ -12419,7 +11345,7 @@ const resolveInsertTargets = (
   }
 
   if (value.kind === "insert") {
-    return executeNestedInsert(db, schema, value, context).map((id) => ({ id, properties: {} }));
+    return executeNestedInsert(db, schema, value, context, ast).map((id) => ({ id, properties: {} }));
   }
 
   if (value.kind === "set") {
@@ -12470,7 +11396,7 @@ const resolveInsertTargets = (
           }
         }
 
-        const nestedIds = executeNestedInsert(db, schema, { kind: "insert", typeName: value.body.typeName, values: replacedValues }, context);
+        const nestedIds = executeNestedInsert(db, schema, { kind: "insert", typeName: value.body.typeName, values: replacedValues }, context, ast);
         rows.push(...nestedIds.map((id) => ({ id, properties: {} })));
       }
     }
