@@ -17,6 +17,7 @@ import type {
   OrderByIR,
   OverlayIR,
   PathIdIR,
+  MultiFieldElementFilterIR,
   ScalarExprIR,
   ScalarFnName,
   ScopeTreeIR,
@@ -1638,6 +1639,32 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         return { kind: "index_access", value: inner, index: expr.index };
       }
       if (expr.kind === "function_call") {
+        // `count(.multi_prop)` / `count((SELECT _ := .multi_prop FILTER ...))`
+        // — lower to `multi_field_count` over `json_each`. Recognise both the
+        // bare path argument and the SELECT-subquery form with an optional
+        // alias-bound element filter (`_ IN {…}`, `_ > 'p'`, `_ NOT IN {…}`).
+        if ((expr.call.name === "count" || expr.call.name === "std::count")
+          && expr.call.args.length === 1
+          && expr.call.args[0].kind === "expr") {
+          const inner = expr.call.args[0].expr;
+          const bareField = subjectScopedMultiField(inner);
+          if (bareField !== undefined) {
+            return { kind: "multi_field_count", column: bareField };
+          }
+          if (inner.kind === "select_expr_subquery"
+            && !inner.limit && !inner.offset && !inner.orderBy) {
+            const iterField = subjectScopedMultiField(inner.expr);
+            if (iterField !== undefined) {
+              if (!inner.filter) {
+                return { kind: "multi_field_count", column: iterField };
+              }
+              const elementFilter = compileMultiFieldElementFilter(inner.filter, inner.alias);
+              if (elementFilter) {
+                return { kind: "multi_field_count", column: iterField, elementFilter };
+              }
+            }
+          }
+        }
         const fn = scalarFnNameFor(expr.call.name);
         if (!fn) return undefined;
         const args: ScalarExprIR[] = [];
@@ -1648,6 +1675,83 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           args.push(compiled);
         }
         return { kind: "fn_call", name: fn, args };
+      }
+      return undefined;
+    };
+
+    // Subject-scoped `.<multi_prop>` / `<Subject>.<multi_prop>` — used by
+    // `multi_field_count` / `multi_field_array_agg` lowerings. Mirrors the
+    // `isSubjectScopedFieldAccess` helper below; the same form is recognised
+    // here without depending on its closure-bound `typeLabel`.
+    const subjectScopedMultiField = (e: FreeObjectExpr): string | undefined => {
+      if (e.kind !== "field_access") return undefined;
+      if (e.field.startsWith("@")) return undefined;
+      const base = e.expr;
+      const shortLabel = typeLabel.includes("::") ? typeLabel.split("::").at(-1) : typeLabel;
+      const isSubjectRoot = base.kind === "current_item"
+        || (base.kind === "select"
+          && (base.typeName === typeLabel || base.typeName === shortLabel)
+          && (!base.clauses || Object.keys(base.clauses).length === 0))
+        || (base.kind === "binding_ref"
+          && (base.name === typeLabel || base.name === shortLabel));
+      if (!isSubjectRoot) return undefined;
+      const field = fieldByName.get(e.field);
+      if (!field?.multi) return undefined;
+      return e.field;
+    };
+
+    // `_ IN {…}` / `_ NOT IN {…}` / `_ <op> <literal>` filter on the
+    // alias-bound iterated element of a multi-property subquery.
+    const compileMultiFieldElementFilter = (
+      filterExpr: FreeObjectExpr,
+      alias: string | undefined,
+    ): MultiFieldElementFilterIR | undefined => {
+      const isAliasRef = (e: FreeObjectExpr): boolean =>
+        alias !== undefined && e.kind === "binding_ref" && e.name === alias;
+      const literalOrSetValues = (e: FreeObjectExpr): ScalarValue[] | undefined => {
+        if (e.kind === "literal" && (typeof e.value === "string" || typeof e.value === "number"
+          || typeof e.value === "boolean" || e.value === null)) {
+          return [e.value as ScalarValue];
+        }
+        if (e.kind === "set_literal") {
+          if (!e.values.every((v) => typeof v === "string" || typeof v === "number"
+            || typeof v === "boolean" || v === null)) return undefined;
+          return e.values as ScalarValue[];
+        }
+        return undefined;
+      };
+      if (filterExpr.kind === "in_expr") {
+        if (isAliasRef(filterExpr.left)) {
+          const values = literalOrSetValues(filterExpr.right);
+          if (values) return { kind: "in", op: filterExpr.op, values };
+        }
+      }
+      if (filterExpr.kind === "compare"
+        && (filterExpr.op === "=" || filterExpr.op === "!="
+          || filterExpr.op === "<" || filterExpr.op === "<="
+          || filterExpr.op === ">" || filterExpr.op === ">=")) {
+        const cmp = (literalSide: FreeObjectExpr): ScalarValue | undefined => {
+          if (literalSide.kind !== "literal") return undefined;
+          const v = literalSide.value;
+          if (typeof v !== "string" && typeof v !== "number"
+            && typeof v !== "boolean" && v !== null) return undefined;
+          return v as ScalarValue;
+        };
+        if (isAliasRef(filterExpr.left)) {
+          const v = cmp(filterExpr.right);
+          if (v !== undefined) return { kind: "compare", op: filterExpr.op, value: v };
+        }
+        if (isAliasRef(filterExpr.right)) {
+          const v = cmp(filterExpr.left);
+          if (v !== undefined) {
+            const flipped = filterExpr.op === "<" ? ">"
+              : filterExpr.op === "<=" ? ">="
+              : filterExpr.op === ">" ? "<"
+              : filterExpr.op === ">=" ? "<="
+              : filterExpr.op;
+            return { kind: "compare", op: flipped, value: v };
+          }
+        }
       }
       return undefined;
     };
@@ -1941,6 +2045,215 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           }
         }
       }
+      // Multi-property set membership: `<value> IN .multi_field`,
+      // `.multi_field IN {…}`, `.multi_field NOT IN {…}` — lower to a
+      // json_each-based EXISTS check. Single-literal RHS / single-literal
+      // LHS both desugar to the same `multi_field_in` IR (set of one).
+      const literalValuesFromExpr = (e: FreeObjectExpr): ScalarValue[] | undefined => {
+        if (e.kind === "literal" && (typeof e.value === "string" || typeof e.value === "number"
+          || typeof e.value === "boolean" || e.value === null)) {
+          return [e.value as ScalarValue];
+        }
+        if (e.kind === "set_literal") {
+          return e.values
+            .filter((v): v is ScalarValue => typeof v === "string" || typeof v === "number"
+              || typeof v === "boolean" || v === null);
+        }
+        return undefined;
+      };
+      const subjectMultiField = (e: FreeObjectExpr): string | undefined => {
+        if (e.kind === "field_access" && e.expr.kind === "current_item" && !e.field.startsWith("@")) {
+          const field = fieldByName.get(e.field);
+          if (field?.multi) return e.field;
+        }
+        return undefined;
+      };
+      // `array_unpack(.array_field)` decomposes a stored array<T> into the
+      // set of its elements — same SQL shape as iterating a multi-property
+      // with json_each. Recognise this so `<x> IN array_unpack(.arr)` and
+      // `<x> = array_unpack(.arr)` lower to the same EXISTS-json_each form.
+      const arrayUnpackOnSubjectArray = (e: FreeObjectExpr): string | undefined => {
+        if (e.kind !== "function_call") return undefined;
+        const callName = e.call.name === "array_unpack" || e.call.name === "std::array_unpack"
+          ? e.call.name : undefined;
+        if (!callName) return undefined;
+        if (e.call.args.length !== 1) return undefined;
+        const arg = e.call.args[0];
+        if (arg.kind !== "expr") return undefined;
+        const inner = arg.expr;
+        if (inner.kind !== "field_access" || inner.expr.kind !== "current_item" || inner.field.startsWith("@")) return undefined;
+        const field = fieldByName.get(inner.field);
+        if (!field?.collection || field.collection.kind !== "array") return undefined;
+        return inner.field;
+      };
+      if (expr.kind === "in_expr") {
+        const leftField = subjectMultiField(expr.left) ?? arrayUnpackOnSubjectArray(expr.left);
+        const rightField = subjectMultiField(expr.right) ?? arrayUnpackOnSubjectArray(expr.right);
+        if (leftField !== undefined) {
+          const values = literalValuesFromExpr(expr.right);
+          if (values) {
+            return { kind: "multi_field_in", column: leftField, op: expr.op, values };
+          }
+        }
+        if (rightField !== undefined) {
+          const values = literalValuesFromExpr(expr.left);
+          if (values) {
+            return { kind: "multi_field_in", column: rightField, op: expr.op, values };
+          }
+        }
+      }
+      // Multi-property `=` / `!=` with a literal or set-literal operand on
+      // either side uses the same set-cross-product matching as `IN`, so
+      // route to `multi_field_in` (with `!=` mapping to `not_in`). This
+      // covers `'plastic' IN .tag_set1`, `.tag_set1 = {'rectangle','wood'}`,
+      // and `.tag_set1 = 'plastic'` uniformly.
+      if (expr.kind === "compare" && (expr.op === "=" || expr.op === "!=")) {
+        const leftField = subjectMultiField(expr.left) ?? arrayUnpackOnSubjectArray(expr.left);
+        const rightField = subjectMultiField(expr.right) ?? arrayUnpackOnSubjectArray(expr.right);
+        if (leftField !== undefined) {
+          const values = literalValuesFromExpr(expr.right);
+          if (values) {
+            return { kind: "multi_field_in", column: leftField, op: expr.op === "=" ? "in" : "not_in", values };
+          }
+        }
+        if (rightField !== undefined) {
+          const values = literalValuesFromExpr(expr.left);
+          if (values) {
+            return { kind: "multi_field_in", column: rightField, op: expr.op === "=" ? "in" : "not_in", values };
+          }
+        }
+      }
+      // `array_agg(.multi_prop ORDER BY .multi_prop [DESC])` — when the
+      // sort key matches the iteration source, lower to a JSON-string
+      // single-value array compared via plain SQL equality. Covers both
+      // `array_agg = array_agg` (set_11) and `array_agg = [literal]`
+      // (set_03) without bouncing through the parsed-runtime evaluator.
+      // EdgeQL `Item.tag_set1` inside an Item-scoped filter parses as
+      // `field_access(select{Item}, tag_set1)` rather than `field_access(
+      // current_item, tag_set1)`. Treat the bare-subject-SELECT root as the
+      // same as the current iteration row.
+      const shortTypeLabel = typeLabel.includes("::") ? typeLabel.split("::").at(-1)! : typeLabel;
+      const isSubjectScopedFieldAccess = (e: FreeObjectExpr): string | undefined => {
+        if (e.kind !== "field_access") return undefined;
+        if (e.field.startsWith("@")) return undefined;
+        const base = e.expr;
+        if (base.kind === "current_item") return e.field;
+        if (base.kind === "select"
+          && (base.typeName === typeLabel || base.typeName === shortTypeLabel)
+          && (!base.clauses || Object.keys(base.clauses).length === 0)) {
+          return e.field;
+        }
+        if (base.kind === "binding_ref"
+          && (base.name === typeLabel || base.name === shortTypeLabel)) {
+          return e.field;
+        }
+        return undefined;
+      };
+      const arrayAggOnSubjectMulti = (
+        e: FreeObjectExpr,
+      ): { column: string; direction: "asc" | "desc" } | undefined => {
+        if (e.kind !== "function_call") return undefined;
+        if (e.call.name !== "array_agg" && e.call.name !== "std::array_agg") return undefined;
+        if (e.call.args.length !== 1) return undefined;
+        const arg = e.call.args[0];
+        if (arg.kind !== "expr") return undefined;
+        const inner = arg.expr;
+        if (inner.kind !== "select_expr_subquery") return undefined;
+        if (inner.filter || inner.limit !== undefined || inner.offset !== undefined) return undefined;
+        const iterField = isSubjectScopedFieldAccess(inner.expr);
+        if (iterField === undefined) return undefined;
+        const field = fieldByName.get(iterField);
+        if (!field?.multi) return undefined;
+        // Optional ORDER BY clause must reference the same iteration value.
+        if (inner.orderBy) {
+          const orderField = isSubjectScopedFieldAccess(inner.orderBy.expr);
+          if (orderField !== iterField) return undefined;
+        }
+        return {
+          column: iterField,
+          direction: inner.orderBy?.direction === "desc" ? "desc" : "asc",
+        };
+      };
+      const literalArrayJson = (e: FreeObjectExpr): string | undefined => {
+        if (e.kind !== "array_literal_expr") return undefined;
+        const out: ScalarValue[] = [];
+        for (const element of e.values) {
+          if (element.kind !== "literal") return undefined;
+          const v = element.value;
+          if (typeof v !== "string" && typeof v !== "number"
+            && typeof v !== "boolean" && v !== null) return undefined;
+          out.push(v as ScalarValue);
+        }
+        return JSON.stringify(out);
+      };
+      if (expr.kind === "compare" && (expr.op === "=" || expr.op === "!=")) {
+        const leftAgg = arrayAggOnSubjectMulti(expr.left);
+        const rightAgg = arrayAggOnSubjectMulti(expr.right);
+        if (leftAgg && rightAgg) {
+          return {
+            kind: "expr_compare",
+            op: expr.op,
+            left: { kind: "multi_field_array_agg", column: leftAgg.column, direction: leftAgg.direction },
+            right: { kind: "multi_field_array_agg", column: rightAgg.column, direction: rightAgg.direction },
+          };
+        }
+        if (leftAgg) {
+          const json = literalArrayJson(expr.right);
+          if (json !== undefined) {
+            return {
+              kind: "expr_compare",
+              op: expr.op,
+              left: { kind: "multi_field_array_agg", column: leftAgg.column, direction: leftAgg.direction },
+              right: { kind: "literal", value: json },
+            };
+          }
+        }
+        if (rightAgg) {
+          const json = literalArrayJson(expr.left);
+          if (json !== undefined) {
+            return {
+              kind: "expr_compare",
+              op: expr.op,
+              left: { kind: "literal", value: json },
+              right: { kind: "multi_field_array_agg", column: rightAgg.column, direction: rightAgg.direction },
+            };
+          }
+        }
+      }
+      // Array-typed property `=`/`!=` against an array literal — compare
+      // against the JSON-encoded stored value as a single scalar.
+      if (expr.kind === "compare" && (expr.op === "=" || expr.op === "!=")) {
+        const arrayFieldLiteral = (
+          fieldSide: FreeObjectExpr,
+          literalSide: FreeObjectExpr,
+        ): { column: string; jsonValue: string } | undefined => {
+          if (fieldSide.kind !== "field_access" || fieldSide.expr.kind !== "current_item") return undefined;
+          if (fieldSide.field.startsWith("@")) return undefined;
+          const field = fieldByName.get(fieldSide.field);
+          if (!field?.collection || field.collection.kind !== "array") return undefined;
+          if (literalSide.kind !== "array_literal_expr") return undefined;
+          const elements: ScalarValue[] = [];
+          for (const element of literalSide.values) {
+            if (element.kind !== "literal") return undefined;
+            const v = element.value;
+            if (typeof v !== "string" && typeof v !== "number"
+              && typeof v !== "boolean" && v !== null) return undefined;
+            elements.push(v as ScalarValue);
+          }
+          return { column: fieldSide.field, jsonValue: JSON.stringify(elements) };
+        };
+        const leftArray = arrayFieldLiteral(expr.left, expr.right);
+        const rightArray = arrayFieldLiteral(expr.right, expr.left);
+        const match = leftArray ?? rightArray;
+        if (match) {
+          return {
+            kind: "field",
+            column: match.column,
+            op: expr.op,
+            value: match.jsonValue,
+          };
+        }
+      }
       // Catch-all for compare expressions whose lowering isn't implemented
       // yet (e.g. `Card = (SELECT …)` correlated subquery comparisons, or
       // backlink-path field comparisons like `Card.<deck.name = 'Bob'`).
@@ -2047,6 +2360,16 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           if (!isValidScalarValue(field.type, v)) {
             fail(`Type mismatch for '${fieldName}' in IN filter: expected ${field.type}`);
           }
+        }
+        if (field.multi) {
+          // `.multi_prop IN {lit, …}` — element-of-set semantics on the
+          // JSON-encoded multi value; emit json_each-based SQL.
+          return {
+            kind: "multi_field_in",
+            column: fieldName,
+            op: filter.op,
+            values: filter.values.values,
+          };
         }
         return {
           kind: "field_in",
@@ -2345,6 +2668,18 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
               computedLink.expr.link,
               computedLink.expr.sourceType,
             ),
+          };
+        }
+        // `EXISTS .scalar_property` (parsed as predicate `field = true`) should
+        // lower to `field IS NOT NULL`, not `field = true`. The parser's
+        // narrow-EXISTS path only routes to free_expr for selected lookahead
+        // tokens; this catches the bare-property fallthrough.
+        if (knownFields.has(targetField)) {
+          return {
+            kind: "expr_compare",
+            left: { kind: "column", column: targetField },
+            right: { kind: "literal", value: null },
+            op: "!=",
           };
         }
       }
