@@ -46,11 +46,11 @@ describe("TestEdgeQLVolatilityInference", () => {
     schema = loadSchema();
   });
 
-  it.skip("test_edgeql_ir_volatility_inference_00 [unconverted: volatility inference not implemented]", () => {
+  it("test_edgeql_ir_volatility_inference_00", () => {
     expectVolatility(schema, `SELECT Card`, "stable");
   });
 
-  it.skip("test_edgeql_ir_volatility_inference_01 [unconverted: volatility inference not implemented]", () => {
+  it("test_edgeql_ir_volatility_inference_01", () => {
     expectVolatility(schema, `
       WITH
         foo := random()
@@ -59,7 +59,7 @@ describe("TestEdgeQLVolatilityInference", () => {
     `, "volatile");
   });
 
-  it.skip("test_edgeql_ir_volatility_inference_02 [unconverted: volatility inference not implemented]", () => {
+  it("test_edgeql_ir_volatility_inference_02", () => {
     expectVolatility(schema, `
       SELECT
         Card
@@ -68,7 +68,7 @@ describe("TestEdgeQLVolatilityInference", () => {
     `, "volatile");
   });
 
-  it.skip("test_edgeql_ir_volatility_inference_03 [unconverted: volatility inference not implemented]", () => {
+  it("test_edgeql_ir_volatility_inference_03", () => {
     expectVolatility(schema, `
       SELECT
         Card
@@ -77,7 +77,7 @@ describe("TestEdgeQLVolatilityInference", () => {
     `, "volatile");
   });
 
-  it.skip("test_edgeql_ir_volatility_inference_04 [unconverted: volatility inference not implemented]", () => {
+  it("test_edgeql_ir_volatility_inference_04", () => {
     expectVolatility(schema, `
       SELECT
         Card
@@ -86,7 +86,7 @@ describe("TestEdgeQLVolatilityInference", () => {
     `, "volatile");
   });
 
-  it.skip("test_edgeql_ir_volatility_inference_05 [unconverted: volatility inference not implemented]", () => {
+  it("test_edgeql_ir_volatility_inference_05", () => {
     expectVolatility(schema, `
       SELECT
         Card
@@ -95,7 +95,7 @@ describe("TestEdgeQLVolatilityInference", () => {
     `, "volatile");
   });
 
-  it.skip("test_edgeql_ir_volatility_inference_06 [unconverted: volatility inference not implemented]", () => {
+  it("test_edgeql_ir_volatility_inference_06", () => {
     expectVolatility(schema, `
       INSERT
         Card {
@@ -106,7 +106,7 @@ describe("TestEdgeQLVolatilityInference", () => {
     `, "modifying");
   });
 
-  it.skip("test_edgeql_ir_volatility_inference_07 [unconverted: volatility inference not implemented]", () => {
+  it("test_edgeql_ir_volatility_inference_07", () => {
     expectVolatility(schema, `
       UPDATE
         Card
@@ -116,42 +116,42 @@ describe("TestEdgeQLVolatilityInference", () => {
     `, "modifying");
   });
 
-  it.skip("test_edgeql_ir_volatility_inference_08 [unconverted: volatility inference not implemented]", () => {
+  it("test_edgeql_ir_volatility_inference_08", () => {
     expectVolatility(schema, `
       DELETE
         Card
     `, "modifying");
   });
 
-  it.skip("test_edgeql_ir_volatility_inference_09 [unconverted: volatility inference not implemented]", () => {
+  it("test_edgeql_ir_volatility_inference_09", () => {
     expectVolatility(schema, `with X := 1 select X`, "immutable");
   });
 
-  it.skip("test_edgeql_ir_volatility_inference_10 [unconverted: volatility inference not implemented]", () => {
+  it("test_edgeql_ir_volatility_inference_10", () => {
     expectVolatility(schema, `with X := User select X`, "stable");
   });
 
-  it.skip("test_edgeql_ir_volatility_inference_11 [unconverted: volatility inference not implemented]", () => {
+  it("test_edgeql_ir_volatility_inference_11", () => {
     expectVolatility(schema, `with X := random() select X`, "volatile");
   });
 
-  it.skip("test_edgeql_ir_volatility_inference_12 [unconverted: volatility inference not implemented]", () => {
+  it("test_edgeql_ir_volatility_inference_12", () => {
     expectVolatility(schema, `select AliasOne`, "immutable");
   });
 
-  it.skip("test_edgeql_ir_volatility_inference_13 [unconverted: globals + volatility inference not implemented]", () => {
+  it("test_edgeql_ir_volatility_inference_13", () => {
     expectVolatility(schema, `select global GlobalOne`, "stable");
   });
 
-  it.skip("test_edgeql_ir_volatility_inference_14 [unconverted: volatility inference not implemented]", () => {
+  it("test_edgeql_ir_volatility_inference_14", () => {
     expectVolatility(schema, `select AirCard`, "stable");
   });
 
-  it.skip("test_edgeql_ir_volatility_inference_15 [unconverted: globals + volatility inference not implemented]", () => {
+  it("test_edgeql_ir_volatility_inference_15", () => {
     expectVolatility(schema, `select global HighestCost`, "stable");
   });
 
-  it.skip("test_edgeql_ir_volatility_inference_16 [unconverted: globals + volatility inference not implemented]", () => {
+  it("test_edgeql_ir_volatility_inference_16", () => {
     expectVolatility(schema, `select global CardsWithText`, "stable");
   });
 });

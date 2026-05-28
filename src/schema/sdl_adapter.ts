@@ -1701,7 +1701,7 @@ const convertPropertyMember = (
   }
 
   const multi = node.cardinality === "multi";
-  const required = multi ? false : node.required === true;
+  const required = node.required === true;
   const hasDefault = body?.default !== null && body?.default !== undefined;
 
   return {
@@ -1763,7 +1763,7 @@ const convertLinkMember = (
     kind: "link",
     name: qualifiedNameToString(node.name),
     target: normalizeLinkTargetType(moduleName, declaredType),
-    required: multi ? false : node.required === true,
+    required: node.required === true,
     multi,
     overloaded: node.overloaded,
     hasDefault: body?.default !== null && body?.default !== undefined,
@@ -1802,7 +1802,7 @@ const convertInferredLinkMember = (
     kind: "link",
     name: qualifiedNameToString(node.name),
     target: normalizeLinkTargetType(moduleName, declaredType),
-    required: multi ? false : node.required === true,
+    required: node.required === true,
     multi,
     overloaded: node.overloaded,
     hasDefault: body?.default !== null && body?.default !== undefined,
