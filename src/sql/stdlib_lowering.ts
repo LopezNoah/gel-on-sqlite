@@ -50,6 +50,14 @@ const STDLIB_SQL_TEMPLATES = new Map<string, StdlibSqlTemplate>([
     if (!argSql[0] || !argSql[1]) return null;
     return `(instr(CAST(${argSql[0]} AS TEXT), CAST(${argSql[1]} AS TEXT)) > 0)`;
   }],
+  // array_join(arr, sep): walk the array via json_each and join the values.
+  // Wraps the array in a CTE so the array placeholder appears in the SQL
+  // BEFORE the separator placeholder — keeping ? positions aligned with the
+  // params array (which receives arg0 before arg1).
+  ["std::array_join", (argSql) => {
+    if (!argSql[0] || !argSql[1]) return null;
+    return `(WITH __aj(__arr) AS (VALUES (${argSql[0]})) SELECT COALESCE(group_concat(value, ${argSql[1]}), '') FROM __aj, json_each(__aj.__arr))`;
+  }],
   ["std::datetime_get", (argSql) => {
     if (!argSql[0] || !argSql[1]) {
       return null;

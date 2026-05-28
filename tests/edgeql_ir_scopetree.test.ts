@@ -34,27 +34,27 @@ describe("TestEdgeQLIRScopeTree", () => {
   // currently compile without diagnosing the issue. The tests are kept here as
   // parity placeholders; flip to `it` once scope-tree inference lands.
 
-  it.skip("test_edgeql_ir_scope_tree_bad_01 [unconverted: scope-tree analysis not implemented]", () => {
+  it("test_edgeql_ir_scope_tree_bad_01", () => {
     expect(() => compileQuery(schema, `
         SELECT User.deck
         FILTER User.name
     `)).toThrow(/reference to 'User\.name' changes the interpretation/);
   });
 
-  it.skip("test_edgeql_ir_scope_tree_bad_02 [unconverted: scope-tree analysis not implemented]", () => {
+  it("test_edgeql_ir_scope_tree_bad_02", () => {
     expect(() => compileQuery(schema, `
         SELECT User.deck
         FILTER User.deck@count
     `)).toThrow(/reference to 'User' changes the interpretation/);
   });
 
-  it.skip("test_edgeql_ir_scope_tree_bad_03 [unconverted: scope-tree analysis not implemented]", () => {
+  it("test_edgeql_ir_scope_tree_bad_03", () => {
     expect(() => compileQuery(schema, `
         SELECT User.deck { foo := User }
     `)).toThrow(/reference to 'User' changes the interpretation/);
   });
 
-  it.skip("test_edgeql_ir_scope_tree_bad_04 [unconverted: UPDATE-with-binding scope-tree analysis not implemented]", () => {
+  it("test_edgeql_ir_scope_tree_bad_04", () => {
     expect(() => compileQuery(schema, `
         UPDATE User.deck SET { name := User.name }
     `)).toThrow(/reference to 'User\.name' changes the interpretation/);
@@ -82,7 +82,7 @@ describe("TestEdgeQLIRScopeTree", () => {
     expect(ir).toBeDefined();
   });
 
-  it.skip("test_edgeql_ir_scope_tree_bad_06 [unconverted: nested UPDATE correlated-set check not implemented]", () => {
+  it("test_edgeql_ir_scope_tree_bad_06", () => {
     expect(() => compileQuery(schema, `
         UPDATE User SET { avatar := (UPDATE .avatar SET { text := "foo" }) }
     `)).toThrow(/cannot reference correlated set 'User' here/);

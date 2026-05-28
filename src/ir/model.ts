@@ -426,6 +426,8 @@ export type SelectShapeExprIR =
 export interface ShapeBaseIR {
   name: string;
   pathId: PathIdIR;
+  typeRef?: SchemaTypeRefIR;
+  cardinality?: Cardinality;
 }
 
 export type SelectShapeElementIR =
@@ -546,6 +548,7 @@ export interface InsertIR extends MutationBaseIR {
   linkDefaults?: InsertLinkDefaultIR[];
   triggers?: TriggerIR[];
   policies?: PolicyIR[];
+  inference?: InferenceResult;
 }
 
 export interface UpdateLinkAssignmentIR {
@@ -571,6 +574,7 @@ export interface UpdateIR extends MutationBaseIR {
   linkAssignments?: UpdateLinkAssignmentIR[];
   triggers?: TriggerIR[];
   policies?: PolicyIR[];
+  inference?: InferenceResult;
 }
 
 export interface DeleteIR extends MutationBaseIR {
@@ -581,6 +585,7 @@ export interface DeleteIR extends MutationBaseIR {
   };
   triggers?: TriggerIR[];
   policies?: PolicyIR[];
+  inference?: InferenceResult;
 }
 
 /* ---------------------------------- */
@@ -632,6 +637,7 @@ export interface SelectFreeIR extends PathStatementIR {
   entries: SelectFreeIREntry[];
   triggers?: TriggerIR[];
   policies?: PolicyIR[];
+  inference?: InferenceResult;
 }
 
 /* ---------------------------------- */
@@ -861,6 +867,8 @@ export interface SelectExprIR {
   entries: SelectExprIREntry[];
   currentBinding?: string;
   orderBy?: OrderByIR<SelectExprIREntry>;
+  typeRef?: SchemaTypeRefIR;
+  inference?: InferenceResult;
 }
 
 /* ---------------------------------- */

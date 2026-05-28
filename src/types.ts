@@ -394,4 +394,12 @@ export interface TypeDef {
   mutationRewrites?: MutationRewriteDef[];
   triggers?: TriggerDef[];
   accessPolicies?: AccessPolicyDef[];
+  // Type-level constraints (e.g. `constraint exclusive on ((.first, .last))`).
+  // Only basic metadata needed for cardinality inference is preserved.
+  typeConstraints?: Array<{
+    name: string;
+    exprText: string;
+    fieldRefs: string[];
+    delegated?: boolean;
+  }>;
 }

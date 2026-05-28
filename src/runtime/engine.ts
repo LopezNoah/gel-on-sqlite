@@ -10,8 +10,8 @@ import type { SchemaSnapshot } from "../schema/schema.js";
 import { compileToSQL, computedValueAlias, shapePayloadAlias, type SQLArtifact } from "../sql/compiler.js";
 import { executeStdlibFunction, resolveStdlibFunction, type RuntimeFunctionArg } from "../stdlib/functions.js";
 import { assertTargetSqlCompatibility, type RuntimeTarget } from "./target.js";
-import type { BacklinkSourceIR, FilterExprIR, GroupIR, InsertIR, InsertLinkAssignmentIR, InsertLinkDefaultIR, InsertLinkPropertyIR, IRStatement, LinkRelationIR, OrderByIR, OverlayIR, ScalarExprIR, SelectExprIREntry, SelectExprIR, SelectIR, SelectShapeElementIR, UpdateIR, UpdateLinkAssignmentIR } from "../ir/model.js";
-import type { AccessPolicyCondition, AccessPolicyDef, AliasDef, ComputedLinkPropertyExpr, FieldDef, FunctionDef, FunctionExprDef, ScalarType, ScalarValue, TypeDef } from "../types.js";
+import type { GroupIR, InsertIR, InsertLinkDefaultIR, InsertLinkPropertyIR, IRStatement, OverlayIR, SelectIR, SelectShapeElementIR, UpdateIR, UpdateLinkAssignmentIR } from "../ir/model.js";
+import type { AccessPolicyCondition, AccessPolicyDef, ComputedLinkPropertyExpr, FieldDef, FunctionDef, FunctionExprDef, ScalarType, ScalarValue, TypeDef } from "../types.js";
 import { qualifiedTypeName } from "../schema/schema.js";
 import { populateSchemaIntrospection } from "../schema/schema_introspection.js";
 import { materializeSchema, type SQLiteDatabase } from "../runtime/database.js";
@@ -80,6 +80,37 @@ const countRuntimeSetCardinality = (value: unknown): number => {
   }
   return count;
 };
+
+const evaluateRuntimeAggregate = (functionName: string, values: unknown[]): unknown => {
+  const normalized = functionName.toLowerCase().split("::").at(-1) ?? functionName.toLowerCase();
+  if (normalized === "count") {
+    return countRuntimeSetCardinality(values);
+  }
+  const numbers = values
+    .filter((value) => value !== null && value !== undefined)
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value));
+  if (normalized === "sum") {
+    return numbers.reduce((total, value) => total + value, 0);
+  }
+  if (numbers.length === 0) {
+    return null;
+  }
+  if (normalized === "min") {
+    return Math.min(...numbers);
+  }
+  if (normalized === "max") {
+    return Math.max(...numbers);
+  }
+  if (normalized === "avg" || normalized === "mean") {
+    return numbers.reduce((total, value) => total + value, 0) / numbers.length;
+  }
+  return null;
+};
+
+const normalizeRuntimeFloat = (value: number): number => (
+  Number.isFinite(value) ? Number(value.toPrecision(15)) : value
+);
 
 const runtimeExprAliases = new WeakMap<SchemaSnapshot, Map<string, string>>();
 
@@ -322,26 +353,6 @@ const parseRuntimeAliasComputedProperties = (exprText: string): RuntimeTypedAlia
   return properties.length > 0 ? properties : undefined;
 };
 
-const parseRuntimeAliasFilterValues = (exprText: string): RuntimeTypedAliasDef["filterValues"] => {
-  const compact = exprText.replace(/^[ \t]*#.*$/gm, "").replace(/\s+/g, " ").trim();
-  const filterIndex = compact.toLowerCase().lastIndexOf(" filter ");
-  const filterText = filterIndex === -1 ? compact : compact.slice(filterIndex);
-  const matches = [...filterText.matchAll(/\.([A-Za-z_][\w]*)\s*=\s*'([^']+)'/g)];
-  if (matches.length < 2) {
-    return undefined;
-  }
-
-  const field = matches[0][1];
-  if (!matches.every((match) => match[1] === field)) {
-    return undefined;
-  }
-
-  return {
-    field,
-    values: [...new Set(matches.map((match) => match[2]))],
-  };
-};
-
 const parseRuntimeAliasComputedExistsProperties = (
   exprText: string,
   moduleName: string,
@@ -381,25 +392,6 @@ const parseRuntimeAliasLinkOverrides = (exprText: string, moduleName: string): R
     });
   }
   return overrides;
-};
-
-const runtimeTypedAliasFromSchemaAlias = (alias: AliasDef): RuntimeTypedAliasDef | undefined => {
-  if (!alias.sourceType) {
-    return undefined;
-  }
-  const exprText = alias.exprText ?? "";
-  return {
-    aliasName: alias.name,
-    moduleName: alias.module,
-    sourceType: qualifyRuntimeTypeName(alias.sourceType, alias.module),
-    filter: alias.filter?.kind === "field_predicate"
-      ? { field: alias.filter.field, op: alias.filter.op, value: alias.filter.value }
-      : undefined,
-    filterValues: parseRuntimeAliasFilterValues(exprText),
-    computedProperties: parseRuntimeAliasComputedProperties(exprText),
-    computedExistsProperties: parseRuntimeAliasComputedExistsProperties(exprText, alias.module),
-    linkOverrides: parseRuntimeAliasLinkOverrides(exprText, alias.module),
-  };
 };
 
 const splitTopLevelScriptStatements = (script: string): string[] => {
@@ -460,41 +452,6 @@ const splitTopLevelScriptStatements = (script: string): string[] => {
   const tail = script.slice(start).trim();
   if (tail) statements.push(tail);
   return statements;
-};
-
-const splitTopLevelComma = (input: string): string[] => {
-  const out: string[] = [];
-  let start = 0;
-  let depth = 0;
-  let quote: "'" | '"' | undefined;
-  for (let i = 0; i < input.length; i += 1) {
-    const ch = input[i]!;
-    if (quote) {
-      if (ch === "\\") i += 1;
-      else if (ch === quote) quote = undefined;
-      continue;
-    }
-    if (ch === "'" || ch === '"') {
-      quote = ch;
-      continue;
-    }
-    if (ch === "(" || ch === "[" || ch === "{" || ch === "<") {
-      depth += 1;
-      continue;
-    }
-    if (ch === ")" || ch === "]" || ch === "}" || ch === ">") {
-      depth = Math.max(0, depth - 1);
-      continue;
-    }
-    if (ch === "," && depth === 0) {
-      const piece = input.slice(start, i).trim();
-      if (piece) out.push(piece);
-      start = i + 1;
-    }
-  }
-  const tail = input.slice(start).trim();
-  if (tail) out.push(tail);
-  return out;
 };
 
 const dynamicQualifiedNameParts = (rawName: string, defaultModule = "default"): { module: string; name: string; qualified: string } => {
@@ -971,7 +928,7 @@ const tryRuntimeSelectExprEvaluationAst = (
           || expr.call.args.some((arg) => arg.kind === "expr" ? needsRuntimeEval(arg.expr) : arg.kind === "function_call" ? needsRuntimeEval({ kind: "function_call", call: arg.call }) : arg.kind === "binding_ref" ? needsRuntimeEval({ kind: "binding_ref", name: arg.name }) : false);
       }
       case "for_expr":
-        return needsRuntimeEval(expr.iterator) || needsRuntimeEval(expr.body);
+        return true;
       case "field_access":
         return needsRuntimeEval(expr.expr);
       case "distinct":
@@ -1358,7 +1315,13 @@ const tryRuntimeSelectExprEvaluationAst = (
           return evalExpr({ kind: "field_access", expr: { kind: "binding_ref", name: "__path_tmp" }, field: expr.tail, optional: false }, nextEnv);
         }
         if (value && typeof value === "object" && !Array.isArray(value)) {
-          return (value as Record<string, unknown>)[expr.tail] ?? null;
+          const row = value as Record<string, unknown>;
+          if (Object.prototype.hasOwnProperty.call(row, expr.tail)) {
+            return row[expr.tail] ?? null;
+          }
+          const nextEnv = new Map(env);
+          nextEnv.set("__path_tmp", value);
+          return evalExpr({ kind: "field_access", expr: { kind: "binding_ref", name: "__path_tmp" }, field: expr.tail, optional: false }, nextEnv);
         }
         return null;
       }
@@ -1606,6 +1569,14 @@ const tryRuntimeSelectExprEvaluationAst = (
         }
         if (Array.isArray(value)) {
           if (value.length > 0 && Array.isArray(value[0])) {
+            const sourceIsSetOfTuples = expr.expr.kind === "tuple"
+              && expr.expr.values.some((slot) => {
+                const slotValue = evalExpr(slot, env);
+                return Array.isArray(slotValue) && !exprIsTupleValue(slot) && slot.kind !== "array_literal_expr";
+              });
+            if (sourceIsSetOfTuples) {
+              return value.map((tup) => Array.isArray(tup) ? readIndex(tup) : tup);
+            }
             // `array_literal_expr[N]` is array indexing: the source IS an
             // array (single value), and the result is its Nth element — even
             // if that element is itself a tuple/array. Distinguish from a
@@ -1694,6 +1665,31 @@ const tryRuntimeSelectExprEvaluationAst = (
           if (computed?.kind === "property" && computed.expr.kind === "set_literal") {
             return [...computed.expr.values];
           }
+          if (computed?.kind === "property" && computed.expr.kind === "link_aggregate") {
+            const sourceEnv = new Map(env);
+            sourceEnv.set("__computed_source__", row);
+            const linked = evalExpr({
+              kind: "field_access",
+              expr: { kind: "binding_ref", name: "__computed_source__" },
+              field: computed.expr.link,
+              optional: false,
+            }, sourceEnv);
+            const linkItems = Array.isArray(linked)
+              ? linked
+              : linked === null || linked === undefined ? [] : [linked];
+            const values = linkItems.flatMap((item) => {
+              const linkEnv = new Map(env);
+              linkEnv.set("__computed_link__", item);
+              const value = evalExpr({
+                kind: "field_access",
+                expr: { kind: "binding_ref", name: "__computed_link__" },
+                field: computed.expr.field,
+                optional: false,
+              }, linkEnv);
+              return Array.isArray(value) ? value : value === null || value === undefined ? [] : [value];
+            });
+            return evaluateRuntimeAggregate(computed.expr.functionName, values);
+          }
           return null;
         };
         if (Array.isArray(value)) {
@@ -1764,6 +1760,23 @@ const tryRuntimeSelectExprEvaluationAst = (
         // has no time_estimate the runtime sees `null`, but the static type
         // is `int64`, which picks the right overload's body.
         const staticTypes = expr.call.args.map((arg) => inferStaticArgType(arg, schema, ast.withModule ?? "default"));
+        // EdgeQL empty-set propagation: when a UDF exists by name+arity but
+        // no overload accepts the runtime args because some non-OPTIONAL
+        // parameter received an empty set, the whole call evaluates to an
+        // empty set (not scalar null, which the top-level set wrapping
+        // would otherwise turn into a one-row `[null]` result).
+        const dividerIdx = qualifiedName.lastIndexOf("::");
+        const fnModule = dividerIdx >= 0 ? qualifiedName.slice(0, dividerIdx) : (ast.withModule ?? "default");
+        const fnName = dividerIdx >= 0 ? qualifiedName.slice(dividerIdx + 2) : qualifiedName;
+        const anyEmpty = args.some((arg) => {
+          if (arg === null || arg === undefined) return true;
+          return typeof arg === "object" && "kind" in arg && arg.kind === "set" && arg.values.length === 0;
+        });
+        if (anyEmpty && schema.listFunctions().some((f) => f.module === fnModule && f.name === fnName)) {
+          if (!resolveUserFunctionOverload(schema, fnModule, fnName, args, staticTypes)) {
+            return [];
+          }
+        }
         return executeFunctionCall(schema, db, context, qualifiedName, args, staticTypes);
       }
       case "for_expr": {
@@ -1774,7 +1787,13 @@ const tryRuntimeSelectExprEvaluationAst = (
             ? []
             : [iteratorValue];
         const isSetProducing = (body: FreeObjectExpr): boolean => {
-          if (body.kind === "select_expr_subquery") return isSetProducing(body.expr);
+          if (body.kind === "select_expr_subquery") {
+            if ((body.filter || body.orderBy || body.limit !== undefined || body.offset !== undefined)
+              && !exprIsTupleValue(body.expr)) {
+              return true;
+            }
+            return isSetProducing(body.expr);
+          }
           if (body.kind === "select") return true;
           if (body.kind === "for_expr") return true;
           if (body.kind === "set_expr") return true;
@@ -1802,8 +1821,6 @@ const tryRuntimeSelectExprEvaluationAst = (
         return record;
       }
       case "math": {
-        const leftValue = evalExpr(expr.left, env);
-        const rightValue = evalExpr(expr.right, env);
         const applyMath = (l: unknown, r: unknown): number | null => {
           const ln = Number(l);
           const rn = Number(r);
@@ -1811,13 +1828,49 @@ const tryRuntimeSelectExprEvaluationAst = (
             case "+": return ln + rn;
             case "-": return ln - rn;
             case "*": return ln * rn;
-            case "/": return ln / rn;
+            case "/": return normalizeRuntimeFloat(ln / rn);
             case "//": return Math.floor(ln / rn);
             case "%": return ln % rn;
             case "^": return Math.pow(ln, rn);
             default: return null;
           }
         };
+        // EdgeQL co-iteration: when both sides walk a binding currently
+        // bound to a set (e.g. `WITH x := {1,2,3} SELECT x * x`), the two
+        // references must iterate in lockstep — `x * x` produces three
+        // values (1, 4, 9), not nine. Without this, evaluating each side
+        // independently yields the full Cartesian product. (The `compare`
+        // case below has a similar shortcut for `?=`/`?!=`.)
+        const findBindingRoot = (e: FreeObjectExpr | ComputedExpr): string | null => {
+          if (!e || typeof e !== "object") return null;
+          if (e.kind === "binding_ref") return e.name;
+          if (e.kind === "field_access") return findBindingRoot(e.expr);
+          if (e.kind === "index_access") return findBindingRoot(e.expr);
+          if (e.kind === "cast") return findBindingRoot(e.expr);
+          return null;
+        };
+        const leftRoot = findBindingRoot(expr.left);
+        const rightRoot = findBindingRoot(expr.right);
+        if (leftRoot && leftRoot === rightRoot && env.has(leftRoot)) {
+          const bound = env.get(leftRoot);
+          if (Array.isArray(bound)) {
+            const rows: number[] = [];
+            for (const row of bound) {
+              const rowEnv: EvalEnv = new Map(env);
+              rowEnv.set(leftRoot, row);
+              const l = evalExpr(expr.left, rowEnv);
+              const r = evalExpr(expr.right, rowEnv);
+              const value = applyMath(
+                Array.isArray(l) ? l[0] : l,
+                Array.isArray(r) ? r[0] : r,
+              );
+              if (value !== null) rows.push(value);
+            }
+            return rows;
+          }
+        }
+        const leftValue = evalExpr(expr.left, env);
+        const rightValue = evalExpr(expr.right, env);
         const leftIsSet = Array.isArray(leftValue);
         const rightIsSet = Array.isArray(rightValue);
         if (!leftIsSet && !rightIsSet) {
@@ -3440,33 +3493,6 @@ const trySchemaTupleQuery = (schema: SchemaSnapshot, query: string): QueryResult
   };
 };
 
-const trySchemaPointerAliasQuery = (schema: SchemaSnapshot, query: string): QueryResult | undefined => {
-  const tokens = tryTokenize(query);
-  if (!tokensIncludeQualifiedName(tokens, "schema", "Pointer")
-    && !tokensIncludeWithModuleSelect(tokens, "schema", "Pointer")) {
-    return undefined;
-  }
-
-  const parsed = tryParseStatement(query);
-  const pointerName = findAnyFilterFieldEqualsLiteral(parsed, "name");
-  const sourceName = findAnyFilterFieldEqualsLiteral(parsed, "source.name");
-  if (!pointerName || !sourceName) {
-    return undefined;
-  }
-
-  const alias = schema.getAlias(sourceName);
-  const typedAlias = alias ? runtimeTypedAliasFromSchemaAlias(alias) : undefined;
-  const linkOverride = typedAlias?.linkOverrides.find((link) => link.name === pointerName);
-  if (!linkOverride) {
-    return undefined;
-  }
-
-  return {
-    kind: "select",
-    rows: [{ name: pointerName, target: { from_alias: true } }],
-  };
-};
-
 const findRuntimeLinkDef = (
   schema: SchemaSnapshot,
   typeName: string,
@@ -3782,9 +3808,6 @@ const tryEvaluateParsedRuntimeSelect = (
     if (expr.kind === "if_else") {
       return freeExprNeedsParsedRuntime(expr.condition, inNot) || freeExprNeedsParsedRuntime(expr.thenExpr, inNot) || freeExprNeedsParsedRuntime(expr.elseExpr, inNot);
     }
-    if (expr.kind === "function_call") {
-      return expr.call.args.some((arg) => arg.kind === "expr" && freeExprNeedsParsedRuntime(arg.expr, inNot));
-    }
     if (expr.kind === "field_access" || expr.kind === "index_access" || expr.kind === "slice_access") {
       return freeExprNeedsParsedRuntime(expr.expr, inNot);
     }
@@ -3939,6 +3962,31 @@ const tryEvaluateParsedRuntimeSelect = (
   const rowMatchesTypeExpr = (row: ParsedRuntimeRow, fallbackType: string | undefined, expr: TypeExpr): boolean => {
     const rowType = rowTypeName(row, fallbackType);
     return concreteNamesForTypeExpr(expr).includes(rowType);
+  };
+
+  const scopedRowsForTypeName = (typeName: string, env: ParsedRuntimeEnv): ParsedRuntimeRow[] | undefined => {
+    const qualified = qualifyType(typeName);
+    if (!schema.getType(qualified)) {
+      return undefined;
+    }
+    const matches = (row: ParsedRuntimeRow, fallbackType?: string): boolean => {
+      const rowType = rowTypeName(row, fallbackType);
+      return rowType === qualified
+        || schema.listConcreteTypesAssignableTo(qualified).some((typeDef) => qualifiedTypeName(typeDef) === rowType);
+    };
+
+    if (env.row && matches(env.row, env.rowType)) {
+      return [env.row];
+    }
+    if (env.outerRows) {
+      for (let i = env.outerRows.length - 1; i >= 0; i -= 1) {
+        const outer = env.outerRows[i]!;
+        if (matches(outer.row, outer.rowType)) {
+          return [outer.row];
+        }
+      }
+    }
+    return undefined;
   };
 
   const concreteTypeForRow = (baseTypeName: string, rowId: unknown): string => {
@@ -4202,6 +4250,10 @@ const tryEvaluateParsedRuntimeSelect = (
     if (value.kind === "binding_ref") {
       const qualifiedName = qualifyType(value.name);
       if (schema.getType(qualifiedName)) {
+        const scopedRows = scopedRowsForTypeName(value.name, env);
+        if (scopedRows) {
+          return scopedRows;
+        }
         return concreteRowsForType(value.name);
       }
     }
@@ -4639,7 +4691,25 @@ const tryEvaluateParsedRuntimeSelect = (
         if (Object.prototype.hasOwnProperty.call(row, expr.field)) return row[expr.field] ?? null;
         const sourceType = rowTypeName(row, env.rowType);
         const linked = readForwardLink(row, sourceType, expr.field);
-        return linked.length > 0 ? linked : null;
+        if (linked.length > 0) {
+          return linked;
+        }
+        const computed = schema.getType(sourceType)?.computeds?.find((candidate) => candidate.kind === "property" && candidate.name === expr.field);
+        if (computed?.kind === "property" && computed.expr.kind === "literal") {
+          return computed.expr.value;
+        }
+        if (computed?.kind === "property" && computed.expr.kind === "set_literal") {
+          return [...computed.expr.values];
+        }
+        if (computed?.kind === "property" && computed.expr.kind === "link_aggregate") {
+          const linkRows = readForwardLink(row, sourceType, computed.expr.link);
+          const fieldValues = readPresentFieldValues(linkRows, computed.expr.field) ?? linkRows.flatMap((linkRow) => {
+            const value = readForwardLink(linkRow, rowTypeName(linkRow), computed.expr.field);
+            return value.length > 0 ? value : [];
+          });
+          return evaluateRuntimeAggregate(computed.expr.functionName, fieldValues);
+        }
+        return null;
       };
       if (Array.isArray(base)) {
         return base.flatMap((item) => {
@@ -4786,7 +4856,7 @@ const tryEvaluateParsedRuntimeSelect = (
         case "+": return leftNum + rightNum;
         case "-": return leftNum - rightNum;
         case "*": return leftNum * rightNum;
-        case "/": return leftNum / rightNum;
+        case "/": return normalizeRuntimeFloat(leftNum / rightNum);
         case "//": return Math.floor(leftNum / rightNum);
         case "%": return leftNum % rightNum;
         case "^": return Math.pow(leftNum, rightNum);
@@ -5355,7 +5425,9 @@ const tryEvaluateParsedRuntimeSelect = (
       return false;
     }
     if (filter.target.kind !== "field") return true;
-    if (filter.op === "=" && filter.value === true) {
+    if (filter.kind === "in_predicate") {
+      // Handled below via the dedicated `in_predicate` branch.
+    } else if (filter.op === "=" && filter.value === true) {
       const value = row[filter.target.field];
       if (Array.isArray(value)) return value.length > 0;
       return value !== null && value !== undefined;
@@ -5366,15 +5438,17 @@ const tryEvaluateParsedRuntimeSelect = (
       }
       return value;
     };
-    const expected = typeof filter.value === "object" && filter.value !== null && "kind" in filter.value
-      ? filter.value.kind === "field_ref"
-        ? row[filter.value.field]
-        : filter.value.kind === "binding_ref"
-          ? unwrapBoundScalar(env.bindings.get(filter.value.name)?.[0])
-          : filter.value.kind === "set_literal"
-            ? filter.value.values
-            : filter.value
-      : filter.value;
+    const expected = filter.kind === "in_predicate"
+      ? undefined
+      : typeof filter.value === "object" && filter.value !== null && "kind" in filter.value
+        ? filter.value.kind === "field_ref"
+          ? row[filter.value.field]
+          : filter.value.kind === "binding_ref"
+            ? unwrapBoundScalar(env.bindings.get(filter.value.name)?.[0])
+            : filter.value.kind === "set_literal"
+              ? filter.value.values
+              : filter.value
+        : filter.value;
     // Resolve dotted path targets like `priority.name` by walking links.
     const resolveDottedFieldValue = (target: ParsedRuntimeRow, path: string): unknown => {
       if (path === "__type__.name") return rowTypeName(target, typeName);
@@ -6360,6 +6434,20 @@ export const executeQuery = (
     }
   }
 
+  try {
+    const compiledTrace = executeQueryWithTrace(db, schema, rewrittenQuery, securityContext);
+    if (
+      compiledTrace.ast.kind === "select_expr"
+      && compiledTrace.sql.loweringMode === "single_statement"
+      && compiledTrace.result.kind === "select"
+      && (compiledTrace.result.rows?.length ?? 0) > 0
+    ) {
+      return compiledTrace.result;
+    }
+  } catch {
+    // Unsupported select expressions still fall through to the runtime evaluator.
+  }
+
   const runtimeSelectExprEvaluationResult = tryRuntimeSelectExprEvaluation(db, schema, query, securityContext);
   if (runtimeSelectExprEvaluationResult) {
     if (dbg) console.error("HACK: tryRuntimeSelectExprEvaluation");
@@ -7090,15 +7178,26 @@ const executeForLoop = (
       pos: ast.pos,
     };
 
+    // The compile-to-SQL path can't lower bodies that need the AST runtime
+    // (UDF calls, alias subqueries with link-property shapes, etc.) — it
+    // emits stub SQL that returns a single NULL row. Try the AST evaluator
+    // first; it iterates per-binding in JS and routes UDF calls through
+    // executeFunctionCall. `tryRuntimeSelectExprEvaluationAst` returns
+    // undefined when the body doesn't need runtime eval, so plain FOR loops
+    // still fall through to the SQL path below.
+    const runtimeResult = tryRuntimeSelectExprEvaluationAst(db, schema, syntheticAst, context);
+
     const compiled = compilerService.compile(schema, syntheticAst, { overlays, globals: context.globals, target: runtimeTarget });
     const ir = compiled.ir;
     const sqlArtifact = compiled.sql;
     assertTargetSqlCompatibility(sqlArtifact.sql, runtimeTarget);
     const sqlTrail: SQLArtifact[] = [sqlArtifact];
 
-    const rows = ir.kind === "select_expr"
-      ? runGelSelectExprSQL(db, sqlArtifact)
-      : [];
+    const rows = runtimeResult?.kind === "select"
+      ? runtimeResult.rows
+      : ir.kind === "select_expr"
+        ? runGelSelectExprSQL(db, sqlArtifact)
+        : [];
 
     const currentOverlays = extractOverlays(ir);
     traces.push({
@@ -7363,37 +7462,6 @@ const coerceUnknownToScalar = (value: unknown): ScalarValue | undefined => {
 // Sentinel marker for an empty set during free-expression evaluation. In
 // EdgeQL semantics, `{}` and a NULL-valued field are both empty sets.
 const SHAPE_EMPTY_SET = Symbol("empty_set");
-
-// EdgeQL-style ordering: tuples compare element-wise, numbers compare
-// numerically, strings via localeCompare. Returns negative/zero/positive.
-const compareEdgeQLValues = (a: unknown, b: unknown): number => {
-  if (a === b) return 0;
-  const aNull = a === null || a === undefined;
-  const bNull = b === null || b === undefined;
-  if (aNull && bNull) return 0;
-  if (aNull) return -1;
-  if (bNull) return 1;
-  if (Array.isArray(a) && Array.isArray(b)) {
-    const len = Math.min(a.length, b.length);
-    for (let i = 0; i < len; i += 1) {
-      const cmp = compareEdgeQLValues(a[i], b[i]);
-      if (cmp !== 0) return cmp;
-    }
-    return a.length - b.length;
-  }
-  if (typeof a === "number" && typeof b === "number") {
-    return a < b ? -1 : a > b ? 1 : 0;
-  }
-  if (typeof a === "boolean" && typeof b === "boolean") {
-    return a === b ? 0 : a ? 1 : -1;
-  }
-  // Plain lexicographic comparison (matches PG's default text ordering and
-  // the engine's pre-existing string sort behavior) — `localeCompare` would
-  // pick a locale-dependent collation that mixes uppercase and lowercase.
-  const aStr = String(a);
-  const bStr = String(b);
-  return aStr < bStr ? -1 : aStr > bStr ? 1 : 0;
-};
 
 // Whether the FreeObjectExpr can produce more than one value (set semantics).
 // Used to decide if the shape's evaluator output should be wrapped as an array.
@@ -7687,8 +7755,10 @@ const tryEvaluateBacklinkShapeExpr = (
   // Peel the wrappers down to the for_expr we recognise.
   let cursor: FreeObjectExpr = expr;
   let projectedShape: ShapeElement[] | undefined;
-  if (cursor.kind === "select_expr") {
-    cursor = cursor.expr;
+  // `shapeEl.expr` can be a ComputedExpr's `select_expr` wrapper at runtime
+  // (the static type FreeObjectExpr doesn't include it); peel it through.
+  if ((cursor as { kind: string }).kind === "select_expr") {
+    cursor = (cursor as unknown as { expr: FreeObjectExpr }).expr;
   }
 
   // EXISTS over a backlink-derived set. EdgeQL's `EXISTS X` is the
@@ -7761,7 +7831,7 @@ const tryEvaluateBacklinkShapeExpr = (
         continue;
       }
       if (shapeEl.kind === "computed") {
-        const value = evaluateSelectExprShapeEntry(db, schema, shapeEl.expr, entry.row, entry.typeName);
+        const value = evaluateSelectExprShapeEntry(db, schema, shapeEl.expr as unknown as FreeObjectExpr, entry.row, entry.typeName);
         out[shapeEl.name] = value;
         continue;
       }
@@ -8522,7 +8592,7 @@ const evalGroupRowExpr = (
         case "+": return left + right;
         case "-": return left - right;
         case "*": return left * right;
-        case "/": return right === 0 ? null : left / right;
+        case "/": return right === 0 ? null : normalizeRuntimeFloat(left / right);
         case "%": return right === 0 ? null : left % right;
         default: return null;
       }
@@ -8834,8 +8904,9 @@ const inferStaticArgType = (
       // (current_item) by falling back to the caller-supplied implicit type.
       let inner: FreeObjectExpr = expr.expr;
       while (inner.kind === "field_access" || inner.kind === "cast"
-        || inner.kind === "select_expr_subquery" || inner.kind === "select_expr") {
-        inner = (inner as { expr: FreeObjectExpr }).expr;
+        || inner.kind === "select_expr_subquery"
+        || (inner as { kind: string }).kind === "select_expr") {
+        inner = (inner as unknown as { expr: FreeObjectExpr }).expr;
       }
       let typeName: string | undefined;
       if (inner.kind === "select") {
@@ -9674,103 +9745,6 @@ const linkJunctionFromSql = (
   return `(${parts.join(" UNION ALL ")}) ${alias}`;
 };
 */
-
-const compileFilterPredicate = (lhsSql: string, op: "=" | "!=" | "<" | "<=" | ">" | ">=" | "?=" | "?!=" | "like" | "ilike"): string => {
-  if (op === "=") {
-    return `${lhsSql} = ?`;
-  }
-
-  if (op === "!=") {
-    return `${lhsSql} != ?`;
-  }
-
-  if (op === "like") {
-    return `${lhsSql} LIKE ?`;
-  }
-
-  if (op === "<" || op === "<=" || op === ">" || op === ">=") {
-    return `${lhsSql} ${op} ?`;
-  }
-
-  if (op === "?=") {
-    return `(${lhsSql} IS NULL OR ${lhsSql} = ?)`;
-  }
-
-  if (op === "?!=" ) {
-    return `(${lhsSql} IS NULL OR ${lhsSql} != ?)`;
-  }
-
-  return `LOWER(${lhsSql}) LIKE LOWER(?)`;
-};
-
-const compileNestedFilterExprSQL = (filter: FilterExprIR, params: ScalarValue[], linkPropertyAlias?: string): string => {
-  const columnExpr = (column: string): string => {
-    if (column.startsWith("@")) {
-      const alias = linkPropertyAlias ?? "t";
-      return `${alias}.${quoteIdent(column.slice(1))}`;
-    }
-    if (column === "__type__.name") {
-      return `t.${quoteIdent("__source_type")}`;
-    }
-    return `t.${quoteIdent(column)}`;
-  };
-
-  if (filter.kind === "field") {
-    params.push(filter.value);
-    return compileFilterPredicate(columnExpr(filter.column), filter.op);
-  }
-
-  if (filter.kind === "field_in") {
-    const column = columnExpr(filter.column);
-    const placeholders = filter.values.map(() => "?").join(", ");
-    params.push(...filter.values);
-    const op = filter.op === "in" ? "IN" : "NOT IN";
-    return `${column} ${op} (${placeholders})`;
-  }
-
-  if (filter.kind === "field_compare") {
-    const left = columnExpr(filter.leftColumn);
-    const right = columnExpr(filter.rightColumn);
-    if (filter.op === "=") {
-      return `${left} = ${right}`;
-    }
-    if (filter.op === "!=") {
-      return `${left} != ${right}`;
-    }
-    if (filter.op === "like") {
-      return `${left} LIKE ${right}`;
-    }
-    return `LOWER(${left}) LIKE LOWER(${right})`;
-  }
-
-  if (filter.kind === "backlink") {
-    throw new AppError("E_SQL", "Backlink filters are not supported for nested runtime link resolution");
-  }
-
-  if (filter.kind === "self_in_select") {
-    throw new AppError("E_SQL", "IN subquery filters are not supported for nested runtime link resolution");
-  }
-
-  if (filter.kind === "backlink_contains") {
-    throw new AppError("E_SQL", "Backlink membership filters are not supported for nested runtime link resolution");
-  }
-
-  if (filter.kind === "link_property_exists" || filter.kind === "link_property_compare_exists" || filter.kind === "backlink_property_compare" || filter.kind === "backlink_property_in" || filter.kind === "backlink_property_value_compare") {
-    throw new AppError("E_SQL", "Link property filters are not supported for nested runtime link resolution");
-  }
-
-  if (filter.kind === "not") {
-    return `(NOT ${compileNestedFilterExprSQL(filter.expr, params, linkPropertyAlias)})`;
-  }
-
-  if (filter.kind === "and" || filter.kind === "or") {
-    const left = compileNestedFilterExprSQL(filter.left, params, linkPropertyAlias);
-    const right = compileNestedFilterExprSQL(filter.right, params, linkPropertyAlias);
-    return filter.kind === "and" ? `(${left} AND ${right})` : `(${left} OR ${right})`;
-  }
-
-  return "1 = 1";
-};
 
 /*
 const compilePolymorphicTargetSource = (

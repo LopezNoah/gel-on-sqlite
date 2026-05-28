@@ -42,7 +42,7 @@ import type {
 } from "./ast.js";
 import { simpleTypeName } from "./ast.js";
 import type { Token, TokenKind } from "./tokenizer.js";
-import { tokenize, tokenizeWithStarts, offsetToLineCol } from "./tokenizer.js";
+import { tokenizeWithStarts, offsetToLineCol } from "./tokenizer.js";
 
 // Token kinds the parser treats as "name-like" (identifier or context-sensitive
 // keyword that can also be used as a name). Using a Set lets isNameToken run as
@@ -844,6 +844,38 @@ class Parser {
           );
         }
         return this.parseDDL();
+      }
+
+      // Bare top-level expression (`'a' if true else 'b'`, `1 + 2`,
+      // `<str>{}`, …). Try to parse it as a free-object expression and wrap
+      // as `SELECT <expr>` so the rest of the pipeline runs through the
+      // select_expr path. We restrict to a set of tokens that can start a
+      // free expression to keep error messages helpful for genuine syntax
+      // failures.
+      const exprStartTokens = new Set([
+        "lparen", "lbrace", "lbracket", "lt",
+        "number", "string", "bytes_string",
+        "kw_true", "kw_false", "kw_null",
+        "kw_not", "kw_distinct", "kw_exists", "kw_detached",
+        "kw_assert", "kw_assert_exists", "kw_assert_single", "kw_assert_distinct",
+        "dot", "backward_link", "optional_link",
+        "minus", "param", "global",
+      ]);
+      if (exprStartTokens.has(token.kind) || this.isNameToken(token)) {
+        const fallbackAttempt = this.attempt(() => {
+          const expr = this.parseFreeObjectExpr();
+          if (this.peek().kind === "semi") this.consume();
+          this.expect("eof", "Unexpected tokens after statement");
+          return expr;
+        });
+        if (fallbackAttempt) {
+          return {
+            ...this.withContext(withClause),
+            kind: "select_expr",
+            expr: fallbackAttempt,
+            pos: this.posOf(token),
+          };
+        }
       }
 
       throw new AppError("E_SYNTAX", "Expected 'select', 'insert', 'update', 'delete', 'for', 'configure', transaction, or DDL statement", ...this.posPair(token));
@@ -1822,12 +1854,26 @@ class Parser {
 
   private parseFreeObjectExpr(): FreeObjectExpr {
     let expr = this.parseFreeObjectIfElseExpr();
-    while (this.peek().kind === "kw_union") {
+    while (
+      this.peek().kind === "kw_union"
+      || this.peek().kind === "kw_intersect"
+      || this.peek().kind === "kw_except"
+    ) {
+      const opTok = this.peek();
       this.consume();
       const right = this.parseFreeObjectIfElseExpr();
-      expr = expr.kind === "set_expr"
-        ? { kind: "set_expr", values: [...expr.values, right] }
-        : { kind: "set_expr", values: [expr, right] };
+      if (opTok.kind === "kw_union") {
+        expr = expr.kind === "set_expr"
+          ? { kind: "set_expr", values: [...expr.values, right] }
+          : { kind: "set_expr", values: [expr, right] };
+      } else {
+        expr = {
+          kind: "set_op",
+          op: opTok.kind === "kw_intersect" ? "intersect" : "except",
+          left: expr,
+          right,
+        };
+      }
     }
     return expr;
   }
@@ -4451,21 +4497,46 @@ class Parser {
     let elseExpr: InsertConflict["else"];
     if (this.peek().kind === "kw_else") {
       this.consume();
-      this.expect("lparen", "Expected '(' after else");
+      const hasParen = this.peek().kind === "lparen";
+      if (hasParen) this.consume();
+      // Accept `DETACHED ...` and arbitrary parenthesised expressions as
+      // best-effort: we record the underlying type name so cardinality
+      // inference can act on it, without yet executing the body.
+      if (this.peek().kind === "kw_detached") {
+        this.consume();
+      }
+      const innerHasParen = this.peek().kind === "lparen";
+      if (innerHasParen) this.consume();
       if (this.peek().kind === "kw_select") {
         this.consume();
         elseExpr = this.parseInlineSelectExpr();
       } else if (this.peek().kind === "kw_update") {
         elseExpr = this.parseInlineUpdateExpr();
+      } else if (this.peek().kind === "kw_insert") {
+        this.consume();
+        const insTypeName = this.parseQualifiedName("Expected type name in insert expression");
+        // Skip optional `{...}` body — we don't compile inline INSERTs through
+        // this branch yet; only the type name is needed for cardinality.
+        if (this.peek().kind === "lbrace") {
+          let depth = 1;
+          this.consume();
+          while (depth > 0 && this.peek().kind !== "eof") {
+            if (this.peek().kind === "lbrace") depth++;
+            else if (this.peek().kind === "rbrace") depth--;
+            this.consume();
+          }
+        }
+        elseExpr = { kind: "select", typeName: insTypeName, shape: [], clauses: {} };
       } else if (this.isNameToken(this.peek())) {
-        // Bare type-name form: `UNLESS CONFLICT ON (.n) ELSE (X)` is sugar for
+        // Bare type-name form: `UNLESS CONFLICT ON (.n) ELSE X` is sugar for
         // `... ELSE (SELECT X)`. Route through the same inline-select parser.
         elseExpr = this.parseInlineSelectExpr();
       } else {
         const token = this.peek();
         throw new AppError("E_SYNTAX", "Expected select or update expression in else clause", ...this.posPair(token));
       }
-      this.expect("rparen", "Expected ')' after else expression");
+      if (innerHasParen) this.expect("rparen", "Expected ')' after else inner expression");
+      if (hasParen) this.expect("rparen", "Expected ')' after else expression");
     }
 
     return {
@@ -4511,7 +4582,15 @@ class Parser {
     const start = this.expect("kw_update", "Expected 'update'");
     let target: FreeObjectExpr | undefined;
     let typeName: string;
-    if (this.peek().kind === "lbrace" || this.peek().kind === "lparen" || (this.isNameToken(this.peek()) && this.peekNext().kind === "lbracket")) {
+    if (
+      this.peek().kind === "lbrace"
+      || this.peek().kind === "lparen"
+      || this.peek().kind === "dot"
+      || this.peek().kind === "backward_link"
+      || this.peek().kind === "optional_link"
+      || (this.isNameToken(this.peek()) && this.peekNext().kind === "lbracket")
+      || (this.isNameToken(this.peek()) && this.peekNext().kind === "dot")
+    ) {
       target = this.parseFreeObjectExpr();
       typeName = this.deleteTargetRootTypeName(target);
     } else {
@@ -5600,7 +5679,7 @@ class Parser {
       || (this.isNameToken(this.peek()) && this.peekNext().kind === "backward_link")
       // partial backlink: `.<owner[IS Issue]...`
       || this.peek().kind === "backward_link";
-    let field = "";
+    let field: string;
     let expr: FreeObjectExpr | undefined;
     if (looksLikeExpression) {
       const startToken = this.peek();
@@ -6120,9 +6199,6 @@ const parseSetModuleStatementFromTokens = (tokens: Token[]): string | undefined 
 
   return i === tokens.length ? parts.join("::") : undefined;
 };
-
-const parseSetModuleStatement = (input: string): string | undefined =>
-  parseSetModuleStatementFromTokens(tokenize(input));
 
 export const parseEdgeQL = (input: string, options: ParseEdgeQLOptions = {}): Statement => {
   const parser = new Parser(input, options);

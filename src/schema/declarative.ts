@@ -113,6 +113,12 @@ export interface ObjectTypeDeclaration {
   members: TypeMember[];
   triggers: TriggerDef[];
   accessPolicies: AccessPolicyDef[];
+  typeConstraints?: Array<{
+    name: string;
+    exprText: string;
+    fieldRefs: string[];
+    delegated?: boolean;
+  }>;
 }
 
 export interface AbstractAnnotationDeclaration extends AbstractAnnotationDef {
