@@ -3,7 +3,8 @@ export type ErrorCode =
   | "E_SEMANTIC"
   | "E_VALIDATION"
   | "E_SQL"
-  | "E_RUNTIME";
+  | "E_RUNTIME"
+  | "E_UNSUPPORTED";
 
 export class AppError extends Error {
   public readonly code: ErrorCode;

@@ -1796,6 +1796,41 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           op: "=",
         };
       }
+      // `FILTER Subject IS T` / `FILTER Subject IS T1 | T2`: lower to
+      // `__source_type IN (…concretes of T…)`. The TypeExpr resolver expands
+      // unions / intersections into the matching concrete type set; if the
+      // expansion is empty the predicate is constant false.
+      if (expr.kind === "is_type") {
+        const shortTypeLabel = typeLabel.includes("::") ? typeLabel.split("::").at(-1)! : typeLabel;
+        const isSubjectRef = (e: FreeObjectExpr): boolean => {
+          if (e.kind === "current_item") return true;
+          if (e.kind === "binding_ref" && (e.name === typeLabel || e.name === shortTypeLabel)) return true;
+          if (e.kind === "select"
+            && (e.typeName === typeLabel || e.typeName === shortTypeLabel)
+            && (!e.clauses || Object.keys(e.clauses).length === 0)) {
+            return true;
+          }
+          return false;
+        };
+        if (isSubjectRef(expr.expr)) {
+          const typeExpr = expr.typeExpr ?? { kind: "type_name" as const, name: expr.typeName };
+          const concretes = concreteTypeNamesForTypeExpr(typeExpr, options.fallbackModule);
+          if (concretes.length === 0) {
+            return {
+              kind: "expr_compare",
+              left: { kind: "literal", value: true },
+              right: { kind: "literal", value: false },
+              op: "=",
+            };
+          }
+          return {
+            kind: "field_in",
+            column: "__source_type",
+            op: "in",
+            values: concretes,
+          };
+        }
+      }
       if (
         expr.kind === "cast"
         && expr.expr.kind === "set_literal"
@@ -2041,6 +2076,62 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
                 computedLink.expr.link,
                 computedLink.expr.sourceType,
               ),
+            };
+          }
+        }
+        // EdgeQL `EXISTS Subject.<linkname[IS T]` is parsed as
+        //   exists(for_expr { iterator: SELECT Subject, body: backlink_path })
+        // by the tokenizer's backlink desugar. The `(SELECT …)` wrapper adds
+        // a `select_expr_subquery` around the for_expr but otherwise yields
+        // the same set, so peel it. A trailing `.id` on a link / backlink
+        // walks through a still-at-most-one row and doesn't change `EXISTS`
+        // semantics — peel that too.
+        let inner: FreeObjectExpr = expr.expr;
+        while (true) {
+          if (inner.kind === "select_expr_subquery"
+            && !inner.filter && !inner.orderBy && inner.limit === undefined && inner.offset === undefined) {
+            inner = inner.expr;
+            continue;
+          }
+          if (inner.kind === "field_access" && inner.field === "id"
+            && (inner.expr.kind === "for_expr" || inner.expr.kind === "field_access")) {
+            inner = inner.expr;
+            continue;
+          }
+          break;
+        }
+        if (
+          inner.kind === "for_expr"
+          && inner.body.kind === "backlink_path"
+          && inner.iterator.kind === "select"
+          && (inner.iterator.typeName === typeLabel || inner.iterator.typeName === shortTypeLabel)
+        ) {
+          return {
+            kind: "backlink_exists",
+            sources: resolveBacklinkSources(
+              typeLabel,
+              options.fallbackModule,
+              inner.body.link,
+              inner.body.sourceType,
+            ),
+          };
+        }
+        // `EXISTS Subject.linkname[.id]` for a forward link reduces to a
+        // null-check on the link's inline FK column.
+        if (
+          inner.kind === "field_access"
+          && inner.expr.kind === "select"
+          && options.subjectType
+          && (inner.expr.typeName === typeLabel || inner.expr.typeName === shortTypeLabel)
+        ) {
+          const linkName = inner.field;
+          const link = collectLinks(options.subjectType, true).find((candidate) => candidate.name === linkName);
+          if (link && !link.multi && (link.properties?.length ?? 0) === 0) {
+            return {
+              kind: "expr_compare",
+              left: { kind: "column", column: `${linkName}_id` },
+              right: { kind: "literal", value: null },
+              op: "!=",
             };
           }
         }
