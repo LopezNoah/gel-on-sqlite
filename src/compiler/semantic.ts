@@ -1025,6 +1025,11 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     ensureFieldRef: (field: string) => void,
     selectedColumns: Set<string>,
   ): CompiledShapeFunctionArg => {
+    // Strip the named-arg envelope — keyword args (`message := …`) contribute
+    // the same way to the runtime call as positional ones in our IR.
+    if (arg.kind === "named_arg") {
+      return compileFunctionArgInShape(arg.arg, ensureFieldRef, selectedColumns);
+    }
     if (arg.kind === "field_ref") {
       ensureFieldRef(arg.field);
       selectedColumns.add(arg.field);
@@ -1032,6 +1037,12 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     }
 
     if (arg.kind === "binding_ref") {
+      // `assert_distinct(Card)` etc. — the bare name might be a schema type
+      // rather than a with-binding. Encode as a field_ref so the cardinality
+      // post-pass can resolve it; if neither a type nor a binding, fall
+      // through to the scalar resolver which produces the right diagnostic.
+      const asTypeName = schema.getType(normalizeTypeName(arg.name, activeModule));
+      if (asTypeName) return { kind: "field_ref", column: arg.name };
       return { kind: "literal", value: resolveWithBindingScalar(arg.name) };
     }
 
@@ -1117,6 +1128,9 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
   const compileFunctionArgInFreeObject = (
     arg: NonNullable<Extract<FreeObjectExpr, { kind: "function_call" }>["call"]>["args"][number],
   ): CompiledFreeObjectFunctionArg => {
+    if (arg.kind === "named_arg") {
+      return compileFunctionArgInFreeObject(arg.arg);
+    }
     if (arg.kind === "binding_ref") {
       // If the binding's value is a set/array literal, inline it directly so
       // aggregate function calls like `max({1,2,3})` work without needing a
@@ -3104,13 +3118,11 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         if (chainCard !== undefined) return chainCard;
         return inferAstCardinality(expr.expr);
       }
-      case "function_call": {
-        if (isAggregating(expr.call.name)) return "one";
-        const argCards = expr.call.args
-          .filter((a) => (a as { kind?: string }).kind === "expr")
-          .map((a) => inferAstCardinality((a as { expr: FreeObjectExpr }).expr));
-        return cartesianMany(argCards);
-      }
+      case "function_call":
+        // Delegate to the FreeObjectExpr variant so assert_* / aggregating /
+        // signature-aware rules are applied (the shape-level walker above only
+        // handled positional `expr` args, which missed e.g. `assert_distinct(Card)`).
+        return inferAstCardinality({ kind: "function_call", call: expr.call } as FreeObjectExpr);
       default:
         return "many";
     }
@@ -3194,6 +3206,86 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
   // references to the binding (e.g. `select max(s)` where `s := {1,2,3}`)
   // resolve to the correct cardinality bound.
   const bindingCards = new Map<string, AstCardinality>();
+  // Map of WITH-binding name → the type expression at the source of the
+  // binding (when the binding is `Source[is A | B]`), so a downstream field
+  // access can compute the field cardinality across the union/intersection.
+  const bindingTypeExprs = new Map<string, TypeExpr>();
+
+  // Combine field cardinalities across a union of types: the field on a row
+  // in `A | B` has lower-bound min(A.lower, B.lower) and upper-bound
+  // max(A.upper, B.upper).
+  const cardUnionOfFields = (a: AstCardinality, b: AstCardinality): AstCardinality => {
+    if (a === "empty") return b;
+    if (b === "empty") return a;
+    const lowerA = a === "one" || a === "at_least_one";
+    const lowerB = b === "one" || b === "at_least_one";
+    const upperOneA = a === "one" || a === "at_most_one";
+    const upperOneB = b === "one" || b === "at_most_one";
+    const lowerNonZero = lowerA && lowerB;
+    const upperOne = upperOneA && upperOneB;
+    if (lowerNonZero && upperOne) return "one";
+    if (upperOne) return "at_most_one";
+    if (lowerNonZero) return "at_least_one";
+    return "many";
+  };
+
+  // Combine field cardinalities across a type intersection: the field on a
+  // row in `A & B` has lower-bound max(A.lower, B.lower) and upper-bound
+  // min(A.upper, B.upper).
+  const cardIntersectOfFields = (a: AstCardinality, b: AstCardinality): AstCardinality => {
+    if (a === "empty" || b === "empty") return "empty";
+    const lowerA = a === "one" || a === "at_least_one";
+    const lowerB = b === "one" || b === "at_least_one";
+    const upperOneA = a === "one" || a === "at_most_one";
+    const upperOneB = b === "one" || b === "at_most_one";
+    const lowerNonZero = lowerA || lowerB;
+    const upperOne = upperOneA || upperOneB;
+    if (lowerNonZero && upperOne) return "one";
+    if (upperOne) return "at_most_one";
+    if (lowerNonZero) return "at_least_one";
+    return "many";
+  };
+
+  // Field/link cardinality on a type expression (union/intersection of
+  // concrete types). Returns undefined if the field can't be resolved on
+  // every branch.
+  const fieldCardOnTypeExpr = (typeExpr: TypeExpr, fieldName: string): AstCardinality | undefined => {
+    if (typeExpr.kind === "type_name") {
+      const typeDef = schema.getType(normalizeTypeName(typeExpr.name, activeModule));
+      if (!typeDef) return undefined;
+      const ptr = lookupPointer(typeDef, fieldName);
+      if (!ptr) return undefined;
+      if (ptr.kind === "field") return cardinalityForFieldDef(ptr.def);
+      if (ptr.kind === "link") return cardinalityForLinkDef(ptr.def);
+      return cardinalityForComputedDef(ptr.def);
+    }
+    const lc = fieldCardOnTypeExpr(typeExpr.left, fieldName);
+    const rc = fieldCardOnTypeExpr(typeExpr.right, fieldName);
+    if (lc === undefined || rc === undefined) return undefined;
+    return typeExpr.kind === "type_union"
+      ? cardUnionOfFields(lc, rc)
+      : cardIntersectOfFields(lc, rc);
+  };
+
+  // Walk through transparent function-call wrappers (assert_*) and binding
+  // refs to find the underlying type expression of an expression. Used so
+  // `assert_exists(assert_single(TypeExpr)).val` can compute val's
+  // cardinality on `TypeExpr`'s union/intersection.
+  const findUnderlyingTypeExpr = (expr: FreeObjectExpr): TypeExpr | undefined => {
+    if (expr.kind === "binding_ref") return bindingTypeExprs.get(expr.name);
+    if (expr.kind === "function_call") {
+      const stripped = stripModulePrefix(expr.call.name);
+      if (stripped === "assert_exists" || stripped === "assert_single" || stripped === "assert_distinct") {
+        const first = expr.call.args[0];
+        if (first?.kind === "expr") return findUnderlyingTypeExpr(first.expr);
+        if (first?.kind === "binding_ref") return findUnderlyingTypeExpr({ kind: "binding_ref", name: first.name } as FreeObjectExpr);
+      }
+    }
+    if (expr.kind === "select_expr_subquery" || expr.kind === "cast" || expr.kind === "distinct") {
+      return findUnderlyingTypeExpr(expr.expr);
+    }
+    return undefined;
+  };
 
   const isAtMostOneCard = (c: AstCardinality): boolean => c === "one" || c === "at_most_one" || c === "empty";
   const isAtLeastOneCard = (c: AstCardinality): boolean => c === "one" || c === "at_least_one";
@@ -3341,6 +3433,18 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         // Walk to the path's root if possible. For our tests the relevant
         // cases are subqueries with LIMIT 1 used as a single source.
         const sourceCard = inferAstCardinality(expr.expr);
+        // Source is `binding[is A | B]` (or wrapped in assert_*): combine the
+        // field's cardinality across the union/intersection of types so a
+        // `.val` on a heterogeneous source reflects the per-branch bound.
+        if (!expr.field.startsWith("@")) {
+          const underlyingTypeExpr = findUnderlyingTypeExpr(expr.expr);
+          if (underlyingTypeExpr) {
+            const fieldCard = fieldCardOnTypeExpr(underlyingTypeExpr, expr.field);
+            if (fieldCard !== undefined) {
+              return cartesianCard(sourceCard, fieldCard);
+            }
+          }
+        }
         // If the source's shape defines `expr.field` as a polymorphic
         // (`[is T].field`) projection and `T` isn't a supertype of the
         // source's type, the field can be empty on non-matching rows —
@@ -3398,9 +3502,16 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         // elements — so `[a, b]` has card |a| * |b|. An empty array literal
         // reduces to a single empty array (cartesianMany([]) = "one").
         return cartesianMany(expr.values.map(inferAstCardinality));
-      case "free_object_constructor":
-        // Free-object constructor: exactly one value.
+      case "free_object_constructor": {
+        // `{a := A, b := B}` is a free object — exactly one row, with each
+        // field holding a (possibly multi) value. `(a := A, b := B)` (the
+        // `tupleLike` paren form) is a named tuple — iterates as the
+        // cartesian product of its entries.
+        if (expr.tupleLike) {
+          return cartesianMany(expr.entries.map((entry) => inferAstCardinality(entry.expr)));
+        }
         return "one";
+      }
       case "tuple":
         // A tuple expression iterates over the cartesian product of its
         // elements: `(a, b)` produces |a| × |b| pair values.
@@ -3472,8 +3583,9 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         const stripped = stripModulePrefix(callName);
         // Function-call args come in many shapes; normalise each to a
         // FreeObjectExpr-equivalent so we can infer cardinality consistently.
-        const argCards: AstCardinality[] = expr.call.args.map((a) => {
+        const inferArgCard = (a: unknown): AstCardinality => {
           const k = (a as { kind?: string }).kind;
+          if (k === "named_arg") return inferArgCard((a as { arg: unknown }).arg);
           if (k === "expr") return inferAstCardinality((a as { expr: FreeObjectExpr }).expr);
           if (k === "binding_ref") return inferAstCardinality({ kind: "binding_ref", name: (a as { name: string }).name } as FreeObjectExpr);
           if (k === "literal") return "one";
@@ -3485,17 +3597,22 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           if (k === "array_literal") return "one";
           if (k === "function_call") return inferAstCardinality({ kind: "function_call", call: (a as { call: FunctionCallExpr }).call } as FreeObjectExpr);
           return "many";
-        });
+        };
+        const argCards: AstCardinality[] = expr.call.args.map(inferArgCard);
         if (isAggregating(callName)) return "one";
         // `assert_exists(x, …)`: result has the same upper bound as the first
-        // argument, with the lower bound bumped to ≥1.
+        // argument, with the lower bound bumped to ≥1. The optional `message`
+        // is itself a multi arg — when provided as a multi set, the call
+        // iterates and the result becomes at_least_one (lower stays ≥1).
         if (stripped === "assert_exists") {
           const primary = argCards[0] ?? "many";
           const rest = argCards.slice(1);
           let card: AstCardinality;
           if (isAtMostOneCard(primary)) card = "one";
           else card = "at_least_one";
-          // Extra args (e.g. the optional `message`) multiply cartesian-style.
+          const restMulti = rest.some((c) => c !== "one" && c !== "at_most_one" && c !== "empty");
+          if (restMulti) return "at_least_one";
+          // Otherwise extra args multiply cartesian-style.
           return rest.reduce((acc, c) => cartesianCard(acc, c), card);
         }
         // `assert_distinct(x, …)`: passes input cardinality through, but
@@ -3504,6 +3621,27 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           const primary = argCards[0] ?? "many";
           const rest = argCards.slice(1);
           return rest.reduce((acc, c) => cartesianCard(acc, c), primary);
+        }
+        // `assert(cond, [message := …])`: the message is an OPTIONAL multi
+        // argument. Mirrors Python's `preserves_optionality` logic: lower
+        // bound follows the non-optional condition arg, but a multi message
+        // forces the upper bound to MANY (a multi message iterates the call).
+        if (stripped === "assert") {
+          const primary = argCards[0] ?? "many";
+          const messageCard = argCards[1];
+          const primaryLower = isAtLeastOneCard(primary);
+          const primaryUpperOne = isAtMostOneCard(primary);
+          const messageMulti = messageCard !== undefined
+            && messageCard !== "one"
+            && messageCard !== "at_most_one"
+            && messageCard !== "empty";
+          if (messageMulti) {
+            return primaryLower ? "at_least_one" : "many";
+          }
+          if (primaryUpperOne && primaryLower) return "one";
+          if (primaryUpperOne) return "at_most_one";
+          if (primaryLower) return "at_least_one";
+          return "many";
         }
         // Optional aggregates: empty input ⇒ empty result; non-empty input ⇒
         // single value (assert_single additionally enforces this at runtime).
@@ -5136,15 +5274,29 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
             });
             continue;
           }
-          ensureField(shapeElement.expr.field);
-          selectedColumns.add(shapeElement.expr.field);
+          // A computed shape `x := .foo` can reference a scalar field, a
+          // link, or a schema-level computed. We accept any of those —
+          // ensureField only knows about scalar fields and would reject links
+          // by name, so check for link/computed before failing.
+          const computedFieldName = shapeElement.expr.field;
+          const isKnownField = knownFields.has(computedFieldName);
+          const matchingLinkInComputed = !isKnownField
+            ? collectLinks(typeDef, true).find((l) => l.name === computedFieldName)
+            : undefined;
+          const matchingComputedInComputed = !isKnownField && !matchingLinkInComputed
+            ? collectComputeds(typeDef, true).find((c) => c.name === computedFieldName)
+            : undefined;
+          if (!isKnownField && !matchingLinkInComputed && !matchingComputedInComputed) {
+            fail(`Unknown field '${computedFieldName}' on '${qualifiedName}'`);
+          }
+          if (isKnownField) selectedColumns.add(computedFieldName);
           shapeElements.push({
             kind: "computed",
             name: shapeElement.name,
             pathId: toPathIdIR(elementPathId),
             expr: {
               kind: "field_ref",
-              column: shapeElement.expr.field,
+              column: computedFieldName,
             },
           });
           shapeNames.add(shapeElement.name);
@@ -6472,20 +6624,59 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           args: expr.call.args.map((arg) => compileFunctionArgInFreeObject(arg)) as never,
         };
       }
-      if (expr.kind === "select_expr_subquery" && expr.expr.kind === "select") {
-        // The wrapper carries optional extra tail clauses (filter/orderBy/limit/
-        // offset) that apply *outside* the inner SELECT's own clauses. When any
-        // wrapper-level clause is present we can't faithfully fold it into the
-        // inner SELECT here (semantics: outer FILTER applies to the inner set,
-        // not to its rows pre-aggregation), so fall through to the more general
-        // error handling. The common case (`(SELECT T { ... } ORDER BY .x)`)
-        // parses the tail into `inner.clauses`, leaving the wrapper bare.
-        const hasOuterTail = expr.filter !== undefined
-          || expr.orderBy !== undefined
-          || expr.limit !== undefined
-          || expr.offset !== undefined;
+      if (expr.kind === "select_expr_subquery") {
+        // Unwrap nested `(SELECT (SELECT ...) …)` chains: any intermediate
+        // wrapper with no tail clauses contributes nothing and can be
+        // collapsed. After collapse the wrapper either holds the original
+        // tail (and points directly at a SELECT) or is empty (and we can
+        // recurse onto the inner expression).
+        let cur: FreeObjectExpr = expr;
+        while (
+          cur.kind === "select_expr_subquery"
+          && (cur as { expr: FreeObjectExpr }).expr.kind === "select_expr_subquery"
+          && (cur as { filter?: unknown }).filter === undefined
+          && (cur as { orderBy?: unknown }).orderBy === undefined
+          && (cur as { limit?: unknown }).limit === undefined
+          && (cur as { offset?: unknown }).offset === undefined
+        ) {
+          cur = (cur as { expr: FreeObjectExpr }).expr;
+        }
+        // Now collect the outermost tail clauses (if any) and walk down to
+        // find the underlying SELECT, dropping intermediate empty wrappers.
+        const outer = cur as Extract<FreeObjectExpr, { kind: "select_expr_subquery" }>;
+        const hasOuterTail = outer.filter !== undefined
+          || outer.orderBy !== undefined
+          || outer.limit !== undefined
+          || outer.offset !== undefined;
+        // Find the deepest non-wrapper expr along the chain.
+        let inner: FreeObjectExpr = outer.expr;
+        while (
+          inner.kind === "select_expr_subquery"
+          && (inner as { filter?: unknown }).filter === undefined
+          && (inner as { orderBy?: unknown }).orderBy === undefined
+          && (inner as { limit?: unknown }).limit === undefined
+          && (inner as { offset?: unknown }).offset === undefined
+        ) {
+          inner = (inner as { expr: FreeObjectExpr }).expr;
+        }
         if (!hasOuterTail) {
-          return compileFreeObjectExprToSelectFreeEntry(expr.expr, name);
+          return compileFreeObjectExprToSelectFreeEntry(inner, name);
+        }
+        // Outer tail clauses (typical: `(SELECT T ORDER BY .x)`). If the
+        // innermost expression is a `select`, fold the outer tail clauses
+        // into the inner select's own clauses and reuse the existing
+        // SELECT compile path.
+        if (inner.kind === "select") {
+          const folded = {
+            ...inner,
+            clauses: {
+              filter: inner.clauses?.filter ?? outer.filter,
+              orderBy: inner.clauses?.orderBy ?? outer.orderBy,
+              limit: inner.clauses?.limit ?? outer.limit,
+              offset: inner.clauses?.offset ?? outer.offset,
+            },
+          };
+          return compileFreeObjectExprToSelectFreeEntry(folded as FreeObjectExpr, name);
         }
       }
       if (expr.kind === "select") {
@@ -6876,12 +7067,18 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           }
         }
         const value = asNestedExprEntry(compileExprToIREntry(expr.expr, currentItemBinding));
+        // Type-preserving asserts (`assert_exists`, `assert_distinct`,
+        // `assert_single`) flow the source type through unchanged, so a
+        // property access on top of them is valid whenever the underlying
+        // source carries that property.
+        const isTransparentAssert = value.kind === "function_call"
+          && /(?:^|::)assert_(?:exists|distinct|single)$/.test((value as { functionName: string }).functionName);
         if (
           value.kind === "literal"
           || value.kind === "set_literal"
           || value.kind === "enum_path"
           || value.kind === "cast"
-          || value.kind === "function_call"
+          || (value.kind === "function_call" && !isTransparentAssert)
           || (value.kind === "type_field_path" && !expr.field.startsWith("@"))
         ) {
           fail("invalid property reference on an expression of primitive type");
@@ -7767,6 +7964,9 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           arg: NonNullable<Extract<FreeObjectExpr, { kind: "function_call" }>["call"]>["args"][number],
           bindingName?: string,
         ): SelectExprIREntry<3> => {
+          if (arg.kind === "named_arg") {
+            return compileSelectExprFunctionArg(arg.arg, bindingName);
+          }
           if (arg.kind === "literal") {
             return { kind: "literal", value: arg.value };
           }
@@ -7788,6 +7988,16 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
               return { kind: "set_literal", values: [...bindingValue.expr.values] };
             }
             if (!bindingValue && schema.getType(normalizeTypeName(arg.name, activeModule))) {
+              return asNestedExprEntry(compileExprToIREntry({ kind: "binding_ref", name: arg.name }, bindingName)) as SelectExprIREntry<3>;
+            }
+            // Non-scalar bindings (e.g. `with z := (select User)`) — defer to
+            // the general expression compiler so the runtime resolves the
+            // binding's value at evaluation time instead of failing here.
+            if (bindingValue?.kind === "subquery_expr"
+                || bindingValue?.kind === "subquery_statement"
+                || bindingValue?.kind === "subquery"
+                || bindingValue?.kind === "binding_ref"
+                || bindingValue?.kind === "path") {
               return asNestedExprEntry(compileExprToIREntry({ kind: "binding_ref", name: arg.name }, bindingName)) as SelectExprIREntry<3>;
             }
             const scalar = resolveWithBindingScalar(arg.name);
@@ -8144,6 +8354,15 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           bindCard = "one";
         } else {
           bindCard = inferAstCardinality(value.expr);
+        }
+        // Track `Object[is A | B]` style sources so a downstream
+        // `binding.val` can fold the per-branch field cardinality.
+        if (value.expr.kind === "path_steps") {
+          const steps = (value.expr as { steps?: Array<{ kind: string; typeExpr?: TypeExpr }> }).steps ?? [];
+          const last = steps[steps.length - 1];
+          if (last?.kind === "type_intersection" && last.typeExpr) {
+            bindingTypeExprs.set(binding.name, last.typeExpr);
+          }
         }
       } else if (value.kind === "subquery_statement") {
         const inner = value.statement;

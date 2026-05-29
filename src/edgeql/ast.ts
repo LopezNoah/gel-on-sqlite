@@ -358,6 +358,11 @@ export type FunctionCallArgExpr =
       kind: "parameter";
       name: string;
       castType?: string;
+    }
+  | {
+      kind: "named_arg";
+      name: string;
+      arg: FunctionCallArgExpr;
     };
 
 export interface FunctionCallExpr {
@@ -526,6 +531,11 @@ export type FreeObjectExpr =
   | {
       kind: "free_object_constructor";
       entries: Array<{ name: string; expr: FreeObjectExpr }>;
+      // Set when the source used `(name := …, …)` rather than `{name := …, …}`.
+      // The paren form is a *named tuple* (cardinality is the cartesian
+      // product of entries); the brace form is a free object (cardinality is
+      // exactly one).
+      tupleLike?: boolean;
     }
   | {
       kind: "array_literal_expr";
@@ -843,7 +853,13 @@ export interface FunctionDecl {
   returnType: string;
   returnOptional?: boolean;
   returnSetOf?: boolean;
-  body: { kind: "query"; language: "edgeql"; query: string };
+  body: {
+    kind: "query";
+    language: string;
+    query: string;
+    fromFunction?: string;
+    fromExpression?: boolean;
+  };
 }
 
 export interface DDLStatement {
@@ -868,7 +884,12 @@ export interface DDLStatement {
     | "role"
     | "extension"
     | "alias"
-    | "global";
+    | "global"
+    | "annotation"
+    | "migration"
+    | "future"
+    | "cast"
+    | "operator";
   name: string;
   value?: FreeObjectExpr;
   functionDecl?: FunctionDecl;
