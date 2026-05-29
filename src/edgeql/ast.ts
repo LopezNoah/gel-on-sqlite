@@ -472,6 +472,10 @@ export type FreeObjectExpr =
       expr: FreeObjectExpr;
     }
   | {
+      kind: "introspect_typeof";
+      expr: FreeObjectExpr;
+    }
+  | {
       kind: "enum_path";
       enumType: string;
       member: string;
@@ -547,7 +551,7 @@ export type FreeObjectExpr =
     }
   | {
       kind: "compare";
-      op: "=" | "!=" | ">" | "<" | ">=" | "<=" | "?=" | "?!=" | "like" | "ilike";
+      op: "=" | "!=" | ">" | "<" | ">=" | "<=" | "?=" | "?!=" | "like" | "ilike" | "not_like" | "not_ilike";
       left: FreeObjectExpr;
       right: FreeObjectExpr;
     }

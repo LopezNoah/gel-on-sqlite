@@ -32,6 +32,59 @@ const expectCardinality = (
   expect(inference?.cardinality).toBe(expected);
 };
 
+type ShapeEntry = { name?: string; cardinality?: Cardinality; ptrref?: { outCardinality?: Cardinality } };
+
+const hasCard = (el: ShapeEntry | undefined): boolean =>
+  el !== undefined && (el.cardinality !== undefined || el.ptrref?.outCardinality !== undefined);
+
+const findShapeField = (ir: unknown, field: string): ShapeEntry | undefined => {
+  if (!ir || typeof ir !== "object") return undefined;
+  const obj = ir as Record<string, unknown>;
+  let bestFound: ShapeEntry | undefined;
+  for (const key of ["shape", "fields"] as const) {
+    const arr = obj[key];
+    if (Array.isArray(arr)) {
+      for (const el of arr as ShapeEntry[]) {
+        if (el.name === field || el.name?.endsWith?.(field)) {
+          if (hasCard(el)) return el;
+          if (!bestFound) bestFound = el;
+        }
+      }
+    }
+  }
+  const recurseInto = (next: unknown): ShapeEntry | undefined => {
+    const r = findShapeField(next, field);
+    if (hasCard(r)) return r;
+    if (!bestFound && r) bestFound = r;
+    return undefined;
+  };
+  if (Array.isArray(obj.entries)) {
+    for (const entry of obj.entries) {
+      const r = recurseInto(entry);
+      if (r) return r;
+    }
+  }
+  if (obj.value) {
+    const r = recurseInto(obj.value);
+    if (r) return r;
+  }
+  if (obj.query) {
+    const r = recurseInto(obj.query);
+    if (r) return r;
+  }
+  if (Array.isArray(obj.values)) {
+    for (const v of obj.values) {
+      const r = recurseInto(v);
+      if (r) return r;
+    }
+  }
+  if (obj.expr) {
+    const r = recurseInto(obj.expr);
+    if (r) return r;
+  }
+  return bestFound;
+};
+
 const expectShapeFieldCardinality = (
   schema: SchemaSnapshot,
   source: string,
@@ -39,8 +92,7 @@ const expectShapeFieldCardinality = (
   expected: Cardinality,
 ): void => {
   const ir = compileQuery(schema, source);
-  const shape = (ir as { shape?: Array<{ name: string; cardinality?: Cardinality; ptrref?: { outCardinality?: Cardinality } }> }).shape ?? [];
-  const found = shape.find((el) => el.name === field || el.name?.endsWith?.(field));
+  const found = findShapeField(ir, field);
   expect(found?.cardinality ?? found?.ptrref?.outCardinality).toBe(expected);
 };
 

@@ -2293,6 +2293,8 @@ export const parseDeclarativeSchema = (
   const abstractAnnotations: AbstractAnnotationDeclaration[] = [];
   const constraints: ConstraintDeclaration[] = [];
   const aliases: AliasDeclaration[] = [];
+  const permissions: PermissionDeclaration[] = [];
+  const globals: GlobalDeclaration[] = [];
 
   for (const parsedModule of parsedModules) {
     for (const declaration of parsedModule.document.declarations) {
@@ -2369,8 +2371,19 @@ export const parseDeclarativeSchema = (
           break;
         }
 
-        case "IgnoredDeclaration":
+        case "IgnoredDeclaration": {
+          const declarationKind = (declaration as { declarationKind?: "global" | "permission" }).declarationKind;
+          const name = (declaration as { name?: string }).name;
+          const exprText = (declaration as { exprText?: string }).exprText;
+          if (declarationKind === "permission" && name) {
+            registerModule(parsedModule.moduleName);
+            permissions.push({ module: parsedModule.moduleName, name });
+          } else if (declarationKind === "global" && name) {
+            registerModule(parsedModule.moduleName);
+            globals.push({ module: parsedModule.moduleName, name, exprText });
+          }
           break;
+        }
 
         default:
           unsupported(`Unsupported top-level declaration '${(declaration as TopLevelDeclarationNode).kind}'`);
@@ -2383,6 +2396,7 @@ export const parseDeclarativeSchema = (
     types,
     functions: functions.length ? functions : undefined,
     permissions: [],
+    globals: globals.length ? globals : undefined,
     scalarTypes: scalarTypes.length ? scalarTypes : undefined,
     abstractAnnotations: abstractAnnotations.length ? abstractAnnotations : undefined,
     constraints: constraints.length ? constraints : undefined,

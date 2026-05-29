@@ -3029,6 +3029,12 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           }
         }
       }
+      // Optional path projection (`.?>field`) drops the lower bound: even on
+      // required/single sources, the result may be empty.
+      if ((expr as { optional?: boolean }).optional) {
+        if (stepCard === "one") stepCard = "at_most_one";
+        else if (stepCard === "at_least_one") stepCard = "many";
+      }
       return cartesianCard(baseCard, stepCard);
     }
     return undefined;
@@ -3367,9 +3373,31 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     switch (expr.kind) {
       case "literal":
       case "parameter":
-      case "global_ref":
       case "substitution":
         return "one";
+      case "global_ref": {
+        // Computed globals defined as `global G := <expr>` inherit the
+        // cardinality of the bound expression. Bare globals (declared
+        // without a default) are at_most_one.
+        const name = expr.name;
+        const normalized = normalizeTypeName(name, activeModule);
+        const def = schema.getGlobal(normalized) ?? schema.getGlobal(`default::${name}`) ?? schema.getGlobal(name);
+        if (def?.exprText) {
+          try {
+            const parsed = parseEdgeQL(`select ${def.exprText.replace(/;\s*$/, "")}`);
+            const stmt = (Array.isArray(parsed) ? parsed[0] : parsed) as Statement;
+            if (stmt.kind === "select_expr") {
+              return inferAstCardinality(stmt.expr);
+            }
+            if (stmt.kind === "select") {
+              return inferAstCardinality({ kind: "select", typeName: stmt.typeName, shape: stmt.shape, clauses: { filter: stmt.filter } } as FreeObjectExpr);
+            }
+          } catch {
+            // Fall through to the conservative bound below if parsing fails.
+          }
+        }
+        return "one";
+      }
       case "current_item":
         return "one";
       case "enum_path":
@@ -3433,6 +3461,14 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         // Walk to the path's root if possible. For our tests the relevant
         // cases are subqueries with LIMIT 1 used as a single source.
         const sourceCard = inferAstCardinality(expr.expr);
+        // `.?>field` (optional path operator): even when the source and the
+        // underlying link/property are single-valued, the optional projection
+        // may emit zero rows.
+        if ((expr as { optional?: boolean }).optional) {
+          if (sourceCard === "one") return "at_most_one";
+          if (sourceCard === "at_least_one") return "many";
+          return sourceCard;
+        }
         // Source is `binding[is A | B]` (or wrapped in assert_*): combine the
         // field's cardinality across the union/intersection of types so a
         // `.val` on a heterogeneous source reflects the per-branch bound.
@@ -3858,6 +3894,12 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     return undefined;
   };
 
+  // Tracks the currently active shape's element list when computing the
+  // multiplicity of a shape-element's body, so a body reference like
+  // `current_item.<field>` can resolve through the surrounding shape's
+  // computeds (which aren't part of the source type itself).
+  const shapeContextStack: ShapeElement[][] = [];
+
   // Tuple- and array-aware multiplicity. Recurses through the FreeObjectExpr
   // grammar; the top-level entry (`inferTopLevelMultiplicity`) layers on the
   // "card single ⇒ UNIQUE" override.
@@ -3870,6 +3912,9 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       case "global_ref":
       case "current_item":
       case "enum_path":
+        return "unique";
+      case "introspect_typeof":
+        // INTROSPECT TYPEOF X yields a single schema-type metadata object.
         return "unique";
       case "select": {
         const t = resolveObjectTypeOrAliasSource(expr.typeName);
@@ -3947,6 +3992,110 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         // Tuple-element access: peel through to the underlying tuple element.
         // `(a, b).0` is parsed as an index_access, but `(name := ...).field`
         // is a field_access on a free_object — treat similarly.
+        // Introspection metadata: `(INTROSPECT TYPEOF X).name` projects the
+        // single schema-type's name, so the result is unique.
+        if (expr.expr.kind === "introspect_typeof") return "unique";
+        // Shape-projection-rooted field access: look the field up in the
+        // outer projection's shape rather than the source type — the field
+        // may be a computed alias (e.g. `foo := .z.0`) absent from the
+        // underlying schema. Fall back to the source-type lookup for plain
+        // schema fields/links projected without a rename.
+        // ComputedExpr (shape element bodies) wraps FreeObjectExpr inside
+        // `kind: "select_expr"` / `kind: "subquery"` envelopes; unwrap those
+        // before reusing the FreeObjectExpr multiplicity inference.
+        const computedExprToFree = (ce: unknown): FreeObjectExpr | undefined => {
+          if (!ce || typeof ce !== "object") return undefined;
+          const node = ce as { kind?: string; expr?: unknown };
+          if (node.kind === "select_expr" && node.expr) return node.expr as FreeObjectExpr;
+          if (node.kind === "field_ref") return undefined;
+          return ce as FreeObjectExpr;
+        };
+
+        // Evaluate a shape element body in the context of its surrounding
+        // shape so references to sibling computeds resolve.
+        const inferComputedBodyMult = (
+          body: FreeObjectExpr,
+          shapeForContext: ShapeElement[],
+        ): AstMultiplicity => {
+          shapeContextStack.push(shapeForContext);
+          try { return inferAstMultiplicity(body); }
+          finally { shapeContextStack.pop(); }
+        };
+
+        // Resolve any computed shape elements visible to `current_item`
+        // references inside the body of a shape element. For shape projection
+        // on a typed binding (`X1 := Card { z := ... }` then `X1 { foo := ... }`),
+        // the inner body sees BOTH the projection's own shape and the
+        // binding's underlying shape — merge them.
+        const collectMergedShape = (e: FreeObjectExpr): ShapeElement[] => {
+          if (e.kind === "binding_ref") {
+            const binding = withBindings.get(e.name);
+            if (binding?.kind === "subquery") return binding.query.shape;
+            if (binding?.kind === "subquery_expr") return collectMergedShape(binding.expr);
+          }
+          if (e.kind === "shape_projection") return [...e.shape, ...collectMergedShape(e.expr)];
+          if (e.kind === "select_expr_subquery" || e.kind === "distinct" || e.kind === "cast") return collectMergedShape(e.expr);
+          return [];
+        };
+
+        const findInShape = (e: FreeObjectExpr): AstMultiplicity | undefined => {
+          if (e.kind === "shape_projection") {
+            const mergedShape = collectMergedShape(e);
+            for (const el of e.shape) {
+              if ("name" in el && el.name === expr.field) {
+                if (el.kind === "computed") {
+                  const inner = computedExprToFree(el.expr);
+                  if (!inner) return undefined;
+                  return inferComputedBodyMult(inner, mergedShape);
+                }
+                if (el.kind === "field" || el.kind === "link" || el.kind === "backlink") {
+                  const srcType = resolveExprObjectType(e.expr);
+                  if (srcType) return fieldMultiplicityOnType(srcType, el.name);
+                  return undefined;
+                }
+              }
+            }
+            return findInShape(e.expr);
+          }
+          if (e.kind === "select_expr_subquery" || e.kind === "distinct" || e.kind === "cast") {
+            return findInShape(e.expr);
+          }
+          // binding_ref X — look up X's value (subquery/subquery_expr) and
+          // check whether its shape defines `expr.field` as a computed. This
+          // lets `.foo` projection on a WITH binding find computed fields
+          // defined on the binding's own typed-select shape.
+          if (e.kind === "binding_ref") {
+            const binding = withBindings.get(e.name);
+            if (binding?.kind === "subquery") {
+              for (const el of binding.query.shape) {
+                if ("name" in el && el.name === expr.field) {
+                  if (el.kind === "computed") {
+                    const inner = computedExprToFree(el.expr);
+                    if (!inner) return undefined;
+                    return inferComputedBodyMult(inner, binding.query.shape);
+                  }
+                }
+              }
+            }
+            if (binding?.kind === "subquery_expr") {
+              return findInShape(binding.expr);
+            }
+          }
+          return undefined;
+        };
+        const shapeMult = findInShape(expr.expr);
+        if (shapeMult !== undefined) return shapeMult;
+        // Within an active shape context, `current_item.<field>` may resolve
+        // to a sibling computed in the surrounding shape. Look it up.
+        if (expr.expr.kind === "current_item" && shapeContextStack.length > 0) {
+          const ctx = shapeContextStack[shapeContextStack.length - 1]!;
+          for (const el of ctx) {
+            if ("name" in el && el.name === expr.field && el.kind === "computed") {
+              const inner = computedExprToFree((el as { expr: unknown }).expr);
+              if (inner) return inferComputedBodyMult(inner, ctx);
+            }
+          }
+        }
         const srcType = resolveExprObjectType(expr.expr);
         if (!srcType) return "duplicate";
         return fieldMultiplicityOnType(srcType, expr.field);
@@ -4062,6 +4211,12 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           if (numMany === 1 && isAtMostOneCard(elCards[idx])) return "duplicate";
           return elMults[idx];
         }
+        // Index access on a single-card source (e.g. FOR iter variable bound
+        // to one tuple per iteration) yields a unique single value.
+        const srcCard = inferAstCardinality(expr.expr);
+        if (isAtMostOneCard(srcCard)) {
+          return inferAstMultiplicity(expr.expr);
+        }
         // Array / generic index: DUPLICATE unless card is single (override
         // applies at the top level).
         return "duplicate";
@@ -4090,6 +4245,16 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       }
       case "path_steps":
         return "unknown";
+      case "path": {
+        // `binding.field` desugars to field_access(binding_ref(head), tail).
+        // Delegate to the field_access logic so binding-shape lookups for
+        // computed fields work.
+        return inferAstMultiplicity({
+          kind: "field_access",
+          expr: { kind: "binding_ref", name: expr.head } as FreeObjectExpr,
+          field: expr.tail,
+        } as FreeObjectExpr);
+      }
       case "backlink_path":
         // A bare backlink reaches an object set → UNIQUE.
         return "unique";
@@ -4274,6 +4439,52 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     if (expr.kind === "cast") return resolveExprObjectType(expr.expr);
     if (expr.kind === "distinct") return resolveExprObjectType(expr.expr);
     if (expr.kind === "select_expr_subquery") return resolveExprObjectType(expr.expr);
+    return undefined;
+  };
+
+  // Like resolveExprObjectType but follows set unions / FOR bodies / inserts
+  // and traverses through WITH-binding chains. Used only for shape-projection
+  // field-cardinality lookups, where every branch of a multi-value source
+  // yields rows of (a possibly-related) object type and we need any object
+  // type representative — not the literal cartesian-set type — to look up
+  // pointer cardinality on. Returns undefined when no object branch resolves.
+  const resolveShapeSourceObjectType = (expr: FreeObjectExpr): TypeDef | undefined => {
+    if (expr.kind === "binding_ref") {
+      const bound = bindingTypes.get(expr.name);
+      if (bound) return bound;
+      const directBinding = withBindings.get(expr.name);
+      if (directBinding) {
+        if (directBinding.kind === "subquery_expr") return resolveShapeSourceObjectType(directBinding.expr);
+        if (directBinding.kind === "subquery") return resolveObjectTypeOrAliasSource(directBinding.query.typeName);
+        if (directBinding.kind === "subquery_statement") {
+          const stmt = directBinding.statement;
+          if (stmt.kind === "select" || stmt.kind === "insert" || stmt.kind === "update") {
+            return resolveObjectTypeOrAliasSource(stmt.typeName);
+          }
+        }
+      }
+      return resolveObjectTypeOrAliasSource(expr.name);
+    }
+    if (expr.kind === "select") return resolveObjectTypeOrAliasSource(expr.typeName);
+    if (expr.kind === "shape_projection") return resolveShapeSourceObjectType(expr.expr);
+    if (expr.kind === "cast") return resolveShapeSourceObjectType(expr.expr);
+    if (expr.kind === "distinct") return resolveShapeSourceObjectType(expr.expr);
+    if (expr.kind === "select_expr_subquery") return resolveShapeSourceObjectType(expr.expr);
+    if (expr.kind === "set_expr") {
+      for (const v of expr.values) {
+        const t = resolveShapeSourceObjectType(v);
+        if (t) return t;
+      }
+      return undefined;
+    }
+    if (expr.kind === "for_expr") return resolveShapeSourceObjectType(expr.body);
+    if (expr.kind === "mutation_expr") {
+      const stmt = expr.statement;
+      if (stmt.kind === "insert" || stmt.kind === "select" || stmt.kind === "update") {
+        return resolveObjectTypeOrAliasSource(stmt.typeName);
+      }
+      return undefined;
+    }
     return undefined;
   };
 
@@ -5733,6 +5944,29 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           const rewrittenInnerExpr = options.subjectBindingName
             ? rewriteSubjectBindingRefsToCurrent(shapeElement.expr.expr, options.subjectBindingName)
             : shapeElement.expr.expr;
+          // Validate any nested ORDER BY: an ORDER BY expression must yield a
+          // single value per source row. `ORDER BY {1, 2}` is a static error.
+          const validateOrderBy = (e: FreeObjectExpr | undefined): void => {
+            if (!e) return;
+            if (e.kind === "select_expr_subquery" && e.orderBy) {
+              const orderCard = inferAstCardinality(e.orderBy.expr);
+              if (orderCard === "many" || orderCard === "at_least_one") {
+                fail("possibly more than one element returned by an expression for the ORDER BY");
+              }
+            }
+            // Recurse into common transparent wrappers.
+            if (e.kind === "select_expr_subquery" || e.kind === "shape_projection" || e.kind === "cast" || e.kind === "distinct" || e.kind === "exists") {
+              validateOrderBy(e.expr);
+            }
+            if (e.kind === "set_expr" || e.kind === "tuple" || e.kind === "array_literal_expr") {
+              for (const v of e.values) validateOrderBy(v);
+            }
+            if (e.kind === "for_expr") {
+              validateOrderBy(e.iterator);
+              validateOrderBy(e.body);
+            }
+          };
+          validateOrderBy(rewrittenInnerExpr);
           shapeElements.push({
             kind: "computed",
             name: shapeElement.name,
@@ -6073,6 +6307,22 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           if (astEl.cardinality === "one" && (exprCard === "many" || exprCard === "at_least_one")) {
             fail(`cardinality of computed '${astEl.name}' is 'single' but expression produces 'multi' values`);
           }
+          // Object-typed link assignments must produce a unique set —
+          // duplicates collapse the link's identity guarantees.
+          const unwrap = (e: ComputedExpr): FreeObjectExpr | undefined => {
+            if (e.kind === "select_expr") return e.expr;
+            return undefined;
+          };
+          const underlying = unwrap(astEl.expr);
+          if (underlying) {
+            const exprObjectType = resolveShapeSourceObjectType(underlying);
+            if (exprObjectType) {
+              const exprMult = inferAstMultiplicity(underlying);
+              if (exprMult === "duplicate") {
+                fail(`possibly more than one element returned for an link '${astEl.name}'`);
+              }
+            }
+          }
         } else if (astEl?.kind === "field") {
           if (el.cardinality === undefined) {
             const fieldDef = collectFields(typeDef, true).find((f) => f.name === astEl.name);
@@ -6404,6 +6654,11 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       if (typedRoot?.kind === "type_name") {
         return { typeName: typedRoot.name };
       }
+      // set_expr / for_expr / mutation_expr that yields object rows — fall
+      // back to the first branch's source type so consumers (UPDATE, SELECT
+      // of binding) can find a table to operate on.
+      const obj = resolveShapeSourceObjectType(binding.expr);
+      if (obj) return { typeName: qualifiedTypeName(obj) };
     }
 
     return undefined;
@@ -7109,23 +7364,49 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
             multi?: boolean;
           }>;
           multi?: boolean;
+          cardinality?: AstCardinality;
+        };
+
+        // For each shape-projection field, infer the cardinality contributed
+        // by the projection so callers can read `.cardinality` uniformly with
+        // typed-select shape elements. The base is the source's per-row
+        // cardinality (resolved via the inner expr's object type when known)
+        // and modifiers / explicit assignments compose multiplicatively.
+        const sourceType = resolveShapeSourceObjectType(expr.expr);
+        const sourceShapeElementCardinality = (name: string): AstCardinality | undefined => {
+          if (!sourceType) return undefined;
+          const fieldDef = collectFields(sourceType, true).find((f) => f.name === name);
+          if (fieldDef) return cardinalityForFieldDef(fieldDef);
+          const linkDef = collectLinks(sourceType, true).find((l) => l.name === name);
+          if (linkDef) return cardinalityForLinkDef(linkDef);
+          const computedDef = collectComputeds(sourceType, true).find((c) => c.name === name);
+          if (computedDef) return cardinalityForComputedDef(computedDef);
+          return undefined;
         };
 
         const fields: ShapeProjectionField[] = [];
         for (const element of expr.shape) {
           if (element.kind === "field") {
+            const baseCard = sourceShapeElementCardinality(element.name);
+            const combined = baseCard !== undefined
+              ? combineWithModifiers(element.cardinality, element.required, baseCard)
+              : undefined;
             fields.push({
               name: element.name,
               sourceField: element.name,
+              ...(combined !== undefined ? { cardinality: combined } : {}),
             });
             continue;
           }
 
           if (element.kind === "computed") {
             if (element.expr.kind === "field_ref") {
+              const baseCard = sourceShapeElementCardinality(element.expr.field) ?? "many";
+              const combined = combineWithModifiers(element.cardinality, element.required, baseCard);
               fields.push({
                 name: element.name,
                 sourceField: element.expr.field,
+                cardinality: combined,
               });
               continue;
             }
@@ -7154,11 +7435,16 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
               });
               continue;
             }
-            fields.push({
-              name: element.name,
-              expr: asNestedExprEntry(compileExprToIREntry(element.expr, currentItemBinding)),
-              multi: Boolean(element.multi || element.cardinality === "many"),
-            });
+            {
+              const exprCard = inferComputedExprCardinality(element.expr, sourceType);
+              const combined = combineWithModifiers(element.cardinality, element.required, exprCard);
+              fields.push({
+                name: element.name,
+                expr: asNestedExprEntry(compileExprToIREntry(element.expr, currentItemBinding)),
+                multi: Boolean(element.multi || element.cardinality === "many"),
+                cardinality: combined,
+              });
+            }
             continue;
           }
 
@@ -8281,6 +8567,14 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     if (expr.offset !== undefined && expr.offset < 0) {
       fail("OFFSET must not be negative");
     }
+    // ORDER BY requires a single value per source row — a multi-valued
+    // expression like `ORDER BY {1, 2}` is a static cardinality violation.
+    if (expr.orderBy) {
+      const orderCard = inferAstCardinality(expr.orderBy.expr);
+      if (orderCard === "many" || orderCard === "at_least_one") {
+        fail("possibly more than one element returned by an expression for the ORDER BY");
+      }
+    }
     return {
       kind: "select_expr_subquery",
       alias: expr.alias ?? aliasFromInnerSubquery,
@@ -8306,6 +8600,13 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     }
   }
 }
+      if (expr.kind === "introspect_typeof") {
+        // INTROSPECT TYPEOF X yields the schema type metadata for X. We don't
+        // lower introspection to SQL; for IR-only inference paths we encode
+        // as an opaque "type_name" entry so multiplicity/cardinality remain
+        // single-valued (the type is one schema object).
+        return { kind: "type_name", sourceType: "" };
+      }
       fail(`Unsupported expression kind in select_expr: ${(expr as FreeObjectExpr).kind}`);
       throw new Error("unreachable");
     };
@@ -8473,6 +8774,16 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     // iteration disjoint from the others. Mirrors python's DISTINCT_UNION
     // detection: a filter `.<field> = <iter_var>` with a simple field LHS
     // (not index/function/...).
+    // Returns true if `expr` is derived deterministically from the iter
+    // variable — either directly (`iter_var`), or via tuple-element access
+    // (`iter_var.0`, `iter_var.1`) — so per-iteration values are disjoint.
+    const isIterDerivedRef = (expr: FreeObjectExpr): boolean => {
+      if (expr.kind === "binding_ref" && expr.name === statement.variable) return true;
+      if (expr.kind === "index_access") return isIterDerivedRef(expr.expr);
+      if (expr.kind === "field_access") return isIterDerivedRef(expr.expr);
+      return false;
+    };
+
     const isDirectIterFilter = (filter: FilterExpr | undefined): boolean => {
       if (!filter) return false;
       if (filter.kind === "predicate" && filter.op === "=" && filter.target.kind === "field") {
@@ -8485,7 +8796,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         if (e.kind === "compare" && e.op === "=") {
           const sides = [e.left, e.right];
           const fieldSide = sides.find((s) => s.kind === "field_access" && (s.expr.kind === "current_item" || s.expr.kind === "binding_ref"));
-          const varSide = sides.find((s) => s.kind === "binding_ref" && (s as { name: string }).name === statement.variable);
+          const varSide = sides.find(isIterDerivedRef);
           if (fieldSide && varSide) return true;
         }
       }
@@ -8590,22 +8901,42 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       return false;
     };
 
+    // Walk into the body looking for a filter restricting on the iter
+    // variable. Handles `SELECT (SELECT X FILTER .field = iter.N)` shapes
+    // where the iter-referencing FILTER is nested inside an extra SELECT.
+    const findNestedIterFilter = (e: FreeObjectExpr | undefined, depth = 0): boolean => {
+      if (!e || depth > 6) return false;
+      const filterCandidate = (e as { filter?: unknown }).filter;
+      if (filterCandidate && isDirectIterFilter(filterCandidate as unknown as FilterExpr)) return true;
+      if (e.kind === "select") {
+        if (e.clauses?.filter && isDirectIterFilter(e.clauses.filter)) return true;
+      }
+      if (e.kind === "select_expr_subquery" || e.kind === "shape_projection" || e.kind === "distinct" || e.kind === "cast") {
+        return findNestedIterFilter(e.expr, depth + 1);
+      }
+      if (e.kind === "set_expr") return e.values.some((v) => findNestedIterFilter(v, depth + 1));
+      return false;
+    };
+
     let forCombinedMult: AstMultiplicity = "duplicate";
     if (forIterMult === "empty" || forBodyMult === "empty") forCombinedMult = "empty";
     else if (body.kind === "insert") forCombinedMult = "unique"; // UNION of INSERTs is always UNIQUE
     else if (forIterMult !== "duplicate" && forBodyMult === "unique") {
       // Body multiplicity is UNIQUE; the FOR result is UNIQUE iff the body
       // can be proven disjoint across iterations. Triggers:
-      //   - body references the iter variable directly
-      //   - body filters by `.field = iter_var`
+      //   - body references the iter variable directly (or via tuple deref)
+      //   - body filters by `.field = iter_var` (possibly nested)
       //   - body is a free-object constructor (fresh identity per iter)
       //   - body is a mutation expr (INSERTs create fresh identities)
       const bodyRefsIter =
-        bodyInner?.kind === "binding_ref" && resolvesToIterVar(bodyInner.name);
+        (bodyInner?.kind === "binding_ref" && resolvesToIterVar(bodyInner.name))
+        || (bodyInner !== undefined && isIterDerivedRef(bodyInner));
       const bodyIsFreeObj = bodyInner?.kind === "free_object_constructor";
       const bodyIsInsert =
         bodyInner?.kind === "mutation_expr" && bodyInner.statement.kind === "insert";
-      if (bodyRefsIter || bodyIsFreeObj || bodyIsInsert || isDirectIterFilter(bodyFilter)) {
+      if (bodyRefsIter || bodyIsFreeObj || bodyIsInsert
+        || isDirectIterFilter(bodyFilter)
+        || findNestedIterFilter(forBodyExpr)) {
         forCombinedMult = "unique";
       }
     }
@@ -9052,6 +9383,14 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
   }
 
   if (statement.kind === "update") {
+    // Seed binding multiplicities so a target binding's set semantics
+    // (`X := {User, User}` → duplicate) survives into the inference fold.
+    for (const binding of statement.with ?? []) {
+      const value = binding.value;
+      if (value.kind === "subquery_expr") {
+        bindingMults.set(binding.name, inferAstMultiplicity(value.expr));
+      }
+    }
     const pathId = createPathId();
     let filterExpr = mergeFilters(resolvedRootType.clauses.filter, statement.filter);
     // Normalize a free_expr-form filter into a predicate when it's a
@@ -9190,7 +9529,15 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         errmessage: p.errmessage,
       })),
       inference: {
-        cardinality: predicateFilter ? "at_most_one" : "many",
+        // When the UPDATE target is a WITH-bound set expression with
+        // duplicates (`X := {User, User}`), the filter restricts each branch
+        // but the union still produces many rows. Use the binding's
+        // multiplicity to decide.
+        cardinality: (() => {
+          const bindingMult = bindingMults.get(statement.typeName);
+          if (bindingMult === "duplicate") return "many";
+          return predicateFilter ? "at_most_one" : "many";
+        })(),
         multiplicity: "unique",
         volatility: "modifying",
       },

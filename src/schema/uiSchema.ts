@@ -46,6 +46,7 @@ export const schemaSnapshotFromDeclarative = (schema: DeclarativeSchema): Schema
     functionDefsFromDeclarative(schema),
     aliasDefsFromDeclarative(schema),
     schema.scalarTypes ?? [],
+    (schema.globals ?? []).map((g) => ({ module: g.module, name: g.name, exprText: g.exprText })),
   );
 };
 

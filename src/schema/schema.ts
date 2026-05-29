@@ -7,19 +7,36 @@ export interface SchemaDelta {
   addFields?: Array<{ typeName: string; field: FieldDef }>;
 }
 
+export interface GlobalDef {
+  module: string;
+  name: string;
+  exprText?: string;
+}
+
 export class SchemaSnapshot {
   private readonly typesByName: Map<string, TypeDef>;
   private readonly functionsBySignature: Map<string, FunctionDef>;
   private readonly aliasesByName: Map<string, AliasDef>;
   private readonly scalarTypesByName: Map<string, ScalarTypeDeclaration>;
+  private readonly globalsByName: Map<string, GlobalDef>;
 
-  constructor(types: TypeDef[] = [], functions: FunctionDef[] = [], aliases: AliasDef[] = [], scalarTypes: ScalarTypeDeclaration[] = []) {
+  constructor(types: TypeDef[] = [], functions: FunctionDef[] = [], aliases: AliasDef[] = [], scalarTypes: ScalarTypeDeclaration[] = [], globals: GlobalDef[] = []) {
     this.typesByName = new Map(types.map((t) => [qualifiedTypeName(t), cloneTypeDef(t)]));
     this.functionsBySignature = new Map(functions.map((fn) => [functionSignature(fn), cloneFunctionDef(fn)]));
     this.aliasesByName = new Map(aliases.map((alias) => [qualifiedAliasName(alias), cloneAliasDef(alias)]));
     this.scalarTypesByName = new Map(
       scalarTypes.map((scalarType) => [qualifiedScalarTypeName(scalarType), cloneScalarTypeDeclaration(scalarType)] as const),
     );
+    this.globalsByName = new Map(globals.map((g) => [`${g.module}::${g.name}`, { ...g }]));
+  }
+
+  getGlobal(name: string): GlobalDef | undefined {
+    const existing = this.globalsByName.get(name);
+    return existing ? { ...existing } : undefined;
+  }
+
+  listGlobals(): GlobalDef[] {
+    return [...this.globalsByName.values()].map((g) => ({ ...g }));
   }
 
   getType(name: string): TypeDef | undefined {

@@ -140,6 +140,15 @@ export interface PermissionDeclaration {
   name: string;
 }
 
+export interface GlobalDeclaration {
+  module: string;
+  name: string;
+  // EdgeQL expression source if the global was declared with `:= …`.
+  // Cardinality inference reads this to infer whether `global G` is one /
+  // at_most_one / many based on the bound expression.
+  exprText?: string;
+}
+
 export interface FunctionDeclaration {
   module: string;
   name: string;
@@ -205,6 +214,7 @@ export interface DeclarativeSchema {
   operators?: OperatorDeclaration[];
   abstractAnnotations?: AbstractAnnotationDeclaration[];
   permissions?: PermissionDeclaration[];
+  globals?: GlobalDeclaration[];
   scalarTypes?: ScalarTypeDeclaration[];
   constraints?: ConstraintDeclaration[];
   aliases?: AliasDeclaration[];

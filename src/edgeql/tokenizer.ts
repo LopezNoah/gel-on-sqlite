@@ -420,6 +420,18 @@ const isIdentPartCC = (cc: number): boolean =>
   (cc >= CC_A && cc <= CC_Z) ||
   (cc >= CC_0 && cc <= CC_9) ||
   cc === CC_UNDERSCORE;
+// Unicode-aware identifier scan: accept any character that isn't ASCII
+// whitespace/operator/punctuation as a letter, so names like `Пример`
+// tokenize as identifiers. Kept separate so the inner ASCII path stays a
+// tight numeric comparison.
+const ASCII_NON_LETTER = new Set<number>();
+for (const ch of " \t\n\r\f\v(){}[],;.:?+-*/%<>=!|&^~@#$\"'`\\") {
+  ASCII_NON_LETTER.add(ch.charCodeAt(0));
+}
+const isExtendedIdentStartCC = (cc: number): boolean =>
+  isAlphaCC(cc) || (cc > 0x7f && !ASCII_NON_LETTER.has(cc));
+const isExtendedIdentPartCC = (cc: number): boolean =>
+  isIdentPartCC(cc) || (cc > 0x7f && !ASCII_NON_LETTER.has(cc));
 
 // Internal implementation; returns both the token list and the lineStarts table
 // the parser needs for offset → line/column resolution. Public `tokenize` and
@@ -444,6 +456,25 @@ const tokenizeImpl = (input: string): TokenizeResult => {
 
   // scanEscapeValue: at entry, `i` is just past the leading backslash; the
   // escape character has not been consumed yet. Returns the unescaped char.
+  const isHex = (cc: number): boolean =>
+    (cc >= 48 && cc <= 57) // 0-9
+    || (cc >= 97 && cc <= 102) // a-f
+    || (cc >= 65 && cc <= 70); // A-F
+  const readHexDigits = (count: number, tokenOffset: number, name: string): number => {
+    if (i + count > len) {
+      return syntaxError(`Truncated \\${name} escape sequence`, tokenOffset);
+    }
+    let codepoint = 0;
+    for (let k = 0; k < count; k += 1) {
+      const c = input.charCodeAt(i + k);
+      if (!isHex(c)) {
+        return syntaxError(`Unsupported escape sequence '\\${name}'`, tokenOffset);
+      }
+      codepoint = codepoint * 16 + parseInt(input[i + k]!, 16);
+    }
+    i += count;
+    return codepoint;
+  };
   const scanEscapeValue = (tokenOffset: number): string => {
     if (i >= len) {
       syntaxError("Unterminated escape sequence", tokenOffset);
@@ -458,6 +489,26 @@ const tokenizeImpl = (input: string): TokenizeResult => {
       case CC_BACKSLASH: return "\\";
       case CC_SQUOTE: return "'";
       case CC_DQUOTE: return '"';
+      // 'x' is 120 — two-digit hex escape \xHH
+      case 120: return String.fromCodePoint(readHexDigits(2, tokenOffset, "x"));
+      // 'u' is 117 — four-digit hex escape \uHHHH
+      case 117: return String.fromCodePoint(readHexDigits(4, tokenOffset, "u"));
+      // 'U' is 85 — eight-digit hex escape \UHHHHHHHH
+      case 85: return String.fromCodePoint(readHexDigits(8, tokenOffset, "U"));
+      // 'b' is 98 — backspace
+      case 98: return "\b";
+      // 'f' is 102 — form feed
+      case 102: return "\f";
+      // 'v' is 118 — vertical tab
+      case 118: return "\v";
+      // '0' is 48 — null char
+      case 48: return "\0";
+      // Line continuation: `\` immediately followed by LF — both consumed,
+      // contributes nothing to the literal.
+      case CC_LF: {
+        lineStarts.push(i);
+        return "";
+      }
       default:
         return syntaxError(`Unsupported escape sequence '\\${input[i - 1]}'`, tokenOffset);
     }
@@ -544,7 +595,11 @@ const tokenizeImpl = (input: string): TokenizeResult => {
     while (i < len) {
       const cc = input.charCodeAt(i);
       if (cc === CC_LF) {
-        syntaxError("Unterminated string literal", tokenOffset);
+        // Multi-line raw newlines are accepted by upstream — record the new
+        // line so error reporting stays accurate, then continue scanning.
+        i += 1;
+        lineStarts.push(i);
+        continue;
       }
       if (cc === quoteCC) {
         const seg = input.slice(segStart, i);
@@ -552,6 +607,11 @@ const tokenizeImpl = (input: string): TokenizeResult => {
         i += 1;
         tokens.push({ kind, lexeme: out, lower: out, offset: tokenOffset });
         return;
+      }
+      // Byte strings must only contain ASCII characters (0-0x7F) outside of
+      // escape sequences. Non-ASCII source bytes are rejected at scan time.
+      if (kind === "bytes_string" && cc > 0x7f) {
+        syntaxError("invalid character in byte string literal: non-ASCII byte", tokenOffset);
       }
       if (cc === CC_BACKSLASH && !raw) {
         if (value === undefined) {
@@ -566,7 +626,20 @@ const tokenizeImpl = (input: string): TokenizeResult => {
           strInterpStack.push({ quote: quoteCC, parenDepth: openParens });
           return;
         }
-        value += scanEscapeValue(tokenOffset);
+        const escaped = scanEscapeValue(tokenOffset);
+        // For byte strings, restrict \xHH to ASCII range (matches the
+        // upstream check). For regular strings, \xHH must produce a byte
+        // ≤ 0x7F; higher bytes need \u/\U.
+        if (escaped.length > 0) {
+          const cp = escaped.codePointAt(0);
+          if (kind === "bytes_string" && cp !== undefined && cp > 0x7f) {
+            syntaxError(`invalid escape '\\x${cp.toString(16).padStart(2, "0").toUpperCase()}' in byte string literal: non-ASCII byte`, tokenOffset);
+          }
+          if (kind === "string" && cp !== undefined && cp > 0x7f && input.charCodeAt(i - 3) === 120) {
+            syntaxError(`invalid \\x escape in string literal: produces non-ASCII byte`, tokenOffset);
+          }
+        }
+        value += escaped;
         segStart = i;
         continue;
       }
@@ -739,6 +812,7 @@ const tokenizeImpl = (input: string): TokenizeResult => {
       if (cc >= CC_A && cc <= CC_Z) { hasUppercase = true; i += 1; continue; }
       if (cc === CC_UNDERSCORE) { i += 1; continue; }
       if (cc >= CC_0 && cc <= CC_9) { i += 1; continue; }
+      if (cc > 0x7f && !ASCII_NON_LETTER.has(cc)) { i += 1; continue; }
       break;
     }
 
@@ -1121,7 +1195,7 @@ const tokenizeImpl = (input: string): TokenizeResult => {
     }
 
     // Identifiers / keywords
-    if (isAlphaCC(cc)) {
+    if (isAlphaCC(cc) || (cc > 0x7f && !ASCII_NON_LETTER.has(cc))) {
       scanIdentifierOrKeyword(tokenOffset);
       continue;
     }
