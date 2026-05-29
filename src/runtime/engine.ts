@@ -7103,118 +7103,18 @@ export const executeQuery = (
   query: string,
   securityContext: SecurityContext = DEFAULT_SECURITY_CONTEXT,
 ): QueryResult => {
-  const dbg = process.env.GEL_DEBUG_RUNTIME === "1";
-  // HACK (not using SQL): the block below short-circuits on a series of
-  // tokenizer/AST shape patterns and returns results without ever touching
-  // the IR/SQL pipeline. Each `tryRuntime*` / `trySchema*` helper covers a
-  // class of query the compiler can't lower yet (schema-link introspection,
-  // schema pointer/tuple/type/object-type queries). These should be pushed
-  // into ast_to_ir + sql/gel_ir_compiler so a single SQL path handles them.
-  // Schema-introspection bypasses run BEFORE the AST evaluator
-  // (tryRuntimeSelectExprEvaluation) because the AST path otherwise consumes
-  // these queries and produces empty/wrong results — the parser now accepts
-  // `kw_schema` as a name, but the IR/SQL pipeline still has no `schema::*`
-  // introspection types. The full fix is to delete these bypasses once real
-  // schema introspection is wired through the principled path.
-  const runtimeAliasSchemaResult = tryRuntimeTypedAliasSchemaLinkIntrospection(schema, query);
-  if (runtimeAliasSchemaResult) {
-    return runtimeAliasSchemaResult;
-  }
-
-  const schemaTupleResult = trySchemaTupleQuery(schema, query);
-  if (schemaTupleResult) {
-    return schemaTupleResult;
-  }
-
-  const schemaTypeResult = trySchemaTypeQuery(schema, query);
-  if (schemaTypeResult) {
-    return schemaTypeResult;
-  }
-
+  // Runtime fallbacks (tryRuntime*, trySchema*, tryEvaluateParsedRuntimeSelect,
+  // preEvaluateGroupBindings, etc.) have been disabled. Everything must lower
+  // through the compile pipeline. FOR-INSERT still routes through the unit
+  // path so the script harness can surface the unsupported-lowering error
+  // uniformly; FOR-SELECT goes through the normal compile pipeline.
   const rewrittenQuery = injectRuntimeAliasBinding(schema, query);
   validateRestrictedLinkPropertyTokens(rewrittenQuery);
-  if (schemaObjectTypeQueryNeedsRuntimeBypass(rewrittenQuery)) {
-    const schemaQueryResult = trySchemaObjectTypeQuery(schema, rewrittenQuery);
-    if (schemaQueryResult) {
-      return schemaQueryResult;
-    }
-  }
-
-  try {
-    const compiledTrace = executeQueryWithTrace(db, schema, rewrittenQuery, securityContext);
-    if (
-      compiledTrace.ast.kind === "select_expr"
-      && compiledTrace.sql.loweringMode === "single_statement"
-      && compiledTrace.result.kind === "select"
-      && (compiledTrace.result.rows?.length ?? 0) > 0
-      && !selectHasSetDerivedComputedShape(compiledTrace.ast)
-    ) {
-      return compiledTrace.result;
-    }
-  } catch {
-    // Unsupported select expressions still fall through to the runtime evaluator.
-  }
-
-  const runtimeSelectExprEvaluationResult = tryRuntimeSelectExprEvaluation(db, schema, query, securityContext);
-  if (runtimeSelectExprEvaluationResult) {
-    if (dbg) console.error("HACK: tryRuntimeSelectExprEvaluation");
-    return runtimeSelectExprEvaluationResult;
-  }
-
   const parsedQuery = parseEdgeQL(rewrittenQuery);
-  validateParsedStatement(parsedQuery, { schema, module: parsedQuery.withModule });
-  // HACK (not using SQL): preEvaluateGroupBindings runs GROUP statements at
-  // the AST stage and inlines their results as synthetic WITH bindings,
-  // because the IR/SQL path can't currently fold a GROUP result into a
-  // surrounding select. GROUP should compile end-to-end through gel_ir.
-  const preprocessed = preEvaluateGroupBindings(db, schema, parsedQuery, normalizeSecurityContext(securityContext));
-  if (preprocessed !== parsedQuery) {
-    // GROUP results were inlined as synthetic WITH bindings. Run the rewritten
-    // AST directly so we don't re-parse the original query string (which would
-    // discard the inlined results).
-    const ctx = normalizeSecurityContext(securityContext);
-    if (preprocessed.kind === "select_expr") {
-      const r = tryRuntimeSelectExprEvaluationAst(db, schema, preprocessed, ctx);
-      if (r) return r;
-    }
-    if (preprocessed.kind === "select") {
-      const r = tryEvaluateParsedRuntimeSelect(db, schema, preprocessed, ctx);
-      if (r) return r;
-    }
-    if (preprocessed.kind === "group") {
-      const compiled = getCompilerService().compile(schema, preprocessed, {
-        globals: ctx.globals,
-        target: resolvedRuntimeTarget(ctx, db),
-      });
-      if (compiled.ir.kind === "group") {
-        return {
-          kind: "select",
-          rows: runGroupIR(db, schema, compiled.ir, ctx, []),
-        };
-      }
-    }
-  }
-
-  if (isSchemaIntrospectionSelect(parsedQuery)) {
-    return executeQueryWithTrace(db, schema, rewrittenQuery, securityContext).result;
-  }
-
-  // HACK (not using SQL): tryEvaluateParsedRuntimeSelect is a ~2k-line AST
-  // interpreter that handles every shape/expression the IR/SQL path can't
-  // express yet (filtered/ordered/limited links in shapes, multi-step
-  // field_access through links, FOR exprs, computed pointers, binding_refs,
-  // etc.). Everything it covers should be lowered through gel_ir_compiler
-  // and removed from here.
-  const parsedRuntimeResult = tryEvaluateParsedRuntimeSelect(db, schema, parsedQuery, securityContext);
-  if (parsedRuntimeResult) {
-    return parsedRuntimeResult;
-  }
-
-  if (parsedQuery.kind === "for") {
+  if (parsedQuery.kind === "for" && parsedQuery.body.kind === "insert") {
     const script = rewrittenQuery.trim().endsWith(";") ? rewrittenQuery : `${rewrittenQuery};`;
     return executeQueryUnitWithTrace(db, schema, script, securityContext).result;
   }
-
   return executeQueryWithTrace(db, schema, rewrittenQuery, securityContext).result;
 };
 
@@ -7287,11 +7187,17 @@ export const executeQueryWithTrace = (
         rows: runSelectIR(db, schema, ir, context, sqlArtifact, sqlTrail),
       };
     } else if (ir.kind === "select_free") {
+      if (sqlArtifact.loweringMode !== "single_statement") {
+        throw new AppError(
+          "E_UNSUPPORTED",
+          "select_free requires SQL lowering; runtime fallback disabled",
+          ast.pos.line,
+          ast.pos.column,
+        );
+      }
       result = {
         kind: "select",
-        rows: sqlArtifact.loweringMode === "single_statement"
-          ? runSelectFreeSQL(db, sqlArtifact)
-          : [materializeFreeObjectRow(db, schema, ir.entries, context, sqlTrail)],
+        rows: runSelectFreeSQL(db, sqlArtifact),
       };
     } else if (ir.kind === "select_expr") {
       result = {
@@ -7299,24 +7205,13 @@ export const executeQueryWithTrace = (
         rows: runGelSelectExprSQL(db, sqlArtifact),
       };
     } else if (ir.kind === "group") {
-      // HACK (not using SQL): GROUP is executed by runGroupIR, which
-      // re-materializes source rows through the parsed-runtime evaluators
-      // and aggregates in TS. The strict IR/SQL compile rejects shape
-      // entries that touch backlinks (`count(.owners)`), so we never run
-      // the compiled SQL. GROUP should lower to a single SQL statement
-      // with GROUP BY + per-grouping JSON aggregation.
-      result = {
-        kind: "select",
-        rows: runGroupIR(db, schema, ir, context, sqlTrail),
-      };
+      throw new AppError(
+        "E_UNSUPPORTED",
+        "GROUP requires SQL lowering; runtime fallback disabled",
+        ast.pos.line,
+        ast.pos.column,
+      );
     } else {
-      // HACK (not using SQL): writes go through runWriteWithAccessPolicies
-      // which evaluates access policies row-by-row in TS, expands link
-      // assignments via applyInsertLinkAssignments / applyUpdateLinkAssignments
-      // (multiple hand-rolled SQL statements per assignment), and runs
-      // on-target-delete handlers as separate SELECT/DELETE/UPDATEs. The
-      // compiled `sqlArtifact` for the write is only partly used; policies
-      // and link side effects should be lowered into a single SQL plan.
       const writeResult = runWriteWithAccessPolicies(db, schema, ast, ir, sqlArtifact, subjectType!, context);
 
       result = {
@@ -7472,9 +7367,53 @@ export const executeQueryUnitWithTrace = (
     }
 
     for (const ast of expanded) {
-      if (ast.kind === "for") {
-        executeForLoop(db, schema, ast, context, runtimeTarget, compilerService, overlays, traces);
+      if (ast.kind === "for" && ast.body.kind === "insert"
+        && ast.iteratorExpr.kind === "set_literal") {
+        // AST-level desugar of `FOR x IN {literals…} UNION (INSERT T { … })`:
+        // emit one cleanly-lowered INSERT per literal with the iter binding
+        // substituted in. No expression evaluation happens here — only
+        // symbolic substitution of `binding_ref(x)` with the literal value.
+        const iterValues = ast.iteratorExpr.values;
+        const effectiveValues: (ScalarValue | null)[] = iterValues.length === 0 && ast.optional
+          ? [null]
+          : (iterValues as (ScalarValue | null)[]);
+        for (const value of effectiveValues) {
+          const insertValues: Record<string, InsertValue> = {};
+          for (const [key, v] of Object.entries(ast.body.values)) {
+            if (typeof v === "object" && v !== null && "kind" in v
+              && (v as { kind?: unknown }).kind === "binding_ref"
+              && (v as { name?: unknown }).name === ast.variable) {
+              insertValues[key] = value as InsertValue;
+            } else {
+              insertValues[key] = v;
+            }
+          }
+          const insertAst: InsertStatement = {
+            ...ast.body,
+            with: value !== null && isScalarValue(value)
+              ? [
+                  ...(ast.body.with ?? []).filter((binding) => binding.name !== ast.variable),
+                  { name: ast.variable, value: { kind: "literal", value } },
+                ]
+              : ast.body.with,
+            values: insertValues,
+          };
+          expanded.push(insertAst);
+        }
         continue;
+      }
+      if (ast.kind === "for") {
+        // Non-INSERT FOR statements (e.g. `FOR x IN T UNION (x.name, T.name)`)
+        // are lowered as SELECTs through `compileASTToGelIR`. Surface the
+        // remaining unsupported FOR-body shapes with a uniform error.
+        if (ast.body.kind !== "select_expr" && ast.body.kind !== "select") {
+          throw new AppError(
+            "E_UNSUPPORTED",
+            "FOR requires SQL lowering; runtime fallback disabled",
+            ast.pos.line,
+            ast.pos.column,
+          );
+        }
       }
       if (ast.kind === "ddl") {
         if (ast.action === "create" && ast.objectKind === "function" && ast.functionDecl) {
@@ -7521,22 +7460,27 @@ export const executeQueryUnitWithTrace = (
       if (ir.kind === "select") {
         result = { kind: "select", rows: runSelectIR(db, schema, ir, context, sqlArtifact, sqlTrail) };
       } else if (ir.kind === "select_free") {
-        result = {
-          kind: "select",
-          rows: sqlArtifact.loweringMode === "single_statement"
-            ? runSelectFreeSQL(db, sqlArtifact)
-            : [materializeFreeObjectRow(db, schema, ir.entries, context, sqlTrail)],
-        };
-    } else if (ir.kind === "select_expr") {
+        if (sqlArtifact.loweringMode !== "single_statement") {
+          throw new AppError(
+            "E_UNSUPPORTED",
+            "select_free requires SQL lowering; runtime fallback disabled",
+            ast.pos.line,
+            ast.pos.column,
+          );
+        }
+        result = { kind: "select", rows: runSelectFreeSQL(db, sqlArtifact) };
+      } else if (ir.kind === "select_expr") {
         result = {
           kind: "select",
           rows: runGelSelectExprSQL(db, sqlArtifact),
         };
       } else if (ir.kind === "group") {
-        result = {
-          kind: "select",
-          rows: runGroupIR(db, schema, ir, context, sqlTrail),
-        };
+        throw new AppError(
+          "E_UNSUPPORTED",
+          "GROUP requires SQL lowering; runtime fallback disabled",
+          ast.pos.line,
+          ast.pos.column,
+        );
       } else {
         const writeResult = runWriteWithAccessPolicies(db, schema, ast, ir, sqlArtifact, subjectType!, context);
         result = { kind: ir.kind, changes: writeResult.changes, rows: writeResult.rows };
@@ -8746,31 +8690,12 @@ const materializeSelectRow = (
           output[element.name] = row[loweredAlias];
           continue;
         }
-
-        const resolveShapeFunctionArg = (arg: typeof element.expr.args[number]): RuntimeFunctionArg => {
-          if (arg.kind === "field_ref") {
-            return row[arg.column] as ScalarValue;
-          }
-          if (arg.kind === "set_literal") {
-            return { kind: "set" as const, values: [...arg.values] };
-          }
-          if (arg.kind === "array_literal") {
-            return { kind: "array" as const, values: [...arg.values] };
-          }
-          if (arg.kind === "function_call") {
-            return executeFunctionCall(
-              schema,
-              db,
-              context,
-              arg.functionName,
-              arg.args.map((nested) => resolveShapeFunctionArg(nested)),
-            ) as RuntimeFunctionArg;
-          }
-          return arg.value;
-        };
-
-        const args: RuntimeFunctionArg[] = element.expr.args.map((arg) => resolveShapeFunctionArg(arg));
-        output[element.name] = executeFunctionCall(schema, db, context, element.expr.functionName, args);
+        throw new AppError(
+          "E_UNSUPPORTED",
+          `function_call '${element.expr.functionName}' in shape requires SQL lowering; runtime fallback disabled`,
+          1,
+          1,
+        );
       } else if (element.expr.kind === "link_aggregate") {
         // The aggregate is folded into the outer SELECT by sql/compiler's
         // compileLinkAggregateExpr — the row always carries the lowered value.
@@ -8789,10 +8714,11 @@ const materializeSelectRow = (
         }
       } else if (element.expr.kind === "select_expr") {
         const loweredAlias = computedValueAlias(element.pathId);
-        if (!freeExprHasCollectionDerivation(element.expr.expr)
-          && Object.prototype.hasOwnProperty.call(row, loweredAlias) && row[loweredAlias] !== null && row[loweredAlias] !== undefined) {
+        if (Object.prototype.hasOwnProperty.call(row, loweredAlias)) {
           const raw = row[loweredAlias];
-          if (typeof raw === "string"
+          if (raw === null || raw === undefined) {
+            output[element.name] = null;
+          } else if (typeof raw === "string"
             && (raw === "true" || raw === "false" || raw === "null"
               || raw.startsWith("[") || raw.startsWith("{"))) {
             try {
@@ -8805,25 +8731,12 @@ const materializeSelectRow = (
           }
           continue;
         }
-        const evaluated = evaluateSelectExprShapeEntry(db, schema, element.expr.expr, row, sourceType);
-        // A computed shape field whose name matches a multi-link on the
-        // source type should always wrap its value as an array — even when
-        // the value happens to have a single entry — so the output shape is
-        // consistent across rows.
-        const schemaLink = findRuntimeLinkDef(schema, sourceType, element.name);
-        const isMultiLinkComputed = Boolean(schemaLink?.link.multi);
-        const exprMulti = exprIsPotentiallyMulti(element.expr.expr) || isMultiLinkComputed;
-        if (evaluated !== null && !Array.isArray(evaluated) && exprMulti) {
-          output[element.name] = [evaluated];
-        } else if (Array.isArray(evaluated) && evaluated.length === 1 && !exprMulti) {
-          output[element.name] = evaluated[0];
-        } else if (Array.isArray(evaluated) && evaluated.length === 0 && !exprMulti) {
-          // EdgeQL: a single-cardinality computed shape exposes an empty set
-          // as null, not as an empty array.
-          output[element.name] = null;
-        } else {
-          output[element.name] = evaluated;
-        }
+        throw new AppError(
+          "E_UNSUPPORTED",
+          `select_expr computed shape '${element.name}' requires SQL lowering; runtime fallback disabled`,
+          1,
+          1,
+        );
       } else {
         output[element.name] = { name: sourceType };
       }

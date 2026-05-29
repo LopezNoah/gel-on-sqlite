@@ -177,7 +177,10 @@ const compileSelectToSQL = (ir: SelectIR, target: RuntimeTarget): SQLArtifact =>
         params,
       );
       if (lowered) {
-        projections.push(`${lowered} AS ${quoteIdent(computedValueAlias(element.pathId))}`);
+        const projected = freeExprIsBooleanShape(element.expr.expr)
+          ? `json(CASE WHEN ${lowered} THEN 'true' ELSE 'false' END)`
+          : lowered;
+        projections.push(`${projected} AS ${quoteIdent(computedValueAlias(element.pathId))}`);
       } else {
         // When SQL lowering fails for a shape-computed expression, the runtime
         // falls back to JS evaluation on the row. Project any referenced raw
@@ -587,6 +590,34 @@ const operatorToSqlInfix = (op: string): string | null => {
   return null;
 };
 
+/**
+ * Whether a shape-computed `FreeObjectExpr` produces a boolean value once
+ * lowered by `compileShapeScalarValueSQL`. The shape projection wraps these
+ * with `json(CASE WHEN … THEN 'true' ELSE 'false' END)` so the materializer
+ * sees a JSON string and parses it into a JS `true`/`false` — the bare
+ * SQLite result would otherwise be an integer 0/1.
+ */
+const freeExprIsBooleanShape = (expr: FreeObjectExpr): boolean => {
+  switch (expr.kind) {
+    case "compare":
+    case "and":
+    case "or":
+    case "not":
+    case "logical":
+    case "exists":
+    case "in_expr":
+    case "is_type":
+      return true;
+    case "select_expr_subquery":
+      return freeExprIsBooleanShape(expr.expr);
+    case "cast":
+      // EdgeQL `<bool>(...)` — the cast wraps a boolean expression.
+      return expr.castType === "bool" || freeExprIsBooleanShape(expr.expr);
+    default:
+      return false;
+  }
+};
+
 const compileShapeComputedFreeExprSQL = (
   expr: FreeObjectExpr,
   sourceAlias: string,
@@ -735,9 +766,30 @@ const compileShapeScalarValueSQL = (
     if (node.kind === "compare") {
       const left = compile(node.left);
       const right = compile(node.right);
+      if (!left || !right) return null;
+      if (node.op === "?=" || node.op === "?!=") {
+        // SQLite's `IS` / `IS NOT` are the null-safe equality operators that
+        // match EdgeQL `?=` / `?!=` when each side is at-most-one at the
+        // current row (NULL stands in for the empty set).
+        const sqlOp = node.op === "?=" ? "IS" : "IS NOT";
+        return `(${left} ${sqlOp} ${right})`;
+      }
       const op = operatorToSqlInfix(node.op);
-      if (!left || !right || !op) return null;
+      if (!op) return null;
       return `(${left} ${op} ${right})`;
+    }
+    if (node.kind === "set_literal") {
+      // An empty `{}` literal at row-scalar position represents the empty set,
+      // which equates to SQL NULL. (A multi-element set literal in a scalar
+      // context isn't expressible — bail.)
+      if (node.values.length === 0) return "NULL";
+      if (node.values.length === 1) {
+        const value = node.values[0];
+        if (value === null) return "NULL";
+        params.push(encodeParam(value as ScalarValue));
+        return "?";
+      }
+      return null;
     }
     if (node.kind === "logical" || node.kind === "and" || node.kind === "or") {
       const opName = node.kind === "logical" ? node.op : node.kind;
