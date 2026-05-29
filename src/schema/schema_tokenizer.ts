@@ -450,6 +450,13 @@ export type TopLevelDeclarationNode =
 
 export interface IgnoredDeclarationNode {
   kind: "IgnoredDeclaration";
+  // Tag the source of an ignored top-level (`global Name := …;` /
+  // `permission Name;`) so the adapter can hoist a minimal record for it.
+  // Globals defined with an expression carry the expression text as a hint
+  // for downstream cardinality inference.
+  declarationKind?: "global" | "permission";
+  name?: string;
+  exprText?: string;
 }
 
 export interface AliasDeclarationNode {
@@ -854,9 +861,40 @@ export class Parser {
   }
 
   private parseIgnoredDeclaration(): IgnoredDeclarationNode {
-    this.parseOpaqueUntilSemicolonBalanced();
+    // Capture the declaration kind (`global` / `permission`), its name, and
+    // — for computed globals — the expression text. Cardinality inference
+    // needs the expression to figure out whether a `global G` reference
+    // collapses to one, at_most_one, etc.
+    let declarationKind: "global" | "permission" | undefined;
+    let name: string | undefined;
+    if (this.checkNameInsensitive("global")) {
+      declarationKind = "global";
+      this.pos += 1;
+    } else if (this.checkNameInsensitive("permission")) {
+      declarationKind = "permission";
+      this.pos += 1;
+    }
+    if (declarationKind) {
+      const next = this.current();
+      if (next && (next.type === "identifier" || next.type === "keyword")) {
+        name = next.value;
+        this.pos += 1;
+      }
+    }
+    let exprText: string | undefined;
+    if (declarationKind === "global" && this.check("assign")) {
+      this.pos += 1;
+      const startTok = this.current();
+      this.parseOpaqueUntilSemicolonBalanced();
+      const endTok = this.tokens[this.pos - 1];
+      if (startTok && endTok) {
+        exprText = this.sourceText.slice(startTok.start, endTok.end);
+      }
+    } else {
+      this.parseOpaqueUntilSemicolonBalanced();
+    }
     this.expect("semicolon", "Expected ';' after declaration");
-    return { kind: "IgnoredDeclaration" };
+    return { kind: "IgnoredDeclaration", declarationKind, name, exprText };
   }
 
   private parseAliasDeclaration(): AliasDeclarationNode {
