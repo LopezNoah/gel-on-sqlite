@@ -136,6 +136,23 @@ export const compileGelIRToSQL = (
             sql += ` ORDER BY ${orderSql}`;
           }
         }
+        // Statement-level LIMIT / OFFSET are no different from the wrapped
+        // path's: append them to the scalar select so `SELECT X LIMIT 1`
+        // produces only one row.
+        const stmtLimit = statement.limit ?? topSelect.selectExpr?.limit;
+        const stmtOffset = statement.offset ?? topSelect.selectExpr?.offset;
+        if (stmtLimit) {
+          const limitN = extractNumericLiteral(stmtLimit);
+          if (limitN !== undefined) {
+            sql += ` LIMIT ${limitN}`;
+          }
+        }
+        if (stmtOffset) {
+          const offsetN = extractNumericLiteral(stmtOffset);
+          if (offsetN !== undefined) {
+            sql += ` OFFSET ${offsetN}`;
+          }
+        }
         return { sql, params, loweringMode: "single_statement" };
       }
     }
@@ -1286,6 +1303,42 @@ const compileScalarSelectSQLInner = (
       return sql;
     }
   }
+  // EdgeQL `X.__type__.name` resolves to the source row's type label. Detect
+  // the pointer-chain `.__type__.name` and short-circuit to `__source_type`
+  // on the underlying table — schemas don't expose `__type__` as a real link.
+  if (sourceSet.expr.kind === "pointer") {
+    const nameStep = sourceSet.expr as Pointer;
+    if (nameStep.ptrref.shortName === "name" && nameStep.source.expr.kind === "pointer") {
+      const typeStep = nameStep.source.expr as Pointer;
+      if (typeStep.ptrref.shortName === "__type__" && typeStep.source.expr.kind === "type_root") {
+        const compiledSource = compileSelectSource(typeStep.source, undefined, undefined, options, params, target);
+        if (compiledSource) {
+          return `SELECT ${compiledSource.alias}.${quoteIdent("__source_type")} AS ${quoteIdent("value")} FROM ${compiledSource.sql}`;
+        }
+      }
+    }
+  }
+  // Top-level `SELECT EXISTS X` lowers to a boolean scalar over X's source.
+  if (sourceSet.expr.kind === "exists_expr") {
+    const existsExpr = sourceSet.expr as ExistsExpr;
+    const innerSet = existsExpr.expr;
+    // EXISTS of a select_expr/type_root/pointer source: lower to SELECT EXISTS(SELECT 1 FROM source).
+    // Let compileSelectSource handle envelope unwrapping and WHERE attachment.
+    if (innerSet.expr.kind === "select_expr"
+      || innerSet.expr.kind === "type_root"
+      || innerSet.expr.kind === "pointer") {
+      const innerCompiled = compileSelectSource(innerSet, undefined, undefined, options, params, target);
+      if (innerCompiled) {
+        return `SELECT (CASE WHEN EXISTS(SELECT 1 FROM ${innerCompiled.sql}) THEN json('true') ELSE json('false') END) AS ${quoteIdent("value")}`;
+      }
+    }
+    // EXISTS of a scalar selection: wrap a scalar compile.
+    const innerScalar = compileScalarSelectSQL(innerSet, params, target, options);
+    if (innerScalar) {
+      return `SELECT (CASE WHEN EXISTS(SELECT 1 FROM (${innerScalar}) AS __e WHERE __e.${quoteIdent("value")} IS NOT NULL) THEN json('true') ELSE json('false') END) AS ${quoteIdent("value")}`;
+    }
+  }
+
   if (sourceSet.expr.kind === "tuple") {
     const tuple = sourceSet.expr as Tuple;
     if (tuple.elements.length === 0) {
@@ -3000,8 +3053,86 @@ const compileValueSetSQL = (
     if (typeCheck.result !== undefined) {
       return typeCheck.result ? "1" : "0";
     }
-    const leftType = qualifyTypeName(typeCheck.left.typeref);
+    // EdgeQL `<literal> IS <type>` is a static check: the literal's concrete
+    // scalar type either is (or descends from) the target type, or it isn't.
+    // Resolve by walking the literal expression to its concrete scalar type
+    // and consulting the scalar-type ancestor table. Also handle `field IS T`
+    // by reading the pointer's declared outTarget.
+    const concreteLiteralType = (() => {
+      let inner: { kind: string; expr?: unknown; ptrref?: { outTarget?: { id?: string; nameHint?: string } } } = typeCheck.left as unknown as { kind: string; expr?: unknown };
+      // Unwrap one layer of `set` envelope around the literal.
+      if (inner.kind === "set" && (inner as { expr?: { kind: string } }).expr) {
+        inner = (inner as { expr: { kind: string } }).expr as { kind: string };
+      }
+      if (inner.kind === "integer_constant") return "std::int64";
+      if (inner.kind === "float_constant") return "std::float64";
+      if (inner.kind === "string_constant") return "std::str";
+      if (inner.kind === "boolean_constant") return "std::bool";
+      if (inner.kind === "bigint_constant") return "std::bigint";
+      if (inner.kind === "decimal_constant") return "std::decimal";
+      // `pointer` IR (e.g. `Issue.time_estimate`): use the pointer's declared
+      // output target type. Only resolve if it's a known std:: scalar.
+      if (inner.kind === "pointer" && inner.ptrref?.outTarget) {
+        const target = inner.ptrref.outTarget;
+        const targetId = target.id ?? target.nameHint;
+        if (targetId && (targetId.startsWith("std::") || targetId.startsWith("default::"))) {
+          return targetId;
+        }
+      }
+      return undefined;
+    })();
     const rightType = qualifyTypeName(typeCheck.right);
+    const stripStd = (n: string): string => n.startsWith("std::") ? n.slice(5) : n.startsWith("default::") ? n.slice(9) : n;
+    const SCALAR_ANCESTORS: Record<string, string[]> = {
+      int16: ["int16", "anyint", "anyreal", "anyscalar", "anytype"],
+      int32: ["int32", "anyint", "anyreal", "anyscalar", "anytype"],
+      int64: ["int64", "anyint", "anyreal", "anyscalar", "anytype"],
+      bigint: ["bigint", "anyint", "anyreal", "anyscalar", "anytype"],
+      float32: ["float32", "anyfloat", "anyreal", "anyscalar", "anytype"],
+      float64: ["float64", "anyfloat", "anyreal", "anyscalar", "anytype"],
+      decimal: ["decimal", "anyreal", "anyscalar", "anytype"],
+      str: ["str", "anyscalar", "anytype"],
+      bool: ["bool", "anyscalar", "anytype"],
+      bytes: ["bytes", "anyscalar", "anytype"],
+      uuid: ["uuid", "anyscalar", "anytype"],
+      datetime: ["datetime", "anyscalar", "anytype"],
+      duration: ["duration", "anyscalar", "anytype"],
+      json: ["json", "anyscalar", "anytype"],
+    };
+    if (concreteLiteralType) {
+      const literalShort = stripStd(concreteLiteralType);
+      const targetShort = stripStd(rightType);
+      const ancestors = SCALAR_ANCESTORS[literalShort];
+      const trueSql = "json('true')";
+      const falseSql = "json('false')";
+      // A scalar literal is never an Object.
+      if (ancestors && targetShort === "Object") {
+        return typeCheck.op === "is" ? falseSql : trueSql;
+      }
+      if (ancestors) {
+        const matches = ancestors.includes(targetShort);
+        if (typeCheck.op === "is") return matches ? trueSql : falseSql;
+        if (typeCheck.op === "is not") return matches ? falseSql : trueSql;
+      }
+      // Object types (pointer targets that aren't std:: scalars): the result is
+      // false against any scalar target (concrete or abstract), true against
+      // Object, or anytype, otherwise we fall back to the typeref-based check.
+      const SCALAR_ABSTRACT = new Set(["anyint", "anyreal", "anyfloat", "anyscalar"]);
+      if (!ancestors) {
+        if (targetShort === "anytype") {
+          // anytype accepts everything.
+          return typeCheck.op === "is" ? trueSql : falseSql;
+        }
+        if (SCALAR_ANCESTORS[targetShort] || SCALAR_ABSTRACT.has(targetShort)) {
+          // target is a scalar — an object value never satisfies it.
+          return typeCheck.op === "is" ? falseSql : trueSql;
+        }
+        if (targetShort === "Object") {
+          return typeCheck.op === "is" ? trueSql : falseSql;
+        }
+      }
+    }
+    const leftType = qualifyTypeName(typeCheck.left.typeref);
     const rightChildren = (typeCheck.right.children ?? []).map((child) => qualifyTypeName(child));
     const matches = leftType === rightType || rightChildren.includes(leftType);
     if (matches) {
