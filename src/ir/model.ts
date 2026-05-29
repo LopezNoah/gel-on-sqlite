@@ -435,7 +435,7 @@ export type SelectShapeExprIR =
     }
   | {
       kind: "link_aggregate";
-      functionName: "sum";
+      functionName: "sum" | "count" | "min" | "max" | "avg";
       relation: LinkRelationIR;
       column: string;
     }

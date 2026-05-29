@@ -8675,6 +8675,27 @@ const materializeSelectRow = (
       } else if (element.expr.kind === "is_type") {
         output[element.name] = element.expr.concreteSourceTypes.includes(sourceType);
       } else if (element.expr.kind === "subquery") {
+        // When the SQL compiler has folded this shape entry into the outer
+        // SELECT (via `compileShapeSubquerySQL`), the row already carries the
+        // materialised value — read it instead of firing a per-row query.
+        const loweredAlias = computedValueAlias(element.pathId);
+        if (Object.prototype.hasOwnProperty.call(row, loweredAlias)) {
+          const raw = row[loweredAlias];
+          if (raw === null || raw === undefined) {
+            output[element.name] = null;
+          } else if (typeof raw === "string"
+            && (raw === "true" || raw === "false" || raw === "null"
+              || raw.startsWith("[") || raw.startsWith("{"))) {
+            try {
+              output[element.name] = JSON.parse(raw);
+            } catch {
+              output[element.name] = raw;
+            }
+          } else {
+            output[element.name] = raw;
+          }
+          continue;
+        }
         const nestedSql = compileToSQL(element.expr.query, { target: resolvedRuntimeTarget(context, db) });
         assertTargetSqlCompatibility(nestedSql.sql, resolvedRuntimeTarget(context, db));
         sqlTrail.push(nestedSql);
@@ -8744,8 +8765,19 @@ const materializeSelectRow = (
     }
 
     if (element.kind === "link") {
+      // Effective cardinality on this shape entry: the link's declared multi
+      // flag *plus* any narrowing introduced by an inner FILTER on an
+      // exclusive property (e.g. `watchers: { … } FILTER .name = 'Yury'`).
+      // Cardinality inference at IR-build time records the result on
+      // `inference.cardinality` — when it's "one" / "at_most_one" / "empty"
+      // we unwrap the JSON array to a single object (or null) so callers
+      // see a scalar, not a one-element list.
+      const inferredAtMostOne = element.inference?.cardinality === "one"
+        || element.inference?.cardinality === "at_most_one"
+        || element.inference?.cardinality === "empty";
+      const treatAsMulti = element.relation.multi && !inferredAtMostOne;
       if (element.sourceTypeFilter && element.sourceTypeFilter !== sourceType) {
-        output[element.name] = element.relation.multi ? [] : null;
+        output[element.name] = treatAsMulti ? [] : null;
         continue;
       }
 
@@ -8753,7 +8785,7 @@ const materializeSelectRow = (
       // compileLinkArrayExpr, so the JSON-aggregated set is always present
       // on the row.
       const payload = parsePayloadArray(row[shapePayloadAlias(element.pathId)]) ?? [];
-      output[element.name] = element.relation.multi ? payload : (payload[0] ?? null);
+      output[element.name] = treatAsMulti ? payload : (payload[0] ?? null);
       continue;
     }
 
@@ -9501,15 +9533,53 @@ const materializeFreeObjectRow = (
 const runGelSelectExprSQL = (db: SQLiteDatabase, sqlArtifact: SQLArtifact): unknown[] => {
   const rows = db.prepare(sqlArtifact.sql).all(...sqlArtifact.params) as Record<string, unknown>[];
   return rows.map((row) => {
-    const value = row.value;
-    if (typeof value !== "string") {
-      return value ?? null;
+    // Scalar select: the SQL projects a single `value` column. Parse JSON-
+    // shaped strings ("true"/"false"/"null"/"[…]"/"{…}") so the test layer
+    // sees a structured value.
+    if (Object.prototype.hasOwnProperty.call(row, "value")) {
+      const value = row.value;
+      if (typeof value !== "string") {
+        return value ?? null;
+      }
+      try {
+        return JSON.parse(value);
+      } catch {
+        return value;
+      }
     }
-    try {
-      return JSON.parse(value);
-    } catch {
-      return value;
+    // Shape select: GEL-IR emits id, __source_type, plus shape columns. Drop
+    // the engine-internal slots and return an object whose keys match the
+    // requested shape. Parse any JSON-shaped string columns (link payloads
+    // come back as json_group_array strings).
+    const out: Record<string, unknown> = {};
+    let hasShapeColumn = false;
+    for (const key of Object.keys(row)) {
+      if (key === "id" || key === "__source_type") continue;
+      hasShapeColumn = true;
+      const v = row[key];
+      if (typeof v === "string"
+        && (v === "true" || v === "false" || v === "null"
+          || v.startsWith("[") || v.startsWith("{"))) {
+        try {
+          out[key] = JSON.parse(v);
+        } catch {
+          out[key] = v;
+        }
+      } else {
+        out[key] = v;
+      }
     }
+    // No shape columns AND every internal slot is NULL ⇒ the GEL-IR fallback
+    // `SELECT NULL AS id, NULL AS …` path. Surface as null in that case so
+    // consumers see "no data" rather than an empty object. When the row has
+    // a real id (object identity) but no shape columns yet, return `{}` —
+    // some callers (free-object constructors, default-shape selects)
+    // legitimately produce shapeless rows.
+    if (!hasShapeColumn) {
+      const allNull = Object.keys(row).every((k) => row[k] === null || row[k] === undefined);
+      if (allNull) return null;
+    }
+    return out;
   });
 };
 

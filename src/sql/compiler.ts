@@ -1,6 +1,6 @@
 import { AppError } from "../errors.js";
 import type { FreeObjectExpr } from "../edgeql/ast.js";
-import type { FilterExprIR, IRStatement, LinkPathStepIR, LinkRelationIR, PathIdIR, ScalarExprIR, SelectFreeIR, SelectIR, SelectShapeElementIR } from "../ir/model.js";
+import type { FilterExprIR, IRStatement, LinkPathStepIR, LinkRelationIR, PathIdIR, ScalarExprIR, SelectExprIR, SelectExprIREntry, SelectFreeIR, SelectIR, SelectShapeElementIR } from "../ir/model.js";
 import type { RuntimeTarget } from "../runtime/target.js";
 import { canLowerStdlibFunctionSql, lowerStdlibFunctionSql } from "./stdlib_lowering.js";
 import type { ComputedLinkPropertyDef, ComputedLinkPropertyExpr, ScalarValue } from "../types.js";
@@ -28,6 +28,8 @@ export const compileToSQL = (ir: IRStatement, options: SQLCompileOptions = {}): 
   }
 
   if (ir.kind === "select_expr") {
+    const lowered = tryCompileSelectExprToSQL(ir, target);
+    if (lowered) return lowered;
     return {
       sql: "SELECT 1",
       params: [],
@@ -127,6 +129,109 @@ const compileSelectFreeToSQL = (ir: SelectFreeIR, target: RuntimeTarget): SQLArt
   };
 };
 
+/**
+ * Attempt to lower a simple top-level `select_expr` IR (e.g. `SELECT 5 IS int64`,
+ * `SELECT 1 + 2`) directly into a one-row SQL `SELECT … AS "value"`. Returns
+ * null for entries that need the runtime fallback (paths, shapes, subqueries).
+ */
+const tryCompileSelectExprToSQL = (ir: SelectExprIR, target: RuntimeTarget): SQLArtifact | null => {
+  if (ir.orderBy) return null;
+  if (ir.entries.length !== 1) return null;
+  const entry = ir.entries[0];
+  const params: ScalarValue[] = [];
+  const sql = compileSelectExprEntrySQL(entry, params, target);
+  if (sql === null) return null;
+  return {
+    sql: `SELECT ${sql} AS ${quoteIdent("value")}`,
+    params,
+    loweringMode: "single_statement",
+  };
+};
+
+const literalScalarTypeName = (value: unknown): string | undefined => {
+  if (typeof value === "boolean") return "bool";
+  if (typeof value === "number") return Number.isInteger(value) ? "int64" : "float64";
+  if (typeof value === "string") return "str";
+  if (value === null) return undefined;
+  if (typeof value === "bigint") return "bigint";
+  return undefined;
+};
+
+const scalarTypeHierarchy: Record<string, string[]> = {
+  // Numeric scalar abstract types EdgeQL recognises.
+  int16: ["int16", "anyint", "anyreal", "anyscalar"],
+  int32: ["int32", "anyint", "anyreal", "anyscalar"],
+  int64: ["int64", "anyint", "anyreal", "anyscalar"],
+  bigint: ["bigint", "anyint", "anyreal", "anyscalar"],
+  float32: ["float32", "anyfloat", "anyreal", "anyscalar"],
+  float64: ["float64", "anyfloat", "anyreal", "anyscalar"],
+  decimal: ["decimal", "anyreal", "anyscalar"],
+  str: ["str", "anyscalar"],
+  bool: ["bool", "anyscalar"],
+  bytes: ["bytes", "anyscalar"],
+  uuid: ["uuid", "anyscalar"],
+  datetime: ["datetime", "anyscalar"],
+  duration: ["duration", "anyscalar"],
+  json: ["json", "anyscalar"],
+};
+
+const stripStdPrefix = (name: string): string => {
+  if (name.startsWith("std::")) return name.slice(5);
+  if (name.startsWith("default::")) return name.slice(9);
+  return name;
+};
+
+const literalSatisfiesIsType = (literalValue: unknown, typeName: string): boolean | undefined => {
+  const literalType = literalScalarTypeName(literalValue);
+  if (!literalType) return undefined;
+  const targetType = stripStdPrefix(typeName);
+  // Object types: a scalar literal never satisfies Object.
+  if (targetType === "Object" || targetType === "default::Object") return false;
+  const ancestors = scalarTypeHierarchy[literalType];
+  if (!ancestors) return undefined;
+  return ancestors.includes(targetType);
+};
+
+const compileSelectExprEntrySQL = (
+  entry: SelectExprIREntry,
+  params: ScalarValue[],
+  target: RuntimeTarget,
+): string | null => {
+  if (entry.kind === "literal") {
+    if (entry.value === null) return "NULL";
+    if (typeof entry.value === "boolean") {
+      return `json(${entry.value ? "'true'" : "'false'"})`;
+    }
+    params.push(encodeParam(entry.value));
+    return "?";
+  }
+  if (entry.kind === "is_type" && entry.value.kind === "literal") {
+    const result = literalSatisfiesIsType(entry.value.value, entry.typeName);
+    if (result === undefined) return null;
+    return `json(${result ? "'true'" : "'false'"})`;
+  }
+  if (entry.kind === "cast") {
+    const inner = compileSelectExprEntrySQL(entry.value, params, target);
+    if (inner === null) return null;
+    const sqlType = sqlCastType(entry.castType);
+    if (!sqlType) return null;
+    return `CAST(${inner} AS ${sqlType})`;
+  }
+  if (entry.kind === "math") {
+    const left = compileSelectExprEntrySQL(entry.left, params, target);
+    const right = compileSelectExprEntrySQL(entry.right, params, target);
+    if (left === null || right === null) return null;
+    const op = entry.op === "//" ? "/" : entry.op;
+    return `(${left} ${op} ${right})`;
+  }
+  if (entry.kind === "concat") {
+    const parts = entry.parts.map((part) => compileSelectExprEntrySQL(part, params, target));
+    if (parts.some((part) => part === null)) return null;
+    return parts.length === 0 ? "''" : `(${(parts as string[]).map((part) => `COALESCE(CAST(${part} AS TEXT), '')`).join(" || ")})`;
+  }
+  return null;
+};
+
 const compileSelectToSQL = (ir: SelectIR, target: RuntimeTarget): SQLArtifact => {
   const params: ScalarValue[] = [];
   const rootAlias = "t0";
@@ -167,7 +272,40 @@ const compileSelectToSQL = (ir: SelectIR, target: RuntimeTarget): SQLArtifact =>
       continue;
     }
 
+    if (element.expr.kind === "subquery") {
+      // Uncorrelated shape subquery: emit an inline subquery that selects
+      // from the nested type's tables, applies filter/order/limit, and
+      // returns either a single json_object (LIMIT 1) or a json array.
+      const lowered = compileShapeSubquerySQL(element.expr.query, params, target);
+      if (lowered) {
+        projections.push(`${lowered} AS ${quoteIdent(computedValueAlias(element.pathId))}`);
+      }
+      continue;
+    }
+
     if (element.expr.kind === "select_expr") {
+      // Special case: `x := (SELECT Subject.__type__ { name })` resolves to a
+      // single object whose `name` is the source row's type label. Lower it
+      // to a json_object that references the row's `__source_type` slot.
+      const typeShapeProjection = (() => {
+        let inner: FreeObjectExpr = element.expr.expr;
+        while (inner.kind === "select_expr_subquery") inner = inner.expr;
+        if (inner.kind !== "shape_projection") return null;
+        const fa = inner.expr;
+        if (fa.kind !== "field_access" || fa.field !== "__type__") return null;
+        if (fa.expr.kind !== "select" && fa.expr.kind !== "current_item") return null;
+        const shapeFields = (inner.shape ?? []).filter((s): s is { kind: "field"; name: string } =>
+          s.kind === "field" && typeof (s as { name?: string }).name === "string");
+        if (shapeFields.length === 0) return null;
+        // Only support the `name` field for now (the common case).
+        const onlyName = shapeFields.every((s) => s.name === "name");
+        if (!onlyName) return null;
+        return shapeFields;
+      })();
+      if (typeShapeProjection) {
+        projections.push(`json_object('name', ${rootAlias}.${quoteIdent("__source_type")}) AS ${quoteIdent(computedValueAlias(element.pathId))}`);
+        continue;
+      }
       const referenced = collectShapeScalarValueColumns(element.expr.expr);
       extraShapeColumns.push(...referenced);
       const lowered = compileShapeScalarValueSQL(
@@ -177,8 +315,14 @@ const compileSelectToSQL = (ir: SelectIR, target: RuntimeTarget): SQLArtifact =>
         params,
       );
       if (lowered) {
+        // Preserve EdgeQL 3-valued logic: a boolean expression whose operand
+        // is NULL stays NULL, rather than collapsing to false. Wrap with
+        // separate WHEN clauses for TRUE / NOT TRUE — when the operand is
+        // NULL, neither matches and CASE returns NULL. Use an inline sub-
+        // SELECT so the `lowered` expression (and its `?` placeholders) is
+        // emitted only once.
         const projected = freeExprIsBooleanShape(element.expr.expr)
-          ? `json(CASE WHEN ${lowered} THEN 'true' ELSE 'false' END)`
+          ? `(SELECT CASE WHEN _v THEN json('true') WHEN NOT _v THEN json('false') END FROM (SELECT (${lowered}) AS _v))`
           : lowered;
         projections.push(`${projected} AS ${quoteIdent(computedValueAlias(element.pathId))}`);
       } else {
@@ -302,6 +446,116 @@ const compileSelectToSQL = (ir: SelectIR, target: RuntimeTarget): SQLArtifact =>
     params,
     loweringMode: requiresFallback ? "fallback_multi_query" : "single_statement",
   };
+};
+
+/**
+ * Lower an uncorrelated shape `subquery` IR (an inline `(SELECT T { … })`) to
+ * a single SQL expression that produces either a single json_object (when
+ * the inner has LIMIT 1 and a one-shape-row result) or a json_array. The
+ * returned SQL is embedded directly in the parent SELECT — no per-row
+ * runtime evaluation is involved.
+ */
+const compileShapeSubquerySQL = (
+  query: SelectIR,
+  params: ScalarValue[],
+  target: RuntimeTarget,
+): string | null => {
+  const innerAlias = "sq0";
+  const sources = query.sourceTables.length > 0 ? query.sourceTables : [query.typeRef];
+  const unionColumns = [...new Set(["id", ...query.columns])]
+    .filter((column) => column !== "__source_type" && column !== "__expr__");
+  const sourceSelects = sources.map((source) => {
+    const available = source.columns && source.columns.length > 0 ? new Set(source.columns) : undefined;
+    const projection = unionColumns
+      .map((column) => (
+        !available || available.has(column)
+          ? `${quoteIdent(column)} AS ${quoteIdent(column)}`
+          : `NULL AS ${quoteIdent(column)}`
+      ))
+      .join(", ");
+    return `SELECT ${quoteLiteral(source.name)} AS ${quoteIdent("__source_type")}, ${projection} FROM ${quoteIdent(source.table)}`;
+  });
+  const innerFrom = `(${sourceSelects.join(" UNION ALL ")}) ${innerAlias}`;
+
+  // Build the json_object that materialises the inner shape row. Support a
+  // limited subset of shape element kinds — fall back when anything outside
+  // the supported subset shows up so callers can choose a different lowering.
+  const pairs: string[] = [];
+  for (const el of query.shape) {
+    if (el.kind === "field") {
+      pairs.push(quoteLiteral(el.name));
+      pairs.push(`${innerAlias}.${quoteIdent(el.column)}`);
+      continue;
+    }
+    if (el.kind === "computed") {
+      if (el.expr.kind === "field_ref") {
+        pairs.push(quoteLiteral(el.name));
+        pairs.push(`${innerAlias}.${quoteIdent(el.expr.column)}`);
+        continue;
+      }
+      if (el.expr.kind === "literal") {
+        pairs.push(quoteLiteral(el.name));
+        params.push(encodeParam(el.expr.value));
+        pairs.push("?");
+        continue;
+      }
+      if (el.expr.kind === "type_name") {
+        pairs.push(quoteLiteral(el.name));
+        pairs.push(`${innerAlias}.${quoteIdent("__source_type")}`);
+        continue;
+      }
+      if (el.expr.kind === "concat") {
+        pairs.push(quoteLiteral(el.name));
+        const sqlParts = el.expr.parts.map((part) => {
+          if (part.kind === "field_ref") {
+            return `COALESCE(${innerAlias}.${quoteIdent(part.column)}, '')`;
+          }
+          params.push(encodeParam(part.value));
+          return "COALESCE(?, '')";
+        });
+        pairs.push(sqlParts.length === 0 ? "''" : `(${sqlParts.join(" || ")})`);
+        continue;
+      }
+      // Anything more complex: bail and let the runtime fallback fire.
+      return null;
+    }
+    // Links/backlinks in the subquery shape: not supported in this fast path.
+    return null;
+  }
+  const rowExpr = pairs.length === 0 ? "json_object()" : `json_object(${pairs.join(", ")})`;
+
+  let sql = `SELECT ${rowExpr} AS item FROM ${innerFrom}`;
+  if (query.orderBy) {
+    const orderTerms: string[] = [];
+    for (let term: typeof query.orderBy | undefined = query.orderBy; term; term = term.then) {
+      const direction = term.direction.toUpperCase();
+      if (term.exprAst) {
+        const refSql = compileShapeScalarValueSQL(term.exprAst, innerAlias, undefined, params, target);
+        if (!refSql) return null;
+        orderTerms.push(`${refSql} ${direction}`);
+      } else {
+        orderTerms.push(`${innerAlias}.${quoteIdent(term.value)} ${direction}`);
+      }
+    }
+    if (orderTerms.length > 0) {
+      sql += ` ORDER BY ${orderTerms.join(", ")}`;
+    }
+  }
+  if (query.limit !== undefined) {
+    sql += " LIMIT ?";
+    params.push(query.limit);
+  } else if (query.offset !== undefined) {
+    sql += " LIMIT -1";
+  }
+  if (query.offset !== undefined) {
+    sql += " OFFSET ?";
+    params.push(query.offset);
+  }
+  // LIMIT 1 → single object; otherwise return as JSON array.
+  if (query.limit === 1) {
+    return `(SELECT item FROM (${sql}))`;
+  }
+  return `COALESCE((SELECT json_group_array(json(item)) FROM (${sql})), '[]')`;
 };
 
 const compileLinkArrayExpr = (
@@ -774,14 +1028,15 @@ const compileShapeScalarValueSQL = (
         const sqlOp = node.op === "?=" ? "IS" : "IS NOT";
         return `(${left} ${sqlOp} ${right})`;
       }
+      if (node.op === "like") return `(${left} LIKE ${right})`;
+      if (node.op === "ilike") return `(LOWER(${left}) LIKE LOWER(${right}))`;
       const op = operatorToSqlInfix(node.op);
       if (!op) return null;
       return `(${left} ${op} ${right})`;
     }
     if (node.kind === "set_literal") {
       // An empty `{}` literal at row-scalar position represents the empty set,
-      // which equates to SQL NULL. (A multi-element set literal in a scalar
-      // context isn't expressible — bail.)
+      // which equates to SQL NULL.
       if (node.values.length === 0) return "NULL";
       if (node.values.length === 1) {
         const value = node.values[0];
@@ -789,18 +1044,37 @@ const compileShapeScalarValueSQL = (
         params.push(encodeParam(value as ScalarValue));
         return "?";
       }
-      return null;
+      // Multi-element set literal in a shape position: serialize as JSON array.
+      // The runtime's materializeSelectRow recognises strings starting with "["
+      // and JSON.parses them back into a JS array. Only emit when every value
+      // is a JSON-serialisable scalar.
+      const allScalar = node.values.every((v) =>
+        v === null
+        || typeof v === "string"
+        || typeof v === "number"
+        || typeof v === "boolean");
+      if (!allScalar) return null;
+      const jsonText = JSON.stringify(node.values);
+      params.push(jsonText);
+      return "?";
     }
     if (node.kind === "logical" || node.kind === "and" || node.kind === "or") {
       const opName = node.kind === "logical" ? node.op : node.kind;
       const left = compile(node.left);
       const right = compile(node.right);
       if (!left || !right) return null;
-      return `(${left} ${opName === "and" ? "AND" : "OR"} ${right})`;
+      // EdgeQL's AND/OR follow cartesian-product / 3-valued semantics: when
+      // either operand is the empty set (encoded here as SQL NULL), the
+      // result is also empty/NULL — unlike SQLite's `FALSE AND NULL = FALSE`
+      // short-circuit. Use a sub-SELECT to evaluate each side once and apply
+      // the NULL-propagating rule explicitly.
+      const sqlOp = opName === "and" ? "AND" : "OR";
+      return `(SELECT CASE WHEN _l IS NULL OR _r IS NULL THEN NULL ELSE (_l ${sqlOp} _r) END FROM (SELECT (${left}) AS _l, (${right}) AS _r))`;
     }
     if (node.kind === "not") {
       const inner = compile(node.expr);
       if (!inner) return null;
+      // NOT propagates NULL (NOT NULL = NULL) — SQLite already matches.
       return `(NOT ${inner})`;
     }
     if (node.kind === "if_else") {
@@ -1251,7 +1525,14 @@ const compileLinkAggregateExpr = (
     }
   }
 
-  return `COALESCE((SELECT SUM(${aggregateColumn}) FROM ${fromClause} WHERE ${whereClause}), 0)`;
+  const fn = expr.functionName.toUpperCase();
+  if (fn === "COUNT") {
+    return `(SELECT COUNT(${aggregateColumn}) FROM ${fromClause} WHERE ${whereClause})`;
+  }
+  if (fn === "SUM") {
+    return `COALESCE((SELECT SUM(${aggregateColumn}) FROM ${fromClause} WHERE ${whereClause}), 0)`;
+  }
+  return `(SELECT ${fn}(${aggregateColumn}) FROM ${fromClause} WHERE ${whereClause})`;
 };
 
 const linkAggregateJunctionAlias = (relation: LinkRelationIR, sourceAlias: string): string =>
