@@ -1,5 +1,36 @@
 import { AppError } from "../errors.js";
 
+// EdgeQL tokenizer — implements the lexical grammar in
+// docs/reference/reference/edgeql/lexical.rst.
+//
+// Token classes (lexical.rst lines 14-15):
+//   * keywords   — reserved / partially-reserved / unreserved
+//   * identifiers — plain or backtick-quoted
+//   * literals   — strings, bytes, integers, decimals, floats
+//   * symbols    — operators and punctuation
+//
+// Identifiers (lexical.rst lines 22-46):
+//   plain_ident  := [A-Za-z_] [A-Za-z0-9_]*
+//   quoted_ident := "`" [^@] [^`]* "`"        # `` doubles to a literal `
+//
+// Strings (lexical.rst lines 121-260):
+//   str       := ' str_content* '  |  " str_content* "
+//   raw_str   := r' raw_content* ' |  r" raw_content* "
+//                | dollar_quote raw_content* dollar_quote
+//   bytes_str := b' bytes_content* ' | b" bytes_content* "
+//
+// Integers / decimals / floats (lexical.rst lines 302-394):
+//   integer  := "0" | [1-9] [0-9]*
+//   bigint   := integer "n"
+//   float    := integer "." digit* (exp)?  |  integer exp
+//   decimal  := float "n"
+//   exp      := "e" ("+"|"-")? digit+
+//
+// Comments (lexical.rst lines 405-412) start with `#` and run to EOL;
+// they're treated as whitespace.
+//
+// Operator precedence (lexical.rst lines 418-449) is documented inline at
+// each parser site that consumes the relevant token kinds.
 export type TokenKind =
   | "kw_unreserved"
   | "kw_partial_reserved"
@@ -149,6 +180,17 @@ export type TokenKind =
   | "at"
   | "eof";
 
+// Keyword classes follow the partitioning described in lexical.rst lines
+// 64-96 ("Names and keywords"). Each list corresponds to a grammar
+// production:
+//   * UNRESERVED_KEYWORDS    — usable in name positions (paths/shapes/etc.)
+//   * PARTIAL_RESERVED       — reserved in some positions, names in others
+//   * FUTURE_RESERVED        — earmarked for future grammar; not yet usable
+//                              as names so old queries don't break later
+//   * CURRENT_RESERVED       — true reserved words; never valid as names
+//                              without a backtick quote
+//   * COMBINED_KEYWORDS      — multi-word keyword sequences treated as
+//                              single tokens (e.g. `order by`)
 export const UNRESERVED_KEYWORDS = [
   "abort", "abstract", "access", "after", "alias", "allow", "all", "annotation", "applied",
   "as", "asc", "assignment", "before", "branch", "cardinality", "cast", "committed",

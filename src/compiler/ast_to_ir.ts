@@ -855,7 +855,14 @@ const BUILTIN_SCALAR_NAMES: Record<string, string> = {
 };
 
 const normalizeScalarCastName = (ctx: IRCompileContext, name: string): string => {
-  if (name.includes("::")) return name;
+  if (name.includes("::")) {
+    // `cal::*` casts (`<cal::local_date>...`) keep their short form coming out
+    // of the parser; promote them to fully-qualified `std::cal::*` so
+    // downstream comparators (type compatibility checks, error messages,
+    // overlay metadata) see the same canonical name as the rest of the code.
+    if (name.startsWith("cal::")) return `std::${name}`;
+    return name;
+  }
   if (BUILTIN_SCALAR_NAMES[name]) return BUILTIN_SCALAR_NAMES[name];
   const typeDef = getSchemaType(ctx, name);
   if (typeDef) return qualifiedTypeName(typeDef);
@@ -911,9 +918,151 @@ const inferAstExprTypeName = (expr: FreeObjectExpr, ctx: IRCompileContext): stri
       if (enumType) return enumType.qualifiedName;
       return undefined;
     }
+    case "tuple": {
+      // Best-effort: name the tuple by its element types so cross-type
+      // comparisons (`(1,2) = [1,2]`) can be rejected. If any element is
+      // un-inferable, fall back to a generic `tuple<>` so the type-category
+      // bucket still matches.
+      const inner = (expr as { values: FreeObjectExpr[] }).values
+        .map((v) => inferAstExprTypeName(v, ctx) ?? "anytype");
+      return `tuple<${inner.join(", ")}>`;
+    }
+    case "array_literal_expr": {
+      const values = (expr as { values: FreeObjectExpr[] }).values;
+      if (values.length === 0) return "array<anytype>";
+      const elemType = inferAstExprTypeName(values[0], ctx) ?? "anytype";
+      return `array<${elemType}>`;
+    }
+    case "set_expr": {
+      // Set element types are uniform; infer from the first value.
+      const values = (expr as { values: FreeObjectExpr[] }).values;
+      if (values.length === 0) return undefined;
+      return inferAstExprTypeName(values[0], ctx);
+    }
+    case "set_literal": {
+      const values = (expr as { values: ScalarValue[] }).values;
+      if (values.length === 0) return undefined;
+      const v = values[0];
+      if (typeof v === "string") return "std::str";
+      if (typeof v === "boolean") return "std::bool";
+      if (typeof v === "number") return Number.isInteger(v) ? "std::int64" : "std::float64";
+      return undefined;
+    }
     default:
       return undefined;
   }
+};
+
+// Type-category helpers used by binary/unary operator validation. We keep the
+// taxonomy aligned with EdgeQL's std types: numeric scalars share arithmetic,
+// strings/bytes have their own set of operations, and temporals form another
+// island. Returns one of "numeric", "str", "bytes", "bool", "uuid", "json",
+// "datetime", "duration", "array", "tuple", or "other" if no specific bucket
+// applies.
+const typeCategory = (typeName: string | undefined): string => {
+  if (!typeName) return "other";
+  const NUMERIC = new Set([
+    "std::int16", "std::int32", "std::int64",
+    "std::float32", "std::float64",
+    "std::bigint", "std::decimal",
+  ]);
+  if (NUMERIC.has(typeName)) return "numeric";
+  if (typeName === "std::str") return "str";
+  if (typeName === "std::bytes") return "bytes";
+  if (typeName === "std::bool") return "bool";
+  if (typeName === "std::uuid") return "uuid";
+  if (typeName === "std::json") return "json";
+  if (typeName === "std::datetime"
+    || typeName === "std::cal::local_datetime"
+    || typeName === "std::cal::local_date"
+    || typeName === "std::cal::local_time"
+  ) return "datetime";
+  if (typeName === "std::duration"
+    || typeName === "std::cal::relative_duration"
+    || typeName === "std::cal::date_duration"
+  ) return "duration";
+  if (typeName.startsWith("array<") || typeName === "std::array") return "array";
+  if (typeName.startsWith("tuple<") || typeName === "std::tuple") return "tuple";
+  return "other";
+};
+
+const canApplyUnaryArith = (typeName: string): boolean => {
+  const c = typeCategory(typeName);
+  return c === "numeric" || c === "duration";
+};
+
+const NUMERIC_INT_FAMILY = new Set(["std::int16", "std::int32", "std::int64"]);
+const NUMERIC_FLOAT_FAMILY = new Set(["std::float32", "std::float64"]);
+const NUMERIC_ARBITRARY_PRECISION = new Set(["std::bigint", "std::decimal"]);
+
+const SAME_CATEGORIES = new Set(["str", "bool", "uuid", "bytes", "json"]);
+
+// Returns true if `a` and `b` can be combined under EdgeQL's "comparable"
+// rules — same type, compatible numeric families (small-int <-> float OK;
+// bigint/decimal <-> float NOT OK), or one of the known cross-temporal pairs
+// (`local_date <-> local_datetime`, `relative_duration <-> date_duration`).
+// Compatible pairs survive operator resolution; everything else triggers
+// "cannot be applied to operands".
+const areCompareCompatible = (a: string, b: string): boolean => {
+  if (a === b) return true;
+  const ca = typeCategory(a);
+  const cb = typeCategory(b);
+  if (ca === "numeric" && cb === "numeric") {
+    // EdgeQL incompatibility rules for numeric: `bigint`/`decimal` cannot be
+    // compared with float types without an explicit cast. They CAN be
+    // compared with int families and with each other. int families are
+    // compatible with everything except as above.
+    const aArb = NUMERIC_ARBITRARY_PRECISION.has(a);
+    const bArb = NUMERIC_ARBITRARY_PRECISION.has(b);
+    const aFloat = NUMERIC_FLOAT_FAMILY.has(a);
+    const bFloat = NUMERIC_FLOAT_FAMILY.has(b);
+    if ((aArb && bFloat) || (bArb && aFloat)) {
+      return false;
+    }
+    return true;
+  }
+  if ((a === "std::cal::local_date" && b === "std::cal::local_datetime")
+    || (b === "std::cal::local_date" && a === "std::cal::local_datetime")) {
+    return true;
+  }
+  if ((a === "std::cal::relative_duration" && b === "std::cal::date_duration")
+    || (b === "std::cal::relative_duration" && a === "std::cal::date_duration")) {
+    return true;
+  }
+  if (ca === cb && SAME_CATEGORIES.has(ca)) return true;
+  // Two arrays / two tuples: defer to a structural comparison of the inner
+  // generics so `array<int64>` vs `array<float64>` is rejected but two
+  // `array<int64>` (even when the literals were assembled differently) is
+  // accepted. The simplest form: same outer kind AND same printed name OR
+  // anytype on either side wins (we use `anytype` for empty/unknown).
+  if (ca === cb && (ca === "array" || ca === "tuple")) {
+    if (a.includes("anytype") || b.includes("anytype")) return true;
+    return a === b;
+  }
+  return false;
+};
+
+// Arithmetic-compatible: numeric pairs per the compare rules, plus
+// temporal/duration combinations EdgeQL actually permits. `datetime + datetime`
+// is rejected (no such operator); `datetime + duration` returns datetime.
+const areArithCompatible = (a: string, b: string): boolean => {
+  if (a === b) {
+    const cat = typeCategory(a);
+    return cat === "numeric" || cat === "duration";
+  }
+  const ca = typeCategory(a);
+  const cb = typeCategory(b);
+  if (ca === "numeric" && cb === "numeric") {
+    const aArb = NUMERIC_ARBITRARY_PRECISION.has(a);
+    const bArb = NUMERIC_ARBITRARY_PRECISION.has(b);
+    const aFloat = NUMERIC_FLOAT_FAMILY.has(a);
+    const bFloat = NUMERIC_FLOAT_FAMILY.has(b);
+    if ((aArb && bFloat) || (bArb && aFloat)) return false;
+    return true;
+  }
+  if ((ca === "datetime" && cb === "duration") || (ca === "duration" && cb === "datetime")) return true;
+  if (ca === "duration" && cb === "duration") return true;
+  return false;
 };
 
 // EdgeQL schema aliases (e.g. `alias FireCard := SELECT Card FILTER .element = 'Fire'`)
@@ -1552,6 +1701,31 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
     }
 
     case "index_access": {
+      // Validate that the index is a non-float numeric. EdgeQL reports the
+      // failure as either "cannot index array by 'std::X'" or "cannot index
+      // string by 'std::X'", so we surface the source category in the message.
+      const indexTypeName = expr.indexExpr
+        ? inferAstExprTypeName(expr.indexExpr, ctx)
+        : (typeof expr.index === "number"
+            ? (Number.isInteger(expr.index) ? "std::int64" : "std::float64")
+            : typeof expr.index === "string" ? "std::str" : undefined);
+      if (indexTypeName) {
+        const cat = typeCategory(indexTypeName);
+        const isIntegerNumeric = cat === "numeric"
+          && (indexTypeName === "std::int16"
+            || indexTypeName === "std::int32"
+            || indexTypeName === "std::int64"
+            || indexTypeName === "std::bigint");
+        if (!isIntegerNumeric) {
+          const sourceTypeName = inferAstExprTypeName(expr.expr, ctx);
+          const sourceCat = typeCategory(sourceTypeName);
+          const targetWord = sourceCat === "str" ? "string"
+            : sourceCat === "bytes" ? "bytes"
+            : sourceCat === "json" ? "JSON"
+            : "array";
+          failSemantic(`cannot index ${targetWord} by '${indexTypeName}'`);
+        }
+      }
       const source = compileFreeObjectExpr(expr.expr, ctx);
       return {
         kind: "set",
@@ -1570,6 +1744,26 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
     }
 
     case "slice_access": {
+      const checkSliceBound = (e: FreeObjectExpr | undefined, raw: unknown): void => {
+        const t = e
+          ? inferAstExprTypeName(e, ctx)
+          : (typeof raw === "number"
+              ? (Number.isInteger(raw) ? "std::int64" : "std::float64")
+              : typeof raw === "string" ? "std::str" : undefined);
+        if (!t) return;
+        const isIntegerNumeric = t === "std::int16" || t === "std::int32"
+          || t === "std::int64" || t === "std::bigint";
+        if (!isIntegerNumeric) {
+          const sourceTypeName = inferAstExprTypeName(expr.expr, ctx);
+          const sourceCat = typeCategory(sourceTypeName);
+          const targetWord = sourceCat === "str" ? "string"
+            : sourceCat === "bytes" ? "bytes"
+            : "array";
+          failSemantic(`cannot slice ${targetWord} by '${t}'`);
+        }
+      };
+      checkSliceBound(expr.startExpr, expr.start);
+      checkSliceBound(expr.endExpr, expr.end);
       const source = compileFreeObjectExpr(expr.expr, ctx);
       return {
         kind: "set",
@@ -1903,6 +2097,16 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
     }
 
     case "compare": {
+      // Reject incompatible-type comparisons (`<int64>1 = <str>'a'`, etc.) so
+      // they raise "operator 'X' cannot be applied to operands of type 'Y' and
+      // 'Z'" rather than silently returning false from SQLite.
+      const leftType = inferAstExprTypeName(expr.left, ctx);
+      const rightType = inferAstExprTypeName(expr.right, ctx);
+      if (leftType && rightType && !areCompareCompatible(leftType, rightType)) {
+        failSemantic(
+          `operator '${expr.op}' cannot be applied to operands of type '${leftType}' and '${rightType}'`,
+        );
+      }
       const left = compileFreeObjectExpr(expr.left, ctx);
       const right = compileFreeObjectExpr(expr.right, ctx);
       return {
@@ -1991,6 +2195,18 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
           return compileFreeObjectExpr({ kind: "literal", value: folded } as typeof expr.expr, ctx);
         }
       }
+      // Reject unary -/+/NOT on operands whose declared type cannot accept it,
+      // matching EdgeQL's "operator 'X' cannot ... 'std::Y'" error.
+      const innerTypeName = inferAstExprTypeName(expr.expr, ctx);
+      if (innerTypeName) {
+        if ((expr.op === "neg" || expr.op === "pos") && !canApplyUnaryArith(innerTypeName)) {
+          const sym = expr.op === "neg" ? "-" : "+";
+          failSemantic(`operator '${sym}' cannot be applied to operand of type '${innerTypeName}'`);
+        }
+        if (expr.op === "not" && innerTypeName !== "std::bool") {
+          failSemantic(`operator 'NOT' cannot be applied to operand of type '${innerTypeName}'`);
+        }
+      }
       const inner = compileFreeObjectExpr(expr.expr, ctx);
       return {
         kind: "set",
@@ -2011,6 +2227,24 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
     }
 
     case "math": {
+      // Reject incompatible-type arithmetic (`<int64>1 + <str>'a'`, etc.) so it
+      // raises "operator 'X' cannot be applied to operands of type 'Y' and 'Z'"
+      // rather than silently coercing in SQLite.
+      const mathLeftType = inferAstExprTypeName(expr.left, ctx);
+      const mathRightType = inferAstExprTypeName(expr.right, ctx);
+      if (mathLeftType && mathRightType && !areArithCompatible(mathLeftType, mathRightType)) {
+        const opSym = expr.op === "add" ? "+"
+          : expr.op === "sub" ? "-"
+          : expr.op === "mul" ? "*"
+          : expr.op === "div" ? "/"
+          : expr.op === "mod" ? "%"
+          : expr.op === "pow" ? "^"
+          : expr.op === "floor_div" ? "//"
+          : expr.op;
+        failSemantic(
+          `operator '${opSym}' cannot be applied to operands of type '${mathLeftType}' and '${mathRightType}'`,
+        );
+      }
       const left = compileFreeObjectExpr(expr.left, ctx);
       const right = compileFreeObjectExpr(expr.right, ctx);
       return {

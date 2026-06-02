@@ -269,6 +269,26 @@ export const renderSchemaSQL = (schema: SchemaSnapshot): string => {
       `CREATE TABLE IF NOT EXISTS ${quoteIdent(table)} (${columns.join(", ")})`,
     );
 
+    // Exclusive-constraint indexes: any field tagged with `constraint exclusive`
+    // becomes a UNIQUE index in SQLite. This makes EdgeQL's "violates
+    // exclusivity constraint" error surface as a real SQLite UNIQUE failure
+    // at INSERT/UPDATE time, rather than silently allowing duplicates.
+    // (Cross-type exclusivity — Person + DerivedPerson sharing a constraint —
+    // is *not* enforced here; that needs cross-table coordination.)
+    for (const field of allFields) {
+      if (field.multi) continue;
+      if (field.name.endsWith("_id") && allLinks.some((l) => `${l.name}_id` === field.name)) continue;
+      const fieldConstraints = (field as { constraints?: Array<{ name: string }> }).constraints ?? [];
+      const isExclusive = fieldConstraints.some((c) =>
+        c.name === "std::exclusive" || c.name === "exclusive"
+      );
+      if (isExclusive) {
+        lines.push(
+          `CREATE UNIQUE INDEX IF NOT EXISTS ${quoteIdent(`${table}__uniq_${field.name}`)} ON ${quoteIdent(table)} (${quoteIdent(field.name)})`,
+        );
+      }
+    }
+
     // Global ID insert trigger
     lines.push(
       `CREATE TRIGGER IF NOT EXISTS ${quoteIdent(triggerName(table, "gid_insert"))} AFTER INSERT ON ${quoteIdent(table)} BEGIN INSERT INTO ${quoteIdent("__gel_global_ids")} (${quoteIdent("id")}, ${quoteIdent("type_name")}) VALUES (NEW.${quoteIdent("id")}, ${quoteLiteral(table)}); END`,

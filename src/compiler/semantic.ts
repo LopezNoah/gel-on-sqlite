@@ -9509,6 +9509,12 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           if (norm === "default::Object" || norm === "std::Object") {
             return { name: "Object", module: activeModule, fields: [], abstract: true, extends: [] } as TypeDef;
           }
+          if (norm === "std::FreeObject") {
+            return { name: "FreeObject", module: "std", fields: [], abstract: true, extends: [] } as TypeDef;
+          }
+          if (statement.kind === "insert" && schema.getAlias(norm)) {
+            fail(`cannot insert into expression alias '${norm}'`);
+          }
           return requireValue(
             schema.getType(norm),
             `Unknown type '${norm}'`,
@@ -9662,7 +9668,33 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       }
     };
     if (typeDef.abstract) {
-      fail(`cannot insert into abstract object type '${qualifiedTypeName(typeDef)}'`);
+      // `Object` and `FreeObject` are stdlib types — they're loaded under the
+      // "default" module in our schema fixture but EdgeQL surfaces them as
+      // `std::Object`/`std::FreeObject` in error messages. Rewrite the
+      // qualified name so tests assertioning the upstream wording match.
+      const qualified = qualifiedTypeName(typeDef);
+      const reported = (typeDef.name === "Object" || typeDef.name === "FreeObject")
+        ? `std::${typeDef.name}`
+        : qualified;
+      // `std::FreeObject` has a distinct upstream error ("free objects cannot
+      // be inserted") even though it's also abstract.
+      if (typeDef.name === "FreeObject") {
+        fail("free objects cannot be inserted");
+      }
+      fail(`cannot insert into abstract object type '${reported}'`);
+    }
+    if (statement.typeName === "std::FreeObject") {
+      // Catches the case where the schema doesn't have FreeObject registered
+      // at all — we still want the right diagnostic.
+      fail("free objects cannot be inserted");
+    }
+    // Inserting into a schema alias (e.g. `CREATE ALIAS Foo := SELECT T;
+    // INSERT Foo;`) is rejected — aliases are read-only expressions.
+    const aliasName = statement.typeName.includes("::")
+      ? statement.typeName
+      : `default::${statement.typeName}`;
+    if (schema.getAlias(aliasName)) {
+      fail(`cannot insert into expression alias '${aliasName}'`);
     }
 
     const linkByName = new Map((typeDef.links ?? []).map((link) => [link.name, link] as const));
@@ -9752,7 +9784,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           scalarValues[field.name] = pendingGeneratedValueForField(field.name);
           continue;
         }
-        fail(`Missing required field '${field.name}'`);
+        fail(`missing value for required property '${field.name}' of object type '${qualifiedTypeName(typeDef)}'`);
       }
     }
 

@@ -9,20 +9,46 @@ const STDLIB_SQL_TEMPLATES = new Map<string, StdlibSqlTemplate>([
   ["math::abs", (argSql) => argSql[0] ? `abs(${argSql[0]})` : null],
   ["math::ceil", (argSql) => argSql[0] ? `ceil(${argSql[0]})` : null],
   ["math::floor", (argSql) => argSql[0] ? `floor(${argSql[0]})` : null],
-  ["math::exp", (argSql) => argSql[0] ? `exp(${argSql[0]})` : null],
-  ["math::ln", (argSql) => argSql[0] ? `ln(${argSql[0]})` : null],
-  ["math::lg", (argSql) => argSql[0] ? `log(${argSql[0]})` : null],
-  ["math::log", (argSql) => argSql[0] && argSql[1] ? `(ln(${argSql[0]}) / ln(${argSql[1]}))` : null],
+  ["math::exp", (argSql) => argSql[0] ? `_gel_exp(${argSql[0]})` : null],
+  ["math::ln", (argSql) => argSql[0] ? `_gel_ln(${argSql[0]})` : null],
+  ["math::lg", (argSql) => argSql[0] ? `_gel_lg(${argSql[0]})` : null],
+  ["math::log", (argSql) => argSql[0] && argSql[1] ? `_gel_log(${argSql[0]}, ${argSql[1]})` : null],
   ["math::pi", () => "pi()"],
   ["math::e", () => "exp(1.0)"],
-  ["math::acos", (argSql) => argSql[0] ? `acos(${argSql[0]})` : null],
-  ["math::asin", (argSql) => argSql[0] ? `asin(${argSql[0]})` : null],
+  // `std::assert(cond)` / `std::assert(cond, message := …)` — route through
+  // the `_gel_assert` custom function so falsy conditions raise an error
+  // instead of returning NULL through the SQL fallback.
+  ["std::assert", (argSql) => {
+    if (!argSql[0]) return null;
+    if (argSql[1]) return `_gel_assert(${argSql[0]}, ${argSql[1]})`;
+    return `_gel_assert(${argSql[0]})`;
+  }],
+  ["std::assert_single", (argSql) => {
+    if (!argSql[0]) return null;
+    if (argSql[1]) return `_gel_assert_single(${argSql[0]}, ${argSql[1]})`;
+    return `_gel_assert_single(${argSql[0]})`;
+  }],
+  ["std::assert_exists", (argSql) => argSql[0] ? `_gel_assert_exists(${argSql[0]})` : null],
+  ["std::array_set", (argSql) => argSql[0] && argSql[1] && argSql[2]
+    ? `_gel_array_set(${argSql[0]}, ${argSql[1]}, ${argSql[2]})`
+    : null],
+  ["std::array_insert", (argSql) => argSql[0] && argSql[1] && argSql[2]
+    ? `_gel_array_insert(${argSql[0]}, ${argSql[1]}, ${argSql[2]})`
+    : null],
+  ["std::duration_get", (argSql) => argSql[0] && argSql[1]
+    ? `_gel_duration_get(${argSql[0]}, ${argSql[1]})`
+    : null],
+  // Trig functions use the `_gel_*` custom SQLite functions registered in
+  // openSQLite() — those wrappers raise "input is out of range" for inputs
+  // SQLite's built-in trig would silently return NULL / Infinity for.
+  ["math::acos", (argSql) => argSql[0] ? `_gel_acos(${argSql[0]})` : null],
+  ["math::asin", (argSql) => argSql[0] ? `_gel_asin(${argSql[0]})` : null],
   ["math::atan", (argSql) => argSql[0] ? `atan(${argSql[0]})` : null],
   ["math::atan2", (argSql) => argSql[0] && argSql[1] ? `atan2(${argSql[0]}, ${argSql[1]})` : null],
-  ["math::cos", (argSql) => argSql[0] ? `cos(${argSql[0]})` : null],
-  ["math::cot", (argSql) => argSql[0] ? `(1.0 / tan(${argSql[0]}))` : null],
-  ["math::sin", (argSql) => argSql[0] ? `sin(${argSql[0]})` : null],
-  ["math::tan", (argSql) => argSql[0] ? `tan(${argSql[0]})` : null],
+  ["math::cos", (argSql) => argSql[0] ? `_gel_cos(${argSql[0]})` : null],
+  ["math::cot", (argSql) => argSql[0] ? `_gel_cot(${argSql[0]})` : null],
+  ["math::sin", (argSql) => argSql[0] ? `_gel_sin(${argSql[0]})` : null],
+  ["math::tan", (argSql) => argSql[0] ? `_gel_tan(${argSql[0]})` : null],
   ["std::datetime_current", () => "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"],
   ["std::datetime_of_transaction", () => "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"],
   ["std::datetime_of_statement", () => "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"],
