@@ -5629,6 +5629,24 @@ const tryEvaluateParsedRuntimeSelect = (
         }
         return value;
       }
+      // `assert(cond)` / `assert(cond, message := …)`: raise on false.
+      if (normalized === "std::assert") {
+        const condArg = expr.call.args[0];
+        const cond = condArg ? evalFunctionArg(condArg, env) : null;
+        const truthy = cond === true || cond === 1
+          || (Array.isArray(cond) && cond.length > 0 && (cond[0] === true || cond[0] === 1));
+        if (!truthy) {
+          const messageArg = expr.call.args[1];
+          let message = "assertion failed";
+          if (messageArg) {
+            const m = evalFunctionArg(messageArg, env);
+            const flat = Array.isArray(m) ? m[0] : m;
+            if (typeof flat === "string" && flat) message = flat;
+          }
+          throw new AppError("E_SEMANTIC", message, 1, 1);
+        }
+        return cond;
+      }
       // Fallback: route to stdlib function dispatch.
       const stdlibDef = resolveStdlibFunction(name, expr.call.args.length);
       if (stdlibDef) {
@@ -7438,9 +7456,10 @@ export const executeQueryUnitWithTrace = (
       const astSubjectType = ast.kind === "insert" || ast.kind === "update" || ast.kind === "delete"
         ? schema.getType(ast.typeName)
         : undefined;
-      if (ast.kind === "insert" && !astSubjectType && Object.keys(ast.values).length === 0 && !ast.conflict) {
-        continue;
-      }
+      // (Removed legacy silent-skip for INSERT-with-unknown-type-and-no-shape.
+      // It was masking real errors like `INSERT Object;` /
+      // `INSERT std::FreeObject;` / `INSERT InsertTest;` — fall through to
+      // compilation and let the IR pass raise the right diagnostic instead.)
 
       const compiled = compilerService.compile(schema, ast, { overlays, globals: context.globals, target: runtimeTarget });
       const ir = compiled.ir;

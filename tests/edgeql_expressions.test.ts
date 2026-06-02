@@ -9264,7 +9264,7 @@ describe("TestExpressions", () => {
       sameTypeSet([ldesc.typename, rdesc.typename], ["std::cal::relative_duration", "std::cal::date_duration"])
       || sameTypeSet([ldesc.typename, rdesc.typename], ["std::cal::local_date", "std::cal::local_datetime"]);
     for (const [left, ldesc] of get_test_items({ anyreal: false })) {
-      for (const [right, rdesc] of get_test_items()) {
+      for (const [right, rdesc] of get_test_items({anyreal: false})) {
         const expected = left === right || compatible(ldesc, rdesc)
           ? true
           : "cannot be applied to operands";
@@ -9280,7 +9280,7 @@ describe("TestExpressions", () => {
       sameTypeSet([ldesc.typename, rdesc.typename], ["std::cal::relative_duration", "std::cal::date_duration"])
       || sameTypeSet([ldesc.typename, rdesc.typename], ["std::cal::local_date", "std::cal::local_datetime"]);
     for (const [left, ldesc] of get_test_items({ anyreal: false })) {
-      for (const [right, rdesc] of get_test_items()) {
+      for (const [right, rdesc] of get_test_items({anyreal: false})) {
         const expected = left === right || compatible(ldesc, rdesc)
           ? true
           : "cannot be applied to operands";
@@ -9293,7 +9293,7 @@ describe("TestExpressions", () => {
 
   it("test_edgeql_expr_valid_comp_03", () => {
     for (const [left, ldesc] of get_test_items({ anyreal: true })) {
-      for (const [right, rdesc] of get_test_items()) {
+      for (const [right, rdesc] of get_test_items({anyreal: true})) {
         const expected = (ldesc.anynumeric && rdesc.anyfloat) || (rdesc.anynumeric && ldesc.anyfloat) || !rdesc.anyreal
           ? "cannot be applied to operands"
           : true;
@@ -12947,7 +12947,7 @@ describe("TestExpressions", () => {
   });
 
   it("test_edgeql_expr_valid_order_07", () => {
-    for (const [_val, vdesc] of (get_test_items() as any)) {
+    for (const [_val, vdesc] of (get_test_items({anyreal: true}) as any)) {
       let query = `
                 WITH X := <${vdesc.typename}>{ ${"-4, -3, -2, -1, 0, 1, 2, 3, 4"} }
                 SELECT X ORDER BY X DESC;
@@ -12971,7 +12971,7 @@ describe("TestExpressions", () => {
   });
 
   it("test_edgeql_expr_valid_arithmetic_01", () => {
-    for (const right of (get_test_values() as any)) {
+    for (const right of (get_test_values({signed: true}) as any)) {
       let query = `SELECT count(-${right});`;
       assertQueryResult(
         h,
@@ -12982,7 +12982,7 @@ describe("TestExpressions", () => {
   });
 
   it("test_edgeql_expr_valid_arithmetic_02", () => {
-    for (const right of (get_test_values() as any)) {
+    for (const right of (get_test_values({signed: false}) as any)) {
       let query = `SELECT -${right};`;
       expect(() => {
         h.query(
@@ -12993,7 +12993,7 @@ describe("TestExpressions", () => {
   });
 
   it("test_edgeql_expr_valid_arithmetic_03", () => {
-    for (const left of (get_test_values() as any)) {
+    for (const left of (get_test_values({datetime: false, anyreal: false}) as any)) {
       for (const right of (get_test_values() as any)) {
         let query = `SELECT ${left} ${"+"} ${right};`;
         expect(() => {
@@ -13042,7 +13042,7 @@ describe("TestExpressions", () => {
   });
 
   it("test_edgeql_expr_valid_arithmetic_04", () => {
-    let dts = get_test_values();
+    let dts = get_test_values({datetime: true});
     for (const left of (dts as any)) {
       for (const right of (get_test_values() as any)) {
         if (((dts) as any).includes(right)) {
@@ -13163,7 +13163,7 @@ describe("TestExpressions", () => {
   });
 
   it("test_edgeql_expr_valid_arithmetic_07", () => {
-    let dts = get_test_values();
+    let dts = get_test_values({datetime: true});
     for (const left of (dts as any)) {
       for (const right of (dts as any)) {
         let query = `SELECT count(${left} ${"*"} ${right});`;
@@ -13201,8 +13201,8 @@ describe("TestExpressions", () => {
   });
 
   it("test_edgeql_expr_valid_arithmetic_08", () => {
-    for (const left of (get_test_values() as any)) {
-      for (const right of (get_test_values() as any)) {
+    for (const left of (get_test_values({anynumeric: true}) as any)) {
+      for (const right of (get_test_values({anyint: false, anynumeric: false}) as any)) {
         let query = `SELECT ${left} ${"+"} ${right};`;
         expect(() => {
           h.script(
@@ -13247,8 +13247,8 @@ describe("TestExpressions", () => {
         }).toThrow(new RegExp("cannot be applied to operands"));
       }
     }
-    for (const [left, ldesc] of (get_test_items() as any)) {
-      for (const right of (get_test_values() as any)) {
+    for (const [left, ldesc] of (get_test_items({anynumeric: true}) as any)) {
+      for (const right of (get_test_values({anyint: true}) as any)) {
         assertQueryResult(
           h,
           `
@@ -13307,8 +13307,8 @@ describe("TestExpressions", () => {
         );
       }
     }
-    for (const [left, ldesc] of (get_test_items() as any)) {
-      for (const right of (get_test_values() as any)) {
+    for (const [left, ldesc] of (get_test_items({anynumeric: true}) as any)) {
+      for (const right of (get_test_values({anyint: true}) as any)) {
         assertQueryResult(
           h,
           `
@@ -13325,8 +13325,8 @@ describe("TestExpressions", () => {
         );
       }
     }
-    for (const left of (get_test_values() as any)) {
-      for (const right of (get_test_values() as any)) {
+    for (const left of (get_test_values({anynumeric: true}) as any)) {
+      for (const right of (get_test_values({anyint: true}) as any)) {
         assertQueryResult(
           h,
           `
@@ -13427,8 +13427,8 @@ describe("TestExpressions", () => {
   });
 
   it("test_edgeql_expr_valid_setop_02", () => {
-    for (const left of (get_test_values() as any)) {
-      for (const right of (get_test_values() as any)) {
+    for (const left of (get_test_values({anyreal: true, anynumeric: false}) as any)) {
+      for (const right of (get_test_values({anyreal: false}) as any)) {
         let query = `SELECT ${left} UNION ${right};`;
         expect(() => {
           h.script(
@@ -13462,7 +13462,7 @@ describe("TestExpressions", () => {
   });
 
   it("test_edgeql_expr_valid_setop_04", () => {
-    for (const [left, ldesc] of (get_test_items() as any)) {
+    for (const [left, ldesc] of (get_test_items({anyreal: false}) as any)) {
       for (const [right, rdesc] of (get_test_items() as any)) {
         let query = `SELECT count(${left} UNION ${right});`;
         let argtypes = undefined;
@@ -13503,8 +13503,8 @@ describe("TestExpressions", () => {
   });
 
   it("test_edgeql_expr_valid_setop_05", () => {
-    for (const left of (get_test_values() as any)) {
-      for (const right of (get_test_values() as any)) {
+    for (const left of (get_test_values({anynumeric: true}) as any)) {
+      for (const right of (get_test_values({anyreal: false}) as any)) {
         let query = `SELECT ${left} UNION ${right};`;
         expect(() => {
           h.script(
@@ -13516,8 +13516,8 @@ describe("TestExpressions", () => {
   });
 
   it("test_edgeql_expr_valid_setop_06", () => {
-    for (const [left, left_t] of (get_test_items() as any)) {
-      for (const right of (get_test_values() as any)) {
+    for (const [left, left_t] of (get_test_items({anynumeric: true}) as any)) {
+      for (const right of (get_test_values({anyint: true}) as any)) {
         let query = `SELECT count(${left} UNION ${right});`;
         assertQueryResult(
           h,
@@ -13534,8 +13534,8 @@ describe("TestExpressions", () => {
         );
       }
     }
-    for (const left of (get_test_values() as any)) {
-      for (const right of (get_test_values() as any)) {
+    for (const left of (get_test_values({anynumeric: true}) as any)) {
+      for (const right of (get_test_values({anyfloat: true}) as any)) {
         let query = `SELECT count(${left} UNION ${right});`;
         expect(() => {
           h.script(
@@ -13566,8 +13566,8 @@ describe("TestExpressions", () => {
   });
 
   it("test_edgeql_expr_valid_setop_08", () => {
-    for (const left of (get_test_values() as any)) {
-      for (const right of (get_test_values() as any)) {
+    for (const left of (get_test_values({anyreal: true, anynumeric: false}) as any)) {
+      for (const right of (get_test_values({anyreal: false}) as any)) {
         let query = `SELECT ${left} ${"??"} ${right};`;
         expect(() => {
           h.script(
@@ -13623,7 +13623,7 @@ describe("TestExpressions", () => {
 
   it("test_edgeql_expr_valid_setop_10", () => {
     for (const [left, ldesc] of get_test_items({ anyreal: false })) {
-      for (const [right, rdesc] of get_test_items()) {
+      for (const [right, rdesc] of get_test_items({anyreal: false})) {
         let query = `SELECT count(${left} ${"??"} ${right});`;
         let desc_typename = compatibleScalarType(ldesc, rdesc);
         if (desc_typename) {
@@ -13675,8 +13675,8 @@ describe("TestExpressions", () => {
   });
 
   it("test_edgeql_expr_valid_setop_11", () => {
-    for (const left of (get_test_values() as any)) {
-      for (const right of (get_test_values() as any)) {
+    for (const left of (get_test_values({anynumeric: true}) as any)) {
+      for (const right of (get_test_values({anyreal: false}) as any)) {
         let query = `SELECT ${left} ${"??"} ${right};`;
         expect(() => {
           h.script(
@@ -13694,8 +13694,8 @@ describe("TestExpressions", () => {
   });
 
   it("test_edgeql_expr_valid_setop_12", () => {
-    for (const left of (get_test_values() as any)) {
-      for (const right of (get_test_values() as any)) {
+    for (const left of (get_test_values({anynumeric: true}) as any)) {
+      for (const right of (get_test_values({anyfloat: true}) as any)) {
         let query = `SELECT ${left} ${"??"} ${right};`;
         expect(() => {
           h.script(
@@ -13710,8 +13710,8 @@ describe("TestExpressions", () => {
         }).toThrow(new RegExp("cannot be applied to operands"));
       }
     }
-    for (const [left, left_t] of (get_test_items() as any)) {
-      for (const right of (get_test_values() as any)) {
+    for (const [left, left_t] of (get_test_items({anynumeric: true}) as any)) {
+      for (const right of (get_test_values({anyint: true}) as any)) {
         let query = `SELECT ${left} ${"??"} ${right};`;
         assertQueryResult(
           h,
@@ -13745,7 +13745,7 @@ describe("TestExpressions", () => {
   });
 
   it("test_edgeql_expr_valid_setop_13", () => {
-    for (const val of (get_test_values() as any)) {
+    for (const val of (get_test_values({anyreal: true}) as any)) {
       let query = `SELECT 1 IF True ELSE ${val};`;
       assertQueryResult(
         h,
@@ -13756,7 +13756,7 @@ describe("TestExpressions", () => {
   });
 
   it("test_edgeql_expr_valid_setop_14", () => {
-    for (const val of (get_test_values() as any)) {
+    for (const val of (get_test_values({anyreal: false}) as any)) {
       let query = `SELECT 1 IF True ELSE ${val};`;
       expect(() => {
         h.script(
@@ -16121,7 +16121,8 @@ aa \
     );
     assertQueryResult(
       h,
-      `SELECT 'bb\   aa';`,
+      `SELECT 'bb\
+   aa';`,
       ["bbaa"]
     );
     assertQueryResult(
@@ -19794,9 +19795,9 @@ aa \
   });
 
   it("test_edgeql_expr_range_29", () => {
-    for (const [_, desc0] of (get_test_items() as any)) {
+    for (const [_, desc0] of (get_test_items({anyreal: true}) as any)) {
       let t0 = desc0.typename;
-      for (const [_, desc1] of (get_test_items() as any)) {
+      for (const [_, desc1] of (get_test_items({anyreal: true}) as any)) {
         let t1 = desc1.typename;
         let query = `
                     with r := range(2, 9)

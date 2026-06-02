@@ -882,6 +882,22 @@ class Parser {
     };
   }
 
+  // Top-level statement dispatcher. Implements the EdgeQL statement
+  // production from docs/reference/reference/edgeql/index.rst:
+  //
+  //   statement := [ with_clause ] (
+  //                  select_stmt | insert_stmt | update_stmt | delete_stmt
+  //                | for_stmt   | group_stmt  | configure_stmt
+  //                | transaction_stmt | session_stmt | describe_stmt
+  //                | analyze_stmt | ddl_stmt
+  //                ) ';'
+  //
+  // The optional WITH block (with.rst) attaches only to query/DML/FOR/GROUP
+  // forms — transaction-control and DDL reject a leading WITH. SET/RESET
+  // (sess_set_alias.rst, sess_reset_alias.rst), DESCRIBE (describe.rst),
+  // ANALYZE (analyze.rst), and savepoint statements (tx_sp_*.rst) flow
+  // through the permissive passthrough because the runtime doesn't execute
+  // them — parsing them just has to accept the token stream.
   parseStatement(): Statement {
     const withClause = this.peek().kind === "kw_with"
       ? this.parseWithClause()
@@ -927,7 +943,8 @@ class Parser {
       if (token.kind === "kw_if") {
         const ctx: ParseContext = withClause;
         const expr = this.parseFreeObjectExpr();
-        if (this.peek().kind === "semi") {
+        // Per lexical.rst lines 400-402, ';' is idempotent.
+        while (this.peek().kind === "semi") {
           this.consume();
         }
         this.expect("eof", "Unexpected tokens after statement");
@@ -940,13 +957,19 @@ class Parser {
       }
 
       if (token.kind === "kw_start" || token.kind === "kw_commit" || token.kind === "kw_rollback") {
-        // `WITH ... COMMIT` is not legal upstream — WITH bindings only attach
-        // to query/DML statements, not transaction control.
-        if (withClause.with && withClause.with.length > 0) {
+        // Transaction-control statements (tx_start.rst, tx_commit.rst,
+        // tx_rollback.rst) are marked `:eql-statement:` only — they lack the
+        // `:eql-haswith:` marker that select/insert/update/delete/for/group
+        // carry. That means *no* WITH form (expression binding, MODULE, or
+        // alias-as-module) may precede them.
+        const hasWithBindings = (withClause.with && withClause.with.length > 0)
+          || (withClause.withModuleAliases && withClause.withModuleAliases.length > 0)
+          || (withClause.withModule !== undefined && withClause.withModule !== this.defaultModule);
+        if (hasWithBindings) {
           this.notSupported(
             token,
             "WITH before transaction control",
-            `'${token.lexeme}' cannot follow a WITH-bindings block; transaction statements stand alone`,
+            `'${token.lexeme}' cannot follow a WITH block; transaction statements stand alone`,
           );
         }
         // `COMMIT MIGRATION` is a migration-control statement, not a
@@ -1003,7 +1026,7 @@ class Parser {
         if (exprStartTokens.has(token.kind) || this.isNameToken(token)) {
           const fallbackAttempt = this.attempt(() => {
             const expr = this.parseFreeObjectExpr();
-            if (this.peek().kind === "semi") this.consume();
+            while (this.peek().kind === "semi") this.consume();
             this.expect("eof", "Unexpected tokens after statement");
             return expr;
           });
@@ -1179,7 +1202,9 @@ class Parser {
       }
     }
 
-    if (this.peek().kind === "semi") {
+    // Per lexical.rst lines 400-402, ';' is idempotent — `commit;;`,
+    // `select 1;;;` etc. are all valid (upstream test_edgeql_syntax_constants_02).
+    while (this.peek().kind === "semi") {
       this.consume();
     }
     this.expect("eof", "Unexpected tokens after configure statement");
@@ -1195,6 +1220,37 @@ class Parser {
     };
   }
 
+  // GROUP statement — see docs/reference/reference/edgeql/group.rst.
+  //
+  // Grammar (eql:synopsis from group.rst lines 11-37):
+  //
+  //   [ with <with-item> [, ...] ]
+  //   group [<alias> := ] <expr>
+  //   [ using <using-alias> := <expr>, [, ...] ]
+  //   by <grouping-element>, ... ;
+  //
+  //   <grouping-element> :=
+  //       <ref-or-list>
+  //     | '{' <grouping-element>, ... '}'      # grouping set
+  //     | ROLLUP( <ref-or-list>, ... )
+  //     | CUBE  ( <ref-or-list>, ... )
+  //
+  //   <ref-or-list> :=
+  //       ()
+  //     | <grouping-ref>
+  //     | ( <grouping-ref>, ... )
+  //
+  //   <grouping-ref> := <using-alias> | .<field-name>
+  //
+  // The optional `<alias> :=` before <expr> (group.rst line 15) is the
+  // ad-hoc source binding handled in parseGroupSource. USING bindings
+  // (group.rst lines 45-50) are required only when BY references aliases
+  // rather than plain `.field` short paths.
+  //
+  // The output is a set of free objects shaped `{key, grouping, elements}`
+  // (group.rst lines 84-112) — the parser doesn't synthesise this; it
+  // simply records the source/using/by triple and lets the runtime build
+  // the result.
   private parseGroup(ctx: ParseContext = {}): GroupStatement {
     const start = this.expect("kw_group", "Expected 'group'");
     const body = this.parseGroupBody();
@@ -1267,6 +1323,11 @@ class Parser {
 
   private parseGroupUsingBindings(): GroupUsingBinding[] {
     const bindings: GroupUsingBinding[] = [];
+    // Track declared aliases so duplicates fail at parse time, matching the
+    // parseWithClause precedent (`Duplicate with binding 'X'`). The
+    // group.rst grammar doesn't formally require uniqueness, but every
+    // downstream consumer treats the alias as a lookup key.
+    const seenAliases = new Set<string>();
     while (true) {
       const aliasToken = this.peek();
       if (!this.isNameToken(aliasToken)) {
@@ -1276,6 +1337,10 @@ class Parser {
       if (alias === "id") {
         throw new AppError("E_SYNTAX", "may not name a grouping alias 'id'", ...this.posPair(aliasToken));
       }
+      if (seenAliases.has(alias)) {
+        throw new AppError("E_SYNTAX", `Duplicate USING alias '${alias}'`, ...this.posPair(aliasToken));
+      }
+      seenAliases.add(alias);
       this.expect("assign", "Expected ':=' in USING binding");
       const aliasExpr = this.withLocalBinding(alias, () => this.parseFreeObjectExpr());
       bindings.push({ alias, expr: aliasExpr });
@@ -1439,6 +1504,40 @@ class Parser {
     }
   }
 
+  // Transaction control — START / COMMIT / ROLLBACK [TO SAVEPOINT].
+  //
+  // Grammars (one per file under docs/reference/reference/edgeql/):
+  //
+  //   START TRANSACTION (tx_start.rst lines 35-45):
+  //     start transaction <transaction-mode> [ , ... ] ;
+  //     # where <transaction-mode> is one of:
+  //     #   isolation repeatable read
+  //     #   isolation serializable
+  //     #   read write | read only
+  //     #   deferrable | not deferrable
+  //
+  //   COMMIT (tx_commit.rst line 37):
+  //     commit ;
+  //
+  //   ROLLBACK (tx_rollback.rst line 37):
+  //     rollback ;
+  //
+  //   ROLLBACK TO SAVEPOINT (tx_sp_rollback.rst lines 37-39):
+  //     rollback to savepoint <savepoint-name> ;
+  //
+  // SAVEPOINT-related forms (DECLARE / RELEASE — tx_sp_declare.rst,
+  // tx_sp_release.rst) reach this parser via parsePassthroughStatement
+  // because they're keyword-led but flow through the top-level
+  // passthrough lexeme list. See parseStatement above.
+  //
+  // The transaction-mode list is comma-separated. Per tx_start.rst:
+  //   * isolation defaults to `serializable`
+  //   * the same option may not be specified twice
+  //   * READ ONLY conflicts with READ WRITE; DEFERRABLE with NOT DEFERRABLE
+  //
+  // After the mode list we accept any remaining tail tokens permissively
+  // (depth-tracked) to support upstream's migration-control variants like
+  // `START MIGRATION TO <Lang> $$body$$` which embed an SDL block.
   private parseTransaction(): TransactionStatement {
     const token = this.expectAny(["kw_start", "kw_commit", "kw_rollback"], "Expected 'start', 'commit', or 'rollback'");
     let action: TransactionStatement["action"];
@@ -1606,11 +1705,42 @@ class Parser {
       }
     }
 
-    // Consume any remaining transaction-tail tokens permissively. Upstream
-    // accepts options like `READ ONLY`, `DEFERRABLE`, `TO SAVEPOINT foo`,
-    // and migration-control variants (`START MIGRATION TO { ... }`) which
-    // can contain `;` inside their `{}` block — so depth-track brackets.
-    {
+    // Per-action tail handling. Each .rst grammar is exact:
+    //   * COMMIT (tx_commit.rst line 37):           `commit ;`
+    //   * ROLLBACK (tx_rollback.rst line 37):       `rollback ;`
+    //     -or- (tx_sp_rollback.rst lines 37-39):    `rollback to savepoint <name> ;`
+    //   * START (tx_start.rst lines 35-45):         `start transaction <mode>, ... ;`
+    //     plus migration-control variants which can carry an SDL body.
+    if (action === "commit") {
+      // Bare `commit` allows no trailing tokens — anything before the
+      // statement terminator is a syntax error.
+    } else if (action === "rollback") {
+      // Optional `TO SAVEPOINT <name>` tail.
+      if (this.isKeywordLikeToken(this.peek()) && this.peek().lower === "to") {
+        this.consume();
+        if (!(this.isKeywordLikeToken(this.peek()) && this.peek().lower === "savepoint")) {
+          this.notSupported(
+            this.peek(),
+            "expected SAVEPOINT after ROLLBACK TO",
+            "the only legal tail of ROLLBACK is `TO SAVEPOINT <name>`",
+          );
+        }
+        this.consume();
+        // Savepoint name — any keyword-like or name-like token works.
+        const nameTok = this.peek();
+        if (!this.isNameToken(nameTok) && !this.isKeywordLikeToken(nameTok)) {
+          throw new AppError(
+            "E_SYNTAX",
+            "Expected savepoint name after ROLLBACK TO SAVEPOINT",
+            ...this.posPair(nameTok),
+          );
+        }
+        this.consume();
+      }
+    } else {
+      // START — permissive tail for migration-control variants
+      // (`START MIGRATION TO <Lang> $$body$$`, `START MIGRATION TO { ... }`)
+      // which can contain `;` inside their `{}` block, so depth-track.
       let depth = 0;
       while (this.peek().kind !== "eof") {
         const k = this.peek().kind;
@@ -1622,7 +1752,9 @@ class Parser {
         this.consume();
       }
     }
-    if (this.peek().kind === "semi") {
+    // Per lexical.rst lines 400-402, ';' is idempotent — `commit;;`,
+    // `select 1;;;` etc. are all valid (upstream test_edgeql_syntax_constants_02).
+    while (this.peek().kind === "semi") {
       this.consume();
     }
     this.expect("eof", "Unexpected tokens after transaction statement");
@@ -1636,11 +1768,40 @@ class Parser {
   }
 
   // Catch-all for top-level statements whose full grammar we don't model
-  // (DESCRIBE, ANALYZE, POPULATE/ABORT MIGRATION, SET GLOBAL/ALIAS, RESET,
-  // DECLARE SAVEPOINT, RELEASE SAVEPOINT, etc.). Consumes tokens to the
-  // next top-level `;` or eof, respecting bracket depth so any nested
-  // braces (e.g. CREATE MIGRATION { ... } inside a top-level wrapper)
-  // don't fool the cursor. Returns a DescribeStatement-shaped placeholder.
+  // because the runtime never executes them — parse-only just needs to
+  // accept the token stream. Each form has its own .rst spec under
+  // docs/reference/reference/edgeql/:
+  //
+  //   DESCRIBE (describe.rst lines 11-28):
+  //     describe schema [ as { ddl | sdl | text [verbose] } ] ;
+  //     describe <schema-type> <name> [ as { ddl | sdl | text [verbose] } ] ;
+  //     where <schema-type> ∈ {object, annotation, constraint, function,
+  //                            link, module, property, scalar type, type}
+  //
+  //   ANALYZE (analyze.rst line 12):
+  //     analyze <query> ;       # <query> is any EdgeQL query
+  //
+  //   SET (sess_set_alias.rst lines 11-15):
+  //     set module <module> ;
+  //     set alias <alias> as module <module> ;
+  //     set global <name> := <expr> ;
+  //
+  //   RESET (sess_reset_alias.rst lines 11-16):
+  //     reset module ;
+  //     reset alias <alias> ;
+  //     reset alias * ;
+  //     reset global <name> ;
+  //
+  //   DECLARE SAVEPOINT (tx_sp_declare.rst line 37):
+  //     declare savepoint <savepoint-name> ;
+  //
+  //   RELEASE SAVEPOINT (tx_sp_release.rst line 37):
+  //     release savepoint <savepoint-name> ;
+  //
+  // Consumes tokens to the next top-level `;` or eof, respecting bracket
+  // depth so any nested braces (e.g. CREATE MIGRATION { ... } inside a
+  // top-level wrapper) don't fool the cursor. Returns a
+  // DescribeStatement-shaped placeholder.
   private parsePassthroughStatement(start: Token): Statement {
     let depth = 0;
     while (this.peek().kind !== "eof") {
@@ -1652,7 +1813,7 @@ class Parser {
       }
       this.consume();
     }
-    if (this.peek().kind === "semi") this.consume();
+    while (this.peek().kind === "semi") this.consume();
     this.expect("eof", "Unexpected tokens after statement");
     return {
       kind: "describe",
@@ -2058,7 +2219,9 @@ class Parser {
     } else {
       this.skipDDLBody();
     }
-    if (this.peek().kind === "semi") {
+    // Per lexical.rst lines 400-402, ';' is idempotent — `commit;;`,
+    // `select 1;;;` etc. are all valid (upstream test_edgeql_syntax_constants_02).
+    while (this.peek().kind === "semi") {
       this.consume();
     }
     this.expect("eof", "Unexpected tokens after DDL statement");
@@ -2435,7 +2598,26 @@ class Parser {
     }
   }
 
-  private parseFor(ctx: ParseContext = {}): ForStatement {
+  // FOR statement — see docs/reference/reference/edgeql/for.rst.
+  //
+  // Grammar (eql:synopsis from for.rst lines 12-18):
+  //
+  //   [ with <with-item> [, ...] ]
+  //   for <variable> in <iterator-expr>
+  //   union <output-expr> ;
+  //
+  // Per for.rst lines 28-34, <iterator-expr> is restricted: literals,
+  // function calls, set constructors `{ ... }`, paths, or any
+  // parenthesised expression/statement. Bare DETACHED, binary ops, casts,
+  // concats, or top-level shape projections are rejected — they must be
+  // wrapped in `{...}` or `(...)`. We enforce that with the explicit
+  // `disallowed()` check on the parsed iterator.
+  //
+  // <output-expr> is any expression — typically an INSERT/UPDATE/DELETE
+  // wrapped in `(...)`, but bare SELECT-like expressions are also legal.
+  // We accept an optional `OPTIONAL` prefix on the variable (used when
+  // the iterator may be empty and we want a single null pass).
+  private parseFor(ctx: ParseContext = {}, expectEof = true): ForStatement {
     const start = this.expect("kw_for", "Expected 'for'");
     let optional = false;
     if (this.peek().kind === "kw_optional") {
@@ -2550,6 +2732,13 @@ class Parser {
     if (hasWrappedStatement) {
       this.expect("rparen", "Expected ')' after for body");
     }
+    // Top-level FOR must consume to EOF. The body parsers were called with
+    // expectEof=false so they leave trailing tokens to us. Per lexical.rst
+    // lines 400-402, idempotent ; sequences are tolerated before EOF.
+    if (expectEof) {
+      while (this.peek().kind === "semi") this.consume();
+      this.expect("eof", "Unexpected tokens after statement");
+    }
     return {
       ...this.withContext(ctx),
       kind: "for",
@@ -2561,6 +2750,30 @@ class Parser {
     };
   }
 
+  // SELECT statement — see docs/reference/reference/edgeql/select.rst.
+  //
+  // Grammar (eql:synopsis from select.rst):
+  //
+  //   [ with <with-item> [, ...] ]
+  //   select <expr>
+  //     [ filter <filter-expr> ]
+  //     [ order by <order-expr> [asc|desc] [empty {first|last}] [then ...] ]
+  //     [ offset <offset-expr> ]
+  //     [ limit  <limit-expr>  ] ;
+  //
+  // Three concrete AST shapes can fall out of this entry point:
+  //
+  //   SelectStatement      — typed object select: `SELECT Foo { ... } ...`
+  //                          (parseTypedSelect / tryParseNarrowedTypedSelect).
+  //   SelectFreeStatement  — free-object select: `SELECT { a := 1, b := 2 }`
+  //                          (parseFreeObjectSelect via parseSelectFreeOrExpr).
+  //   SelectExprStatement  — expression select: `SELECT 1 + 2`,
+  //                          `SELECT (insert ...)`, `SELECT global X`, etc.
+  //                          (parseSelectExprTail via parseSelectFreeOrExpr).
+  //
+  // Trailing FILTER/ORDER BY/OFFSET/LIMIT are handled by parseClauseChain
+  // — that enforces the ordering constraint baked into the grammar
+  // (filter < order by < offset < limit).
   private parseSelect(ctx: ParseContext = {}): SelectStatement | SelectFreeStatement | SelectExprStatement {
     const start = this.expect("kw_select", "Expected 'select'");
 
@@ -2587,7 +2800,7 @@ class Parser {
         if (this.peek().kind === "lt") {
           this.notSupported(this.peek(), "parametric type in INTROSPECT", "INTROSPECT does not accept parametric type expressions");
         }
-        if (this.peek().kind === "semi") this.consume();
+        while (this.peek().kind === "semi") this.consume();
         this.expect("eof", "Unexpected tokens after statement");
         return {
           ...this.withContext(ctx),
@@ -2630,7 +2843,7 @@ class Parser {
       }
       this.consume();
     }
-    if (this.peek().kind === "semi") this.consume();
+    while (this.peek().kind === "semi") this.consume();
     this.expect("eof", "Unexpected tokens after statement");
     return {
       ...this.withContext(ctx),
@@ -2814,7 +3027,8 @@ class Parser {
 
     const clauses = this.parseClauseChain();
 
-    if (expectEof && this.peek().kind === "semi") {
+    // Per lexical.rst lines 400-402, ';' is idempotent at statement end.
+    while (expectEof && this.peek().kind === "semi") {
       this.consume();
     }
 
@@ -2872,7 +3086,8 @@ class Parser {
 
     const clauses = this.parseClauseChain();
 
-    if (expectEof && this.peek().kind === "semi") {
+    // Per lexical.rst lines 400-402, ';' is idempotent at statement end.
+    while (expectEof && this.peek().kind === "semi") {
       this.consume();
     }
     if (expectEof) {
@@ -2914,7 +3129,8 @@ class Parser {
           ...tail,
         }
       : expr;
-    if (expectEof && this.peek().kind === "semi") {
+    // Per lexical.rst lines 400-402, ';' is idempotent at statement end.
+    while (expectEof && this.peek().kind === "semi") {
       this.consume();
     }
     if (expectEof) {
@@ -2947,7 +3163,9 @@ class Parser {
     }, "Expected ',' between free object entries");
 
     this.expect("rbrace", "Expected '}' after free object entries");
-    if (this.peek().kind === "semi") {
+    // Per lexical.rst lines 400-402, ';' is idempotent — `commit;;`,
+    // `select 1;;;` etc. are all valid (upstream test_edgeql_syntax_constants_02).
+    while (this.peek().kind === "semi") {
       this.consume();
     }
     this.expect("eof", "Unexpected tokens after statement");
@@ -3711,6 +3929,30 @@ class Parser {
     });
   }
 
+  // Path / postfix chain — see docs/reference/reference/edgeql/paths.rst.
+  //
+  // Per paths.rst lines 23-46, a path is:
+  //
+  //   <expression> <path-step> [ <path-step> ... ]
+  //
+  //   <path-step> := <step-direction> <pointer-name>
+  //
+  //   <step-direction> is one of:
+  //     .   — outgoing link/property reference
+  //     .<  — incoming / backlink reference (tokenized `backward_link`)
+  //     @   — link property reference
+  //
+  // We additionally accept the optional-traversal variant `.?` (tokenized
+  // `optional_link`) which propagates `{}` rather than failing when the
+  // step is empty. The `[is Type]` type-intersection postfix and `[N]`/
+  // `[start:end]` index/slice postfixes (volatility.rst / shapes.rst use
+  // them too) are recognised here when the caller passes the matching
+  // options, so this routine is the central postfix dispatcher for all
+  // path-like grammar.
+  //
+  // The terminal pointer determines result semantics (paths.rst lines
+  // 14-21): paths ending in a link yield a set of objects; paths ending
+  // in a property yield a set of property values.
   private parsePostfixChain(baseExpr: FreeObjectExpr, options: PostfixChainOptions = {}): FreeObjectExpr {
     let expr = baseExpr;
     const backlinkBindingName = "__gel_backlink_item__";
@@ -3821,11 +4063,37 @@ class Parser {
           continue;
         }
 
+        // Floats inside subscript brackets (`[1.0]`, `[:1.0]`) become a
+        // literal-FreeObjectExpr rather than a folded `index`/`start`/`end`
+        // number; downstream type-checking needs to see the float as a
+        // distinct type so it can reject `[1.0]` with "cannot index by float".
+        const isFloatLexeme = (lex: string): boolean => {
+          if (lex.endsWith("n")) return false;
+          return lex.includes(".") || /[eE]/.test(lex.replace(/_/g, ""));
+        };
+        const consumeBound = (sign: 1 | -1): number | FreeObjectExpr | undefined => {
+          if (this.peek().kind !== "number") return undefined;
+          const lex = this.consume().lexeme;
+          const num = this.parseNumberLexeme(lex);
+          if (isFloatLexeme(lex)) {
+            // Wrap as `<float64>VAL` so type inference downstream knows this
+            // is a float — `Number(1.0)` and `Number(1)` are indistinguishable
+            // in JS, so a literal alone loses the float-ness.
+            const cast: FreeObjectExpr = {
+              kind: "cast",
+              castType: "std::float64",
+              expr: { kind: "literal", value: sign * num },
+            } as unknown as FreeObjectExpr;
+            return cast;
+          }
+          return sign * num;
+        };
+
         if (this.peek().kind === "colon") {
           this.consume();
           let end: number | FreeObjectExpr | undefined;
           if (this.peek().kind === "number") {
-            end = this.parseNumberLexeme(this.consume().lexeme);
+            end = consumeBound(1);
           } else if (this.peek().kind !== "rbracket") {
             end = this.parseFreeObjectExpr();
           }
@@ -3842,7 +4110,7 @@ class Parser {
 
         const startToken = this.peek();
         let start: number | FreeObjectExpr | undefined;
-        let startSign = 1;
+        let startSign: 1 | -1 = 1;
         if (startToken.kind === "minus" && this.peekNth(1).kind === "number") {
           this.consume();
           startSign = -1;
@@ -3850,7 +4118,7 @@ class Parser {
           this.consume();
         }
         if (this.peek().kind === "number") {
-          start = startSign * this.parseNumberLexeme(this.consume().lexeme);
+          start = consumeBound(startSign);
         } else if (this.peek().kind !== "colon") {
           start = this.parseFreeObjectExpr();
         }
@@ -3858,7 +4126,7 @@ class Parser {
         if (this.peek().kind === "colon") {
           this.consume();
           let end: number | FreeObjectExpr | undefined;
-          let endSign = 1;
+          let endSign: 1 | -1 = 1;
           if (this.peek().kind === "minus" && this.peekNth(1).kind === "number") {
             this.consume();
             endSign = -1;
@@ -3866,7 +4134,7 @@ class Parser {
             this.consume();
           }
           if (this.peek().kind === "number") {
-            end = endSign * this.parseNumberLexeme(this.consume().lexeme);
+            end = consumeBound(endSign);
           } else if (this.peek().kind !== "rbracket") {
             end = this.parseFreeObjectExpr();
           }
@@ -4292,6 +4560,26 @@ class Parser {
     };
   }
 
+  // Shape element — see docs/reference/reference/edgeql/shapes.rst.
+  //
+  // Per shapes.rst lines 14-53, a shape is `<expr> { <shape_element> [, ...] }`
+  // where each shape_element follows:
+  //
+  //   [ "[" is <object-type> "]" ] <pointer-spec>
+  //
+  // and <pointer-spec> is one of:
+  //
+  //   * <name>                                — existing link/property
+  //   * [@]<name> := <ptr-expr>               — computed link/property
+  //                                             (`@<name>` for link prop)
+  //   * <pointer-name>: [ "[" is <T> "]" ] "{" ... "}"   — sub-shape
+  //
+  // We additionally accept cardinality/required modifiers (`required`,
+  // `optional`, `multi`, `single`) and splat forms (`*`, `**`,
+  // `[is Type].*`, `(Type | Other).**`). Per-element FILTER/ORDER BY/
+  // OFFSET/LIMIT clauses (selection-style refinement of a link target)
+  // are routed through clauseChainToShapeModifiers — they follow the
+  // same ordering rule as parseClauseChain.
   private parseShapeEntry(): ShapeElement {
     const { required, cardinality } = this.parseShapeEntryModifiers();
 
@@ -4519,6 +4807,13 @@ class Parser {
     if (this.peek().kind === "colon") {
       this.consume();
       hasLinkShapeColon = true;
+      // shapes.rst line 48: `<pointer-name>: [ "[" is <target-type> "]" ] "{" ... "}"`
+      // — the target-type intersection is optional and sits between the colon
+      // and the sub-shape. Without this, `bar: [is Bar] { x }` falls through
+      // and reports "Expected '{' after ':' in link shape".
+      if (this.peek().kind === "lbracket" && this.peekNth(1).kind === "kw_is") {
+        typeFilter = this.parseTypeFilter("shape link-target type filter");
+      }
     }
 
     if (this.peek().kind === "lbrace") {
@@ -5324,6 +5619,30 @@ class Parser {
     return undefined;
   }
 
+  // Function call — see docs/reference/reference/edgeql/functions.rst.
+  //
+  // Grammar (functions.rst lines 13-21):
+  //
+  //   <function_name> "(" [<argument> [, <argument>, ...]] ")"
+  //
+  //   <argument> := <expr> | <identifier> := <expr>
+  //
+  // <function_name> is a possibly qualified name (e.g. `len`, `math::ceil`).
+  // Arguments are positional (`<expr>`) or named-only (`<name> := <expr>`,
+  // see the array_get example on functions.rst lines 40-43). Trailing
+  // commas are accepted by upstream's test_edgeql_syntax_function_09.
+  //
+  // Upstream rejections we mirror (test_edgeql_syntax.py):
+  //   * positional argument after named (function_06)
+  //   * duplicate named argument (function_07)
+  //   * `$<name> := ...` prefix on named args (function_08) — names are
+  //     bare identifiers, not parameter references
+  //   * missing comma between args (function_10/11)
+  //   * bare keywords like `ALL` in argument position (function_05)
+  //
+  // Aggregate-style trailing clauses (`FILTER ... ORDER BY ...`) inside a
+  // single argument are handled by parseFunctionCallArgExpr — see
+  // test_edgeql_syntax_function_03.
   private parseFunctionCallExpr(allowExpressionArgs = false): FunctionCallExpr {
     const name = this.parseQualifiedName("Expected function name");
     const lparenToken = this.expect("lparen", "Expected '(' after function name");
@@ -5549,6 +5868,23 @@ class Parser {
     return "link" in expr;
   }
 
+  // INSERT statement — see docs/reference/reference/edgeql/insert.rst.
+  //
+  // Grammar (eql:synopsis from insert.rst lines 11-17):
+  //
+  //   [ with <with-spec> [, ...] ]
+  //   insert <expression> [ <insert-shape> ]
+  //   [ unless conflict
+  //       [ on <property-expr> [ else <alternative> ] ]
+  //   ] ;
+  //
+  //   <insert-shape> := '{' <link> := <insert-value-expr> [, ...] '}'
+  //
+  // <expression> is parsed as a qualified type name (we tolerate a leading
+  // `DETACHED` per with.rst's detached-expression rules). The shape body
+  // is a comma-separated list of assignments (parseInsertAssignment).
+  // `unless conflict` is delegated to parseInsertConflict — see
+  // insert.rst lines 54-100 for the ON/ELSE semantics.
   private parseInsert(ctx: ParseContext = {}, expectEof = true): InsertStatement {
     const start = this.expect("kw_insert", "Expected 'insert'");
     if (this.peek().kind === "kw_detached") {
@@ -5567,7 +5903,9 @@ class Parser {
 
     const conflict = this.parseInsertConflict();
 
-    if (this.peek().kind === "semi") {
+    // Per lexical.rst lines 400-402, ';' is idempotent — `commit;;`,
+    // `select 1;;;` etc. are all valid (upstream test_edgeql_syntax_constants_02).
+    while (this.peek().kind === "semi") {
       this.consume();
     }
 
@@ -5794,7 +6132,9 @@ class Parser {
       return nested;
     }
     if (next.kind === "kw_for") {
-      const forStmt = this.parseFor();
+      // Nested `(FOR ... UNION ...)` — the closing `)` is the boundary,
+      // so don't enforce EOF inside parseFor here.
+      const forStmt = this.parseFor({}, false);
       this.expect("rparen", "Expected ')' after for expression");
       return forStmt;
     }
@@ -5887,6 +6227,18 @@ class Parser {
     };
   }
 
+  // UNLESS CONFLICT clause — see insert.rst lines 52-100.
+  //
+  // Grammar:
+  //
+  //   unless conflict [ on <property-expr> [ else <alternative> ] ]
+  //
+  // `on <property-expr>` is the conflict target. The grammar permits both
+  // `on .field` (bare) and `on (.field)` / `on (.a, .b)` (paren-wrapped) —
+  // we accept both. `else <alternative>` provides a fallback expression
+  // when a conflict fires (typically an UPDATE or SELECT). Per
+  // insert.rst lines 90-100, `else` requires `on` to disambiguate which
+  // constraint the alternative reacts to.
   private parseInsertConflict(): InsertConflict | undefined {
     if (this.peek().kind !== "kw_unless") {
       return undefined;
@@ -5896,18 +6248,38 @@ class Parser {
     this.expect("kw_conflict", "Expected 'conflict' after 'unless'");
 
     let onField: string | undefined;
+    let onFields: string[] | undefined;
     if (this.peek().kind === "kw_on") {
       this.consume();
-      // EdgeQL accepts both `ON .field` and `ON (.field)` — the latter is the
-      // upstream-canonical form. Accept an optional `(...)` wrapper.
+      // Per insert.rst lines 67-71 the target is "either a reference to a
+      // property (or link) or a tuple of references". Accept:
+      //   ON .field                       (bare)
+      //   ON (.field)                     (paren-wrapped single — canonical)
+      //   ON (.first, .last [, ...])      (tuple)
       const wrapped = this.peek().kind === "lparen";
       if (wrapped) {
         this.consume();
       }
-      this.expect("dot", "Expected '.' in conflict target");
-      onField = this.expectName("Expected field name in conflict target").lexeme;
+      const fields: string[] = [];
+      const readOne = (): void => {
+        this.expect("dot", "Expected '.' in conflict target");
+        fields.push(this.expectName("Expected field name in conflict target").lexeme);
+      };
+      readOne();
+      // Tuple form is only legal inside `(...)` — `ON .a, .b` (no parens) is
+      // a syntax error upstream.
       if (wrapped) {
+        while (this.peek().kind === "comma") {
+          this.consume();
+          // Trailing comma is allowed (consistent with other comma-lists).
+          if (this.peek().kind === "rparen") break;
+          readOne();
+        }
         this.expect("rparen", "Expected ')' after conflict target");
+      }
+      onField = fields[0];
+      if (fields.length > 1) {
+        onFields = fields;
       }
     }
 
@@ -5969,6 +6341,7 @@ class Parser {
 
     return {
       onField,
+      onFields,
       else: elseExpr,
     };
   }
@@ -6006,6 +6379,25 @@ class Parser {
     };
   }
 
+  // UPDATE statement — see docs/reference/reference/edgeql/update.rst.
+  //
+  // Grammar (eql:synopsis from update.rst lines 11-19):
+  //
+  //   [ with <with-item> [, ...] ]
+  //   update <selector-expr>
+  //   [ filter <filter-expr> ]
+  //   set <shape> ;
+  //
+  // The <set-shape> body supports three assignment operators
+  // (update.rst lines 45-63):
+  //
+  //   set { <field> := <update-expr> [, ...] }   # replace
+  //   set { <field> += <update-expr> [, ...] }   # add to multi link/property
+  //   set { <field> -= <update-expr> [, ...] }   # remove from multi link/property
+  //
+  // The selector accepts the same expression grammar as DELETE — bare type
+  // names, paths, parenthesised sub-queries, and shape-decorated forms all
+  // route through parseFreeObjectExpr.
   private parseUpdate(ctx: ParseContext = {}, expectEof = true): UpdateStatement {
     const start = this.expect("kw_update", "Expected 'update'");
     let target: FreeObjectExpr | undefined;
@@ -6042,7 +6434,9 @@ class Parser {
 
     this.expect("rbrace", "Expected '}' after assignments");
 
-    if (this.peek().kind === "semi") {
+    // Per lexical.rst lines 400-402, ';' is idempotent — `commit;;`,
+    // `select 1;;;` etc. are all valid (upstream test_edgeql_syntax_constants_02).
+    while (this.peek().kind === "semi") {
       this.consume();
     }
 
@@ -6062,6 +6456,26 @@ class Parser {
     };
   }
 
+  // DELETE statement — see docs/reference/reference/edgeql/delete.rst.
+  //
+  // Grammar (eql:synopsis from delete.rst lines 11-23):
+  //
+  //   [ with <with-item> [, ...] ]
+  //   delete <expr>
+  //   [ filter <filter-expr> ]
+  //   [ order by <order-expr> [direction] [then ...] ]
+  //   [ offset <offset-expr> ]
+  //   [ limit  <limit-expr> ] ;
+  //
+  // Per delete.rst lines 32-38, `delete ...` is syntactic sugar for
+  // `delete (select ...)` — the trailing FILTER/ORDER BY/OFFSET/LIMIT
+  // clauses shape the set to be deleted the same way an explicit SELECT
+  // would. The shared parseClauseChain enforces that ordering.
+  //
+  // <expr> here is permissive: bare type names route through the
+  // qualified-name parser, while paths/shape-decorated targets/literals
+  // route through parseFreeObjectExpr so any expression accepted by
+  // SELECT also lands here.
   private parseDelete(ctx: ParseContext = {}, expectEof = true): DeleteStatement {
     const start = this.expect("kw_delete", "Expected 'delete'");
     let target: FreeObjectExpr | undefined;
@@ -6089,7 +6503,9 @@ class Parser {
 
     const clauses = this.parseClauseChain();
 
-    if (this.peek().kind === "semi") {
+    // Per lexical.rst lines 400-402, ';' is idempotent — `commit;;`,
+    // `select 1;;;` etc. are all valid (upstream test_edgeql_syntax_constants_02).
+    while (this.peek().kind === "semi") {
       this.consume();
     }
 
@@ -6155,6 +6571,21 @@ class Parser {
     return "Object";
   }
 
+  // FILTER clause — see select.rst lines 25-32 and the Filter section at
+  // lines 197-247. The grammar is simply:
+  //
+  //   filter <filter-expr>
+  //
+  // <filter-expr> must evaluate to a boolean (or boolean set) — input
+  // elements for which the expression is true are kept, all others are
+  // dropped. The clause is conceptualised as `_filter($input, set of
+  // $cond)`, so `$cond` lives in a sibling scope to the preceding clause
+  // (see the example on lines 207-228 explaining why `FILTER` over an
+  // aggregate set behaves the way it does).
+  //
+  // We split out a small precedence ladder for the inner expression
+  // (or > and > not > primary), where `primary` falls through to the
+  // expression-level parser for paren-wrapped sub-queries and predicates.
   private parseFilter(): FilterExpr {
     this.expect("kw_filter", "Expected 'filter'");
     return this.parseOrFilterExpr();
@@ -6479,6 +6910,10 @@ class Parser {
       // truncate at the name and leave the `(...)` for the caller, which
       // then errors with "Unexpected tokens after statement".
       || (this.isNameToken(this.peek()) && this.peekNext().kind === "lparen")
+      // `name::Foo` / `name::Foo.field` — a module-qualified path
+      // (e.g. `f::Foo.name` after `with f as module foo`). readFilterValue
+      // can only read a bare name, so route to the free-expr parser.
+      || (this.isNameToken(this.peek()) && this.peekNext().kind === "coloncolon")
     ) {
       // Complex RHS like `<int64>v.0`, `(x)`, a set literal `{a, b}`, an
       // array literal `[a, b]`, or a function call — rewind to the predicate
@@ -6731,14 +7166,42 @@ class Parser {
     return this.readScalarValue();
   }
 
+  // WITH block — see docs/reference/reference/edgeql/with.rst.
+  //
+  // Grammar (eql:synopsis from with.rst):
+  //
+  //   with <with-item> [, ...]
+  //
+  //   <with-item> :=
+  //       module <module-name>            # set default module
+  //     | <alias> as module <module-name> # alias a module
+  //     | <alias> := <expr>               # bind an expression
+  //
+  // Notes from with.rst:
+  //   * Module aliasing (lines 18-82): `with module foo` and
+  //     `with f as module foo.bar.baz` — module names accept dotted
+  //     segments and unreserved keywords as segments.
+  //   * Expression aliases (lines 85-140): the RHS is evaluated in the
+  //     lexical scope where the alias is *defined*, not where it's used.
+  //     `detached` (with.rst lines 143-172) is a related scoping primitive
+  //     handled by the expression parser, not here.
+  //
+  // We track bindings, module aliases, and the default module separately
+  // so downstream code can resolve unqualified references. Multiple module
+  // declarations or duplicate aliases are rejected.
   private parseWithClause(): ParseContext {
-    this.expect("kw_with", "Expected 'with'");
+    const withToken = this.expect("kw_with", "Expected 'with'");
     const bindings: WithBinding[] = [];
     const names = new Set<string>();
     const scopedBindingNames: string[] = [];
     const moduleAliases: WithModuleAlias[] = [];
     const aliasNames = new Set<string>();
     let withModule: string | undefined;
+    // Per the with.rst grammar (`with <with-item> [, ...]`), at least one
+    // <with-item> is required. The parsing loop below `break`s on the first
+    // non-matching token, so we have to track whether any item was consumed
+    // and reject if not (otherwise `with select Foo;` would slip through).
+    let sawAnyItem = false;
 
     try {
       while (true) {
@@ -6752,6 +7215,7 @@ class Parser {
           // segments (`WITH MODULE abstract` is valid). Use a permissive
           // qualified-name read.
           withModule = this.parsePermissiveQualifiedName("Expected module name after 'module'");
+          sawAnyItem = true;
         } else if ((this.isNameToken(this.peek()) || (this.isKeywordLikeToken(this.peek()) && this.peek().kind !== "kw_select" && this.peek().kind !== "kw_module")) && this.peekNext().kind === "kw_as") {
           const aliasToken = this.consume();
           const alias = aliasToken.lexeme;
@@ -6765,6 +7229,7 @@ class Parser {
           const module = this.parsePermissiveQualifiedName("Expected module name in module alias declaration");
           moduleAliases.push({ alias, module });
           aliasNames.add(alias);
+          sawAnyItem = true;
         } else if (this.isNameToken(this.peek()) || (this.isKeywordLikeToken(this.peek()) && this.peekNext().kind === "assign")) {
           // Unreserved (and partial/future-reserved) keywords like `abort`,
           // `abstract`, `declare` are valid WITH-binding names. Accept any
@@ -6780,6 +7245,7 @@ class Parser {
           bindings.push({ name, value: this.parseWithBindingValue() });
           this.localBindings.push(name);
           scopedBindingNames.push(name);
+          sawAnyItem = true;
         } else {
           break;
         }
@@ -6788,6 +7254,14 @@ class Parser {
           break;
         }
         this.consume();
+      }
+
+      if (!sawAnyItem) {
+        throw new AppError(
+          "E_SYNTAX",
+          "Expected at least one item in WITH block",
+          ...this.posPair(withToken),
+        );
       }
 
       return {
@@ -7153,12 +7627,25 @@ class Parser {
     };
   }
 
+  // ORDER BY clause — see select.rst lines 36-68.
+  //
+  //   order by
+  //     <order-expr> [ asc | desc ] [ empty { first | last } ]
+  //     [ then ... ]
+  //
+  // Multiple ordering terms chain through `then`. `asc` is the default
+  // direction. `empty first` is the default when ascending; `empty last`
+  // when descending. Each <order-expr> must be a singleton of an orderable
+  // (primitive) type — object types are not orderable.
   private parseOrderBy(): { field: string; direction: "asc" | "desc" } {
     this.expect("kw_order", "Expected 'order'");
     this.expect("kw_by", "Expected 'by' after 'order'");
     return this.parseOrderTerm("order by");
   }
 
+  // One ordering term plus optional `then <next-term>` continuation.
+  // Same production as the recursive tail of `order by ... [then ...]` in
+  // select.rst — implemented as right-recursion through `then`.
   private parseOrderTerm(context: string): OrderExpr {
     // ORDER BY can be a field path (e.g. `Issue.body`) OR a free expression
     // (e.g. `len(Text.body)`, `Issue.priority.name ?? Issue.status.name`).
@@ -7221,14 +7708,28 @@ class Parser {
     return { field, expr, direction, nullsPosition, then };
   }
 
+  // Parse the trailing FILTER/ORDER BY/OFFSET/LIMIT chain that appears on
+  // SELECT (select.rst), DELETE (delete.rst), and shape-element subqueries
+  // (shapes.rst). The grammar fixes the order — `filter` must precede
+  // `order by`, which must precede `offset`, which must precede `limit` —
+  // and `stage` enforces it. Each clause is optional and at most one of
+  // each kind may appear. See select.rst lines 11-23 for the canonical
+  // ordering and the per-clause descriptions on lines 25-89.
   private parseClauseChain(): ClauseChain {
     const clauses: ClauseChain = {};
     let stage = 0;
 
+    // Per select.rst lines 11-23 each clause is wrapped in `[ ... ]` — i.e.
+    // optional and at-most-one. Detect duplicates (stage == current) with a
+    // dedicated error, and out-of-order placement (stage > current) with the
+    // ordering error.
     while (true) {
       const token = this.peek();
       if (token.kind === "kw_filter") {
-        if (stage > 0) {
+        if (stage === 1) {
+          throw new AppError("E_SYNTAX", "'filter' may only appear once", ...this.posPair(token));
+        }
+        if (stage > 1) {
           throw new AppError("E_SYNTAX", "'filter' must appear before ordering and pagination", ...this.posPair(token));
         }
         clauses.filter = this.parseFilter();
@@ -7237,7 +7738,10 @@ class Parser {
       }
 
       if (token.kind === "kw_order") {
-        if (stage > 1) {
+        if (stage === 2) {
+          throw new AppError("E_SYNTAX", "'order by' may only appear once", ...this.posPair(token));
+        }
+        if (stage > 2) {
           throw new AppError("E_SYNTAX", "'order by' must appear before offset/limit", ...this.posPair(token));
         }
         clauses.orderBy = this.parseOrderBy();
@@ -7246,7 +7750,10 @@ class Parser {
       }
 
       if (token.kind === "kw_offset") {
-        if (stage > 2) {
+        if (stage === 3) {
+          throw new AppError("E_SYNTAX", "'offset' may only appear once", ...this.posPair(token));
+        }
+        if (stage > 3) {
           throw new AppError("E_SYNTAX", "'offset' must appear before 'limit'", ...this.posPair(token));
         }
         this.consume();
@@ -7258,6 +7765,9 @@ class Parser {
       }
 
       if (token.kind === "kw_limit") {
+        if (stage === 4) {
+          throw new AppError("E_SYNTAX", "'limit' may only appear once", ...this.posPair(token));
+        }
         this.consume();
         const result = this.parseLimitOffsetValue("limit");
         clauses.limit = result.value;

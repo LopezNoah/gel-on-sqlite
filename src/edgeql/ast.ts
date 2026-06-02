@@ -763,7 +763,13 @@ export type InsertValue =
   | ForStatement;
 
 export interface InsertConflict {
+  // Single-field conflict target — `unless conflict on .name`.
   onField?: string;
+  // Tuple conflict target — `unless conflict on (.first, .last)` per
+  // insert.rst lines 67-71. `onField` is set to the first field for
+  // back-compat with existing consumers; `onFields` carries the full list
+  // when the target is a tuple of two or more references.
+  onFields?: string[];
   else?:
     | {
         kind: "select";

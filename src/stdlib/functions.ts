@@ -218,21 +218,43 @@ export const executeStdlibFunction = (name: string, args: RuntimeFunctionArg[]):
     case "math::e":
       return Math.E;
     case "math::acos":
-      return unaryNumeric(args[0], (value) => Math.acos(value));
+      return unaryNumeric(args[0], (value) => {
+        if (value < -1 || value > 1 || !Number.isFinite(value)) {
+          throw new Error("input is out of range for math::acos");
+        }
+        return Math.acos(value);
+      });
     case "math::asin":
-      return unaryNumeric(args[0], (value) => Math.asin(value));
+      return unaryNumeric(args[0], (value) => {
+        if (value < -1 || value > 1 || !Number.isFinite(value)) {
+          throw new Error("input is out of range for math::asin");
+        }
+        return Math.asin(value);
+      });
     case "math::atan":
       return unaryNumeric(args[0], (value) => Math.atan(value));
     case "math::atan2":
       return Math.atan2(toNumber(args[0]), toNumber(args[1]));
     case "math::cos":
-      return unaryNumeric(args[0], (value) => Math.cos(value));
+      return unaryNumeric(args[0], (value) => {
+        if (!Number.isFinite(value)) throw new Error("input is out of range for math::cos");
+        return Math.cos(value);
+      });
     case "math::cot":
-      return unaryNumeric(args[0], (value) => 1 / Math.tan(value));
+      return unaryNumeric(args[0], (value) => {
+        if (!Number.isFinite(value)) throw new Error("input is out of range for math::cot");
+        return 1 / Math.tan(value);
+      });
     case "math::sin":
-      return unaryNumeric(args[0], (value) => Math.sin(value));
+      return unaryNumeric(args[0], (value) => {
+        if (!Number.isFinite(value)) throw new Error("input is out of range for math::sin");
+        return Math.sin(value);
+      });
     case "math::tan":
-      return unaryNumeric(args[0], (value) => Math.tan(value));
+      return unaryNumeric(args[0], (value) => {
+        if (!Number.isFinite(value)) throw new Error("input is out of range for math::tan");
+        return Math.tan(value);
+      });
     case "std::datetime_current":
     case "std::datetime_of_transaction":
     case "std::datetime_of_statement":
@@ -257,11 +279,37 @@ export const executeStdlibFunction = (name: string, args: RuntimeFunctionArg[]):
       }
       return inner;
     }
-    case "std::assert_single":
-    case "std::assert_distinct":
-      return typeof args[0] === "object" && args[0] !== null && "kind" in args[0] && args[0].kind === "set"
-        ? args[0].values
-        : args[0];
+    case "std::assert_single": {
+      // Pass-through unless the input is a set with >1 element; then raise.
+      const raw = args[0];
+      const isSet = typeof raw === "object" && raw !== null && "kind" in raw && raw.kind === "set";
+      const values = isSet ? raw.values : Array.isArray(raw) ? raw : raw == null ? [] : [raw];
+      if (values.length > 1) {
+        const msg = args.length > 1 ? extractScalar(args[1]) : null;
+        throw new Error(typeof msg === "string" && msg ? msg : "assert_single violation");
+      }
+      return isSet ? raw.values : raw;
+    }
+    case "std::assert_distinct": {
+      const raw = args[0];
+      const isSet = typeof raw === "object" && raw !== null && "kind" in raw && raw.kind === "set";
+      const values = isSet ? raw.values : Array.isArray(raw) ? raw : raw == null ? [] : [raw];
+      if (values.length !== new Set(values.map((v) => JSON.stringify(v))).size) {
+        const msg = args.length > 1 ? extractScalar(args[1]) : null;
+        throw new Error(typeof msg === "string" && msg ? msg : "assert_distinct violation");
+      }
+      return isSet ? raw.values : raw;
+    }
+    case "std::assert": {
+      // `assert(cond)` and `assert(cond, message := …)`: raise "assertion
+      // failed" (or the custom message) on false; pass `true`/`{}` through.
+      const cond = extractScalar(args[0]);
+      if (cond === false || cond === 0) {
+        const msg = args.length > 1 ? extractScalar(args[1]) : null;
+        throw new Error(typeof msg === "string" && msg ? msg : "assertion failed");
+      }
+      return cond;
+    }
     case "std::all": {
       const raw = args[0];
       const values = typeof raw === "object" && raw !== null && "kind" in raw && raw.kind === "set"
@@ -432,6 +480,9 @@ export const executeStdlibFunction = (name: string, args: RuntimeFunctionArg[]):
           : [];
       const idx = toNumber(args[1]);
       const normalized = idx < 0 ? arr.length + idx : idx;
+      if (normalized < 0 || normalized >= arr.length) {
+        throw new Error(`array index ${idx} is out of bounds`);
+      }
       const value = extractScalar(args[2]) as ScalarValue;
       arr[normalized] = value;
       return arr;
@@ -444,7 +495,13 @@ export const executeStdlibFunction = (name: string, args: RuntimeFunctionArg[]):
           ? [...raw.values]
           : [];
       const idx = toNumber(args[1]);
-      const normalized = idx < 0 ? Math.max(0, arr.length + idx) : Math.min(arr.length, idx);
+      // EdgeQL allows insert at [0, len] (length-inclusive — appending) and at
+      // [-len, -1] (negative offsets from the end). Anything outside that band
+      // raises "array index N is out of bounds".
+      if (idx > arr.length || idx < -arr.length - 1) {
+        throw new Error(`array index ${idx} is out of bounds`);
+      }
+      const normalized = idx < 0 ? arr.length + idx + 1 : idx;
       const value = extractScalar(args[2]) as ScalarValue;
       arr.splice(normalized, 0, value);
       return arr;
@@ -513,7 +570,7 @@ export const executeStdlibFunction = (name: string, args: RuntimeFunctionArg[]):
       if (part === "day") {
         return date.day;
       }
-      return null;
+      throw new Error(`invalid unit for cal::date_get: '${part}'`);
     }
     case "cal::time_get": {
       const time = parseTimeComponents(String(extractScalar(args[0]) ?? ""));
@@ -527,7 +584,7 @@ export const executeStdlibFunction = (name: string, args: RuntimeFunctionArg[]):
       if (part === "second") {
         return time.second;
       }
-      return null;
+      throw new Error(`invalid unit for cal::time_get: '${part}'`);
     }
     case "std::duration_get": {
       const duration = parseDurationParts(String(extractScalar(args[0]) ?? ""));
@@ -541,7 +598,9 @@ export const executeStdlibFunction = (name: string, args: RuntimeFunctionArg[]):
       if (part === "seconds") {
         return duration.seconds;
       }
-      return null;
+      // EdgeQL only accepts hours/minutes/seconds — `days`, `epoch`, etc. are
+      // rejected. Match the upstream message so tests recognise it.
+      throw new Error(`invalid unit for std::duration_get: '${part}'`);
     }
     case "std::datetime_truncate": {
       const part = String(extractScalar(args[0]) ?? "").toLowerCase();
