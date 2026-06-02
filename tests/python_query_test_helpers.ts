@@ -13,7 +13,16 @@ export function unorderedSet(items: unknown[]): UnorderedSet {
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  // Asymmetric matchers (`expect.any`, `expect.objectContaining`, …) carry an
+  // `asymmetricMatch` method; treat them as opaque values so callers fall
+  // through to a plain `toEqual` rather than recursing into matcher internals.
+  if (typeof (value as { asymmetricMatch?: unknown }).asymmetricMatch === "function") {
+    return false;
+  }
+  return true;
 }
 
 function stable(value: unknown): unknown {

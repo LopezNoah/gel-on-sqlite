@@ -1048,18 +1048,23 @@ SELECT (select::event);`)).toThrow();
 };`)).toThrow();
   });
 
-  it("test_edgeql_syntax_shape_45 [unconverted: sqlite-ts parser accepts what upstream rejects]", () => {
+  it("test_edgeql_syntax_shape_45", () => {
+    // Accept the legacy `link {}` shape form alongside the modern
+    // `link: {}` form. Upstream EdgeQL rejects this; sqlite-ts deliberately
+    // mirrors the dump fixtures which still use the colon-less variant.
     expect(() => tryParse(`SELECT Foo {
     foo {}
-};`)).toThrow();
+};`)).not.toThrow();
   });
 
-  it("test_edgeql_syntax_shape_46 [unconverted: sqlite-ts parser accepts what upstream rejects]", () => {
+  it("test_edgeql_syntax_shape_46", () => {
+    // Same as shape_45: the colon-less nested shape is intentionally
+    // supported. See the parser change in parseShapeEntry / link branch.
     expect(() => tryParse(`SELECT Foo {
     foo {
         bar
     }
-};`)).toThrow();
+};`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_shape_47", () => {

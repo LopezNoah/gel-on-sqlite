@@ -7384,41 +7384,57 @@ export const executeQueryUnitWithTrace = (
       expanded.push(ast);
     }
 
-    for (const ast of expanded) {
-      if (ast.kind === "for" && ast.body.kind === "insert"
-        && ast.iteratorExpr.kind === "set_literal") {
-        // AST-level desugar of `FOR x IN {literals…} UNION (INSERT T { … })`:
-        // emit one cleanly-lowered INSERT per literal with the iter binding
-        // substituted in. No expression evaluation happens here — only
-        // symbolic substitution of `binding_ref(x)` with the literal value.
-        const iterValues = ast.iteratorExpr.values;
-        const effectiveValues: (ScalarValue | null)[] = iterValues.length === 0 && ast.optional
-          ? [null]
-          : (iterValues as (ScalarValue | null)[]);
-        for (const value of effectiveValues) {
-          const insertValues: Record<string, InsertValue> = {};
-          for (const [key, v] of Object.entries(ast.body.values)) {
-            if (typeof v === "object" && v !== null && "kind" in v
-              && (v as { kind?: unknown }).kind === "binding_ref"
-              && (v as { name?: unknown }).name === ast.variable) {
-              insertValues[key] = value as InsertValue;
-            } else {
-              insertValues[key] = v;
+    // Indexed iteration so we can splice FOR-INSERT desugar results in place
+    // (instead of appending at the end). Statement ordering matters: a later
+    // INSERT may reference rows produced by an earlier FOR-INSERT, so the
+    // expanded children must run *before* whatever followed the FOR.
+    for (let stmtIdx = 0; stmtIdx < expanded.length; stmtIdx += 1) {
+      const ast = expanded[stmtIdx];
+      if (ast.kind === "for" && ast.body.kind === "insert") {
+        // AST-level desugar of `FOR x IN <iter> UNION (INSERT T { … })`:
+        // when the iterator yields a flat set of scalar values we can emit
+        // one cleanly-lowered INSERT per value with `binding_ref(x)` in the
+        // body values substituted by the corresponding literal.
+        //
+        // The raw set-literal case is handled inline (no schema/db touch
+        // needed); richer atom-shaped iterators (concat-of-set-literals,
+        // function calls, paren-wrapped expressions, …) get evaluated via
+        // `evaluateForIteratorValues`, which already knows how to lower
+        // those shapes through the IR/SQL pipeline.
+        const iterValues: unknown[] | undefined = ast.iteratorExpr.kind === "set_literal"
+          ? ast.iteratorExpr.values
+          : tryEvaluateScalarIteratorValues(ast.iteratorExpr, schema, db, context);
+        if (iterValues !== undefined) {
+          const effectiveValues: (ScalarValue | null)[] = iterValues.length === 0 && ast.optional
+            ? [null]
+            : (iterValues as (ScalarValue | null)[]);
+          const children: InsertStatement[] = [];
+          for (const value of effectiveValues) {
+            const insertValues: Record<string, InsertValue> = {};
+            for (const [key, v] of Object.entries(ast.body.values)) {
+              if (typeof v === "object" && v !== null && "kind" in v
+                && (v as { kind?: unknown }).kind === "binding_ref"
+                && (v as { name?: unknown }).name === ast.variable) {
+                insertValues[key] = value as InsertValue;
+              } else {
+                insertValues[key] = v;
+              }
             }
+            children.push({
+              ...ast.body,
+              with: value !== null && isScalarValue(value)
+                ? [
+                    ...(ast.body.with ?? []).filter((binding) => binding.name !== ast.variable),
+                    { name: ast.variable, value: { kind: "literal", value } },
+                  ]
+                : ast.body.with,
+              values: insertValues,
+            });
           }
-          const insertAst: InsertStatement = {
-            ...ast.body,
-            with: value !== null && isScalarValue(value)
-              ? [
-                  ...(ast.body.with ?? []).filter((binding) => binding.name !== ast.variable),
-                  { name: ast.variable, value: { kind: "literal", value } },
-                ]
-              : ast.body.with,
-            values: insertValues,
-          };
-          expanded.push(insertAst);
+          expanded.splice(stmtIdx, 1, ...children);
+          stmtIdx -= 1; // re-enter the new first child on the next loop step
+          continue;
         }
-        continue;
       }
       if (ast.kind === "for") {
         // Non-INSERT FOR statements (e.g. `FOR x IN T UNION (x.name, T.name)`)
@@ -8069,6 +8085,43 @@ const evaluateForIteratorValues = (
   }
 
   return [null];
+};
+
+/**
+ * Tries to evaluate a FOR iterator expression to a flat list of scalar values.
+ * Returns `undefined` when the iterator isn't reducible to scalars at this
+ * stage (e.g. it depends on object selects whose ids haven't been allocated
+ * yet). Used by the top-level FOR-INSERT desugar so iterators like
+ * `{'A','B'} ++ {'1','2'}` lower through the normal IR/SQL pipeline.
+ */
+const tryEvaluateScalarIteratorValues = (
+  expr: ForStatement["iteratorExpr"],
+  schema: SchemaSnapshot,
+  db: SQLiteDatabase,
+  context: SecurityContext,
+): unknown[] | undefined => {
+  switch (expr.kind) {
+    case "literal":
+    case "set_literal":
+    case "concat":
+    case "function_call":
+    case "distinct":
+      break;
+    default:
+      return undefined;
+  }
+  let values: unknown[];
+  try {
+    values = evaluateForIteratorValues(expr, schema, db, context);
+  } catch {
+    return undefined;
+  }
+  for (const value of values) {
+    if (value !== null && !isScalarValue(value as unknown)) {
+      return undefined;
+    }
+  }
+  return values;
 };
 
 const bindSelectAstVariable = (
@@ -8849,7 +8902,11 @@ const materializeFieldValue = (
       if (!Array.isArray(parsed)) {
         return [];
       }
-      return parsed.map((item) => coerceScalarForOutput(field.type, item)).sort((a, b) => String(a).localeCompare(String(b)));
+      // Preserve the on-disk insertion order — multi-property values are
+      // stored as a JSON array in their write order, and EdgeQL's `multi
+      // property` semantics expose them in that order unless an explicit
+      // `ORDER BY` reshapes them in the shape clause.
+      return parsed.map((item) => coerceScalarForOutput(field.type, item));
     } catch {
       return [];
     }
@@ -9554,17 +9611,23 @@ const runGelSelectExprSQL = (db: SQLiteDatabase, sqlArtifact: SQLArtifact): unkn
   return rows.map((row) => {
     // Scalar select: the SQL projects a single `value` column. Parse JSON-
     // shaped strings ("true"/"false"/"null"/"[…]"/"{…}") so the test layer
-    // sees a structured value.
+    // sees a structured value. A bare numeric string like "11" must stay as
+    // a string — it's the result of `CAST(x AS TEXT)` and turning it back
+    // into a number defeats the cast.
     if (Object.prototype.hasOwnProperty.call(row, "value")) {
       const value = row.value;
       if (typeof value !== "string") {
         return value ?? null;
       }
-      try {
-        return JSON.parse(value);
-      } catch {
-        return value;
+      if (value === "true" || value === "false" || value === "null"
+        || value.startsWith("[") || value.startsWith("{")) {
+        try {
+          return JSON.parse(value);
+        } catch {
+          return value;
+        }
       }
+      return value;
     }
     // Shape select: GEL-IR emits id, __source_type, plus shape columns. Drop
     // the engine-internal slots and return an object whose keys match the

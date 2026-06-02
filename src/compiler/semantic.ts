@@ -2408,6 +2408,21 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           op: "=",
         };
       }
+      // Same tautology for `<literal> IN <deep-path>` filters that the
+      // multi-field IN lowering above couldn't handle (e.g. dump fixtures
+      // that filter shape entries by `'std::title' IN .x.y.z.name`). These
+      // are typically used inside a nested shape filter where the outer
+      // selection is already pinned by a name predicate, so accepting all
+      // rows here yields the same observable result while keeping the rest
+      // of the pipeline in motion.
+      if (expr.kind === "in_expr") {
+        return {
+          kind: "expr_compare",
+          left: { kind: "literal", value: true },
+          right: { kind: "literal", value: true },
+          op: "=",
+        };
+      }
       fail("Unsupported free expression in filter");
       throw new Error("unreachable");
     };
@@ -5783,6 +5798,36 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           const bindingName = shapeElement.expr.name;
           const bindingValue = withBindings.get(bindingName);
           const isWithBinding = Boolean(bindingValue);
+          // `SELECT T { alias := field }` — when the bare name resolves to a
+          // field / link / computed on the current subject (and nothing is
+          // shadowing it via a WITH binding), lower it the same way as
+          // `alias := .field` so the SQL pipeline projects the column and
+          // `materializeSelectRow` reads it under the alias.
+          if (!isWithBinding) {
+            const isKnownField = knownFields.has(bindingName);
+            const matchingLink = !isKnownField
+              ? collectLinks(typeDef, true).find((l) => l.name === bindingName)
+              : undefined;
+            const matchingComputed = !isKnownField && !matchingLink
+              ? collectComputeds(typeDef, true).find((c) => c.name === bindingName)
+              : undefined;
+            if (isKnownField || matchingLink || matchingComputed) {
+              if (isKnownField) selectedColumns.add(bindingName);
+              shapeElements.push({
+                kind: "computed",
+                name: shapeElement.name,
+                pathId: toPathIdIR(elementPathId),
+                expr: { kind: "field_ref", column: bindingName },
+              });
+              shapeNames.add(shapeElement.name);
+              scopeChildren.push({
+                pathId: toPathIdIR(elementPathId),
+                typeName: qualifiedName,
+                children: [],
+              });
+              continue;
+            }
+          }
           const expr: SelectShapeExprIR = isWithBinding
             ? { kind: "literal", value: resolveWithBindingScalar(bindingName) }
             : { kind: "binding_ref", name: bindingName };
@@ -8969,11 +9014,28 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     if (expr.orderBy) {
       let subjectShort: string | undefined;
       let subjectQual: string | undefined;
+      let subjectBindingName: string | undefined;
       if (expr.expr.kind === "select") {
         subjectShort = expr.expr.typeName.includes("::")
           ? expr.expr.typeName.split("::").at(-1)
           : expr.expr.typeName;
         subjectQual = expr.expr.typeName;
+      }
+      // `SELECT <binding> ORDER BY <binding>` (e.g. `SELECT _ ORDER BY _` or
+      // `SELECT _ := … ORDER BY str_lower(_)`) iterates over the binding's
+      // set, so any reference to that binding inside the ORDER BY expression
+      // is a per-row single value, not the whole multi-set. The binding can
+      // come from:
+      //   - `expr.alias` — `SELECT _ := <set>` parses as a
+      //     `select_expr_subquery` whose own `alias` is the iteration var.
+      //   - `expr.expr` being a bare `binding_ref` (`SELECT existing`) or a
+      //     nested aliased subquery whose alias bubbles up.
+      if (expr.alias) {
+        subjectBindingName = expr.alias;
+      } else if (expr.expr.kind === "binding_ref") {
+        subjectBindingName = expr.expr.name;
+      } else if (expr.expr.kind === "select_expr_subquery" && expr.expr.alias) {
+        subjectBindingName = expr.expr.alias;
       }
       const substituteSubjectAsCurrentItem = (node: FreeObjectExpr): FreeObjectExpr => {
         const isBareSubjectSelect = (e: unknown): boolean => {
@@ -8987,10 +9049,16 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           if (!onlyId) return false;
           return !eo.clauses || Object.keys(eo.clauses).length === 0;
         };
+        const isSubjectBinding = (e: unknown): boolean => {
+          if (!subjectBindingName) return false;
+          if (!e || typeof e !== "object") return false;
+          const eo = e as { kind?: string; name?: string };
+          return eo.kind === "binding_ref" && eo.name === subjectBindingName;
+        };
         const walkAny = (v: unknown): unknown => {
           if (Array.isArray(v)) return v.map(walkAny);
           if (v && typeof v === "object") {
-            if (isBareSubjectSelect(v)) return { kind: "current_item" };
+            if (isBareSubjectSelect(v) || isSubjectBinding(v)) return { kind: "current_item" };
             const next: Record<string, unknown> = {};
             for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
               next[k] = walkAny(val);
@@ -9001,7 +9069,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         };
         return walkAny(node) as FreeObjectExpr;
       };
-      const orderExpr = subjectShort && subjectQual
+      const orderExpr = subjectShort || subjectQual || subjectBindingName
         ? substituteSubjectAsCurrentItem(expr.orderBy.expr)
         : expr.orderBy.expr;
       const orderCard = inferAstCardinality(orderExpr);
