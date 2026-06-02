@@ -1212,7 +1212,8 @@ const parseFunctionBody = (fn: FunctionDeclaration): FunctionDef["body"] => {
   const trimmed = fn.body.text.trim();
   const paramNames = new Set(fn.params.map((param) => param.name));
   const statement = parseFunctionStatement(trimmed);
-  if (statement?.kind === "select_expr" && !statement.with && statement.expr.kind === "concat") {
+  if (statement?.kind === "select_expr" && !statement.with && statement.expr.kind === "concat"
+    && concatRoundtripsAsExprBody(statement.expr, paramNames)) {
     return {
       kind: "expr",
       expr: astToFunctionExpr(statement.expr, paramNames),
@@ -1277,6 +1278,23 @@ const isQueryStatement = (statement: Statement | undefined): boolean => {
     || statement?.kind === "update"
     || statement?.kind === "delete"
     || statement?.kind === "for";
+};
+
+// True when a `concat` expression can be losslessly represented as an `expr`
+// function body. The simple `expr` form only carries `literal`s and
+// `param_ref`s; richer forms (casts, function calls, math, etc.) get silently
+// degraded by `astToFunctionExprPart` and must go through the `query` body
+// path so the full pipeline can lower them.
+const concatRoundtripsAsExprBody = (
+  expr: FreeObjectExpr,
+  paramNames: Set<string>,
+): boolean => {
+  if (expr.kind === "concat") {
+    return expr.parts.every((part) => concatRoundtripsAsExprBody(part, paramNames));
+  }
+  if (expr.kind === "literal") return true;
+  if (expr.kind === "binding_ref") return paramNames.has(expr.name);
+  return false;
 };
 
 const astToFunctionExpr = (

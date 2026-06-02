@@ -14,6 +14,7 @@ import { schemaSnapshotFromDeclarative } from "../src/schema/uiSchema.js";
 import { SchemaSnapshot } from "../src/schema/schema.js";
 import { expect } from "vitest";
 import { parseDeclarativeSchema } from "../src/schema/sdl_adapter.js";
+import { expectLike } from "./python_query_test_helpers.js";
 
 const cloneSchemaSnapshot = (schema: SchemaSnapshot): SchemaSnapshot =>
   new SchemaSnapshot(
@@ -282,8 +283,14 @@ export class QueryHarness {
       }
     }
 
+    // Clone the schema before stashing it: the harness keeps the live
+    // instance (so test-time DDL like `create function` mutates the
+    // test's own snapshot), and the cache keeps an unmodified copy that
+    // future `create({})` calls can clone from. Without the clone the
+    // cache holds the same reference the test then mutates, leaking
+    // UDFs / aliases between tests that share the empty cache key.
     snapshotCache.set(key, {
-      schema,
+      schema: cloneSchemaSnapshot(schema),
       buffer: db.serialize(),
       fallbackModule,
     });
@@ -303,7 +310,12 @@ export class QueryHarness {
   }
 
   /**
-   * Direct port of EdgeDB's assert_query_result
+   * Direct port of EdgeDB's assert_query_result — uses `expectLike` so
+   * matching is "expected keys must be present and equal" rather than strict
+   * structural equality. This mirrors Python's `assert_data_shape` semantics:
+   * the test author lists the fields they care about, extra fields in the
+   * actual row are not a failure. Switch to `expect(...).toEqual(expected)`
+   * locally if you need strict matching for a particular case.
    */
   assertQueryResult(q: string, expected: any) {
     const result = this.query(q);
@@ -311,7 +323,7 @@ export class QueryHarness {
       result && typeof result === "object" && "rows" in result
         ? (result as { rows: unknown }).rows
         : result;
-    expect(normalized).toEqual(expected);
+    expectLike(normalized, expected);
   }
 
   /**

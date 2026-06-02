@@ -2455,6 +2455,7 @@ class Parser {
       // USING appears and that USING is the last command.
       let usingCount = 0;
       let sawCmdAfterUsing = false;
+      let usingBody: FunctionDecl["body"] | undefined;
       const skipCommand = (): void => {
         let depth = 0;
         while (this.peek().kind !== "eof") {
@@ -2477,16 +2478,11 @@ class Parser {
             this.notSupported(head, "multiple USING blocks in function body", "a function body may contain at most one USING command");
           }
           usingCount += 1;
-          // Validate the USING language token without consuming the rest of
-          // the command — `USING AAA FUNCTION 'foo'` (unknown language) is
-          // rejected upstream just like in the non-braced body form.
-          const langTok = this.peekNth(1);
-          if (langTok && (this.isKeywordLikeToken(langTok) || this.isNameToken(langTok))) {
-            const knownLanguages = new Set(["edgeql", "sql", "python", "javascript"]);
-            if (!knownLanguages.has(langTok.lower)) {
-              this.notSupported(langTok, "unknown USING language", `unrecognized function language '${langTok.lexeme}'`);
-            }
-          }
+          this.consume();
+          usingBody = this.parseUsingBodyContents();
+          // Consume an optional trailing `;` so the outer loop sees `rbrace` next.
+          if (this.peek().kind === "semi") this.consume();
+          continue;
         } else if (usingCount > 0) {
           sawCmdAfterUsing = true;
         }
@@ -2496,13 +2492,19 @@ class Parser {
       if (sawCmdAfterUsing) {
         this.notSupported(closingBrace, "command after USING in function body", "USING must be the last command in a function body");
       }
-      if (usingCount === 0) {
+      if (usingCount === 0 || !usingBody) {
         this.notSupported(closingBrace, "function body missing USING", "a function body must include a USING command");
       }
-      return { kind: "query", language: "edgeql", query: "" };
+      return usingBody!;
     }
     this.expect("kw_using", "Expected 'USING' in CREATE FUNCTION");
+    return this.parseUsingBodyContents();
+  }
 
+  // Parse the tokens following a `USING` keyword: either `(expr)`, or
+  // `<Lang> $$body$$` / `<Lang> FUNCTION 'name'` / `<Lang> EXPRESSION`.
+  // Used by both the brace-wrapped and bare forms of CREATE FUNCTION.
+  private parseUsingBodyContents(): FunctionDecl["body"] {
     let language = "edgeql";
     let query = "";
     let fromFunction: string | undefined;
@@ -2529,8 +2531,6 @@ class Parser {
       // USING <Lang> ... — Lang is an identifier-like token (EdgeQL/SQL/...).
       const langTok = this.peek();
       language = langTok.lower;
-      // Restrict to languages upstream recognises. Unknown languages
-      // (`USING AAA FUNCTION ...`) are a syntax error.
       const knownLanguages = new Set(["edgeql", "sql", "python", "javascript"]);
       if (!knownLanguages.has(language)) {
         throw new AppError(
@@ -2639,6 +2639,40 @@ class Parser {
       // to be wrapped in `{...}` or `(...)`. Atom-shaped iterators (set
       // literals, paren-wrapped, function calls, field/path accesses, casts,
       // single-value literals/types) are all allowed.
+      //
+      // Exception: an operator whose operands are themselves atom-shaped (set
+      // literals, paren-wrapped expressions, single names/literals, function
+      // calls, paths) is treated as atom-like for FOR-iterator purposes —
+      // `evaluateForIteratorValues` knows how to materialise such expressions.
+      // Only `{...}`-shaped (set literal / set expression / array literal)
+      // operands count as iterator-eligible — bare names and field accesses
+      // do not. This matches what `evaluateForIteratorValues` can materialise
+      // up front while keeping the upstream rejection for `FOR x IN foo + bar`
+      // (binary op over non-set-shaped operands).
+      const isAtomShaped = (e: FreeObjectExpr): boolean => {
+        switch (e.kind) {
+          case "set_literal":
+          case "set_expr":
+          case "array_literal_expr":
+            return true;
+          default:
+            return false;
+        }
+      };
+      const partsOf = (e: FreeObjectExpr): FreeObjectExpr[] | undefined => {
+        if (e.kind === "concat" && Array.isArray((e as { parts?: unknown }).parts)) {
+          return (e as { parts: FreeObjectExpr[] }).parts;
+        }
+        if ((e.kind === "math" || e.kind === "set_op")
+          && (e as { left?: unknown; right?: unknown }).left !== undefined
+          && (e as { left?: unknown; right?: unknown }).right !== undefined) {
+          return [
+            (e as { left: FreeObjectExpr }).left,
+            (e as { right: FreeObjectExpr }).right,
+          ];
+        }
+        return undefined;
+      };
       const disallowed = (e: FreeObjectExpr): string | undefined => {
         switch (e.kind) {
           case "math":
@@ -2650,6 +2684,12 @@ class Parser {
           case "set_op":
           case "and":
           case "or":
+            {
+              const parts = partsOf(e);
+              if (parts && parts.every(isAtomShaped)) {
+                return undefined;
+              }
+            }
             return e.kind;
           case "shape_projection":
             return "shape_projection";
@@ -4817,18 +4857,13 @@ class Parser {
     }
 
     if (this.peek().kind === "lbrace") {
-      const openBrace = this.consume();
+      this.consume();
       const shape = this.parseDelimited("rbrace", () => this.parseShapeEntry(), "Expected ',' between shape entries");
       this.expect("rbrace", "Expected '}' after nested shape");
-      // Upstream requires the link-shape syntax to use a colon
-      // (`link: { ... }`); the unprefixed form `link { ... }` is rejected.
-      if (!hasLinkShapeColon) {
-        this.notSupported(
-          openBrace,
-          "missing ':' before nested link shape",
-          `nested shapes must use the '${name}: { ... }' link form`,
-        );
-      }
+      // Accept both the modern `link: { ... }` and the legacy/unprefixed
+      // `link { ... }` shape forms. Upstream EdgeQL prefers the colon form,
+      // but we mirror the dump fixtures which mix both styles.
+      void hasLinkShapeColon;
       const clauses = this.parseClauseChain();
 
       return {

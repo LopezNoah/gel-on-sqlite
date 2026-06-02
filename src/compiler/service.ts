@@ -236,6 +236,19 @@ const compileSqlWithStranglerFig = (
     parameterValues: context.params,
     globalValues: context.globals,
     resolveTypeColumns: makeTypeColumnsResolver(schema),
+    resolveEnumMembers: (typeName: string) => {
+      const scalar = schema.listScalarTypes().find((s) => `${s.module}::${s.name}` === typeName);
+      return scalar?.enumValues && scalar.enumValues.length > 0 ? scalar.enumValues : undefined;
+    },
+    resolveFieldEnumMembers: (typeName: string, fieldName: string) => {
+      const typeDef = schema.getType(typeName);
+      const field = typeDef?.fields.find((f) => f.name === fieldName);
+      if (!field) return undefined;
+      const enumName = field.enumTypeName ?? field.targetTypeName;
+      if (!enumName) return undefined;
+      const scalar = schema.listScalarTypes().find((s) => `${s.module}::${s.name}` === enumName);
+      return scalar?.enumValues && scalar.enumValues.length > 0 ? scalar.enumValues : undefined;
+    },
   }) as SQLArtifact & GelIRSQLArtifact;
 
   return {

@@ -250,6 +250,12 @@ const resolveTypeRef = (ctx: IRCompileContext, name: string): TypeRef => {
   if (isUniversalObjectRefName(name)) {
     return universalObjectTypeRef(ctx, name);
   }
+  // Unqualified builtin scalars (`str`, `int64`, …) should resolve as
+  // `std::*` rather than `<active-module>::*` so downstream SQL lowering
+  // recognises them via `sqlCastTarget` / `qualifyTypeName`.
+  if (!name.includes("::") && BUILTIN_SCALAR_NAMES[name]) {
+    return unknownTypeRef(BUILTIN_SCALAR_NAMES[name]);
+  }
   return unknownTypeRef(qualifyTypeName(name, ctx.module));
 };
 
@@ -556,6 +562,34 @@ const resolveBacklinkPointerRef = (
   return undefined;
 };
 
+// `T.<computed-property>` resolves at AST→IR time by substituting the
+// computed body. Supports the structured property-computed shapes the SDL
+// adapter emits (literal, set-of-literals, concat of literal/param parts).
+// Returns undefined when the type has no such computed or the body uses a
+// shape we don't lower here — callers fall through to their existing failure
+// handling.
+const tryLowerComputedPropertyOnTypePath = (
+  ctx: IRCompileContext,
+  source: Set,
+  fieldName: string,
+): Set | undefined => {
+  if (!ctx.schema) return undefined;
+  const typeDef = ctx.schema.getType(source.typeref.id);
+  if (!typeDef) return undefined;
+  const computed = typeDef.computeds?.find(
+    (candidate) => candidate.kind === "property" && candidate.name === fieldName,
+  );
+  if (!computed || computed.kind !== "property") return undefined;
+  const expr = computed.expr;
+  if (expr.kind === "literal") {
+    return literalToSet(expr.value);
+  }
+  if (expr.kind === "set_literal") {
+    return compileSetConstructor(expr.values.map((value) => literalToSet(value)), "set_literal");
+  }
+  return undefined;
+};
+
 const compilePathSteps = (steps: EdgeQLPathStep[], ctx: IRCompileContext): Set => {
   if (steps.length === 0) {
     return literalToSet(null);
@@ -584,6 +618,15 @@ const compilePathSteps = (steps: EdgeQLPathStep[], ctx: IRCompileContext): Set =
     if (step.kind === "ptr") {
       const ptrref = resolvePointerRef(ctx, out.typeref, step.name);
       if (!ptrref) {
+        // No backing column / link / backlink — but the source type may
+        // expose `step.name` as a computed property (`property p := <expr>`).
+        // Lower the computed body in place so the SQL pipeline sees the
+        // substituted expression instead of an unresolved pointer.
+        const computedSet = tryLowerComputedPropertyOnTypePath(ctx, out, step.name);
+        if (computedSet) {
+          out = computedSet;
+          continue;
+        }
         return { ...out, pathId: defaultPathId("path_steps") };
       }
       out = extendPathSetDirectional(
@@ -822,17 +865,35 @@ const compileEnumCast = (
   enumMembers: string[],
   inner: Set,
 ): Set => {
+  // Validate any literal members up-front so bad input still fails at
+  // compile time, but always wrap the inner in a `type_cast` to the enum
+  // target so downstream consumers (especially ORDER BY) can recover the
+  // enum target type and emit enum-aware SQL (mapping each member to its
+  // declared index for sorting).
   const stringValues = tryExtractSetOfStringConstants(inner);
   if (stringValues !== undefined) {
-    const validated = stringValues.map((value) => {
+    for (const value of stringValues) {
       if (!enumMembers.includes(value)) {
         failSemantic(`invalid input value for enum '${enumQualifiedName}': "${value}"`);
       }
-      return enumLiteralSet(value);
-    });
-    return compileSetConstructor(validated, "enum_cast");
+    }
   }
-  return inner;
+  const toType = resolveTypeRef(ctx, enumQualifiedName);
+  return {
+    kind: "set",
+    expr: {
+      kind: "type_cast",
+      fromType: inner.typeref,
+      toType,
+      expr: inner,
+    },
+    pathId: defaultPathId(`cast:${enumQualifiedName}`),
+    typeref: toType,
+    shape: [],
+    isBinding: false,
+    isMaterializedRef: false,
+    isSchemaAlias: false,
+  };
 };
 
 const BUILTIN_SCALAR_NAMES: Record<string, string> = {
@@ -1105,11 +1166,14 @@ const tryResolveSchemaAliasSet = (ctx: IRCompileContext, name: string): Set | un
     body = inner;
   }
 
-  let ast: SelectStatement | undefined;
+  // `alias N := SELECT T {...}` parses to a `select`; `alias N := {2,3,5}`
+  // (and other free-expression bodies) parse to `select_expr` wrapping a
+  // FreeObjectExpr. Both shapes resolve through `compileFreeObjectExpr`.
+  let ast: EdgeQLStatement | undefined;
   for (const candidate of [body, `SELECT ${body}`]) {
     try {
       const parsed = parseEdgeQL(candidate);
-      if (parsed.kind === "select") {
+      if (parsed.kind === "select" || parsed.kind === "select_expr") {
         ast = parsed;
         break;
       }
@@ -1126,6 +1190,9 @@ const tryResolveSchemaAliasSet = (ctx: IRCompileContext, name: string): Set | un
   }
   ctx.aliasResolutionStack.add(qualified);
   try {
+    if (ast.kind === "select_expr") {
+      return compileFreeObjectExpr(ast.expr, ctx);
+    }
     return compileFreeObjectExpr(
       {
         kind: "select",
@@ -1158,6 +1225,8 @@ const functionCallArgToFreeObjectExpr = (arg: FunctionCallArgExpr): FreeObjectEx
     if (arg.kind === "binding_ref") return { kind: "binding_ref", name: arg.name };
     if (arg.kind === "function_call") return { kind: "function_call", call: arg.call };
     if (arg.kind === "parameter") return { kind: "parameter", name: arg.name, castType: arg.castType } as FreeObjectExpr;
+    // `a := <expr>` — peel the envelope; the inner arg is what the function sees.
+    if (arg.kind === "named_arg") return functionCallArgToFreeObjectExpr(arg.arg);
     // set_literal / array_literal already match FreeObjectExpr kinds.
     return arg as FreeObjectExpr;
   }
@@ -1205,8 +1274,11 @@ const substituteBindingRefsInFreeObjectExpr = (
     case "logical":
     case "and":
     case "or":
+    case "set_op":
     case "coalesce":
       return { ...expr, left: rec(expr.left), right: rec(expr.right) } as FreeObjectExpr;
+    case "concat":
+      return { ...expr, parts: expr.parts.map(rec) };
     case "if_else":
       return { ...expr, thenExpr: rec(expr.thenExpr), condition: rec(expr.condition), elseExpr: rec(expr.elseExpr) };
     case "function_call":
@@ -1284,10 +1356,41 @@ const tryBuildInlinedUDFBody = (
   if (matches.length !== 1) return undefined;
   const fn = matches[0];
   if (fn.body.kind !== "query") return undefined;
-  // Only inline when the call's arity exactly fills the parameter list, so
-  // each parameter gets a substitution (no defaults / optional gaps to fill).
-  if (fn.params.length !== args.length) return undefined;
+  // Variadic parameters still bail — those need slot-list reshaping the
+  // inliner doesn't model yet.
   if (fn.params.some((p) => p.variadic)) return undefined;
+  // Split call-site args into positional and named. Named args (`a := X`)
+  // bypass positional ordering and bind by parameter name; remaining
+  // positional args fill the leading positional / namedOnly-excluded slots
+  // in declared order. Anything left over (more positional args than
+  // positional slots) is unsupported.
+  const positionalArgs: FunctionCallArgExpr[] = [];
+  const namedArgs = new Map<string, FunctionCallArgExpr>();
+  for (const arg of args) {
+    if (arg && typeof arg === "object" && "kind" in arg && arg.kind === "named_arg") {
+      namedArgs.set(arg.name, arg.arg);
+    } else {
+      positionalArgs.push(arg);
+    }
+  }
+  const positionalParams = fn.params.filter((p) => !p.namedOnly);
+  if (positionalArgs.length > positionalParams.length) return undefined;
+  // Every named arg must match a declared parameter (named-only or not).
+  for (const name of namedArgs.keys()) {
+    if (!fn.params.some((p) => p.name === name)) return undefined;
+  }
+  // Parameters not satisfied by either positional or named args need defaults
+  // (or must be OPTIONAL — defaultable to empty set).
+  let positionalCursor = 0;
+  for (const param of fn.params) {
+    const isPositionalSlot = !param.namedOnly;
+    const filled = (isPositionalSlot && positionalCursor < positionalArgs.length)
+      || namedArgs.has(param.name);
+    if (isPositionalSlot && positionalCursor < positionalArgs.length) {
+      positionalCursor += 1;
+    }
+    if (!filled && param.default === undefined && !param.optional) return undefined;
+  }
   let parsed: EdgeQLStatement;
   try {
     parsed = parseEdgeQL(fn.body.query);
@@ -1307,9 +1410,22 @@ const tryBuildInlinedUDFBody = (
   // Cartesian product (9 rows) instead of co-iteration (3 rows).
   const inlineCtx = childScope(ctx);
   const substitutions = new Map<string, FreeObjectExpr>();
-  for (let i = 0; i < fn.params.length; i += 1) {
-    const param = fn.params[i];
-    const argExpr = functionCallArgToFreeObjectExpr(args[i]);
+  positionalCursor = 0;
+  for (const param of fn.params) {
+    let argExpr: FreeObjectExpr;
+    if (!param.namedOnly && positionalCursor < positionalArgs.length) {
+      argExpr = functionCallArgToFreeObjectExpr(positionalArgs[positionalCursor]);
+      positionalCursor += 1;
+    } else if (namedArgs.has(param.name)) {
+      argExpr = functionCallArgToFreeObjectExpr(namedArgs.get(param.name)!);
+    } else if (param.default !== undefined) {
+      argExpr = { kind: "literal", value: param.default };
+    } else {
+      // OPTIONAL param without an explicit default: substitute the empty
+      // set so the body's body-level set-union behaves correctly (e.g.
+      // `{<str>x, y}` with empty x reduces to `{y}`).
+      argExpr = { kind: "set_literal", values: [] };
+    }
     let argIR: Set;
     try {
       argIR = compileFreeObjectExpr(argExpr, ctx);
@@ -1383,6 +1499,23 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
       }
       const aliasSet = tryResolveSchemaAliasSet(ctx, expr.name);
       if (aliasSet) return aliasSet;
+      // Inside a shape body (`SELECT T { x := p2 }`) the surrounding
+      // compileShape binds `__subject__` / `__current__` to the source set.
+      // A bare name like `p2` should resolve to a field/link on the subject
+      // before we fall through to the unknown-type-root marker — otherwise
+      // the SQL pipeline never emits the `p2` column and the alias yields a
+      // phantom type-reference value.
+      const subject = resolveBinding(ctx, "__current__") ?? resolveBinding(ctx, "__subject__");
+      if (subject) {
+        const ptrref = resolvePointerRef(ctx, subject.typeref, expr.name);
+        if (ptrref) {
+          return ptrref.computedLinkAliasIsBackward
+            ? extendPathSetDirectional(subject, ptrref, "inbound")
+            : extendPathSet(subject, ptrref);
+        }
+        const computedSet = tryLowerComputedPropertyOnTypePath(ctx, subject, expr.name);
+        if (computedSet) return computedSet;
+      }
       const typeref = resolveTypeRef(ctx, expr.name);
       return setFromTypeRoot(typeref);
     }
@@ -1628,9 +1761,18 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
       }
 
       const ptrref = resolvePointerRef(ctx, source.typeref, expr.field);
-      return ptrref ? (
-        ptrref.computedLinkAliasIsBackward ? extendPathSetDirectional(source, ptrref, "inbound") : extendPathSet(source, ptrref)
-      ) : {
+      if (ptrref) {
+        return ptrref.computedLinkAliasIsBackward
+          ? extendPathSetDirectional(source, ptrref, "inbound")
+          : extendPathSet(source, ptrref);
+      }
+      // No direct pointer / link / backlink — try computed-property
+      // substitution before the unknown-type fallback. Lets `Type.computedP`
+      // lower as the computed body's expression rather than a phantom
+      // `std::anytype` pointer reference.
+      const computedSet = tryLowerComputedPropertyOnTypePath(ctx, source, expr.field);
+      if (computedSet) return computedSet;
+      return {
         kind: "set",
         expr: {
           kind: "pointer",
@@ -2003,8 +2145,12 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
     }
 
     case "function_call": {
-      const args = expr.call.args.map((arg) => {
+      // Compile a single call-site arg into a Set. Named args (`a := X`)
+      // wrap their value in a `named_arg` envelope; peel it before compiling
+      // so the inner expression is what gets lowered.
+      const compileCallArg = (arg: FunctionCallArgExpr): Set => {
         if (arg && typeof arg === "object" && "kind" in arg) {
+          if (arg.kind === "named_arg") return compileCallArg(arg.arg);
           if (arg.kind === "expr") {
             return compileFreeObjectExpr(arg.expr, ctx);
           }
@@ -2025,7 +2171,8 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
           return compileFreeObjectExpr(arg as FreeObjectExpr, ctx);
         }
         return literalToSet(null);
-      });
+      };
+      const args = expr.call.args.map(compileCallArg);
       // Inline expr-body UDFs at AST→IR time so the SQL compiler can lower
       // the call as if the body were written inline (substituting parameter
       // references with the actual argument expressions). Falls back to a
@@ -2357,7 +2504,11 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
         const innerSet = compileFreeObjectExpr(innerExpr, ctx);
         const literal = tryExtractStringConstant(innerSet);
         if (literal !== undefined) return enumLiteralSet(literal);
-        return innerSet;
+        // Fall through to the generic type_cast emission below so the SQL
+        // pipeline produces a real `CAST(<inner> AS TEXT)` wrapper; otherwise
+        // an int-valued inner survives unchanged and the runtime ends up
+        // formatting it via SQLite's default REAL coercion (e.g. `99` →
+        // `'99.0'`).
       }
 
       const inner = compileFreeObjectExpr(innerExpr, ctx);

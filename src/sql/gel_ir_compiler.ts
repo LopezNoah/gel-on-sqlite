@@ -2,6 +2,7 @@ import { quoteIdent, quoteLiteral, tableNameForType } from "../codegen/sql.js";
 import type { RuntimeTarget } from "../runtime/target.js";
 import { lowerStdlibFunctionSql } from "./stdlib_lowering.js";
 import type {
+  ArrayExpr,
   BaseConstant,
   CallArg,
   CoalesceExpr,
@@ -42,6 +43,12 @@ export interface GelIRSQLArtifact {
 export interface GelIRCompileOptions {
   resolveTableName?: (typeName: string) => string;
   resolveTypeColumns?: (typeName: string) => globalThis.Set<string> | undefined;
+  resolveEnumMembers?: (typeName: string) => string[] | undefined;
+  // For sortable enum lookups via a field path: `(typeName, fieldName)` —
+  // returns the enum's declared member list when the field is enum-typed.
+  // Lets ORDER BY recover the right ordering for inlined unions of
+  // enum-typed pointers (e.g. `{O.o0, O.o1}`).
+  resolveFieldEnumMembers?: (typeName: string, fieldName: string) => string[] | undefined;
   maxShapeDepth?: number;
   target?: RuntimeTarget;
   parameterValues?: Record<string, ScalarValue>;
@@ -131,9 +138,13 @@ export const compileGelIRToSQL = (
       if (scalarSql) {
         let sql = scalarSql;
         if (selectOrderBy && selectOrderBy.length > 0) {
-          const orderSql = compileValueSortExprs(selectOrderBy, quoteIdent("value"));
+          const orderSql = compileValueSortExprs(selectOrderBy, quoteIdent("value"), target, options.resolveEnumMembers, options.resolveFieldEnumMembers);
           if (orderSql) {
-            sql += ` ORDER BY ${orderSql}`;
+            // SQLite forbids ORDER BY expressions over a `UNION ALL` chain
+            // unless wrapped in a subquery — only bare column names are
+            // allowed at the union's top level. Wrap unconditionally so any
+            // expression-shaped sort key (e.g. `str_lower(value)`) works.
+            sql = `SELECT ${quoteIdent("value")} AS ${quoteIdent("value")} FROM (${sql}) ORDER BY ${orderSql}`;
           }
         }
         // Statement-level LIMIT / OFFSET are no different from the wrapped
@@ -1252,6 +1263,27 @@ const compileScalarSelectSQLInner = (
       outerWheres,
     );
   }
+  // `<T>{multi-row-source}` distributes over rows — wrap each row's value
+  // with the cast rather than letting `compileValueSetSQL` aggregate the
+  // inner into a single JSON-array scalar. Without this `<str>{a,b}` lowers
+  // as `CAST(json_group_array(value) AS TEXT)` and returns one row holding
+  // `'[a,b]'`, instead of two rows holding `'a'` and `'b'`.
+  if (sourceSet.expr.kind === "type_cast") {
+    const castExpr = sourceSet.expr as TypeCast;
+    // `<T>{}` (cast applied to the empty-set marker) yields zero rows, not
+    // a single `CAST(NULL AS T)` row. Without this guard `<int64>{}` lowers
+    // to `SELECT ? AS value` (one NULL row) and any surrounding union picks
+    // up that phantom row.
+    if (isTopLevelEmptySetMarker(castExpr.expr)) {
+      return `SELECT NULL AS ${quoteIdent("value")} WHERE 0`;
+    }
+    const innerScalarSql = compileScalarSelectSQL(castExpr.expr, params, target, options, outerWheres);
+    if (innerScalarSql) {
+      const castTarget = sqlCastTarget(castExpr.toType);
+      const valueExpr = castTarget ? `CAST(${quoteIdent("value")} AS ${castTarget})` : quoteIdent("value");
+      return `SELECT ${valueExpr} AS ${quoteIdent("value")} FROM (${innerScalarSql})`;
+    }
+  }
   if (sourceSet.expr.kind === "function_call") {
     const call = sourceSet.expr as FunctionCall;
     const shortName = call.functionName.split("::").pop() ?? call.functionName;
@@ -1269,7 +1301,7 @@ const compileScalarSelectSQLInner = (
     const inner = compileScalarSelectSQL(result, params, target, options, innerWheres);
     if (!inner) return null;
     let sql = `SELECT ${quoteIdent("value")} AS ${quoteIdent("value")} FROM (${inner})`;
-    const orderSql = compileValueSortExprs(selectExpr.orderBy, quoteIdent("value"));
+    const orderSql = compileValueSortExprs(selectExpr.orderBy, quoteIdent("value"), target, options.resolveEnumMembers, options.resolveFieldEnumMembers);
     if (orderSql) {
       sql += ` ORDER BY ${orderSql}`;
     }
@@ -1400,6 +1432,50 @@ const compileScalarSelectSQLInner = (
           return setLevel;
         }
       }
+    }
+  }
+  // `{a, b, c} IS T` distributes — emit one boolean per union arm so the
+  // top-level select yields three rows (matching EdgeQL set semantics)
+  // instead of one aggregated row. Each arm's check uses enum membership
+  // when T resolves to an enum scalar.
+  if (expr.kind === "type_check_op") {
+    const tc = expr as TypeCheckOpExpr;
+    const leftExpr = tc.left.expr;
+    if (leftExpr.kind === "operator_call" && (leftExpr as OperatorCall).operator === "union") {
+      const targetEnumMembers = options.resolveEnumMembers?.(qualifyTypeName(tc.right));
+      const memberSet = targetEnumMembers ? new globalThis.Set(targetEnumMembers) : undefined;
+      const armParts: string[] = [];
+      for (const arg of orderedCallArgs((leftExpr as OperatorCall).args)) {
+        const armScalar = compileScalarSelectSQL(arg.expr, params, target, options);
+        if (!armScalar) {
+          armParts.length = 0;
+          break;
+        }
+        // Determine per-arm match. If the inner is a pointer/constant we can
+        // statically resolve; otherwise emit a runtime CASE over the value.
+        const inner = arg.expr.expr;
+        let perArm: string;
+        if (memberSet) {
+          if (inner.kind === "pointer") {
+            const ptr = inner as Pointer;
+            const fieldMembers = ptr.ptrref.outSource && ptr.ptrref.shortName
+              ? options.resolveFieldEnumMembers?.(qualifyTypeName(ptr.ptrref.outSource), ptr.ptrref.shortName)
+              : undefined;
+            perArm = fieldMembers && fieldMembers.join("|") === targetEnumMembers!.join("|") ? "json('true')" : "json('false')";
+          } else if (inner.kind === "string_constant") {
+            const value = (inner as BaseConstant).value;
+            perArm = typeof value === "string" && memberSet.has(value) ? "json('true')" : "json('false')";
+          } else {
+            const branches = targetEnumMembers!.map((m) => `WHEN ${quoteLiteral(m)} THEN json('true')`).join(" ");
+            perArm = `(CASE "value" ${branches} ELSE json('false') END)`;
+          }
+        } else {
+          perArm = "json('false')";
+        }
+        if (tc.op === "is not") perArm = `(CASE WHEN ${perArm} = json('true') THEN json('false') ELSE json('true') END)`;
+        armParts.push(`SELECT ${perArm} AS ${quoteIdent("value")} FROM (${armScalar})`);
+      }
+      if (armParts.length > 0) return armParts.join(" UNION ALL ");
     }
   }
   if (expr.kind === "operator_call" && (expr as OperatorCall).operator === "union") {
@@ -2297,6 +2373,8 @@ const compileValueSetSQLWithAliases = (
 
   const literal = extractScalarConstant(unwrapped.result);
   if (literal !== undefined) {
+    const inlineSql = inlineIntegerConstantSql(unwrapped.result.expr, literal);
+    if (inlineSql !== undefined) return inlineSql;
     params.push(typeof literal === "boolean" ? Number(literal) : literal);
     return "?";
   }
@@ -2355,17 +2433,85 @@ const compileForExprSort = (order: SortExpr, valueAlias: string): string => {
   return `json_extract(${quoteIdent(valueAlias)}, '$[${index}]') ${order.direction.toUpperCase()}`;
 };
 
-const compileValueSortExprs = (orderBy: SortExpr[] | undefined, valueSql: string): string => {
+const compileValueSortExprs = (
+  orderBy: SortExpr[] | undefined,
+  valueSql: string,
+  target: RuntimeTarget = "sqlite",
+  enumMembersByName?: (name: string) => string[] | undefined,
+  fieldEnumMembers?: (typeName: string, fieldName: string) => string[] | undefined,
+): string => {
   return (orderBy ?? [])
     .map((entry) => {
-      const expr = compileValueSortPath(entry.path, valueSql);
+      const expr = compileValueSortPath(entry.path, valueSql, target, enumMembersByName, fieldEnumMembers);
       return expr ? `${expr} ${entry.direction.toUpperCase()}` : "";
     })
     .filter((entry) => entry.length > 0)
     .join(", ");
 };
 
-const compileValueSortPath = (set: Set, valueSql: string): string | null => {
+// Returns the enum member list when every arm of a union dereferences a
+// pointer to the same enum-typed scalar (e.g. `{O.o0, O.o1}` over `UserEnum`
+// columns). Used by `ORDER BY` lowering to recover enum-member ordering for
+// unions that have already been inlined past their declared type cast.
+// Sources of truth, in order: direct enum-typed `outTarget`, the per-field
+// `resolveFieldEnumMembers` lookup (since SQLite-side fields lower to TEXT
+// columns that no longer carry the enum target on `outTarget`).
+const unionEnumMembers = (
+  call: OperatorCall,
+  enumMembersByName: ((name: string) => string[] | undefined) | undefined,
+  fieldEnumMembers: ((typeName: string, fieldName: string) => string[] | undefined) | undefined,
+): string[] | undefined => {
+  const args = orderedCallArgs(call.args);
+  if (args.length === 0) return undefined;
+  let members: string[] | undefined;
+  let memberKey: string | undefined;
+  // Look for at least one pointer-arg that resolves to an enum. Non-pointer
+  // arms (string_constant, etc.) are tolerated as long as their literal value
+  // is a member of the enum — they come from inlined computed properties
+  // like `o2 := <UserEnum>'dolor'` where the cast was elided.
+  for (const arg of args) {
+    const expr = arg.expr.expr;
+    if (expr.kind !== "pointer") continue;
+    const ptr = expr as Pointer;
+    const outName = ptr.ptrref.outTarget ? qualifyTypeName(ptr.ptrref.outTarget) : undefined;
+    let argMembers = outName ? enumMembersByName?.(outName) : undefined;
+    if (!argMembers && fieldEnumMembers && ptr.ptrref.outSource && ptr.ptrref.shortName) {
+      argMembers = fieldEnumMembers(qualifyTypeName(ptr.ptrref.outSource), ptr.ptrref.shortName);
+    }
+    if (!argMembers) continue;
+    const key = argMembers.join("|");
+    if (members === undefined) {
+      members = argMembers;
+      memberKey = key;
+    } else if (memberKey !== key) {
+      return undefined;
+    }
+  }
+  if (!members) return undefined;
+  // Sanity-check non-pointer arms (string constants): every one must be a
+  // member of the recovered enum, otherwise the union isn't actually
+  // enum-typed and we should fall back to lexicographic ordering.
+  const memberSet = new globalThis.Set(members);
+  for (const arg of args) {
+    const expr = arg.expr.expr;
+    if (expr.kind === "pointer") continue;
+    if (expr.kind === "string_constant") {
+      const value = (expr as BaseConstant).value;
+      if (typeof value !== "string" || !memberSet.has(value)) return undefined;
+      continue;
+    }
+    return undefined;
+  }
+  return members;
+};
+
+const compileValueSortPath = (
+  set: Set,
+  valueSql: string,
+  target: RuntimeTarget = "sqlite",
+  enumMembersByName?: (name: string) => string[] | undefined,
+  fieldEnumMembers?: (typeName: string, fieldName: string) => string[] | undefined,
+): string | null => {
   if (set.expr.kind === "index_expr") {
     const index = extractNumericLiteral((set.expr as IndexExpr).index);
     return index === undefined ? null : `json_extract(${valueSql}, '$[${index}]')`;
@@ -2377,6 +2523,56 @@ const compileValueSortPath = (set: Set, valueSql: string): string | null => {
       if (index === undefined) return null;
       return `json_extract(${valueSql}, '$[${index}].${pointer.ptrref.shortName}')`;
     }
+  }
+  // `<EnumT>X` as the sort key — enum order is by declared member index,
+  // not lexicographic. SQLite stores enums as TEXT so we emit a `CASE`
+  // mapping each member to its zero-based index and sort by that.
+  if (set.expr.kind === "type_cast") {
+    const cast = set.expr as TypeCast;
+    const enumName = qualifyTypeName(cast.toType);
+    const members = enumMembersByName?.(enumName);
+    if (members && members.length > 0) {
+      const innerSql = compileValueSortPath(cast.expr, valueSql, target, enumMembersByName);
+      if (innerSql) {
+        const branches = members.map((member, idx) => `WHEN ${quoteLiteral(member)} THEN ${idx}`);
+        return `CASE ${innerSql} ${branches.join(" ")} ELSE NULL END`;
+      }
+    }
+  }
+  // `ORDER BY _` (or any bare reference to the SELECT's iteration variable)
+  // — the IR inlines `_` as the surrounding source set. That source compiles
+  // to the outer `SELECT ... AS value`, so the per-row sort key is just the
+  // `value` column. When every branch of the inlined union dereferences an
+  // enum-typed pointer, apply the same enum→index mapping as an explicit
+  // `<EnumT>` cast so the resulting order matches declared member order.
+  if (set.expr.kind === "operator_call" && (set.expr as OperatorCall).operator === "union") {
+    const members = unionEnumMembers(set.expr as OperatorCall, enumMembersByName, fieldEnumMembers);
+    if (members && members.length > 0) {
+      const branches = members.map((member, idx) => `WHEN ${quoteLiteral(member)} THEN ${idx}`);
+      return `CASE ${valueSql} ${branches.join(" ")} ELSE NULL END`;
+    }
+    return valueSql;
+  }
+  // `ORDER BY <fn>(w)` where `w` is the surrounding select's result set:
+  // the IR inlines `w` as a copy of the source set, so each function-call arg
+  // whose expr matches a multi-row producer is the per-row value reference.
+  // Lower the call via the stdlib template, substituting `valueSql` for each
+  // argument that looks like the row value.
+  if (set.expr.kind === "function_call") {
+    const call = set.expr as FunctionCall;
+    const args = orderedCallArgs(call.args);
+    const argSqls: string[] = [];
+    for (const arg of args) {
+      const argInnerKind = arg.expr.expr.kind;
+      if (argInnerKind === "operator_call" || argInnerKind === "string_constant"
+        || argInnerKind === "integer_constant" || argInnerKind === "pointer") {
+        argSqls.push(valueSql);
+      } else {
+        return null;
+      }
+    }
+    const lowered = lowerStdlibFunctionSql(target, call.functionName, argSqls);
+    if (lowered) return lowered;
   }
   return null;
 };
@@ -2955,6 +3151,8 @@ const compileValueSetSQL = (
 
   const literal = extractScalarConstant(unwrapped.result);
   if (literal !== undefined) {
+    const inlineSql = inlineIntegerConstantSql(unwrapped.result.expr, literal);
+    if (inlineSql !== undefined) return inlineSql;
     params.push(typeof literal === "boolean" ? Number(literal) : literal)
     return "?";
   }
@@ -4090,6 +4288,21 @@ const operatorToInfixSql = (operator: string): string | null => {
   return null;
 };
 
+// Integer constants must be emitted inline rather than via `?` parameters
+// because better-sqlite3 binds JS `number` arguments as IEEE-754 REALs —
+// which means `CAST(? AS TEXT)` with value 99 yields `'99.0'` instead of
+// `'99'`. Inlining (`CAST(99 AS TEXT)` → `'99'`) sidesteps that coercion.
+// Returns the SQL fragment when `expr` is an integer-shaped constant whose
+// JS value is safely representable as a base-10 integer; otherwise undefined.
+const inlineIntegerConstantSql = (expr: Expr, value: ScalarValue): string | undefined => {
+  if (expr.kind !== "integer_constant") return undefined;
+  if (typeof value === "number" && Number.isFinite(value) && Number.isInteger(value)) {
+    return String(value);
+  }
+  if (typeof value === "bigint") return value.toString(10);
+  return undefined;
+};
+
 const extractScalarConstant = (set: Set): ScalarValue | undefined => {
   const expr = set.expr;
   if (
@@ -4159,14 +4372,36 @@ const selectYieldsEmptyByStrictOperand = (set: Set): boolean => {
     }
     if (!STRICT_BINARY_OPS.has(op)) return false;
     const args = orderedCallArgs((expr as OperatorCall).args);
-    return args.some((arg) => isTopLevelEmptySetMarker(arg.expr));
+    // Recurse so nested strict operators propagate empty up the tree —
+    // `x * x + 2 * x + 1` with empty `x` should yield empty even though the
+    // outer `+`'s direct args are themselves `operator_call`s, not raw empty
+    // markers.
+    return args.some((arg) => isTopLevelEmptySetMarker(arg.expr) || selectYieldsEmptyByStrictOperand(arg.expr));
   }
   if (expr.kind === "function_call") {
     const call = expr as FunctionCall;
+    // Inlined UDF: the body's own strictness governs empty-propagation —
+    // recursing into the body picks up set-constructor / union bodies that
+    // remain defined when some arg is empty (e.g. `{<str>x, y}` with empty
+    // `x` still yields `{y}`). Skip the per-arg shortcut here.
+    if (call.body) {
+      return selectYieldsEmptyByStrictOperand(call.body);
+    }
     const shortName = (call.functionName ?? "").split("::").pop() ?? "";
     if (NON_STRICT_STDLIB.has(shortName)) return false;
     const args = orderedCallArgs(call.args);
-    return args.some((arg) => isTopLevelEmptySetMarker(arg.expr));
+    return args.some((arg) => isTopLevelEmptySetMarker(arg.expr) || selectYieldsEmptyByStrictOperand(arg.expr));
+  }
+  // Array and tuple literals are constructed from the cross-product of their
+  // element sets — an empty element means zero rows. `[<int64>{}]` and
+  // `(<int64>{}, 1)` both yield empty.
+  if (expr.kind === "array") {
+    const elements = (expr as ArrayExpr).elements;
+    return elements.some((el) => isTopLevelEmptySetMarker(el) || selectYieldsEmptyByStrictOperand(el));
+  }
+  if (expr.kind === "tuple") {
+    const elements = (expr as Tuple).elements;
+    return elements.some((el) => isTopLevelEmptySetMarker(el.val) || selectYieldsEmptyByStrictOperand(el.val));
   }
   return false;
 };

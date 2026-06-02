@@ -325,8 +325,12 @@ describe("TestDump01", () => {
               ],
             },
             {
+              // m1 has `constraint max_len_value(3)` — the stdlib constraint
+              // shows up under properties.constraints just like
+              // std::exclusive on `id`. Its abstract has no `annotation
+              // title`, so `annotations` is the empty bag.
               name: "m1",
-              constraints: [],
+              constraints: [{ annotations: [] }],
             },
           ],
         },
