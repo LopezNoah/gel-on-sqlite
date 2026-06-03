@@ -5733,7 +5733,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           const resolved = resolveFunctionOrFail(shapeElement.expr.call.name, shapeElement.expr.call.args.length);
           // EdgeQL `sum(.link.field)` over a multi link aggregates the target
           // column across the linked rows. Recognise it here and emit a
-          // `link_aggregate` IR entry so sql/compiler can lower it to a
+          // `link_aggregate` IR entry so SQL lowering can lower it to a
           // correlated SUM subquery — otherwise the per-row N+1 fallback in
           // materializeSelectRow has to fire one SQL per outer row.
           const aggregateLinkExpr = (() => {

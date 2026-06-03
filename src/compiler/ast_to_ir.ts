@@ -435,6 +435,65 @@ const extendPathSetDirectional = (source: Set, ptrref: PointerRef, direction: "o
   };
 };
 
+// Walk the parsed AST for bare-parameter (`$N`) usage that the EdgeQL spec
+// requires to be wrapped in a type cast, and reject shape projections applied
+// to a parameter set (`<int64>$0 { id }`) — there is no underlying object to
+// shape. We thread an `insideCast` flag through the walk; once any explicit
+// `<T>$0` covers a parameter, it's typed and any nested occurrence is OK.
+const validateParametersInStatement = (statement: EdgeQLStatement): void => {
+  const visitExpr = (expr: unknown, insideCast: boolean): void => {
+    if (!expr || typeof expr !== "object") return;
+    const node = expr as Record<string, unknown> & { kind?: string };
+    if (node.kind === "parameter") {
+      if (!insideCast) {
+        const name = typeof node.name === "string" ? node.name : "";
+        throw new AppError("E_SEMANTIC", `missing a type cast before the parameter $${name}`, 1, 1);
+      }
+      return;
+    }
+    if (node.kind === "cast") {
+      visitExpr(node.expr, true);
+      return;
+    }
+    if (node.kind === "shape_projection") {
+      const inner = node.expr as Record<string, unknown> | undefined;
+      const innerKind = inner && typeof inner === "object" ? (inner as { kind?: string }).kind : undefined;
+      const isParamShape = innerKind === "parameter"
+        || (innerKind === "cast" && ((inner as { expr?: { kind?: string } }).expr?.kind === "parameter"));
+      if (isParamShape) {
+        throw new AppError("E_SEMANTIC", "cannot apply a shape to the parameter", 1, 1);
+      }
+      visitExpr(node.expr, insideCast);
+      if (Array.isArray(node.shape)) {
+        for (const el of node.shape) visitExpr(el, insideCast);
+      }
+      return;
+    }
+    for (const value of Object.values(node)) {
+      if (Array.isArray(value)) {
+        for (const item of value) visitExpr(item, insideCast);
+      } else if (value && typeof value === "object") {
+        visitExpr(value, insideCast);
+      }
+    }
+  };
+
+  if (statement.kind === "select_expr") {
+    visitExpr(statement.expr, false);
+    return;
+  }
+  if (statement.kind === "select_free") {
+    for (const entry of statement.entries) visitExpr(entry.expr, false);
+    return;
+  }
+  if (statement.kind === "select") {
+    if (statement.filter) visitExpr(statement.filter, false);
+    if (statement.shape) for (const el of statement.shape) visitExpr(el, false);
+    if (statement.limit) visitExpr(statement.limit, false);
+    if (statement.offset) visitExpr(statement.offset, false);
+  }
+};
+
 const containsSubSelect = (expr: FreeObjectExpr): boolean => {
   if (!expr || typeof expr !== "object") return false;
   if (expr.kind === "select_expr_subquery") return true;
@@ -3312,6 +3371,27 @@ const isSubtypeOf = (ctx: IRCompileContext, childId: string, parentId: string): 
   return walk(childId);
 };
 
+// Decide whether to surface a "no link or property 'X'" error for a shape
+// element whose name failed to resolve against `subject`'s type. Only fires
+// when the subject is a real, schema-resolvable object type — synthesized
+// containers (`unknown:*`, anytype, tuple wrappers, computed alias targets)
+// have no enumerable member list and so we can't tell if the spelling is
+// wrong vs. dynamically added.
+const shouldEnforceShapeMember = (
+  el: EdgeQLShapeElement,
+  subject: Set,
+  ctx: IRCompileContext,
+): boolean => {
+  if (!("name" in el) || !el.name || el.name.startsWith("@")) return false;
+  if (el.name === "id" || el.name === "__type__") return false;
+  if ("origin" in el && el.origin && el.origin !== "explicit") return false;
+  const typeId = subject.typeref.id;
+  if (typeId.startsWith("unknown:") || typeId.startsWith("std::")) return false;
+  if (subject.typeref.isScalar) return false;
+  if (!getResolvedSchemaType(ctx, typeId)) return false;
+  return true;
+};
+
 const validateComputedShapeElement = (
   el: Extract<EdgeQLShapeElement, { kind: "computed" }>,
   subject: Set,
@@ -3425,6 +3505,27 @@ const compileShape = (
     if (el.kind === "field" || el.kind === "link" || el.kind === "computed" || el.kind === "backlink") {
       explicitNames.add(el.name);
     }
+  }
+
+  // Reject `Type { foo, foo }` and `Type { foo, foo := … }` against the same
+  // object. The shape syntax has no semantics for two siblings sharing a name;
+  // the same expression-list quirk used to silently accept it.
+  const seenExplicit = new globalThis.Set<string>();
+  for (const el of shape) {
+    if (el.kind !== "field" && el.kind !== "link" && el.kind !== "computed" && el.kind !== "backlink") continue;
+    if (!el.name || el.name.startsWith("@")) continue;
+    if (el.origin && el.origin !== "explicit") continue;
+    if (seenExplicit.has(el.name)) {
+      const probe = resolvePointerRef(ctx, subject.typeref, el.name);
+      const memberKind = probe && !probe.outTarget.isScalar ? "link" : "property";
+      throw new AppError(
+        "E_SEMANTIC",
+        `duplicate definition of ${memberKind} '${el.name}' of object type '${subject.typeref.id}'`,
+        1,
+        1,
+      );
+    }
+    seenExplicit.add(el.name);
   }
 
   const resolveShapeOrigin = (el: EdgeQLShapeElement): "explicit" | "default" | "splat_expansion" | "materialization" => {
@@ -3660,6 +3761,21 @@ const compileShape = (
       }
       const ptrref = resolvePointerRef(ctx, subject.typeref, el.name);
       if (!ptrref) {
+        // `SELECT User { missing }` — user spelled a field name that doesn't
+        // exist on the source type. Silently skipping turned every typo into
+        // an empty-but-passing shape; surface it so query authors learn at
+        // compile time. Guarded: `id`/`__type__` are implicit on every object
+        // and resolved by the SQL projection itself; non-schema types
+        // (`unknown:*`, tuple wrappers, computed binding aliases) don't have a
+        // resolvable member list, so we can't tell whether the field is real.
+        if (shouldEnforceShapeMember(el, subject, ctx)) {
+          throw new AppError(
+            "E_SEMANTIC",
+            `object type '${subject.typeref.id}' has no link or property '${el.name}'`,
+            1,
+            1,
+          );
+        }
         continue;
       }
       const expr = extendPathSet(subject, ptrref);
@@ -3748,6 +3864,10 @@ const compileShape = (
     if (el.kind === "link") {
       const ptrref = resolvePointerRef(ctx, subject.typeref, el.name);
       if (!ptrref) {
+        // Links with nested shapes can resolve dynamically (subtype-only
+        // pointers reached through `[IS T]`, computed link aliases, etc.) —
+        // skip the strict check here. The field-level check above is enough
+        // to catch the common typo case.
         continue;
       }
       let expr = extendPathSet(subject, ptrref);
@@ -4414,6 +4534,15 @@ const compileSelectStatement = (rawStatement: SelectStatement, ctx: IRCompileCon
     ...statementBase(scoped),
     where: compileFilterToSet(statement.filter, subject, scoped),
     orderBy,
+    // Forward LIMIT/OFFSET literals from the parsed clause chain into the IR;
+    // they were being dropped on the floor, so `SELECT Issue {…} LIMIT 3`
+    // surfaced every row at the SQL layer.
+    limit: statement.limitExpr
+      ? compileFreeObjectExpr(statement.limitExpr, scoped)
+      : statement.limit === undefined ? undefined : literalToSet(statement.limit),
+    offset: statement.offsetExpr
+      ? compileFreeObjectExpr(statement.offsetExpr, scoped)
+      : statement.offset === undefined ? undefined : literalToSet(statement.offset),
     implicitWrapper: false,
     span: statement.pos,
   };
@@ -4577,6 +4706,8 @@ export const compileASTToGelIR = (statement: EdgeQLStatement, options: IRCompile
     globals: new Map(),
     bindingScopes: [new Map()],
   };
+
+  validateParametersInStatement(statement);
 
   if (statement.kind === "select_expr") {
     return compileSelectExprStatement(statement, ctx);
