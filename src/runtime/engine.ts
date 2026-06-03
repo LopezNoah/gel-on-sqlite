@@ -9110,7 +9110,14 @@ const runSelectIR = (
 ): Record<string, unknown>[] => {
   const subjectType = schema.getType(ir.sourceType);
   const isUniversalRoot = ir.sourceType === "std::Object" || ir.sourceType === "default::Object";
-  if (!subjectType && !isUniversalRoot) {
+  // `select GR { ... }` where GR is a WITH-bound expression (not a type)
+  // generates an IR whose `sourceType` names the binding. The SQL artifact
+  // still drives the row data; only the access-policy / type-membership
+  // checks rely on the resolved type, and a missing subject just turns them
+  // into no-ops.
+  const isUnresolvedBindingType = !subjectType && !isUniversalRoot
+    && sqlArtifact.loweringMode === "single_statement";
+  if (!subjectType && !isUniversalRoot && !isUnresolvedBindingType) {
     throw new AppError("E_SEMANTIC", `Unknown type '${ir.sourceType}'`, 1, 1);
   }
 
