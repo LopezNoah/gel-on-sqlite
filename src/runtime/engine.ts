@@ -7,9 +7,10 @@ import { offsetToLineCol, tokenize, type Token } from "../edgeql/tokenizer.js";
 import type { BacklinkExpr, ComputedExpr, DDLStatement, DeleteStatement, FilterExpr, FilterValue, ForStatement, FreeObjectExpr, FunctionCallArgExpr, FunctionCallExpr, InsertStatement, InsertValue, OrderExpr, OrderExprChain, PathStep, SelectExprStatement, SelectStatement, ShapeElement, Statement, TypeExpr, UpdateStatement, WithBinding, WithBindingValue } from "../edgeql/ast.js";
 import type { RuntimeDatabaseAdapter } from "./adapter.js";
 import type { SchemaSnapshot } from "../schema/schema.js";
-import { compileToSQL, computedValueAlias, shapePayloadAlias, type SQLArtifact } from "../sql/compiler.js";
+import type { GelIRSQLArtifact as SQLArtifact } from "../sql/gel_ir_compiler.js";
 import { executeStdlibFunction, resolveStdlibFunction, type RuntimeFunctionArg } from "../stdlib/functions.js";
 import { assertTargetSqlCompatibility, type RuntimeTarget } from "./target.js";
+import type { ShapeElement as GelIRShapeElement, Set as GelIRSet, Statement as GelIRStatement, TypeRef as GelIRTypeRef } from "../ir/gel_ir.js";
 import type { GroupIR, InsertIR, InsertLinkDefaultIR, InsertLinkPropertyIR, IRStatement, OverlayIR, SelectIR, SelectShapeElementIR, UpdateIR, UpdateLinkAssignmentIR } from "../ir/model.js";
 import type { AccessPolicyCondition, AccessPolicyDef, ComputedLinkPropertyExpr, FieldDef, FunctionDef, FunctionExprDef, ScalarType, ScalarValue, TypeDef } from "../types.js";
 import { qualifiedTypeName } from "../schema/schema.js";
@@ -3814,7 +3815,7 @@ const tryEvaluateParsedRuntimeSelect = (
       if (element.kind === "link") {
         // Inline FILTER / ORDER BY / LIMIT / OFFSET on a forward link shape
         // is lowered by the SQL path: the IR carries the link's clauses on
-        // the SelectShapeElementIR, and sql/compiler emits them as
+        // the shape element, and SQL lowering emits them as
         // WHERE / ORDER BY / LIMIT on the correlated subquery. When the
         // SELECT subject is an alias, the link names in this shape can be
         // computeds defined in the alias body (e.g.
@@ -7202,7 +7203,7 @@ export const executeQueryWithTrace = (
     if (ir.kind === "select") {
       result = {
         kind: "select",
-        rows: runSelectIR(db, schema, ir, context, sqlArtifact, sqlTrail),
+        rows: runGelSelectSQL(db, schema, compiled.gelIr, context, sqlArtifact),
       };
     } else if (ir.kind === "select_free") {
       if (sqlArtifact.loweringMode !== "single_statement") {
@@ -7215,12 +7216,12 @@ export const executeQueryWithTrace = (
       }
       result = {
         kind: "select",
-        rows: runSelectFreeSQL(db, sqlArtifact),
+        rows: runGelSelectSQL(db, schema, compiled.gelIr, context, sqlArtifact),
       };
     } else if (ir.kind === "select_expr") {
       result = {
         kind: "select",
-        rows: runGelSelectExprSQL(db, sqlArtifact),
+        rows: runGelSelectSQL(db, schema, compiled.gelIr, context, sqlArtifact),
       };
     } else if (ir.kind === "group") {
       throw new AppError(
@@ -7493,7 +7494,7 @@ export const executeQueryUnitWithTrace = (
 
       let result: QueryResult;
       if (ir.kind === "select") {
-        result = { kind: "select", rows: runSelectIR(db, schema, ir, context, sqlArtifact, sqlTrail) };
+        result = { kind: "select", rows: runGelSelectSQL(db, schema, compiled.gelIr, context, sqlArtifact) };
       } else if (ir.kind === "select_free") {
         if (sqlArtifact.loweringMode !== "single_statement") {
           throw new AppError(
@@ -7503,11 +7504,11 @@ export const executeQueryUnitWithTrace = (
             ast.pos.column,
           );
         }
-        result = { kind: "select", rows: runSelectFreeSQL(db, sqlArtifact) };
+        result = { kind: "select", rows: runGelSelectSQL(db, schema, compiled.gelIr, context, sqlArtifact) };
       } else if (ir.kind === "select_expr") {
         result = {
           kind: "select",
-          rows: runGelSelectExprSQL(db, sqlArtifact),
+          rows: runGelSelectSQL(db, schema, compiled.gelIr, context, sqlArtifact),
         };
       } else if (ir.kind === "group") {
         throw new AppError(
@@ -7882,7 +7883,7 @@ const executeForLoop = (
     const rows = runtimeResult?.kind === "select"
       ? runtimeResult.rows
       : ir.kind === "select_expr"
-        ? runGelSelectExprSQL(db, sqlArtifact)
+        ? runGelSelectSQL(db, schema, compiled.gelIr, context, sqlArtifact)
         : [];
 
     const currentOverlays = extractOverlays(ir);
@@ -7932,7 +7933,7 @@ const executeForLoop = (
     const sqlTrail: SQLArtifact[] = [sqlArtifact];
 
     const rows = ir.kind === "select_expr"
-      ? runGelSelectExprSQL(db, sqlArtifact)
+      ? runGelSelectSQL(db, schema, compiled.gelIr, context, sqlArtifact)
       : [];
 
     const currentOverlays = extractOverlays(ir);
@@ -7963,7 +7964,7 @@ const executeForLoop = (
       assertTargetSqlCompatibility(sqlArtifact.sql, runtimeTarget);
       const sqlTrail: SQLArtifact[] = [sqlArtifact];
 
-      const rows = runSelectIR(db, schema, ir, context, sqlArtifact, sqlTrail);
+      const rows = runGelSelectSQL(db, schema, compiled.gelIr, context, sqlArtifact) as Record<string, unknown>[];
       allRows.push(...rows);
 
       const currentOverlays = extractOverlays(ir);
@@ -8025,7 +8026,7 @@ const evaluateForIteratorValues = (
       return [];
     }
 
-    return runSelectIR(db, schema, compiled.ir, context, compiled.sql, []);
+    return runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
   }
 
   if (expr.kind === "mutation_expr") {
@@ -8768,10 +8769,12 @@ const materializeSelectRow = (
           }
           continue;
         }
-        const nestedSql = compileToSQL(element.expr.query, { target: resolvedRuntimeTarget(context, db) });
-        assertTargetSqlCompatibility(nestedSql.sql, resolvedRuntimeTarget(context, db));
-        sqlTrail.push(nestedSql);
-        output[element.name] = runSelectIR(db, schema, element.expr.query, context, nestedSql, sqlTrail);
+        throw new AppError(
+          "E_UNSUPPORTED",
+          `subquery computed shape '${element.name}' requires Gel SQL lowering; runtime fallback disabled`,
+          1,
+          1,
+        );
       } else if (element.expr.kind === "concat") {
         output[element.name] = element.expr.parts
           .map((part) => (part.kind === "field_ref" ? row[part.column] : part.value))
@@ -8790,8 +8793,8 @@ const materializeSelectRow = (
           1,
         );
       } else if (element.expr.kind === "link_aggregate") {
-        // The aggregate is folded into the outer SELECT by sql/compiler's
-        // compileLinkAggregateExpr — the row always carries the lowered value.
+        // The aggregate is folded into the outer SELECT by SQL lowering, so
+        // the row always carries the lowered value.
         output[element.name] = row[computedValueAlias(element.pathId)];
       } else if (element.expr.kind === "field_suffix_math") {
         const raw = row[element.expr.field];
@@ -8853,9 +8856,8 @@ const materializeSelectRow = (
         continue;
       }
 
-      // sql/compiler unconditionally emits link payloads via
-      // compileLinkArrayExpr, so the JSON-aggregated set is always present
-      // on the row.
+      // SQL lowering emits link payloads as JSON aggregates, so the set is
+      // always present on the row.
       const payload = parsePayloadArray(row[shapePayloadAlias(element.pathId)]) ?? [];
       output[element.name] = treatAsMulti ? payload : (payload[0] ?? null);
       continue;
@@ -8868,9 +8870,9 @@ const materializeSelectRow = (
     const isSingleBacklink = element.multi === false;
     const unwrapSingle = (rows: unknown[]): unknown => rows.length === 0 ? null : rows[0];
 
-    // sql/compiler's compileBacklinkArrayExpr emits json_group_array(json_object(…))
-    // with the full nested shape already materialised, so the payload is
-    // always present and fully shaped on the row.
+    // SQL lowering emits backlinks as json_group_array(json_object(…)) with
+    // the full nested shape already materialised, so the payload is always
+    // present and fully shaped on the row.
     const payload = parsePayloadArray(row[shapePayloadAlias(element.pathId)]) ?? [];
     output[element.name] = isSingleBacklink ? unwrapSingle(payload) : payload;
   }
@@ -9124,8 +9126,7 @@ const runSelectIR = (
   const stmt = db.prepare(sqlArtifact.sql);
   const rows = stmt.all(...sqlArtifact.params);
   // Access policies are evaluated on the already-returned rows. Every column
-  // the policy conditions read is projected by sql/compiler (see
-  // selectedColumns wiring in semantic.ts), so this is a pure in-memory
+  // the policy conditions read is projected by SQL lowering, so this is a pure in-memory
   // filter — no per-row SQL fires.
   const visibleRows = subjectType
     ? rows.filter((row) => evaluateSelectPolicies(schema, db, subjectType, row, context))
@@ -9145,9 +9146,9 @@ const runGroupIR = (
   context: SecurityContext,
   sqlTrail: SQLArtifact[],
 ): Record<string, unknown>[] => {
-  // HACK (not using SQL): GROUP source rows are gathered by trying
+  // HACK (not using GROUP SQL): source rows are gathered by trying
   // tryRuntimeSelectExprEvaluationAst → tryEvaluateParsedRuntimeSelect →
-  // compile+runSelectIR/runGelSelectExprSQL, then grouped in TS below.
+  // compile+runGelSelectSQL, then grouped in TS below.
   // GROUP should be a first-class IR/SQL operation.
   let rows: Record<string, unknown>[] = [];
   const tryExpr = ir.source.kind === "select_expr"
@@ -9169,10 +9170,10 @@ const runGroupIR = (
         });
         if (sourceCompiled.ir.kind === "select") {
           sqlTrail.push(sourceCompiled.sql);
-          rows = runSelectIR(db, schema, sourceCompiled.ir, context, sourceCompiled.sql, sqlTrail);
+          rows = runGelSelectSQL(db, schema, sourceCompiled.gelIr, context, sourceCompiled.sql) as Record<string, unknown>[];
         } else if (sourceCompiled.ir.kind === "select_expr") {
           sqlTrail.push(sourceCompiled.sql);
-          const exprRows = runGelSelectExprSQL(db, sourceCompiled.sql);
+          const exprRows = runGelSelectSQL(db, schema, sourceCompiled.gelIr, context, sourceCompiled.sql);
           rows = exprRows.filter((row): row is Record<string, unknown> => row !== null && typeof row === "object");
         }
       } catch {
@@ -9602,10 +9603,12 @@ const materializeFreeObjectRow = (
     }
 
     if (entry.kind === "select") {
-      const nestedSql = compileToSQL(entry.query, { target: resolvedRuntimeTarget(context, db) });
-      assertTargetSqlCompatibility(nestedSql.sql, resolvedRuntimeTarget(context, db));
-      sqlTrail.push(nestedSql);
-      out[entry.name] = runSelectIR(db, schema, entry.query, context, nestedSql, sqlTrail);
+      throw new AppError(
+        "E_UNSUPPORTED",
+        `select_free entry '${entry.name}' requires Gel SQL lowering; runtime fallback disabled`,
+        1,
+        1,
+      );
       continue;
     }
   }
@@ -9613,64 +9616,109 @@ const materializeFreeObjectRow = (
   return out;
 };
 
-const runGelSelectExprSQL = (db: SQLiteDatabase, sqlArtifact: SQLArtifact): unknown[] => {
+const runGelSelectSQL = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  statement: GelIRStatement,
+  context: SecurityContext,
+  sqlArtifact: SQLArtifact,
+  options: { keepInternalId?: boolean } = {},
+): unknown[] => {
   const rows = db.prepare(sqlArtifact.sql).all(...sqlArtifact.params) as Record<string, unknown>[];
-  return rows.map((row) => {
-    // Scalar select: the SQL projects a single `value` column. Parse JSON-
-    // shaped strings ("true"/"false"/"null"/"[…]"/"{…}") so the test layer
-    // sees a structured value. A bare numeric string like "11" must stay as
-    // a string — it's the result of `CAST(x AS TEXT)` and turning it back
-    // into a number defeats the cast.
-    if (Object.prototype.hasOwnProperty.call(row, "value")) {
-      const value = row.value;
-      if (typeof value !== "string") {
-        return value ?? null;
-      }
-      if (value === "true" || value === "false" || value === "null"
-        || value.startsWith("[") || value.startsWith("{")) {
-        try {
-          return JSON.parse(value);
-        } catch {
-          return value;
-        }
-      }
-      return value;
-    }
-    // Shape select: GEL-IR emits id, __source_type, plus shape columns. Drop
-    // the engine-internal slots and return an object whose keys match the
-    // requested shape. Parse any JSON-shaped string columns (link payloads
-    // come back as json_group_array strings).
-    const out: Record<string, unknown> = {};
-    let hasShapeColumn = false;
-    for (const key of Object.keys(row)) {
-      if (key === "id" || key === "__source_type") continue;
-      hasShapeColumn = true;
-      const v = row[key];
-      if (typeof v === "string"
-        && (v === "true" || v === "false" || v === "null"
-          || v.startsWith("[") || v.startsWith("{"))) {
-        try {
-          out[key] = JSON.parse(v);
-        } catch {
-          out[key] = v;
-        }
-      } else {
-        out[key] = v;
-      }
-    }
-    // No shape columns AND every internal slot is NULL ⇒ the GEL-IR fallback
-    // `SELECT NULL AS id, NULL AS …` path. Surface as null in that case so
-    // consumers see "no data" rather than an empty object. When the row has
-    // a real id (object identity) but no shape columns yet, return `{}` —
-    // some callers (free-object constructors, default-shape selects)
-    // legitimately produce shapeless rows.
-    if (!hasShapeColumn) {
-      const allNull = Object.keys(row).every((k) => row[k] === null || row[k] === undefined);
-      if (allNull) return null;
-    }
-    return out;
+  const visibleRows = rows.filter((row) => evaluateGelSelectPolicies(schema, db, statement, row, context));
+  return materializeGelSQLRows(visibleRows, {
+    keepInternalId: options.keepInternalId ?? gelStatementProjectsId(statement),
   });
 };
+
+const evaluateGelSelectPolicies = (
+  schema: SchemaSnapshot,
+  db: SQLiteDatabase,
+  statement: GelIRStatement,
+  row: Record<string, unknown>,
+  context: SecurityContext,
+): boolean => {
+  const sourceType = typeof row.__source_type === "string"
+    ? row.__source_type
+    : gelStatementSourceType(statement);
+  if (!sourceType) return true;
+  const typeDef = schema.getType(sourceType);
+  return typeDef ? evaluateSelectPolicies(schema, db, typeDef, row, context) : true;
+};
+
+const materializeGelSQLRows = (
+  rows: Record<string, unknown>[],
+  options: { keepInternalId: boolean },
+): unknown[] => rows.map((row) => {
+  const keys = Object.keys(row);
+  // Scalar select: Gel SQL projects a single `value` column. Parse JSON-shaped
+  // strings while preserving plain numeric strings produced by text casts.
+  if (keys.length === 1 && Object.prototype.hasOwnProperty.call(row, "value")) {
+    return normalizeGelSQLValue(row.value);
+  }
+
+  const out: Record<string, unknown> = {};
+  let hasShapeColumn = false;
+  for (const key of keys) {
+    if (key === "__source_type" || key === "__tid__" || key === "__tname__") continue;
+    if (key === "id" && !options.keepInternalId) continue;
+    hasShapeColumn = true;
+    out[key] = normalizeGelSQLValue(row[key]);
+  }
+
+  if (!hasShapeColumn) {
+    const allNull = keys.every((key) => row[key] === null || row[key] === undefined);
+    if (allNull) return null;
+  }
+  return out;
+});
+
+const normalizeGelSQLValue = (value: unknown): unknown => {
+  if (typeof value !== "string") {
+    return value ?? null;
+  }
+  if (value === "true" || value === "false" || value === "null" || value.startsWith("[") || value.startsWith("{")) {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return value;
+    }
+  }
+  return value;
+};
+
+const gelStatementProjectsId = (statement: GelIRStatement): boolean =>
+  topLevelGelShape(statement).some((element) => gelShapeElementName(element) === "id");
+
+const gelStatementSourceType = (statement: GelIRStatement): string | undefined => {
+  const set = unwrapGelSelectResultSet(statement.expr);
+  const typeref = set.typeref;
+  if (!typeref || typeref.isScalar) return undefined;
+  return qualifiedGelTypeName(typeref);
+};
+
+const topLevelGelShape = (statement: GelIRStatement): GelIRShapeElement[] =>
+  unwrapGelSelectResultSet(statement.expr).shape ?? [];
+
+const unwrapGelSelectResultSet = (set: GelIRSet): GelIRSet => {
+  let current = set;
+  while (current.expr.kind === "select_expr") {
+    const result = (current.expr as { result?: GelIRSet }).result;
+    if (!result) break;
+    current = result;
+  }
+  return current;
+};
+
+const gelShapeElementName = (element: GelIRShapeElement): string | undefined => {
+  if (element.name) return element.name;
+  if (element.targetPtr?.shortName) return element.targetPtr.shortName;
+  const expr = element.expr.expr as { ptrref?: { shortName?: string } };
+  return expr.ptrref?.shortName;
+};
+
+const qualifiedGelTypeName = (typeref: GelIRTypeRef): string =>
+  typeref.nameHint.includes("::") ? typeref.nameHint : `${typeref.module}::${typeref.nameHint}`;
 
 const inferStaticArgType = (
   arg: FunctionCallArgExpr,
@@ -10631,6 +10679,20 @@ const rowSourceType = (row: Record<string, unknown>, fallbackType: string): stri
   return typeof type === "string" ? type : fallbackType;
 };
 
+type PathIdLike = string | { id: string };
+
+const resolvePathIdStr = (pathId: PathIdLike): string =>
+  typeof pathId === "string" ? pathId : pathId.id;
+
+const sanitizePathId = (pathId: PathIdLike): string =>
+  resolvePathIdStr(pathId).replaceAll(".", "_");
+
+const shapePayloadAlias = (pathId: PathIdLike): string =>
+  `__shape_${sanitizePathId(pathId)}`;
+
+const computedValueAlias = (pathId: PathIdLike): string =>
+  `__computed_${sanitizePathId(pathId)}`;
+
 const extractOverlays = (ir: IRStatement): OverlayIR[] => {
   if (ir.kind === "select") {
     return ir.appliedOverlays;
@@ -10883,7 +10945,8 @@ const executeSelectExprRows = (
   if (compiled.ir.kind !== "select") {
     return [];
   }
-  return runSelectIR(db, schema, compiled.ir, context, compiled.sql, []);
+  return runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql, { keepInternalId: true })
+    .filter((row): row is Record<string, unknown> => row !== null && typeof row === "object");
 };
 
 const statementTypeOf = (statement: Statement): "select" | "insert" | "update" | "delete" => {
@@ -10962,7 +11025,8 @@ const runWriteWithAccessPolicies = (
       if (!field.hasDefault) {
         continue;
       }
-      if (values[field.name] !== PENDING_INSERT_REWRITE_VALUE) {
+      if (Object.prototype.hasOwnProperty.call(values, field.name)
+        && values[field.name] !== PENDING_INSERT_REWRITE_VALUE) {
         continue;
       }
 
@@ -11438,7 +11502,8 @@ const resolveInsertTargets = (
           continue;
         }
 
-        const selectedRows = runSelectIR(db, schema, compiled.ir, context, compiled.sql, []);
+        const selectedRows = runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql, { keepInternalId: true })
+          .filter((row): row is Record<string, unknown> => row !== null && typeof row === "object");
         for (const row of selectedRows) {
           if (typeof row.id !== "string") {
             continue;

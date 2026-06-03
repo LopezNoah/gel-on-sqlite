@@ -2,13 +2,11 @@ import { createHash } from "node:crypto";
 
 import "../codegen/generated/schema_model.js";
 
-import type { FreeObjectExpr, Statement } from "../edgeql/ast.js";
-import type { Statement as GelIRStatement } from "../ir/gel_ir.js";
+import type { Statement } from "../edgeql/ast.js";
+import type { Set as GelIRSet, Statement as GelIRStatement, TypeRef as GelIRTypeRef } from "../ir/gel_ir.js";
 import type { IRStatement, OverlayIR } from "../ir/model.js";
 import type { RuntimeTarget } from "../runtime/target.js";
 import { qualifiedTypeName, type SchemaSnapshot } from "../schema/schema.js";
-import type { SQLArtifact } from "../sql/compiler.js";
-import { compileToSQL } from "../sql/compiler.js";
 import { compileGelIRToSQL, type GelIRSQLArtifact } from "../sql/gel_ir_compiler.js";
 import type { ScalarValue } from "../types.js";
 import { compileToIR } from "./semantic.js";
@@ -29,9 +27,8 @@ export interface CompilerCacheMeta {
 
 export interface CompileArtifact {
   ir: IRStatement;
-  gelIr?: GelIRStatement;
-  usesGelIrSql: boolean;
-  sql: SQLArtifact;
+  gelIr: GelIRStatement;
+  sql: GelIRSQLArtifact;
   cache: CompilerCacheMeta;
 }
 
@@ -42,14 +39,12 @@ export interface CompileContext {
   target?: RuntimeTarget;
   schemaModel?: GeneratedSchema;
   schemaModelName?: string;
-  experimentalGelIRSqlLowering?: boolean;
 }
 
 interface CachedCompile {
   ir: IRStatement;
-  gelIr?: GelIRStatement;
-  usesGelIrSql: boolean;
-  sql: SQLArtifact;
+  gelIr: GelIRStatement;
+  sql: GelIRSQLArtifact;
 }
 
 export class CompilerService {
@@ -58,10 +53,7 @@ export class CompilerService {
   private misses = 0;
 
   compile(schema: SchemaSnapshot, rawStatement: Statement, context: CompileContext = {}): CompileArtifact {
-    // Expand schema-alias references at the AST level before either IR pass
-    // sees the statement. Both compileToIR (semantic.ts) and compileASTToGelIR
-    // (ast_to_ir.ts) then operate on the expanded form, so neither needs its
-    // own alias-substitution logic.
+    // Expand schema-alias references once before lowering into IR.
     const statement = expandSchemaAliasesInStatement(rawStatement, schema);
     const key = buildCompileCacheKey(schema, statement, context);
     const cached = this.cache.get(key);
@@ -71,7 +63,6 @@ export class CompilerService {
       return {
         ir: cloneValue(cached.ir),
         gelIr: cloneValue(cached.gelIr),
-        usesGelIrSql: cached.usesGelIrSql,
         sql: cloneValue(cached.sql),
         cache: {
           key,
@@ -82,24 +73,24 @@ export class CompilerService {
     }
 
     this.misses += 1;
-    const ir = compileToIR(schema, statement, {
-      overlays: context.overlays,
-      globals: context.globals,
-      schemaModel: context.schemaModel,
-      schemaModelName: context.schemaModelName,
-    });
-    const { sql, gelIr, usesGelIrSql } = compileSqlWithStranglerFig(schema, statement, ir, context);
+    const { sql, gelIr } = compileSqlFromGelIR(schema, statement, context);
+    const ir = needsLegacyRuntimeIR(statement)
+      ? compileToIR(schema, statement, {
+          overlays: context.overlays,
+          globals: context.globals,
+          schemaModel: context.schemaModel,
+          schemaModelName: context.schemaModelName,
+        })
+      : traceIRFromGelIR(statement, gelIr);
     this.cache.set(key, {
       ir: cloneValue(ir),
       gelIr: cloneValue(gelIr),
-      usesGelIrSql,
       sql: cloneValue(sql),
     });
 
     return {
       ir,
       gelIr,
-      usesGelIrSql,
       sql,
       cache: {
         key,
@@ -147,8 +138,6 @@ export const buildCompileCacheKey = (schema: SchemaSnapshot, statement: Statemen
   const globalsFingerprint = stableJson(context.globals ?? {});
   const paramsFingerprint = stableJson(context.params ?? {});
   const targetFingerprint = context.target ?? "sqlite";
-  const gelIrSqlLoweringFingerprint = String(resolveGelIrSqlLoweringEnabled(context));
-
   return createHash("sha256")
     .update(schemaFingerprint)
     .update("|")
@@ -161,8 +150,6 @@ export const buildCompileCacheKey = (schema: SchemaSnapshot, statement: Statemen
     .update(paramsFingerprint)
     .update("|")
     .update(targetFingerprint)
-    .update("|")
-    .update(gelIrSqlLoweringFingerprint)
     .digest("hex");
 };
 
@@ -193,33 +180,11 @@ const makeTypeColumnsResolver = (schema: SchemaSnapshot): (typeName: string) => 
   };
 };
 
-const compileSqlWithStranglerFig = (
+const compileSqlFromGelIR = (
   schema: SchemaSnapshot,
   statement: Statement,
-  ir: IRStatement,
   context: CompileContext,
-): { sql: SQLArtifact; gelIr?: GelIRStatement; usesGelIrSql: boolean } => {
-  if (statement.kind === "select" || statement.kind === "select_free"
-    || statement.kind === "group"
-    || ir.kind === "select" || ir.kind === "select_free" || ir.kind === "group"
-    || (statement.kind === "select_expr" && freeExprContainsMutation(statement.expr))) {
-    return {
-      sql: compileToSQL(ir, { target: context.target ?? "sqlite", parameterValues: context.params, globalValues: context.globals }),
-      usesGelIrSql: false,
-    };
-  }
-
-  if ((statement.kind === "insert" || statement.kind === "update" || statement.kind === "delete") && statement.typeName) {
-    const fallbackModule = statement.withModule ?? "default";
-    const rawTypeName = statement.typeName.includes("::") ? statement.typeName : `${fallbackModule}::${statement.typeName}`;
-    if (!schema.getType(rawTypeName)) {
-      return {
-        sql: compileToSQL(ir, { target: context.target ?? "sqlite", parameterValues: context.params, globalValues: context.globals }),
-        usesGelIrSql: false,
-      };
-    }
-  }
-
+): { sql: GelIRSQLArtifact; gelIr: GelIRStatement } => {
   if (!isGelIRCompatibleStatement(statement)) {
     throw new Error(`Statement kind '${statement.kind}' is not supported by GEL IR SQL lowering`);
   }
@@ -249,62 +214,70 @@ const compileSqlWithStranglerFig = (
       const scalar = schema.listScalarTypes().find((s) => `${s.module}::${s.name}` === enumName);
       return scalar?.enumValues && scalar.enumValues.length > 0 ? scalar.enumValues : undefined;
     },
-  }) as SQLArtifact & GelIRSQLArtifact;
+  });
 
   return {
     gelIr,
-    usesGelIrSql: true,
     sql,
   };
 };
 
-const resolveGelIrSqlLoweringEnabled = (context: CompileContext): boolean => {
-  // Kept for compile cache key stability; lowering is always on.
-  void context;
-  return true;
+const needsLegacyRuntimeIR = (statement: Statement): boolean =>
+  statement.kind === "insert" || statement.kind === "update" || statement.kind === "delete" || statement.kind === "group";
+
+const traceIRFromGelIR = (statement: Statement, gelIr: GelIRStatement): IRStatement => {
+  if (statement.kind === "select") {
+    const sourceSet = unwrapGelSelectResultSet(gelIr.expr);
+    const sourceType = sourceSet.typeref && !sourceSet.typeref.isScalar
+      ? qualifiedGelTypeName(sourceSet.typeref)
+      : "std::Object";
+    return {
+      kind: "select",
+      sourceType,
+      table: tableNameForGelType(sourceType),
+      columns: ["id"],
+      shape: [],
+      filter: undefined,
+      orderBy: undefined,
+      limit: undefined,
+      offset: undefined,
+      pathId: { id: sourceType, steps: [] },
+      scopeTree: { id: "trace", children: [] },
+      appliedOverlays: [],
+    } as unknown as IRStatement;
+  }
+
+  if (statement.kind === "select_free") {
+    return {
+      kind: "select_free",
+      entries: [],
+      pathId: { id: "select_free", steps: [] },
+      scopeTree: { id: "trace", children: [] },
+    } as unknown as IRStatement;
+  }
+
+  return {
+    kind: "select_expr",
+    entries: [],
+    pathId: { id: "select_expr", steps: [] },
+    scopeTree: { id: "trace", children: [] },
+  } as unknown as IRStatement;
 };
 
-const freeExprContainsMutation = (expr: FreeObjectExpr): boolean => {
-  if (expr.kind === "mutation_expr") return true;
-  if (expr.kind === "set_expr" || expr.kind === "tuple" || expr.kind === "array_literal_expr") {
-    return expr.values.some(freeExprContainsMutation);
+const unwrapGelSelectResultSet = (set: GelIRSet): GelIRSet => {
+  let current = set;
+  while (current.expr.kind === "select_expr") {
+    const result = (current.expr as { result?: GelIRSet }).result;
+    if (!result) break;
+    current = result;
   }
-  if (expr.kind === "free_object_constructor") {
-    return expr.entries.some((entry) => freeExprContainsMutation(entry.expr));
-  }
-  if (expr.kind === "shape_projection") {
-    return freeExprContainsMutation(expr.expr);
-  }
-  if (expr.kind === "select_expr_subquery") {
-    return freeExprContainsMutation(expr.expr)
-      || Boolean(expr.filter && freeExprContainsMutation(expr.filter))
-      || Boolean(expr.orderBy && freeExprContainsMutation(expr.orderBy.expr));
-  }
-  if (expr.kind === "for_expr") {
-    return freeExprContainsMutation(expr.iterator)
-      || freeExprContainsMutation(expr.body)
-      || Boolean(expr.filter && freeExprContainsMutation(expr.filter))
-      || Boolean(expr.orderBy && freeExprContainsMutation(expr.orderBy.expr));
-  }
-  if (expr.kind === "distinct" || expr.kind === "cast" || expr.kind === "exists" || expr.kind === "field_access" || expr.kind === "index_access" || expr.kind === "slice_access" || expr.kind === "is_type" || expr.kind === "not" || expr.kind === "unary") {
-    return freeExprContainsMutation(expr.expr);
-  }
-  if (expr.kind === "compare" || expr.kind === "math" || expr.kind === "logical" || expr.kind === "coalesce" || expr.kind === "and" || expr.kind === "or") {
-    return freeExprContainsMutation(expr.left) || freeExprContainsMutation(expr.right);
-  }
-  if (expr.kind === "if_else") {
-    return freeExprContainsMutation(expr.thenExpr)
-      || freeExprContainsMutation(expr.condition)
-      || freeExprContainsMutation(expr.elseExpr);
-  }
-  if (expr.kind === "concat") {
-    return expr.parts.some(freeExprContainsMutation);
-  }
-  if (expr.kind === "function_call") {
-    return expr.call.args.some((arg) => arg.kind === "expr" && freeExprContainsMutation(arg.expr));
-  }
-  return false;
+  return current;
 };
+
+const qualifiedGelTypeName = (typeref: GelIRTypeRef): string =>
+  typeref.nameHint.includes("::") ? typeref.nameHint : `${typeref.module}::${typeref.nameHint}`;
+
+const tableNameForGelType = (qualifiedName: string): string => qualifiedName.replaceAll("::", "__").toLowerCase();
 
 const fingerprintSchema = (schema: SchemaSnapshot): string => {
   const types = schema

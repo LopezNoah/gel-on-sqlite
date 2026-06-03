@@ -82,6 +82,20 @@ export const compileGelIRToSQL = (
   const selectOrderBy = statement.orderBy ?? topSelect.selectExpr?.orderBy;
   const sourceSet = topSelect.selectExpr ? topSelect.result : unwrapSelectResultSet(statement.expr);
 
+  // EdgeQL forbids `LIMIT -1` / `OFFSET -2`; SQLite would silently treat them
+  // as "no limit"/"skip nothing", masking the user error. Catch literal
+  // negatives before anything else compiles so the message is clean.
+  const stmtLimitForValidation = statement.limit ?? topSelect.selectExpr?.limit;
+  const stmtOffsetForValidation = statement.offset ?? topSelect.selectExpr?.offset;
+  const limitForValidation = extractNumericLiteral(stmtLimitForValidation);
+  if (limitForValidation !== undefined && limitForValidation < 0) {
+    throw new Error("LIMIT must not be negative");
+  }
+  const offsetForValidation = extractNumericLiteral(stmtOffsetForValidation);
+  if (offsetForValidation !== undefined && offsetForValidation < 0) {
+    throw new Error("OFFSET must not be negative");
+  }
+
   // `SELECT <T>{}` (and bare `SELECT {}`) must yield zero rows, not one
   // NULL row. The IR represents an empty set literal as a typeless
   // `string_constant` with `value: null` (see literalToSet in ast_to_ir);
@@ -253,6 +267,30 @@ export const compileGelIRToSQL = (
 
     if (orders.length > 0) {
       sql += ` ORDER BY ${orders.join(", ")}`;
+    }
+  }
+
+  // The fallback `compileScalarSelectSQL` branch above already applies
+  // statement-level LIMIT/OFFSET, but the object-shape branch (`SELECT
+  // Issue { … } LIMIT N`) skipped them — every row was returned regardless.
+  const stmtLimit = statement.limit ?? topSelect.selectExpr?.limit;
+  const stmtOffset = statement.offset ?? topSelect.selectExpr?.offset;
+  if (stmtLimit) {
+    const limitN = extractNumericLiteral(stmtLimit);
+    if (limitN !== undefined) {
+      sql += ` LIMIT ${limitN}`;
+    }
+  }
+  if (stmtOffset) {
+    const offsetN = extractNumericLiteral(stmtOffset);
+    if (offsetN !== undefined) {
+      // SQLite requires LIMIT before OFFSET. When the user supplied OFFSET but
+      // no LIMIT (`OFFSET 2` on its own), emit `LIMIT -1` to keep parsing
+      // happy — sqlite reads that as "no row limit".
+      if (!stmtLimit || extractNumericLiteral(stmtLimit) === undefined) {
+        sql += ` LIMIT -1`;
+      }
+      sql += ` OFFSET ${offsetN}`;
     }
   }
 
@@ -3402,6 +3440,35 @@ const innermostLinkFKColumn = (set: Set): string | null => {
   return `${innermostLink.ptrref.shortName}_id`;
 };
 
+// Union-typed links (`references: File | URL | Publication`) reach this
+// function with a single TypeRef whose id is a pipe-joined qualified name and
+// no `children`. Split the id back into its branches so each becomes a real
+// concrete source in the UNION ALL — otherwise the SQL ends up `FROM
+// "default__file|default__url|default__publication"`, a table that doesn't
+// exist.
+const expandUnionTypeRefBranches = (typeRef: TypeRef): TypeRef[] => {
+  if (!typeRef.id.includes("|")) return [typeRef];
+  // Union typerefs land here as a single `unknown:default::File|default::URL`
+  // string (built by `unknownTypeRef` on the parser side). Strip the marker
+  // off the joint so every branch resolves as a real concrete type, not as
+  // `unknown:default::File` which would table-name to `unknown:default__file`.
+  const stripUnknown = (s: string): string => s.startsWith("unknown:") ? s.slice("unknown:".length) : s;
+  const idWithoutMarker = stripUnknown(typeRef.id);
+  return idWithoutMarker.split("|").map((branchId) => {
+    const trimmed = stripUnknown(branchId.trim());
+    return {
+      kind: "type_ref" as const,
+      id: trimmed,
+      nameHint: trimmed,
+      module: trimmed.split("::")[0] ?? "default",
+      isView: false,
+      isScalar: false,
+      isAbstract: false,
+      inSchema: true,
+    };
+  });
+};
+
 const compilePolymorphicSource = (
   typeRef: TypeRef,
   skipSubtypes: boolean,
@@ -3409,7 +3476,10 @@ const compilePolymorphicSource = (
   projectedColumns: string[],
   options: GelIRCompileOptions,
 ): string => {
-  const candidates = skipSubtypes ? [typeRef] : flattenTypeClosure(typeRef);
+  const branches = expandUnionTypeRefBranches(typeRef);
+  const candidates = skipSubtypes
+    ? branches
+    : branches.flatMap((branch) => flattenTypeClosure(branch));
   const concrete = candidates.filter((candidate) => !candidate.isAbstract);
   const sources = concrete.length > 0 ? concrete : [typeRef];
 
@@ -3467,6 +3537,18 @@ const compileShapeProjection = (
     );
     const alias = shapeAliasForElement(shape, shape.expr, depth);
     return `${linkExpr} AS ${quoteIdent(alias)}`;
+  }
+
+  // Shapes-on-paths (`Issue.owner{name}`): the outer source already joined the
+  // path's target type into `g0`, and `collectProjectedColumns` has surfaced
+  // the leaf scalar (`name`) on that row. Reading `g0.name` directly is
+  // correct and avoids re-walking the path through a correlated subquery
+  // anchored on the wrong row identity.
+  const projectedColumn = compileProjectedSourceColumnRef(shapeExpr.result);
+  if (projectedColumn) {
+    const rawValue = `${sourceAlias}.${quoteIdent(projectedColumn)}`;
+    const value = shapeExpr.result.typeref.collection ? `json(${rawValue})` : rawValue;
+    return `${value} AS ${quoteIdent(shapeAliasForElement(shape, shapeExpr.result, depth))}`;
   }
 
   const valueExpr = compileValueSetSQL(shapeExpr.result, sourceAlias, params, target, options);
@@ -3584,6 +3666,62 @@ const tryCompileMultiStepPointerExistsSQL = (
   return `EXISTS (SELECT 1 FROM ${fromSql} WHERE ${whereSqls.join(" AND ")})`;
 };
 
+// `EXISTS Issue.priority` / `EXISTS Issue.<owner[IS Comment]` /
+// `EXISTS Issue.priority.id`: lower a pointer-(chain-)to-object/scalar
+// expression to a direct SQL existence check anchored on `sourceAlias`.
+// Returns null when the inner Set isn't a recognised pointer chain (computed
+// expressions, set ops, etc. fall back to the generic value-level path which
+// the caller wraps in `(… = json('true'))`).
+const tryCompileExistsObjectPointerSQL = (
+  set: Set,
+  sourceAlias: string,
+  _params: ScalarValue[],
+  _target: RuntimeTarget,
+  options: GelIRCompileOptions,
+): string | null => {
+  // Unwrap `(SELECT Issue.<…)`-style subquery wrappers so `EXISTS (SELECT
+  // foo)` works the same as `EXISTS foo`.
+  let inner = set;
+  while (inner.expr.kind === "select_expr") {
+    inner = (inner.expr as SelectExpr).result;
+  }
+
+  // Walk the pointer chain to the first link before the type_root. If the
+  // leaf is a scalar (`.priority.id`), strip it — `EXISTS .a.b.c_scalar` has
+  // the same truth value as `EXISTS .a.b` so long as we never traverse a
+  // dangling FK (which the schema's FK constraint already prevents). The `id`
+  // pointer arrives here with `outTarget.isScalar === false` and an `anytype`
+  // marker (the IR-builder doesn't yet type implicit `id`), so peel it
+  // explicitly by shortName too.
+  let cursor: Set = inner;
+  while (cursor.expr.kind === "pointer") {
+    const ptr = cursor.expr as Pointer;
+    if (ptr.ptrref.outTarget.isScalar || ptr.ptrref.shortName === "id") {
+      cursor = ptr.source;
+      continue;
+    }
+    break;
+  }
+  if (cursor.expr.kind !== "pointer") return null;
+
+  const pointer = cursor.expr as Pointer;
+  if (pointer.ptrref.isLinkProperty) return null;
+  if (pointer.source.expr.kind !== "type_root") return null;
+  if (shouldUseLinkTable(pointer)) {
+    const linkTable = linkTableNameForPointer(pointer);
+    const sideAnchor = pointer.direction === "inbound" ? "target" : "source";
+    return `EXISTS (SELECT 1 FROM ${quoteIdent(linkTable)} _ex WHERE _ex.${quoteIdent(sideAnchor)} = ${sourceAlias}.${quoteIdent("id")})`;
+  }
+  if (pointer.direction === "inbound") {
+    const targetType = pointer.ptrref.outSource;
+    const targetTable = resolveTypeTableName(targetType, options);
+    const inlineColumn = `${pointer.ptrref.shortName}_id`;
+    return `EXISTS (SELECT 1 FROM ${quoteIdent(targetTable)} _ex WHERE _ex.${quoteIdent(inlineColumn)} = ${sourceAlias}.${quoteIdent("id")})`;
+  }
+  const inlineColumn = `${pointer.ptrref.shortName}_id`;
+  return `${sourceAlias}.${quoteIdent(inlineColumn)} IS NOT NULL`;
+};
+
 const compilePredicateSetSQL = (
   set: Set,
   sourceAlias: string,
@@ -3598,6 +3736,24 @@ const compilePredicateSetSQL = (
   // the whole compile bails out and the engine falls back.
   if (set.expr.kind === "boolean_constant") {
     return (set.expr as { value: unknown }).value ? "1" : "0";
+  }
+  // `FILTER EXISTS X` — the predicate path used to reject anything that
+  // wasn't an operator_call, so the WHERE clause silently dropped (one row
+  // count of every-row instead of just rows with X). For object-pointer
+  // arguments (the common case: `EXISTS .priority`, `EXISTS .watchers`,
+  // `EXISTS .<owner[IS Comment]`) emit a direct SQL EXISTS test against the
+  // outer row; otherwise wrap the value-level EXISTS compilation in a
+  // boolean equality so it can live at the top of WHERE.
+  if (set.expr.kind === "exists_expr") {
+    const innerSet = (set.expr as ExistsExpr).expr;
+    const direct = tryCompileExistsObjectPointerSQL(innerSet, sourceAlias, params, target, options);
+    if (direct) return direct;
+    const inner = compileValueSetSQL(set, sourceAlias, params, target, options, linkPropertyAlias);
+    if (!inner) {
+      params.length = checkpoint;
+      return null;
+    }
+    return `(${inner} = json('true'))`;
   }
   if (set.expr.kind !== "operator_call") {
     params.length = checkpoint;
@@ -4771,6 +4927,9 @@ const compileSelectExprShapeProjection = (
 };
 
 const shapeAliasForElement = (shape: ShapeElement, exprSet: Set, depth: number): string => {
+  if (shape.name) {
+    return shape.name;
+  }
   const column = compileSetColumnRef(exprSet);
   if (column) {
     return column;
