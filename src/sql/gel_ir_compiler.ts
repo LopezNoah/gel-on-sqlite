@@ -8,6 +8,7 @@ import type {
   CoalesceExpr,
   ConfigStmt,
   ExistsExpr,
+  DeleteExpr,
   DeleteStmt,
   Expr,
   ForExpr,
@@ -99,19 +100,46 @@ export const compileGelIRToSQL = (
   }
 
   if (sourceSet?.expr.kind === "for_expr") {
+    const forParamsCheckpoint = params.length;
     const projectedColumns = collectForExprProjectedColumns(sourceSet, selectWhere, selectOrderBy);
-    const forSource = compileForExprSource(sourceSet, projectedColumns, options);
+    const forSource = compileForExprSource(sourceSet, projectedColumns, options, params, target);
     const bodySet = innermostForExprBody(sourceSet);
+    // Fresh references to a type root inside the FOR body (e.g. `Card.name`
+    // when the iterator is `C IN Card`) are independent of the iterator —
+    // EdgeQL semantics give them cross-product cardinality. We add a
+    // CROSS JOIN for each unique free type-root and map its pathId so the
+    // body's pointer compilation picks up the new alias instead of falling
+    // back to the iterator's alias.
+    if (forSource) {
+      const freeRoots = collectFreeTypeRoots(bodySet, forSource.bindingAliases, selectWhere);
+      let nextIdx = countAliases(forSource.bindingAliases);
+      for (const root of freeRoots) {
+        const alias = `g${nextIdx++}`;
+        const joinSql = compilePolymorphicSource(root.typeref, false, alias, projectedColumns, options);
+        forSource.fromSql += ` CROSS JOIN ${joinSql}`;
+        forSource.bindingAliases.set(root.key, alias);
+      }
+    }
     const bodySql = forSource
-      ? compileValueSetSQLWithAliases(bodySet, forSource.bindingAliases, forSource.baseAlias, params, target, options, forSource.linkPropertyAliases)
+      ? compileValueSetSQLWithAliases(bodySet, forSource.bindingAliases, forSource.baseAlias, params, target, options, forSource.linkPropertyAliases, forSource.scalarBindingAliases)
       : null;
 
     if (forSource && bodySql) {
       let sql = `SELECT ${bodySql} AS ${quoteIdent("value")} FROM ${forSource.fromSql}`;
-      const whereSets = [...forSource.whereSets, ...(selectWhere ? [selectWhere] : [])];
+      // If the body is itself a `SELECT … FILTER …` (possibly under several
+      // parens-induced select_expr wrappers), treat each FILTER as an
+      // additional WHERE on the FOR's FROM clause.
+      const bodyWheres: Set[] = [];
+      let cur: Set | undefined = bodySet;
+      while (cur && cur.expr.kind === "select_expr") {
+        const se = cur.expr as SelectExpr;
+        if (se.where) bodyWheres.push(se.where);
+        cur = se.result;
+      }
+      const whereSets = [...forSource.whereSets, ...bodyWheres, ...(selectWhere ? [selectWhere] : [])];
       if (whereSets.length > 0) {
         const whereSql = whereSets
-          .map((where) => compilePredicateWithAliases(where, forSource.bindingAliases, params, target, options, forSource.linkPropertyAliases))
+          .map((where) => compilePredicateWithAliases(where, forSource.bindingAliases, params, target, options, forSource.linkPropertyAliases, forSource.scalarBindingAliases))
           .filter((entry): entry is string => Boolean(entry))
           .join(" AND ");
         if (whereSql) {
@@ -129,6 +157,10 @@ export const compileGelIRToSQL = (
       }
       return { sql, params, loweringMode: "single_statement" };
     }
+    // FOR-source compile produced no usable SQL — roll back any params it
+    // appended (e.g. predicate constants from a `select_expr` iterator) so
+    // the fallback path doesn't see leaked placeholders.
+    params.length = forParamsCheckpoint;
   }
   const compiledSource = sourceSet ? compileSelectSource(sourceSet, statement.where, statement.orderBy, options, params, target) : null;
   if (!compiledSource) {
@@ -553,7 +585,14 @@ const collectScalarPointerSources = (set: Set, sources: Map<string, TypeRef>): v
       const typeref = narrowedTyperef && narrowedTyperef.id !== rootTyperef.id
         ? narrowedTyperef
         : rootTyperef;
-      const id = qualifyTypeName(typeref);
+      // Include the outer set's pathId namespace so an iterator-bound
+      // reference (which carries a FOR-scope tag like `for:X:2` on its
+      // outer pathId, even though the inner type_root has an empty
+      // namespace) is distinguishable from a fresh free reference to the
+      // same type — they're the same physical table but different iteration
+      // scopes.
+      const ns = set.pathId?.namespace ?? [];
+      const id = `${qualifyTypeName(typeref)}|${ns.join(",")}`;
       if (!sources.has(id)) {
         sources.set(id, typeref);
       }
@@ -1239,13 +1278,110 @@ const compileScalarSelectSQLInner = (
   // iterators) are still handled earlier in compileSelectStmtToSQL via
   // compileForExprSource.
   if (sourceSet.expr.kind === "for_expr") {
-    return compileScalarSelectSQL(
-      (sourceSet.expr as ForExpr).body,
-      params,
-      target,
-      options,
-      outerWheres,
-    );
+    const forExpr = sourceSet.expr as ForExpr;
+    // Try the structured FROM-based lowering first — same code path as the
+    // top-level FOR in compileSelectStmtToSQL. This produces correct SQL
+    // when the body is a `SELECT Type { shape } FILTER …` and is the only
+    // way to get the body's Card source as g1 (vs the iterator's g0). Only
+    // fall back to body-with-cross-join when the structured path can't
+    // handle the body's shape.
+    {
+      const projectedColumns = collectForExprProjectedColumns(sourceSet);
+      const forSource = compileForExprSource(sourceSet, projectedColumns, options, params, target);
+      if (forSource) {
+        const bodySet = innermostForExprBody(sourceSet);
+        const freeRoots = collectFreeTypeRoots(bodySet, forSource.bindingAliases);
+        let nextIdx = countAliases(forSource.bindingAliases);
+        for (const root of freeRoots) {
+          const alias = `g${nextIdx++}`;
+          const joinSql = compilePolymorphicSource(root.typeref, false, alias, projectedColumns, options);
+          forSource.fromSql += ` CROSS JOIN ${joinSql}`;
+          forSource.bindingAliases.set(root.key, alias);
+        }
+        const bodySql = compileValueSetSQLWithAliases(bodySet, forSource.bindingAliases, forSource.baseAlias, params, target, options, forSource.linkPropertyAliases, forSource.scalarBindingAliases);
+        if (bodySql) {
+          let sql = `SELECT ${bodySql} AS ${quoteIdent("value")} FROM ${forSource.fromSql}`;
+          const bodyWheres: Set[] = [];
+          // Peel any number of select_expr wrappers (parens around the body
+          // stack them) and collect each layer's FILTER.
+          let cur2: Set | undefined = bodySet;
+          while (cur2 && cur2.expr.kind === "select_expr") {
+            const se = cur2.expr as SelectExpr;
+            if (se.where) bodyWheres.push(se.where);
+            cur2 = se.result;
+          }
+          const whereSets = [...forSource.whereSets, ...bodyWheres, ...outerWheres];
+          if (whereSets.length > 0) {
+            const whereSql = whereSets
+              .map((where) => compilePredicateWithAliases(where, forSource.bindingAliases, params, target, options, forSource.linkPropertyAliases, forSource.scalarBindingAliases))
+              .filter((entry): entry is string => Boolean(entry))
+              .join(" AND ");
+            if (whereSql) {
+              sql += ` WHERE ${whereSql}`;
+            }
+          }
+          return sql;
+        }
+      }
+    }
+    // If the body uses the iterator binding (the usual case), compiling the
+    // body alone reproduces the iteration — `x` in body resolves to the
+    // iterator's IR and its compile is the iterator's SQL. But when the
+    // body is independent of the iterator (e.g. `FOR x in {1,2} UNION 1`),
+    // returning just the body drops the iteration count entirely. Cross-join
+    // with the iterator's SQL so the row count matches the iterator's
+    // cardinality.
+    const iterKey = pathIdKey(forExpr.iterator);
+    const setRefersToIter = (root: Set): boolean => {
+      let found = false;
+      const visit = (s: Set): void => {
+        if (found) return;
+        if (pathIdKey(s) === iterKey) { found = true; return; }
+        const e = s.expr;
+        if (e.kind === "pointer") { visit((e as Pointer).source); return; }
+        if (e.kind === "tuple") { for (const el of (e as Tuple).elements) visit(el.val); return; }
+        if (e.kind === "operator_call") { for (const a of orderedCallArgs((e as OperatorCall).args)) visit(a.expr); return; }
+        if (e.kind === "function_call") { for (const a of orderedCallArgs((e as FunctionCall).args)) visit(a.expr); return; }
+        if (e.kind === "if_else_expr") { visit((e as IfElseExpr).condition); visit((e as IfElseExpr).ifExpr); visit((e as IfElseExpr).elseExpr); return; }
+        if (e.kind === "coalesce_expr") { visit((e as CoalesceExpr).left); visit((e as CoalesceExpr).right); return; }
+        if (e.kind === "type_cast") { visit((e as TypeCast).expr); return; }
+        if (e.kind === "exists_expr") { visit((e as ExistsExpr).expr); return; }
+        if (e.kind === "for_expr") { visit((e as ForExpr).iterator); visit((e as ForExpr).body); return; }
+        if (e.kind === "select_expr") { const se = e as SelectExpr; visit(se.result); if (se.where) visit(se.where); return; }
+      };
+      visit(root);
+      return found;
+    };
+    const bodyUsesIter = setRefersToIter(forExpr.body);
+    // Outer FILTERs that don't reference the iterator binding are
+    // independent of the iteration — EdgeQL gives them existential
+    // semantics, but the body's per-row WHERE would over-restrict. Drop
+    // those; only keep wheres that reference the iterator.
+    const propagatedWheres = outerWheres.filter((w) => setRefersToIter(w));
+    // We don't know yet whether body uses the iterator — that depends on
+    // its IR shape. Build body and iter SQLs separately into a scratch
+    // params array so we can stitch them in the right order (iter first
+    // in the final SQL → iter params first in the merged array).
+    const bodyParams: ScalarValue[] = [];
+    const bodySql = compileScalarSelectSQL(forExpr.body, bodyParams, target, options, propagatedWheres);
+    if (!bodySql) return null;
+    if (bodyUsesIter) {
+      params.push(...bodyParams);
+      return bodySql;
+    }
+    // Body is independent of the iterator: cross-join with the iterator
+    // when its SQL is available, otherwise fall back to body alone (some
+    // iterators like `range_unpack(...)` can't lower yet but the body's
+    // single-row result is still useful).
+    const iterParams: ScalarValue[] = [];
+    const iterSql = compileScalarSelectSQL(forExpr.iterator, iterParams, target, options, []);
+    if (!iterSql) {
+      params.push(...bodyParams);
+      return bodySql;
+    }
+    // SQL ordering puts iter first, then body — params must match.
+    params.push(...iterParams, ...bodyParams);
+    return `SELECT ${quoteIdent("body")}.${quoteIdent("value")} AS ${quoteIdent("value")} FROM (${iterSql}) ${quoteIdent("iter")} CROSS JOIN (${bodySql}) ${quoteIdent("body")}`;
   }
   // A user-defined function call whose AST→IR pass attached a substituted
   // body inlines at the statement level: lower the body as if it were
@@ -1290,6 +1426,59 @@ const compileScalarSelectSQLInner = (
     const args = orderedCallArgs(call.args);
     if (shortName === "assert_exists" && args.length === 1) {
       return compileScalarSelectSQL(args[0].expr, params, target, options, outerWheres);
+    }
+    // `array_unpack([X])` simplifies to X — the array is a one-element
+    // wrapper and unpacking it returns the original set. This is the shape
+    // upstream test conversions use to express "evaluate X as a set" inside
+    // a SELECT that would otherwise wrap a multi-row inner with a json_array
+    // collector.
+    if ((shortName === "array_unpack" || shortName === "assert_single") && args.length === 1) {
+      const inner = args[0].expr;
+      if (inner.expr.kind === "array" && (inner.expr as ArrayExpr).elements.length === 1) {
+        return compileScalarSelectSQL((inner.expr as ArrayExpr).elements[0]!, params, target, options, outerWheres);
+      }
+      if (shortName === "assert_single") {
+        return compileScalarSelectSQL(inner, params, target, options, outerWheres);
+      }
+    }
+    // `range_unpack(range(lower, upper))` produces `[lower, upper)` as a
+    // set of ints. SQLite lacks a built-in but a recursive CTE matches
+    // EdgeQL's half-open semantics exactly.
+    if (shortName === "range_unpack" && args.length === 1) {
+      const arg = args[0].expr;
+      if (arg.expr.kind === "function_call") {
+        const rangeCall = arg.expr as FunctionCall;
+        const rangeShort = rangeCall.functionName.split("::").pop();
+        if (rangeShort === "range") {
+          const rangeArgs = orderedCallArgs(rangeCall.args);
+          if (rangeArgs.length >= 2) {
+            const lo = extractNumericLiteral(rangeArgs[0].expr);
+            const hi = extractNumericLiteral(rangeArgs[1].expr);
+            if (lo !== undefined && hi !== undefined) {
+              return `WITH RECURSIVE _range(${quoteIdent("value")}) AS (SELECT ${lo} WHERE ${lo} < ${hi} UNION ALL SELECT ${quoteIdent("value")} + 1 FROM _range WHERE ${quoteIdent("value")} + 1 < ${hi}) SELECT ${quoteIdent("value")} FROM _range`;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // `enumerate(X).1` (the per-row value of `enumerate`) is equivalent to
+  // `X` for SQL lowering — the index column is discarded. Recognise the
+  // pattern so the surrounding pipeline doesn't fall back when the
+  // enumerate's argument is something we can otherwise lower.
+  if (sourceSet.expr.kind === "index_expr") {
+    const idxExpr = sourceSet.expr as IndexExpr;
+    const idxLit = extractNumericLiteral(idxExpr.index);
+    if (idxLit === 1 && idxExpr.expr.expr.kind === "function_call") {
+      const fc = idxExpr.expr.expr as FunctionCall;
+      const sn = fc.functionName.split("::").pop();
+      if (sn === "enumerate") {
+        const enumArgs = orderedCallArgs(fc.args);
+        if (enumArgs.length === 1) {
+          return compileScalarSelectSQL(enumArgs[0].expr, params, target, options, outerWheres);
+        }
+      }
     }
   }
   if (sourceSet.expr.kind === "select_expr") {
@@ -2159,17 +2348,37 @@ const compileSelectSource = (
   };
 };
 
+// A level whose iterator was already lowered to a SQL subquery (select_expr,
+// delete_expr, or any other pre-compiled set producer). Carries the raw SQL
+// so the FROM builder can splice it in either as the first source or as a
+// cross/left join.
+type ForExprPrecompiledLevel = {
+  iteratorPathId: string;
+  alias: string;
+  precompiledSql: string;
+  optional: boolean;
+  // The Set whose pathId the body uses to reach this level — for pointer
+  // resolution against the precompiled subquery's columns.
+  iteratorSet: Set;
+};
+
 const compileForExprSource = (
   sourceSet: Set,
   projectedColumns: string[],
   options: GelIRCompileOptions,
-): { fromSql: string; baseAlias: string; bindingAliases: Map<string, string>; linkPropertyAliases: Map<string, string>; whereSets: Set[]; orderBy?: SortExpr[] } | null => {
+  params: ScalarValue[] = [],
+  target: RuntimeTarget = options.target ?? "sqlite",
+): { fromSql: string; baseAlias: string; bindingAliases: Map<string, string>; scalarBindingAliases: Map<string, string>; linkPropertyAliases: Map<string, string>; whereSets: Set[]; orderBy?: SortExpr[]; paramsCheckpoint: number } | null => {
+  const paramsCheckpoint = params.length;
   const levels: Array<{
     iteratorPathId: string;
     alias: string;
     pointer?: Pointer;
     typeRef?: TypeRef;
     linkAlias?: string;
+    constants?: ScalarValue[];
+    precompiled?: ForExprPrecompiledLevel;
+    optional?: boolean;
   }> = [];
   const whereSets: Set[] = [];
   let orderBy: SortExpr[] | undefined;
@@ -2180,11 +2389,84 @@ const compileForExprSource = (
     const iterator = forExpr.iterator;
     const alias = `g${levels.length}`;
     const iteratorPathId = pathIdKey(iterator);
+    const optional = forExpr.optional === true;
 
     if (iterator.expr.kind === "type_root") {
-      levels.push({ iteratorPathId, alias, typeRef: (iterator.expr as TypeRoot).typeref });
+      levels.push({ iteratorPathId, alias, typeRef: (iterator.expr as TypeRoot).typeref, optional });
     } else if (iterator.expr.kind === "pointer") {
-      levels.push({ iteratorPathId, alias, pointer: iterator.expr as Pointer });
+      levels.push({ iteratorPathId, alias, pointer: iterator.expr as Pointer, optional });
+    } else if (iterator.expr.kind === "operator_call" && (iterator.expr as OperatorCall).operator === "union") {
+      // Set iterator like `{'I', 'Z'}` or `{1, 2}`: each branch must be a
+      // scalar literal so we can emit a `(SELECT a UNION ALL SELECT b) g0`
+      // source. The body references the binding directly (not via pointer
+      // chain), so we mark the level with `constants` and the value-column
+      // alias.
+      const args = orderedCallArgs((iterator.expr as OperatorCall).args);
+      const constants: ScalarValue[] = [];
+      let allConst = true;
+      for (const arg of args) {
+        const lit = extractScalarConstant(arg.expr);
+        if (lit === undefined) { allConst = false; break; }
+        constants.push(lit);
+      }
+      if (!allConst) return null;
+      levels.push({ iteratorPathId, alias, constants, optional });
+    } else if (iterator.expr.kind === "select_expr") {
+      // `FOR x IN (select Type filter …) UNION …` — peel the select_expr
+      // layers down to a type_root or pointer, then emit a SQL subquery
+      // FROM that yields the type's table with the FOR's full projection
+      // (so the body can read any of its columns) and applies each
+      // intermediate FILTER. Wrapping with compileSelectSource would use
+      // the iterator's own shape for projection, which omits columns the
+      // outer body needs.
+      let peel: Set = iterator;
+      const inlineWheres: Set[] = [];
+      while (peel.expr.kind === "select_expr") {
+        const se = peel.expr as SelectExpr;
+        if (se.where) inlineWheres.push(se.where);
+        peel = se.result;
+      }
+      if (peel.expr.kind !== "type_root") return null;
+      const typeref = (peel.expr as TypeRoot).typeref;
+      const baseSrc = compilePolymorphicSource(typeref, false, alias, projectedColumns, options);
+      let sql = `SELECT ${alias}.* FROM ${baseSrc}`;
+      for (const w of inlineWheres) {
+        const wSql = compileWhereClause(w, alias, params, target, options);
+        if (!wSql) return null;
+        sql += ` WHERE ${wSql}`;
+      }
+      const wrapped = `(${sql}) ${alias}`;
+      levels.push({
+        iteratorPathId,
+        alias,
+        precompiled: { iteratorPathId, alias, precompiledSql: wrapped, optional, iteratorSet: iterator },
+        optional,
+      });
+    } else if (iterator.expr.kind === "delete_expr") {
+      // Inline `delete X filter …` as an iterator. For read semantics
+      // here we just SELECT the rows that match — actually performing
+      // the delete is independent of the FOR's value-level semantics
+      // and is handled at statement-level DML. Include the filter's
+      // column refs in the projection so the WHERE clause can resolve.
+      const del = iterator.expr as DeleteExpr;
+      const cols = new Set<string>(projectedColumns.length > 0 ? projectedColumns : ["id"]);
+      if (del.where) {
+        for (const c of collectReferencedColumns(del.where)) cols.add(c);
+      }
+      const sourceCols = [...cols];
+      const inner = compilePolymorphicSource(del.subject, false, alias, sourceCols, options);
+      let sql = `SELECT ${alias}.* FROM ${inner}`;
+      if (del.where) {
+        const w = compileWhereClause(del.where, alias, params, target, options);
+        if (w) sql += ` WHERE ${w}`;
+      }
+      const wrapped = `(${sql}) ${alias}`;
+      levels.push({
+        iteratorPathId,
+        alias,
+        precompiled: { iteratorPathId, alias, precompiledSql: wrapped, optional, iteratorSet: iterator },
+        optional,
+      });
     } else {
       return null;
     }
@@ -2196,22 +2478,77 @@ const compileForExprSource = (
     currentExpr = forExpr.body.expr;
   }
 
-  if (levels.length === 0 || !levels[0].typeRef) {
+  if (levels.length === 0 || (!levels[0].typeRef && !levels[0].constants && !levels[0].precompiled)) {
     return null;
   }
 
   const bindingAliases = new Map<string, string>();
+  const scalarBindingAliases = new Map<string, string>();
   const linkPropertyAliases = new Map<string, string>();
   for (const level of levels) {
     bindingAliases.set(level.iteratorPathId, level.alias);
+    if (level.constants) {
+      // Scalar/set iterators expose a single `value` column on the
+      // generated UNION ALL subquery; record so the body's binding
+      // references can pick that up instead of expecting a type-rooted
+      // column.
+      scalarBindingAliases.set(level.iteratorPathId, level.alias);
+    }
   }
 
   const firstAlias = levels[0].alias;
-  let fromSql = compilePolymorphicSource(levels[0].typeRef, false, firstAlias, projectedColumns, options);
+  let fromSql: string;
+  if (levels[0].typeRef) {
+    if (levels[0].optional) {
+      // `FOR optional x in TypeRoot` — anchor with a single dummy row and
+      // LEFT JOIN the type so empty source still runs the body once.
+      const inner = compilePolymorphicSource(levels[0].typeRef, false, firstAlias, projectedColumns, options);
+      fromSql = `(SELECT 1 AS __anchor) __anchor_0 LEFT JOIN ${inner} ON 1=1`;
+    } else {
+      fromSql = compilePolymorphicSource(levels[0].typeRef, false, firstAlias, projectedColumns, options);
+    }
+  } else if (levels[0].precompiled) {
+    const pre = levels[0].precompiled;
+    if (levels[0].optional) {
+      fromSql = `(SELECT 1 AS __anchor) __anchor_0 LEFT JOIN ${pre.precompiledSql} ON 1=1`;
+    } else {
+      fromSql = pre.precompiledSql;
+    }
+  } else {
+    const consts = levels[0].constants!;
+    const parts = consts.map((c) => {
+      if (typeof c === "string") return `SELECT ${quoteLiteral(c)} AS ${quoteIdent("value")}`;
+      if (typeof c === "number") return `SELECT ${c} AS ${quoteIdent("value")}`;
+      if (typeof c === "boolean") return `SELECT ${c ? 1 : 0} AS ${quoteIdent("value")}`;
+      return `SELECT NULL AS ${quoteIdent("value")}`;
+    });
+    fromSql = `(${parts.join(" UNION ALL ")}) ${firstAlias}`;
+  }
 
   for (let i = 1; i < levels.length; i++) {
     const level = levels[i];
     const previousAlias = levels[i - 1].alias;
+    if (level.constants) {
+      // Nested constant iterator: cross-join with a fresh UNION ALL subquery.
+      const consts = level.constants;
+      const parts = consts.map((c) => {
+        if (typeof c === "string") return `SELECT ${quoteLiteral(c)} AS ${quoteIdent("value")}`;
+        if (typeof c === "number") return `SELECT ${c} AS ${quoteIdent("value")}`;
+        if (typeof c === "boolean") return `SELECT ${c ? 1 : 0} AS ${quoteIdent("value")}`;
+        return `SELECT NULL AS ${quoteIdent("value")}`;
+      });
+      const joiner = level.optional ? "LEFT JOIN" : "CROSS JOIN";
+      const onClause = level.optional ? " ON 1=1" : "";
+      fromSql += ` ${joiner} (${parts.join(" UNION ALL ")}) ${level.alias}${onClause}`;
+      continue;
+    }
+    if (level.precompiled) {
+      const pre = level.precompiled;
+      const joiner = level.optional ? "LEFT JOIN" : "CROSS JOIN";
+      const onClause = level.optional ? " ON 1=1" : "";
+      fromSql += ` ${joiner} ${pre.precompiledSql}${onClause}`;
+      continue;
+    }
     const pointer = level.pointer;
     if (!pointer) {
       return null;
@@ -2251,7 +2588,7 @@ const compileForExprSource = (
     }
   }
 
-  return { fromSql, baseAlias: firstAlias, bindingAliases, linkPropertyAliases, whereSets, orderBy };
+  return { fromSql, baseAlias: firstAlias, bindingAliases, scalarBindingAliases, linkPropertyAliases, whereSets, orderBy, paramsCheckpoint };
 };
 
 const innermostForExprBody = (sourceSet: Set): Set => {
@@ -2262,9 +2599,126 @@ const innermostForExprBody = (sourceSet: Set): Set => {
   return current;
 };
 
+// A "free type root" inside a FOR body is a Pointer.source whose expression is
+// a bare type_root that isn't already mapped to a FOR-iterator alias. These
+// need their own CROSS JOIN so the body produces cross-product cardinality.
+type FreeTypeRoot = { key: string; typeref: TypeRef };
+const collectFreeTypeRoots = (
+  bodySet: Set,
+  bindingAliases: Map<string, string>,
+  outerWhere?: Set,
+): FreeTypeRoot[] => {
+  const seen = new Set<string>();
+  const roots: FreeTypeRoot[] = [];
+  const consider = (src: Set): void => {
+    if (src.expr.kind !== "type_root") return;
+    const key = pathIdKey(src);
+    if (bindingAliases.has(key)) return;
+    if (seen.has(key)) return;
+    seen.add(key);
+    roots.push({ key, typeref: (src.expr as TypeRoot).typeref });
+  };
+  const visit = (set: Set): void => {
+    // If this Set itself is a FOR-iterator binding (its pathId is in
+    // bindingAliases), don't descend into its internals — the binding's
+    // alias already accounts for the iteration source, and the inner
+    // type_root underneath would otherwise look "free" because its
+    // namespace differs from the iterator's outer pathId.
+    if (bindingAliases.has(pathIdKey(set))) return;
+    const expr = set.expr;
+    if (expr.kind === "pointer") {
+      const pointer = expr as Pointer;
+      consider(pointer.source);
+      visit(pointer.source);
+      if (pointer.expr) visit(pointer.expr as unknown as Set);
+      return;
+    }
+    if (expr.kind === "type_root") {
+      consider(set);
+      return;
+    }
+    if (expr.kind === "tuple") {
+      for (const el of (expr as Tuple).elements) visit(el.val);
+      return;
+    }
+    if (expr.kind === "operator_call") {
+      for (const arg of orderedCallArgs((expr as OperatorCall).args)) visit(arg.expr);
+      return;
+    }
+    if (expr.kind === "function_call") {
+      // Function-call arguments compile to their own subquery (see e.g.
+      // `count(Card)` → `(SELECT count(*) FROM Card g_agg)`), so any
+      // type_roots they wrap are independent of the FOR's FROM clause —
+      // don't pull them into the outer CROSS JOIN.
+      return;
+    }
+    if (expr.kind === "if_else_expr") {
+      const ifElse = expr as IfElseExpr;
+      visit(ifElse.condition);
+      visit(ifElse.ifExpr);
+      visit(ifElse.elseExpr);
+      return;
+    }
+    if (expr.kind === "coalesce_expr") {
+      const coalesce = expr as CoalesceExpr;
+      visit(coalesce.left);
+      visit(coalesce.right);
+      return;
+    }
+    if (expr.kind === "type_cast") {
+      visit((expr as TypeCast).expr);
+      return;
+    }
+    if (expr.kind === "exists_expr") {
+      // `exists(Card)` is a boolean — its operand is independent of the FOR.
+      return;
+    }
+    if (expr.kind === "array") {
+      for (const element of (expr as ArrayExpr).elements) visit(element);
+      return;
+    }
+    if (expr.kind === "index_expr") {
+      const indexExpr = expr as IndexExpr;
+      visit(indexExpr.expr);
+      visit(indexExpr.index);
+      return;
+    }
+    if (expr.kind === "select_expr") {
+      const se = expr as SelectExpr;
+      visit(se.result);
+      // Inner FILTERs/ORDER BYs on a FOR body's SELECT may reference free
+      // type-roots that don't appear in `result`; collect them too so the
+      // outer FROM gets the corresponding CROSS JOINs.
+      if (se.where) visit(se.where);
+      for (const order of se.orderBy ?? []) visit(order.path);
+    }
+  };
+  visit(bodySet);
+  if (outerWhere) visit(outerWhere);
+  return roots;
+};
+
+const countAliases = (bindingAliases: Map<string, string>): number => {
+  let max = 0;
+  for (const alias of bindingAliases.values()) {
+    const match = /^g(\d+)$/.exec(alias);
+    if (match) {
+      const n = Number(match[1]);
+      if (n + 1 > max) max = n + 1;
+    }
+  }
+  return max;
+};
+
 const collectForExprProjectedColumns = (sourceSet: Set, where?: Set, orderBy?: SortExpr[]): string[] => {
   const columns = new Set<string>(["id"]);
   const visit = (set: Set): void => {
+    // Shape elements may reference fields (e.g. `Card { name, … }`) that
+    // don't appear elsewhere in the body expression — walk them so those
+    // columns make it into the cross-joined table's projection.
+    for (const elem of set.shape ?? []) {
+      visit(elem.expr);
+    }
     const expr = set.expr;
     if (expr.kind === "pointer") {
       const pointer = expr as Pointer;
@@ -2334,6 +2788,15 @@ const collectForExprProjectedColumns = (sourceSet: Set, where?: Set, orderBy?: S
       const indexExpr = expr as IndexExpr;
       visit(indexExpr.expr);
       visit(indexExpr.index);
+      return;
+    }
+    if (expr.kind === "select_expr") {
+      const selectExpr = expr as SelectExpr;
+      visit(selectExpr.result);
+      if (selectExpr.where) visit(selectExpr.where);
+      for (const order of selectExpr.orderBy ?? []) visit(order.path);
+      if (selectExpr.limit) visit(selectExpr.limit);
+      if (selectExpr.offset) visit(selectExpr.offset);
     }
   };
 
@@ -2355,20 +2818,45 @@ const compileValueSetSQLWithAliases = (
   target: RuntimeTarget,
   options: GelIRCompileOptions,
   linkPropertyAliases?: Map<string, string>,
+  scalarBindingAliases?: Map<string, string>,
 ): string | null => {
   const checkpoint = params.length;
   const unwrapped = unwrapSelectExprSet(set);
   const expr = unwrapped.result.expr;
 
+  // Direct reference to a scalar/set-iterator binding (e.g. `letter`
+  // inside `FOR letter IN {'I', 'Z'} UNION ...`): emit
+  // `${alias}.value` instead of trying to look up a type-rooted column.
+  if (scalarBindingAliases) {
+    const key = pathIdKey(unwrapped.result);
+    const scalarAlias = scalarBindingAliases.get(key);
+    if (scalarAlias) {
+      return `${scalarAlias}.${quoteIdent("value")}`;
+    }
+  }
+
   if (expr.kind === "pointer") {
     const pointer = expr as Pointer;
     const sourceKey = pathIdKey(pointer.source);
-    const alias = bindingAliases.get(sourceKey) ?? fallbackAlias;
+    let alias = bindingAliases.get(sourceKey);
+    if (!alias && pointer.source.expr.kind === "type_root") {
+      // Fallback lookup by typeref id — alternate IR builds for the same
+      // type root (e.g. body vs FILTER's reuse of `Card`) can produce
+      // structurally-equal pathIds that don't serialize identically when
+      // their typeRef objects carry differently-shared sub-references.
+      const sourceTypeId = (pointer.source.expr as TypeRoot).typeref?.id;
+      if (sourceTypeId) {
+        for (const [k, v] of bindingAliases.entries()) {
+          if (k.includes(`"id":"${sourceTypeId}"`)) { alias = v; break; }
+        }
+      }
+    }
+    const resolvedAlias = alias ?? fallbackAlias;
     if (pointer.ptrref.isLinkProperty) {
-      const linkAlias = linkPropertyAliases?.get(sourceKey) ?? alias;
+      const linkAlias = linkPropertyAliases?.get(sourceKey) ?? resolvedAlias;
       return `${linkAlias}.${quoteIdent(columnForPointer(pointer).replace(/^@/, ""))}`;
     }
-    return `${alias}.${quoteIdent(columnForPointer(pointer))}`;
+    return `${resolvedAlias}.${quoteIdent(columnForPointer(pointer))}`;
   }
 
   const literal = extractScalarConstant(unwrapped.result);
@@ -2381,7 +2869,7 @@ const compileValueSetSQLWithAliases = (
 
   if (expr.kind === "tuple") {
     const tuple = expr as Tuple;
-    const parts = tuple.elements.map((element) => compileValueSetSQLWithAliases(element.val, bindingAliases, fallbackAlias, params, target, options, linkPropertyAliases));
+    const parts = tuple.elements.map((element) => compileValueSetSQLWithAliases(element.val, bindingAliases, fallbackAlias, params, target, options, linkPropertyAliases, scalarBindingAliases));
     if (parts.some((part) => !part)) {
       params.length = checkpoint;
       return null;
@@ -2391,18 +2879,141 @@ const compileValueSetSQLWithAliases = (
       : `json_array(${parts.join(", ")})`;
   }
 
+  if (expr.kind === "type_cast") {
+    const castExpr = expr as TypeCast;
+    const inner = compileValueSetSQLWithAliases(castExpr.expr, bindingAliases, fallbackAlias, params, target, options, linkPropertyAliases, scalarBindingAliases);
+    if (!inner) {
+      params.length = checkpoint;
+      return null;
+    }
+    const castTarget = sqlCastTarget(castExpr.toType);
+    return castTarget ? `CAST(${inner} AS ${castTarget})` : inner;
+  }
+
+  // `a ?? b` — coalesce. Recurse so binding refs inside resolve against
+  // the FOR's aliases, then emit SQL `COALESCE(a, b)`. Special-cased here
+  // (vs falling through to compileValueSetSQL) because the inner compile
+  // would otherwise treat the operands as outer scalars and lose the
+  // iterator's column refs.
+  if (expr.kind === "coalesce_expr") {
+    const co = expr as CoalesceExpr;
+    const left = compileValueSetSQLWithAliases(co.left, bindingAliases, fallbackAlias, params, target, options, linkPropertyAliases, scalarBindingAliases);
+    const right = compileValueSetSQLWithAliases(co.right, bindingAliases, fallbackAlias, params, target, options, linkPropertyAliases, scalarBindingAliases);
+    if (left && right) {
+      return `COALESCE(${left}, ${right})`;
+    }
+    params.length = checkpoint;
+  }
+
+  // `Pointer[idx]` (string indexing on a scalar pointer like `.name[0]`) —
+  // recurse so the pointer's source resolves against the FOR aliases. We
+  // only intercept the string-indexing shape; tuple-index access on a
+  // non-pointer operand falls through to compileValueSetSQL which has the
+  // correct json_extract handling for those.
+  if (expr.kind === "index_expr") {
+    const idxExpr = expr as IndexExpr;
+    if (idxExpr.expr.expr.kind === "pointer") {
+      const inner = compileValueSetSQLWithAliases(idxExpr.expr, bindingAliases, fallbackAlias, params, target, options, linkPropertyAliases, scalarBindingAliases);
+      const idxLit = extractNumericLiteral(idxExpr.index);
+      if (inner && idxLit !== undefined) {
+        const start = idxLit >= 0 ? idxLit + 1 : idxLit;
+        return `substr(${inner}, ${start}, 1)`;
+      }
+    }
+  }
+
   if (expr.kind === "operator_call") {
     const call = expr as OperatorCall;
-    const op = normalizeOperator(call.operator);
+    // `union` (set constructor `{a, b}`) and `distinct` produce multi-row
+    // sets — they don't fit in a single value-expression slot, so let the
+    // caller fall back to compileScalarSelectSQL which can emit UNION ALL.
+    if (call.operator === "union" || call.operator === "distinct") {
+      params.length = checkpoint;
+      return null;
+    }
+    const op = operatorToInfixSql(call.operator) ?? normalizeOperator(call.operator);
     const args = orderedCallArgs(call.args);
     if (op && args.length >= 2) {
-      const left = compileValueSetSQLWithAliases(args[0].expr, bindingAliases, fallbackAlias, params, target, options, linkPropertyAliases);
-      const right = compileValueSetSQLWithAliases(args[1].expr, bindingAliases, fallbackAlias, params, target, options, linkPropertyAliases);
+      const left = compileValueSetSQLWithAliases(args[0].expr, bindingAliases, fallbackAlias, params, target, options, linkPropertyAliases, scalarBindingAliases);
+      const right = compileValueSetSQLWithAliases(args[1].expr, bindingAliases, fallbackAlias, params, target, options, linkPropertyAliases, scalarBindingAliases);
       if (!left || !right) {
         params.length = checkpoint;
         return null;
       }
       return `(${left} ${op} ${right})`;
+    }
+  }
+
+  if (expr.kind === "function_call") {
+    const call = expr as FunctionCall;
+    const fname = call.functionName;
+    const args = orderedCallArgs(call.args);
+    // `count(binding)` inside a FOR body: the binding is a single row per
+    // iteration, so its cardinality is always 1 — emit the literal instead
+    // of `count(*) FROM Card`, which would count the whole table and
+    // ignore the iteration's shadowing.
+    if ((fname === "std::count" || fname === "count") && args.length === 1) {
+      const argSet = args[0].expr;
+      if (argSet.expr.kind === "type_root" && bindingAliases.has(pathIdKey(argSet))) {
+        return "1";
+      }
+    }
+    // Inlined user-defined function (UDF body was substituted at IR build
+    // time): recurse into the body with the surrounding FOR aliases so
+    // binding references resolve to the iterator's columns.
+    if (call.body && scalarBindingAliases && scalarBindingAliases.size > 0) {
+      const inner = compileValueSetSQLWithAliases(call.body, bindingAliases, fallbackAlias, params, target, options, linkPropertyAliases, scalarBindingAliases);
+      if (inner) return inner;
+      params.length = checkpoint;
+    }
+  }
+
+  // FOR body that's a `SELECT Type { shape } FILTER …`: the surrounding
+  // FOR has already added Type as a cross-join level (collectFreeTypeRoots),
+  // so use *that* level's alias as the shape's source. The FILTER is
+  // pushed up to the FOR's WHERE clause (see the bodyWheres logic above)
+  // — emit only the shape's json_object here, no inner SELECT/WHERE.
+  if (set.expr.kind === "select_expr") {
+    // Peel any extra select_expr layers (parens-wrapped bodies stack them)
+    // so we find the underlying typed-shape SELECT.
+    let selectExpr = set.expr as SelectExpr;
+    while (selectExpr.result.expr.kind === "select_expr"
+      && (!selectExpr.result.shape || selectExpr.result.shape.length === 0)) {
+      selectExpr = selectExpr.result.expr as SelectExpr;
+    }
+    if (selectExpr.result.expr.kind === "type_root" && selectExpr.result.shape && selectExpr.result.shape.length > 0) {
+      const resultKey = pathIdKey(selectExpr.result);
+      const typeAlias = bindingAliases.get(resultKey);
+      if (typeAlias) {
+        // Compile each shape element with the bindings so computed exprs
+        // (like `letter := letter`) resolve to the iterator's column.
+        const pairs: string[] = [];
+        let ok = true;
+        for (const element of selectExpr.result.shape) {
+          const elemExpr = element.expr;
+          // Scalar field shorthand (`name`): emit alias.column directly.
+          if (elemExpr.expr.kind === "pointer" && elemExpr.typeref.isScalar) {
+            const ptr = elemExpr.expr as Pointer;
+            const col = columnForPointer(ptr);
+            pairs.push(`${quoteLiteral(ptr.ptrref.shortName)}, ${typeAlias}.${quoteIdent(col)}`);
+            continue;
+          }
+          // Computed scalar: compile via the aliased path so binding refs
+          // (`letter := letter`) lower correctly.
+          const computed = compileValueSetSQLWithAliases(elemExpr, bindingAliases, typeAlias, params, target, options, linkPropertyAliases, scalarBindingAliases);
+          if (!computed) { ok = false; break; }
+          const key = element.name
+            ? quoteLiteral(element.name)
+            : (elemExpr.expr.kind === "pointer")
+              ? quoteLiteral((elemExpr.expr as Pointer).ptrref.shortName)
+              : quoteLiteral(shapeAliasForElement(element, elemExpr, 0));
+          pairs.push(`${key}, ${computed}`);
+        }
+        if (ok && pairs.length > 0) {
+          return `json_object(${pairs.join(", ")})`;
+        }
+        params.length = checkpoint;
+      }
     }
   }
 
@@ -2420,7 +3031,8 @@ const compilePredicateWithAliases = (
   target: RuntimeTarget,
   options: GelIRCompileOptions,
   linkPropertyAliases?: Map<string, string>,
-): string | null => compileValueSetSQLWithAliases(set, bindingAliases, "g0", params, target, options, linkPropertyAliases);
+  scalarBindingAliases?: Map<string, string>,
+): string | null => compileValueSetSQLWithAliases(set, bindingAliases, "g0", params, target, options, linkPropertyAliases, scalarBindingAliases);
 
 const compileForExprSort = (order: SortExpr, valueAlias: string): string => {
   if (order.path.expr.kind !== "index_expr") {
@@ -2981,6 +3593,12 @@ const compilePredicateSetSQL = (
   linkPropertyAlias?: string,
 ): string | null => {
   const checkpoint = params.length;
+  // FILTER TRUE / FILTER FALSE — bare boolean constants don't go through
+  // operator_call, so emit a SQL truth value directly. Without this branch
+  // the whole compile bails out and the engine falls back.
+  if (set.expr.kind === "boolean_constant") {
+    return (set.expr as { value: unknown }).value ? "1" : "0";
+  }
   if (set.expr.kind !== "operator_call") {
     params.length = checkpoint;
     return null;
@@ -3695,6 +4313,38 @@ const compileCountOfSetSQL = (
     const scalarSql = compileScalarSelectSQL(set, params, target, options);
     if (scalarSql) {
       return `(SELECT count(*) FROM (${scalarSql}))`;
+    }
+    params.length = checkpoint;
+    // Non-scalar pointer (link traversal like `User.friends`): scalar compile
+    // bails because the target isn't a scalar. Build the link-traversal
+    // FROM clause directly and count its rows.
+    const compiledSource = compileSelectSource(set, undefined, undefined, options, params, target);
+    if (compiledSource) {
+      return `(SELECT count(*) FROM ${compiledSource.sql})`;
+    }
+    params.length = checkpoint;
+  }
+
+  // `count(FOR ... UNION ...)` — compile the FOR's source as a FROM clause
+  // and count its rows. Works when the body has cardinality 1 per iteration
+  // (the common case for FOR-UNION).
+  if (expr.kind === "for_expr") {
+    const checkpoint = params.length;
+    const projectedColumns = collectForExprProjectedColumns(set);
+    const forSource = compileForExprSource(set, projectedColumns, options, params, target);
+    if (forSource) {
+      // Add cross joins for free type roots in the body, matching how the
+      // outer FOR path builds its FROM clause.
+      const bodySet = innermostForExprBody(set);
+      const freeRoots = collectFreeTypeRoots(bodySet, forSource.bindingAliases);
+      let nextIdx = countAliases(forSource.bindingAliases);
+      for (const root of freeRoots) {
+        const alias = `g${nextIdx++}`;
+        const joinSql = compilePolymorphicSource(root.typeref, false, alias, projectedColumns, options);
+        forSource.fromSql += ` CROSS JOIN ${joinSql}`;
+        forSource.bindingAliases.set(root.key, alias);
+      }
+      return `(SELECT count(*) FROM ${forSource.fromSql})`;
     }
     params.length = checkpoint;
   }

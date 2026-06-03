@@ -42,6 +42,9 @@ import type {
   UpdateStmt,
   DeleteStmt,
   ConfigStmt,
+  InsertExpr,
+  UpdateExpr,
+  DeleteExpr,
   ForExpr,
   Pointer,
   PointerRef,
@@ -595,8 +598,36 @@ const compilePathSteps = (steps: EdgeQLPathStep[], ctx: IRCompileContext): Set =
     return literalToSet(null);
   }
   const first = steps[0];
+  // Leading-dot paths like `.name` resolve against the surrounding subject
+  // (`__current__` / `__subject__`) rather than a named object. Without this
+  // they'd bail out as `null`, and the wrapping pointer would be built over
+  // a string-constant source — breaking shape filters like
+  // `SELECT Card {…} FILTER .name = 'Imp'`.
   if (!first || first.kind !== "object_ref") {
-    return literalToSet(null);
+    const current = resolveBinding(ctx, "__current__") ?? resolveBinding(ctx, "__subject__");
+    if (!current) {
+      return literalToSet(null);
+    }
+    let out = current;
+    for (const step of steps) {
+      if (step.kind === "ptr") {
+        const ptrref = resolvePointerRef(ctx, out.typeref, step.name);
+        if (!ptrref) {
+          return { ...out, pathId: defaultPathId("path_steps") };
+        }
+        out = extendPathSetDirectional(out, ptrref, ptrref.computedLinkAliasIsBackward ? "inbound" : (step.direction ?? "outbound"));
+        if (step.optional) {
+          out = { ...out, expr: { ...(out.expr as Pointer), optionalDeref: true } };
+        }
+        continue;
+      }
+      if (step.kind === "type_intersection") {
+        out = { ...out, typeref: resolveTypeRef(ctx, step.typeName) };
+        continue;
+      }
+      if (step.kind === "splat") continue;
+    }
+    return out;
   }
   if (!resolveBinding(ctx, first.name)) {
     const enumType = lookupEnumScalar(ctx, first.name);
@@ -2446,7 +2477,19 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
             : out;
         }
       }
-      const iterator = compileFreeObjectExpr(expr.iterator, ctx);
+      const rawIterator = compileFreeObjectExpr(expr.iterator, ctx);
+      // Namespace the iterator's pathId so the body can distinguish references
+      // to the iteration binding (e.g. `C`) from fresh references to the same
+      // type (e.g. `Card`) — without this, both produce identical pathIds and
+      // the SQL compiler can't tell them apart for cross-product semantics.
+      const iterScopeTag = `for:${expr.variable}:${ctx.nextScopeId++}`;
+      const iterator: Set = {
+        ...rawIterator,
+        pathId: {
+          ...rawIterator.pathId,
+          namespace: [...(rawIterator.pathId?.namespace ?? []), iterScopeTag],
+        },
+      };
       const loopCtx = childScope(ctx);
       bindValue(loopCtx, expr.variable, iterator);
       const body = compileFreeObjectExpr(expr.body, loopCtx);
@@ -2580,6 +2623,97 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
       };
     }
 
+    case "mutation_expr": {
+      // Parser wraps `(delete X filter …)` / `(insert X …)` / `(update X …)`
+      // when they appear in expression positions (e.g. as a FOR iterator).
+      // Lower to the value-level mutation expr Set so callers can treat
+      // it like any other set producer.
+      const stmt = expr.statement;
+      const scoped = withBindings(ctx, stmt.with);
+      if (stmt.kind === "delete") {
+        const typeref = resolveTypeRef(scoped, stmt.typeName);
+        const subject = setFromTypeRoot(typeref);
+        bindValue(scoped, "__subject__", subject);
+        bindValue(scoped, "__current__", subject);
+        const where = compileFilterToSet(stmt.filter, subject, scoped);
+        return {
+          kind: "set",
+          expr: {
+            kind: "delete_expr",
+            subject: typeref,
+            where,
+          } as DeleteExpr,
+          pathId: defaultPathId(`delete:${stmt.typeName}`),
+          typeref,
+          shape: [],
+          isBinding: false,
+          isMaterializedRef: false,
+          isSchemaAlias: false,
+        };
+      }
+      if (stmt.kind === "insert") {
+        const typeref = resolveTypeRef(scoped, stmt.typeName);
+        const subjectSet = setFromTypeRoot(typeref);
+        bindValue(scoped, "__subject__", subjectSet);
+        bindValue(scoped, "__current__", subjectSet);
+        const shape: ShapeElement[] = Object.entries(stmt.values).map(([name, value]) => {
+          const ptrref = resolvePointerRef(scoped, typeref, name);
+          const exprSet = compileInsertValue(value, scoped);
+          return {
+            kind: "shape_element",
+            source: subjectSet,
+            expr: exprSet,
+            targetPtr: ptrref,
+            shapeOp: "assign",
+            shapeOrigin: "explicit",
+            required: ptrref?.outCardinality === "one",
+            cardinality: ptrref?.outCardinality ?? "unknown",
+          };
+        });
+        return {
+          kind: "set",
+          expr: { kind: "insert_expr", subject: typeref, shape } as InsertExpr,
+          pathId: defaultPathId(`insert:${stmt.typeName}`),
+          typeref,
+          shape: [],
+          isBinding: false,
+          isMaterializedRef: false,
+          isSchemaAlias: false,
+        };
+      }
+      if (stmt.kind === "update") {
+        const typeref = resolveTypeRef(scoped, stmt.typeName);
+        const subjectSet = setFromTypeRoot(typeref);
+        bindValue(scoped, "__subject__", subjectSet);
+        bindValue(scoped, "__current__", subjectSet);
+        const shape: ShapeElement[] = Object.entries(stmt.values).map(([name, value]) => {
+          const ptrref = resolvePointerRef(scoped, typeref, name);
+          return {
+            kind: "shape_element",
+            source: subjectSet,
+            expr: compileInsertValue(value, scoped),
+            targetPtr: ptrref,
+            shapeOp: stmt.operations?.[name] ?? "assign",
+            shapeOrigin: "explicit",
+            required: ptrref?.outCardinality === "one",
+            cardinality: ptrref?.outCardinality ?? "unknown",
+          };
+        });
+        const where = compileFilterToSet(stmt.filter, subjectSet, scoped);
+        return {
+          kind: "set",
+          expr: { kind: "update_expr", subject: typeref, where, shape } as UpdateExpr,
+          pathId: defaultPathId(`update:${stmt.typeName}`),
+          typeref,
+          shape: [],
+          isBinding: false,
+          isMaterializedRef: false,
+          isSchemaAlias: false,
+        };
+      }
+      throw new AppError("E_RUNTIME", `AST->IR mutation kind '${(stmt as { kind: string }).kind}' not supported in expression position`, 1, 1);
+    }
+
     default:
       throw new AppError("E_RUNTIME", `AST->IR is not implemented yet for '${expr.kind}'`, 1, 1);
   }
@@ -2707,8 +2841,15 @@ const compileFilterTarget = (target: FilterTarget, subject: Set, ctx: IRCompileC
 };
 
 const compileFilterExpr = (filter: FilterExpr, subject: Set, ctx: IRCompileContext): Set => {
+  // Bind the filter's subject so leading-dot paths inside the filter
+  // (e.g. `.name`, `.deck`) resolve against the subject set rather than
+  // bailing to `null` and producing pointer-on-null IR. The bindings live
+  // in a child scope so they don't leak past the filter.
+  const filterCtx = childScope(ctx);
+  bindValue(filterCtx, "__current__", subject);
+  bindValue(filterCtx, "__subject__", subject);
   if (filter.kind === "free_expr") {
-    return compileFreeObjectExpr(filter.expr, ctx);
+    return compileFreeObjectExpr(filter.expr, filterCtx);
   }
   if (filter.kind === "and" || filter.kind === "or") {
     const left = compileFilterExpr(filter.left, subject, ctx);
@@ -3583,6 +3724,7 @@ const compileShape = (
           shapeOrigin: resolveShapeOrigin(el),
           required: el.required ?? false,
           cardinality: el.cardinality ?? (el.multi ? "many" : ptrref.outCardinality),
+          name: el.name,
         });
         continue;
       }
@@ -3598,6 +3740,7 @@ const compileShape = (
         shapeOrigin: resolveShapeOrigin(el),
         required: el.required ?? false,
         cardinality: el.cardinality ?? (el.multi ? "many" : "at_most_one"),
+        name: el.name,
       });
       continue;
     }
@@ -4246,7 +4389,11 @@ const expandAliasInSelectStatement = (
 const compileSelectStatement = (rawStatement: SelectStatement, ctx: IRCompileContext): SelectStmt => {
   const statement = expandAliasInSelectStatement(rawStatement, ctx, new globalThis.Set<string>());
   const scoped = withBindings(ctx, statement.with);
-  const subject = setFromTypeRoot(resolveTypeRef(scoped, statement.typeName));
+  // `select Foo { ... }` may name either a type or a WITH-bound expression
+  // (e.g. `with GR := (...) select GR { key }`). Prefer the binding when
+  // it exists so the subject inherits the bound set's expression.
+  const bound = resolveBinding(scoped, statement.typeName);
+  const subject = bound ?? setFromTypeRoot(resolveTypeRef(scoped, statement.typeName));
   bindValue(scoped, "__subject__", subject);
   bindValue(scoped, "__current__", subject);
   const shaped = compileShape(subject, statement.shape, scoped);

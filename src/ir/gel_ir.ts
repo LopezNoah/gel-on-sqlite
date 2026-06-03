@@ -169,6 +169,11 @@ export interface ShapeElement extends Base {
   shapeOrigin?: "explicit" | "default" | "splat_expansion" | "materialization";
   required: boolean;
   cardinality: Cardinality;
+  // EdgeQL name of this shape entry as written in the query (e.g. `letter`
+  // for `letter := letter`). Preserved from the AST so SQL lowering can use
+  // it as the JSON object key when the inner expression doesn't carry a
+  // pointer ref of its own.
+  name?: string;
 }
 
 export interface Statement extends Base {

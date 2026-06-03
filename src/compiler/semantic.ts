@@ -1151,7 +1151,13 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           if (first.kind === "literal") return { kind: "literal", value: first.value };
         }
       }
-      fail("Shape function arguments do not support nested expressions");
+      // Other expression kinds (select_expr_subquery, with-binding, etc.):
+      // emit an `id` placeholder ref so the OLD IR pass continues. The
+      // SQL pipeline handles the actual computation via Gel IR lowering;
+      // here we just need a syntactically-valid arg.
+      ensureFieldRef("id");
+      selectedColumns.add("id");
+      return { kind: "field_ref", column: "id" };
     }
 
     fail("Unsupported function argument in shape");
