@@ -29,6 +29,20 @@ const STDLIB_SQL_TEMPLATES = new Map<string, StdlibSqlTemplate>([
     return `_gel_assert_single(${argSql[0]})`;
   }],
   ["std::assert_exists", (argSql) => argSql[0] ? `_gel_assert_exists(${argSql[0]})` : null],
+  // `re_test(pattern, str)` / `re_match(pattern, str)` / `re_replace(...)` —
+  // SQLite has no built-in REGEXP, so we lower to the JS-backed `_gel_re_*`
+  // SQLite functions registered in openSQLite().
+  ["std::re_test", (argSql) => argSql[0] && argSql[1]
+    ? `(_gel_re_test(${argSql[0]}, ${argSql[1]}) = 1)`
+    : null],
+  ["std::re_match", (argSql) => argSql[0] && argSql[1]
+    ? `_gel_re_match_first(${argSql[0]}, ${argSql[1]})`
+    : null],
+  ["std::re_replace", (argSql) => {
+    if (!argSql[0] || !argSql[1] || !argSql[2]) return null;
+    if (argSql[3]) return `_gel_re_replace(${argSql[0]}, ${argSql[1]}, ${argSql[2]}, ${argSql[3]})`;
+    return `_gel_re_replace(${argSql[0]}, ${argSql[1]}, ${argSql[2]})`;
+  }],
   ["std::array_set", (argSql) => argSql[0] && argSql[1] && argSql[2]
     ? `_gel_array_set(${argSql[0]}, ${argSql[1]}, ${argSql[2]})`
     : null],
@@ -109,6 +123,9 @@ const STDLIB_SQL_TEMPLATES = new Map<string, StdlibSqlTemplate>([
 const UNREGISTERED_BUT_SUPPORTED = new Set<string>([
   "std::datetime_get",
   "std::datetime_truncate",
+  "std::re_test",
+  "std::re_match",
+  "std::re_replace",
 ]);
 
 export const canLowerStdlibFunctionSql = (target: RuntimeTarget, functionName: string): boolean =>
