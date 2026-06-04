@@ -37,6 +37,13 @@ export interface HarnessOptions {
   extraModules?: Record<string, string>;
   // Optional setup scripts run inside named modules after the primary setup.
   extraSetups?: Array<{ module: string; setup: string }>;
+  // When true, subsequent script()/query() calls flag the engine to enforce
+  // user-DDL restrictions (generic types, USING SQL, SET OF params,
+  // CREATE INFIX OPERATOR, CREATE CAST, CREATE PSEUDO TYPE,
+  // extending cfg::ConfigObject). Mirrors upstream's
+  // `INTERNAL_TESTMODE = False` on `TestEdgeQLUserDDL`. The read-only
+  // stdlib-module guard is always enforced regardless of this flag.
+  strictUserDDL?: boolean;
 }
 
 function inferredModuleNameFromSchema(schemaName: string): string {
@@ -144,11 +151,31 @@ export class QueryHarness {
   db: any;
   schema: any;
   private readonly defaultModule: string;
+  // When set, the harness threads a security context with this flag through
+  // to executeScript / executeQuery so the engine enforces user-DDL
+  // restrictions (see HarnessOptions.strictUserDDL).
+  private strictUserDDL: boolean = false;
 
   private constructor(db: any, schema: any, defaultModule = "default") {
     this.db = db;
     this.schema = schema;
     this.defaultModule = defaultModule;
+  }
+
+  private buildSecurityContext() {
+    return this.strictUserDDL
+      ? { strictUserDDL: true as const }
+      : undefined;
+  }
+
+  /**
+   * Toggle user-DDL strict enforcement on subsequent script()/query() calls.
+   * Test classes that mirror upstream's `INTERNAL_TESTMODE = False` (e.g.
+   * `TestEdgeQLUserDDL`) call this after `create({})` so the engine
+   * rejects generic types, USING SQL bodies, etc.
+   */
+  setStrictUserDDL(value: boolean): void {
+    this.strictUserDDL = value;
   }
 
   /**
@@ -299,14 +326,14 @@ export class QueryHarness {
   }
 
   query(q: string) {
-    return executeQuery(this.db, this.schema, q);
+    return executeQuery(this.db, this.schema, q, this.buildSecurityContext());
   }
 
   /**
    * Execute a multi-statement script (semicolon-separated)
    */
   script(s: string) {
-    return executeScript(this.db, this.schema, s, undefined, { defaultModule: this.defaultModule });
+    return executeScript(this.db, this.schema, s, this.buildSecurityContext(), { defaultModule: this.defaultModule });
   }
 
   /**
