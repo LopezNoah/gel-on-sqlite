@@ -4317,18 +4317,22 @@ class Parser {
         }
 
         this.consume();
-        // `IS NOT <type>` — same precedence as IS, NOT just inverts.
-        // Parse-only doesn't track the negation in the AST, so we discard it.
+        // `IS NOT <type>` — preserve the negation by wrapping the result in
+        // a `not` operator. The IR / SQL layers already know how to invert a
+        // type check, so this avoids dropping the NOT silently.
+        let negated = false;
         if (this.peek().kind === "kw_not") {
           this.consume();
+          negated = true;
         }
         const typeExpr = this.parseTypeExpr("type expression after 'is'");
-        left = {
+        const isCheck: FreeObjectExpr = {
           kind: "is_type",
           expr: left,
           typeName: simpleTypeName(typeExpr) ?? "",
           typeExpr,
         };
+        left = negated ? { kind: "not", expr: isCheck } : isCheck;
         continue;
       }
 
@@ -4982,7 +4986,11 @@ class Parser {
           },
           clauses: {},
         },
-        multi: true,
+        // Cardinality of `name := X { … }` follows X (which the IR pass
+        // infers from the underlying pointer), not the shape literal. Setting
+        // `multi: true` unconditionally broke `required foo := .owner{name}`
+        // by surfacing a single-link as an array.
+        multi: isMulti || undefined,
         required,
         cardinality,
         operation,

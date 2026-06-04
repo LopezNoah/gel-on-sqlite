@@ -48,6 +48,7 @@ import type {
   ForExpr,
   Pointer,
   PointerRef,
+  SelectExpr,
   ShapeElement,
   TypeRef,
   TypeRoot,
@@ -1638,6 +1639,19 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
       const scoped = withBindings(ctx, expr.clauses._withBindings);
       const bound = resolveBinding(scoped, expr.typeName);
       const aliasSet = bound ? undefined : tryResolveSchemaAliasSet(scoped, expr.typeName);
+      if (!bound && !aliasSet && ctx.schema) {
+        const qualified = qualifyTypeName(expr.typeName, ctx.module);
+        const typeDef = getSchemaType(scoped, qualified) ?? ctx.schema.getType(qualified);
+        const universal = isUniversalObjectRefName(expr.typeName);
+        if (!typeDef && !universal && !expr.typeName.startsWith("schema::")) {
+          throw new AppError(
+            "E_SEMANTIC",
+            `object type or alias '${qualified}' does not exist`,
+            1,
+            1,
+          );
+        }
+      }
       const typeref = bound?.typeref ?? aliasSet?.typeref ?? resolveTypeRef(scoped, expr.typeName);
       let root = bound ?? aliasSet ?? setFromTypeRoot(typeref);
       if (expr.shape.length > 0) {
@@ -1686,11 +1700,16 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
       const inner = compileFreeObjectExpr(expr.expr, scoped);
       // `SELECT alias := X ORDER BY alias` binds `alias` to `X` for the
       // duration of the SELECT's modifiers; the FILTER / ORDER BY clauses
-      // need to resolve that name back to the inner expression.
-      const clauseCtx = expr.alias ? childScope(scoped) : scoped;
+      // need to resolve that name back to the inner expression. Also
+      // shadow `__current__`/`__subject__` so leading-dot references
+      // (`.number`) inside the FILTER resolve against the subquery's
+      // subject rather than the enclosing query's.
+      const clauseCtx = childScope(scoped);
       if (expr.alias) {
         bindValue(clauseCtx, expr.alias, inner);
       }
+      bindValue(clauseCtx, "__current__", inner);
+      bindValue(clauseCtx, "__subject__", inner);
       return {
         kind: "set",
         expr: {
@@ -1862,6 +1881,53 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
       // `std::anytype` pointer reference.
       const computedSet = tryLowerComputedPropertyOnTypePath(ctx, source, expr.field);
       if (computedSet) return computedSet;
+      // If the source is a direct `Type.field` reference (no intermediate
+      // computed/subquery scope) and the field isn't a built-in pseudo-
+      // pointer (`id`/`__type__`) or a link property (`@x`), surface a
+      // friendly "no link or property" error instead of a phantom
+      // `std::anytype` pointer. Limit to the simple type_root-source case so
+      // we don't trip on subquery contexts where `.field` should bind to a
+      // different subject (the select_expr_subquery handler now sets
+      // `__current__` correctly, so the inner `.field` resolves against the
+      // subquery's subject and bypasses this check naturally).
+      if (
+        ctx.schema
+        && source.expr.kind === "type_root"
+        && expr.field !== "id"
+        && expr.field !== "__type__"
+        && !expr.field.startsWith("@")
+        && !source.typeref.id.startsWith("unknown:")
+        && !source.typeref.id.startsWith("std::")
+        && !source.typeref.isScalar
+        && getResolvedSchemaType(ctx, source.typeref.id)
+      ) {
+        throw new AppError(
+          "E_SEMANTIC",
+          `object type '${source.typeref.id}' has no link or property '${expr.field}'`,
+          1,
+          1,
+        );
+      }
+      // `.foo` on a scalar value (`Issue.number` is scalar, `.x` would be
+      // invalid). EdgeQL reports this as "invalid property reference on
+      // an expression of primitive type 'T'".
+      if (
+        ctx.schema
+        && source.typeref.isScalar
+        && !expr.field.startsWith("@")
+        && expr.field !== "id"
+        && expr.field !== "__type__"
+      ) {
+        const typeName = source.typeref.id.startsWith("unknown:")
+          ? source.typeref.id.slice("unknown:".length)
+          : source.typeref.id;
+        throw new AppError(
+          "E_SEMANTIC",
+          `invalid property reference on an expression of primitive type '${typeName}'`,
+          1,
+          1,
+        );
+      }
       return {
         kind: "set",
         expr: {
@@ -1956,6 +2022,19 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
             : sourceCat === "json" ? "JSON"
             : "array";
           failSemantic(`cannot index ${targetWord} by '${indexTypeName}'`);
+        }
+      }
+      // `1[0]` (int indexed) — index indirection only applies to str/bytes/
+      // array/json. Surface the EdgeQL error so `<str>1[0]` (which the
+      // parser reads as `<str>(1[0])` because index has higher precedence
+      // than cast) reports a useful message.
+      const sourceTypeName = inferAstExprTypeName(expr.expr, ctx);
+      if (sourceTypeName) {
+        const sourceCat = typeCategory(sourceTypeName);
+        if (sourceCat !== "str" && sourceCat !== "bytes" && sourceCat !== "json"
+            && sourceTypeName !== "std::anytype" && sourceTypeName !== "std::anyscalar"
+            && !sourceTypeName.startsWith("array<") && !sourceTypeName.startsWith("tuple<")) {
+          failSemantic(`index indirection cannot be applied to '${sourceTypeName}'`);
         }
       }
       const source = compileFreeObjectExpr(expr.expr, ctx);
@@ -2773,6 +2852,31 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
       throw new AppError("E_RUNTIME", `AST->IR mutation kind '${(stmt as { kind: string }).kind}' not supported in expression position`, 1, 1);
     }
 
+    case "set_op": {
+      // `intersect`/`except` lower into operator_call nodes the SQL compiler
+      // recognises (it already handles `union` similarly). Building the IR
+      // here at least lets these queries reach the SQL layer rather than
+      // throwing during AST→IR.
+      const left = compileFreeObjectExpr(expr.left, ctx);
+      const right = compileFreeObjectExpr(expr.right, ctx);
+      return {
+        kind: "set",
+        expr: {
+          kind: "operator_call",
+          operator: expr.op,
+          args: { "0": mkCallArg(left), "1": mkCallArg(right) },
+          returning: left.typeref,
+          volatility: "immutable",
+        } as OperatorCall,
+        pathId: defaultPathId(`set_op:${expr.op}`),
+        typeref: left.typeref,
+        shape: [],
+        isBinding: false,
+        isMaterializedRef: false,
+        isSchemaAlias: false,
+      };
+    }
+
     default:
       throw new AppError("E_RUNTIME", `AST->IR is not implemented yet for '${expr.kind}'`, 1, 1);
   }
@@ -2857,11 +2961,60 @@ const compileFilterValue = (value: FilterValue, ctx: IRCompileContext): Set => {
 
 const compileFilterTarget = (target: FilterTarget, subject: Set, ctx: IRCompileContext): Set => {
   if (target.kind === "field") {
+    // `FILTER number = …` (no leading dot) — EdgeQL treats this as a free
+    // reference to a type/alias named "number", not as an implicit field on
+    // the subject. If the parser tagged it bareName and we can confirm no
+    // such type/alias/binding exists, surface the friendlier EdgeQL error.
+    if ("bareName" in target && target.bareName && !target.field.includes(".")) {
+      const name = target.field;
+      if (
+        !resolveBinding(ctx, name)
+        && ctx.schema
+      ) {
+        const qualified = qualifyTypeName(name, ctx.module);
+        const typeDef = getSchemaType(ctx, qualified) ?? ctx.schema.getType(qualified);
+        if (!typeDef && !isUniversalObjectRefName(name)) {
+          throw new AppError(
+            "E_SEMANTIC",
+            `object type or alias '${qualified}' does not exist`,
+            1,
+            1,
+          );
+        }
+      }
+    }
     const segments = target.field.split(".");
     let result = subject;
-    for (const segment of segments) {
+    for (let i = 0; i < segments.length; i++) {
+      const segment = segments[i]!;
       const ptrref = resolvePointerRef(ctx, result.typeref, segment);
       if (!ptrref) {
+        // `.field` against a known schema type — surface the "no link or
+        // property" error so typos in FILTER don't silently match nothing.
+        // Skip when this is the leading segment and the name happens to
+        // alias a known type/binding (`FILTER User = Issue.watchers`).
+        const isLeading = i === 0;
+        const aliasedToBinding = isLeading && resolveBinding(ctx, segment);
+        const aliasedToType = isLeading && ctx.schema && (getSchemaType(ctx, segment) ?? ctx.schema.getType(qualifyTypeName(segment, ctx.module)));
+        if (
+          ctx.schema
+          && !aliasedToBinding
+          && !aliasedToType
+          && segment !== "id"
+          && segment !== "__type__"
+          && !segment.startsWith("@")
+          && !result.typeref.id.startsWith("unknown:")
+          && !result.typeref.id.startsWith("std::")
+          && !result.typeref.isScalar
+          && getResolvedSchemaType(ctx, result.typeref.id)
+        ) {
+          throw new AppError(
+            "E_SEMANTIC",
+            `object type '${result.typeref.id}' has no link or property '${segment}'`,
+            1,
+            1,
+          );
+        }
         return {
           ...result,
           pathId: defaultPathId(`${result.typeref.id}.${segment}`),
@@ -3493,6 +3646,97 @@ const validateComputedShapeElement = (
   }
 };
 
+// Heuristic: does the compiled IR set look like it can yield more than one
+// row? Used to set a sensible default cardinality on computed shape elements
+// (`owner_of := X.<owner[IS Y]`) where the AST doesn't carry an explicit
+// `multi`/`single` modifier.
+const inferComputedShapeIsMany = (set: Set): boolean => {
+  let cur: Set | undefined = set;
+  while (cur) {
+    const expr = cur.expr;
+    if (expr.kind === "pointer") {
+      const ptr = expr as Pointer;
+      if (ptr.direction === "inbound") return true;
+      if (ptr.ptrref.outCardinality === "many" || ptr.ptrref.outCardinality === "at_least_one") return true;
+      cur = ptr.source;
+      continue;
+    }
+    if (expr.kind === "select_expr") {
+      cur = (expr as SelectExpr).result;
+      continue;
+    }
+    return false;
+  }
+  return false;
+};
+
+// Build a shape element for `__type__: { … }`. The SQL compiler keys off the
+// `shape_element.targetPtr.shortName === "__type__"` marker (we tag the
+// element name accordingly) to emit a synthetic json_object from the row's
+// `__source_type` column without trying to JOIN a non-existent table.
+const synthesizeTypeLinkShapeElement = (
+  subject: Set,
+  el: Extract<EdgeQLShapeElement, { kind: "link" }>,
+): ShapeElement => {
+  const typeRef: TypeRef = {
+    kind: "type_ref",
+    id: "schema::ObjectType",
+    nameHint: "schema::ObjectType",
+    module: "schema",
+    isView: false,
+    isScalar: false,
+    isAbstract: false,
+    inSchema: false,
+  };
+  const ptrref: PointerRef = {
+    kind: "pointer_ref",
+    id: `${subject.typeref.id}.link::__type__`,
+    name: "__type__",
+    shortName: "__type__",
+    outSource: subject.typeref,
+    outTarget: typeRef,
+    outCardinality: "one",
+    inCardinality: "many",
+    isComputed: false,
+    isIdPointer: false,
+    isLinkProperty: false,
+    hasProperties: false,
+  };
+  const childNames = (el.shape ?? [])
+    .map((child) => (child.kind === "field" || child.kind === "computed" || child.kind === "link" || child.kind === "backlink") ? child.name : "")
+    .filter((name) => name && !name.startsWith("@"));
+  const exprSet: Set = {
+    kind: "set",
+    expr: {
+      kind: "pointer",
+      source: subject,
+      ptrref,
+      direction: "outbound",
+      isDefinition: false,
+    } as Pointer,
+    pathId: defaultPathId(`${subject.typeref.id}.__type__`),
+    typeref: typeRef,
+    shape: [],
+    isBinding: false,
+    isMaterializedRef: false,
+    isSchemaAlias: false,
+  };
+  return {
+    kind: "shape_element",
+    source: subject,
+    expr: exprSet,
+    shapeOp: el.operation,
+    shapeOrigin: "explicit",
+    required: false,
+    cardinality: "at_most_one",
+    name: el.name,
+    targetPtr: ptrref,
+    // Carry the user's requested sub-fields on the shape element via a side
+    // channel so the SQL compiler can pick from a fixed map (name, id).
+    syntheticTypeFields: childNames,
+  } as ShapeElement & { syntheticTypeFields: string[] };
+};
+
 const compileShape = (
   subject: Set,
   shape: EdgeQLShapeElement[],
@@ -3848,6 +4092,12 @@ const compileShape = (
       bindValue(computedCtx, "__subject__", subject);
       bindValue(computedCtx, "__current__", subject);
       const compiledExpr = compileFreeObjectExpr(el.expr, computedCtx);
+      // Computed shape elements without an explicit `multi`/`single` mod
+      // used to default to `at_most_one`, which made `owner_of := X.<owner`
+      // collapse to a single object even when the backlink fans out. Sniff
+      // the compiled expression for a clearly-many shape (backlink, multi
+      // pointer, link-table walk) and use `many` instead.
+      const inferredMany = inferComputedShapeIsMany(compiledExpr);
       out.push({
         kind: "shape_element",
         source: subject,
@@ -3855,14 +4105,34 @@ const compileShape = (
         shapeOp: el.operation,
         shapeOrigin: resolveShapeOrigin(el),
         required: el.required ?? false,
-        cardinality: el.cardinality ?? (el.multi ? "many" : "at_most_one"),
+        cardinality: el.cardinality ?? (el.multi || inferredMany ? "many" : "at_most_one"),
         name: el.name,
       });
       continue;
     }
 
     if (el.kind === "link") {
+      // `__type__: { name }` — every object has an implicit link to its
+      // schema::ObjectType. We don't materialize that type, but the source
+      // row's __source_type column already carries the qualified type name,
+      // so synthesize a shape element with a marker ptrref that the SQL
+      // compiler unwraps into a tiny json_object.
+      if (el.name === "__type__") {
+        out.push(synthesizeTypeLinkShapeElement(subject, el));
+        continue;
+      }
       const ptrref = resolvePointerRef(ctx, subject.typeref, el.name);
+      // `User { todo: { name: { bogus } } }` — `name` is a scalar so it
+      // can't carry a nested shape. EdgeQL reports this as
+      // "shapes cannot be applied to scalar type 'std::str'".
+      if (ptrref && ptrref.outTarget.isScalar && el.shape && el.shape.length > 0) {
+        throw new AppError(
+          "E_SEMANTIC",
+          `shapes cannot be applied to scalar type '${ptrref.outTarget.id.startsWith("unknown:") ? ptrref.outTarget.id.slice("unknown:".length) : ptrref.outTarget.id}'`,
+          1,
+          1,
+        );
+      }
       if (!ptrref) {
         // Links with nested shapes can resolve dynamically (subtype-only
         // pointers reached through `[IS T]`, computed link aliases, etc.) —
@@ -4513,6 +4783,25 @@ const compileSelectStatement = (rawStatement: SelectStatement, ctx: IRCompileCon
   // (e.g. `with GR := (...) select GR { key }`). Prefer the binding when
   // it exists so the subject inherits the bound set's expression.
   const bound = resolveBinding(scoped, statement.typeName);
+  if (!bound) {
+    // `SELECT Usr` against a non-existent type: the IR builder used to fall
+    // back to `unknownTypeRef`, which then produced an ugly
+    // `no such table: default__usr` from SQLite. Surface the EdgeQL-shaped
+    // message instead.
+    if (ctx.schema) {
+      const qualified = qualifyTypeName(statement.typeName, ctx.module);
+      const typeDef = getSchemaType(scoped, qualified) ?? ctx.schema.getType(qualified);
+      const universal = isUniversalObjectRefName(statement.typeName);
+      if (!typeDef && !universal && !statement.typeName.startsWith("schema::")) {
+        throw new AppError(
+          "E_SEMANTIC",
+          `object type or alias '${qualified}' does not exist`,
+          1,
+          1,
+        );
+      }
+    }
+  }
   const subject = bound ?? setFromTypeRoot(resolveTypeRef(scoped, statement.typeName));
   bindValue(scoped, "__subject__", subject);
   bindValue(scoped, "__current__", subject);

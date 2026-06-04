@@ -130,6 +130,37 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
       }
       return value as number | string | null;
     });
+    // `std::re_test(pattern, str)` — returns 1 if pattern matches anywhere in
+    // str, else 0. SQLite lacks REGEXP by default; map to JS RegExp.
+    db.function("_gel_re_test", (pattern: string | null, value: string | null) => {
+      if (pattern === null || value === null) return null;
+      try {
+        return new RegExp(String(pattern)).test(String(value)) ? 1 : 0;
+      } catch {
+        return 0;
+      }
+    });
+    // `std::re_match(pattern, str)` — returns the first match's full text, or NULL.
+    db.function("_gel_re_match_first", (pattern: string | null, value: string | null) => {
+      if (pattern === null || value === null) return null;
+      try {
+        const m = new RegExp(String(pattern)).exec(String(value));
+        return m ? m[0] : null;
+      } catch {
+        return null;
+      }
+    });
+    // `std::re_replace(pattern, replacement, str, flags?)` — string substitution.
+    db.function("_gel_re_replace", { varargs: true }, (...args: unknown[]) => {
+      const pattern = args[0]; const replacement = args[1]; const value = args[2];
+      const flags = (args[3] as string | undefined) ?? "";
+      if (pattern == null || replacement == null || value == null) return null;
+      try {
+        return String(value).replace(new RegExp(String(pattern), flags), String(replacement));
+      } catch {
+        return value as string;
+      }
+    });
     // `std::assert_single(x)` — raise if more than one element. `x` is the
     // JSON-encoded array (multi-cardinality sets surface as `json_group_array`).
     db.function("_gel_assert_single", { varargs: true }, (...args: unknown[]) => {

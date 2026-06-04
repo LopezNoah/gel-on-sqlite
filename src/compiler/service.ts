@@ -180,6 +180,40 @@ const makeTypeColumnsResolver = (schema: SchemaSnapshot): (typeName: string) => 
   };
 };
 
+// Mirror of the runtime's `resolveLinkStorageOwner`: inherited link tables
+// live on the most-base type where the link is defined (e.g. `Owned.owner`
+// stays in `default__owned__owner`, not in each subtype's own table).
+const makeLinkStorageTypeResolver = (schema: SchemaSnapshot): (sourceTypeName: string, linkName: string) => string | undefined => {
+  const cache = new Map<string, string>();
+  return (sourceTypeName: string, linkName: string): string | undefined => {
+    const key = `${sourceTypeName}|${linkName}`;
+    const cached = cache.get(key);
+    if (cached) return cached;
+    const typeDef = schema.getType(sourceTypeName);
+    if (!typeDef) return undefined;
+    const link = (typeDef.links ?? []).find((l) => l.name === linkName);
+    if (!link) return undefined;
+    if (link.overloaded) {
+      cache.set(key, sourceTypeName);
+      return sourceTypeName;
+    }
+    let ownerName = sourceTypeName;
+    let current: typeof typeDef | undefined = typeDef;
+    while (current && (current.extends ?? []).length > 0) {
+      const nextBaseName = current.extends?.[0];
+      if (!nextBaseName) break;
+      const baseType = schema.getType(nextBaseName);
+      if (!baseType) break;
+      const baseLink = (baseType.links ?? []).find((l) => l.name === linkName);
+      if (!baseLink || baseLink.overloaded) break;
+      ownerName = nextBaseName.includes("::") ? nextBaseName : `${baseType.module ?? "default"}::${baseType.name}`;
+      current = baseType;
+    }
+    cache.set(key, ownerName);
+    return ownerName;
+  };
+};
+
 const compileSqlFromGelIR = (
   schema: SchemaSnapshot,
   statement: Statement,
@@ -201,6 +235,7 @@ const compileSqlFromGelIR = (
     parameterValues: context.params,
     globalValues: context.globals,
     resolveTypeColumns: makeTypeColumnsResolver(schema),
+    resolveLinkStorageType: makeLinkStorageTypeResolver(schema),
     resolveEnumMembers: (typeName: string) => {
       const scalar = schema.listScalarTypes().find((s) => `${s.module}::${s.name}` === typeName);
       return scalar?.enumValues && scalar.enumValues.length > 0 ? scalar.enumValues : undefined;

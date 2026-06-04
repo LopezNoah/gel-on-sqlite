@@ -50,6 +50,13 @@ export interface GelIRCompileOptions {
   // Lets ORDER BY recover the right ordering for inlined unions of
   // enum-typed pointers (e.g. `{O.o0, O.o1}`).
   resolveFieldEnumMembers?: (typeName: string, fieldName: string) => string[] | undefined;
+  // Inherited links share storage with the most-base type where they're
+  // defined: `LogEntry.owner` inherits from `Owned.owner` and the link table
+  // is `default__owned__owner` (not `default__logentry__owner`). When this
+  // resolver is supplied, the IR compiler uses it to find the right link
+  // table for backlinks/forward links; if absent it falls back to the
+  // sourceType-named table.
+  resolveLinkStorageType?: (sourceTypeName: string, linkName: string) => string | undefined;
   maxShapeDepth?: number;
   target?: RuntimeTarget;
   parameterValues?: Record<string, ScalarValue>;
@@ -249,20 +256,29 @@ export const compileGelIRToSQL = (
     ? `SELECT DISTINCT ${projections.join(", ")} FROM ${sourceSql}`
     : `SELECT ${projections.join(", ")} FROM ${sourceSql}`;
 
-  if (statement.where) {
-    const whereSql = compileWhereClause(statement.where, sourceAlias, params, target, options);
+  const whereToApply = statement.where ?? selectWhere;
+  if (whereToApply) {
+    // When the outer source already expanded a pointer chain (`SELECT
+    // Issue.watchers FILTER .name = …`), `.name` references the chain's
+    // leaf type directly. Rewrite-and-anchor the filter against `g0` so
+    // we don't emit a correlated EXISTS that re-joins through Issue (which
+    // wouldn't match the User-shaped outer row).
+    const rewritten = sourceSet ? rewriteFilterAgainstChainSource(whereToApply, sourceSet) : whereToApply;
+    const whereSql = compileWhereClause(rewritten, sourceAlias, params, target, options);
     if (whereSql) {
       sql += ` WHERE ${whereSql}`;
     }
   }
 
-  if (statement.orderBy && statement.orderBy.length > 0) {
-    const orders = statement.orderBy.map((order) => {
+  const orderByToApply = statement.orderBy ?? selectOrderBy;
+  if (orderByToApply && orderByToApply.length > 0) {
+    const orders = orderByToApply.map((order) => {
       const orderColumn = compileSetColumnRef(order.path);
-      if (!orderColumn) {
-        return "";
+      if (orderColumn) {
+        return `${sourceAlias}.${quoteIdent(orderColumn)} ${order.direction.toUpperCase()}`;
       }
-      return `${sourceAlias}.${quoteIdent(orderColumn)} ${order.direction.toUpperCase()}`;
+      const exprSql = compileValueSetSQL(order.path, sourceAlias, params, target, options);
+      return exprSql ? `${exprSql} ${order.direction.toUpperCase()}` : "";
     }).filter((entry) => entry.length > 0);
 
     if (orders.length > 0) {
@@ -273,26 +289,37 @@ export const compileGelIRToSQL = (
   // The fallback `compileScalarSelectSQL` branch above already applies
   // statement-level LIMIT/OFFSET, but the object-shape branch (`SELECT
   // Issue { … } LIMIT N`) skipped them — every row was returned regardless.
+  // Support both literal counts (`LIMIT 3`) and expression counts
+  // (`LIMIT 6 // 2`, `OFFSET (SELECT count(Status))`) by compiling through
+  // the generic value path.
   const stmtLimit = statement.limit ?? topSelect.selectExpr?.limit;
   const stmtOffset = statement.offset ?? topSelect.selectExpr?.offset;
+  let limitSql: string | null = null;
+  let offsetSql: string | null = null;
   if (stmtLimit) {
     const limitN = extractNumericLiteral(stmtLimit);
     if (limitN !== undefined) {
-      sql += ` LIMIT ${limitN}`;
+      limitSql = String(limitN);
+    } else {
+      limitSql = compileValueSetSQL(stmtLimit, sourceAlias, params, target, options);
     }
   }
   if (stmtOffset) {
     const offsetN = extractNumericLiteral(stmtOffset);
     if (offsetN !== undefined) {
-      // SQLite requires LIMIT before OFFSET. When the user supplied OFFSET but
-      // no LIMIT (`OFFSET 2` on its own), emit `LIMIT -1` to keep parsing
-      // happy — sqlite reads that as "no row limit".
-      if (!stmtLimit || extractNumericLiteral(stmtLimit) === undefined) {
-        sql += ` LIMIT -1`;
-      }
-      sql += ` OFFSET ${offsetN}`;
+      offsetSql = String(offsetN);
+    } else {
+      offsetSql = compileValueSetSQL(stmtOffset, sourceAlias, params, target, options);
     }
   }
+  // SQLite requires LIMIT before OFFSET. When the user supplied OFFSET but
+  // no LIMIT, emit `LIMIT -1` so the OFFSET clause parses (SQLite reads -1 as
+  // "no row cap").
+  if (offsetSql !== null && limitSql === null) {
+    limitSql = "-1";
+  }
+  if (limitSql !== null) sql += ` LIMIT ${limitSql}`;
+  if (offsetSql !== null) sql += ` OFFSET ${offsetSql}`;
 
   return {
     sql,
@@ -603,6 +630,43 @@ const compileConfigStmtToSQL = (statement: ConfigStmt, options: GelIRCompileOpti
   };
 };
 
+// For multi-source scalar selects, walk the IR collecting columns referenced
+// against a specific source type id. Used to project just the columns that
+// each cross-joined branch actually needs.
+const collectReferencedColumnsForSource = (set: Set, sourceTypeId: string): string[] => {
+  const out = new globalThis.Set<string>(["id"]);
+  const visit = (s: Set): void => {
+    const e = s.expr;
+    if (e.kind === "pointer") {
+      const ptr = e as Pointer;
+      if (ptr.source.expr.kind === "type_root") {
+        const rootType = (ptr.source.expr as TypeRoot).typeref;
+        if (rootType.id === sourceTypeId || qualifyTypeName(rootType) === sourceTypeId.split("|")[0]) {
+          out.add(columnForPointer(ptr));
+        }
+      }
+      visit(ptr.source);
+      return;
+    }
+    if (e.kind === "operator_call") {
+      for (const arg of orderedCallArgs((e as OperatorCall).args)) visit(arg.expr);
+      return;
+    }
+    if (e.kind === "function_call") {
+      for (const arg of orderedCallArgs((e as FunctionCall).args)) visit(arg.expr);
+      return;
+    }
+    if (e.kind === "type_cast") { visit((e as TypeCast).expr); return; }
+    if (e.kind === "tuple") { for (const el of (e as Tuple).elements) visit(el.val); return; }
+    if (e.kind === "exists_expr") { visit((e as ExistsExpr).expr); return; }
+    if (e.kind === "coalesce_expr") { visit((e as CoalesceExpr).left); visit((e as CoalesceExpr).right); return; }
+    if (e.kind === "if_else_expr") { visit((e as IfElseExpr).condition); visit((e as IfElseExpr).ifExpr); visit((e as IfElseExpr).elseExpr); return; }
+    if (e.kind === "select_expr") { visit((e as SelectExpr).result); return; }
+  };
+  visit(set);
+  return [...out];
+};
+
 const collectScalarPointerSources = (set: Set, sources: Map<string, TypeRef>): void => {
   const expr = set.expr;
   if (!expr) return;
@@ -634,6 +698,11 @@ const collectScalarPointerSources = (set: Set, sources: Map<string, TypeRef>): v
       if (!sources.has(id)) {
         sources.set(id, typeref);
       }
+    } else if (sourceExpr.kind === "pointer") {
+      // Chained pointer (`Issue.status.name`): walk into the source so the
+      // root type_root still gets registered. Without this we miss the
+      // source for any chain >= 2 links deep.
+      collectScalarPointerSources(pointer.source, sources);
     }
     return;
   }
@@ -1979,7 +2048,51 @@ const compileScalarSelectSQLInner = (
     if (innerWheres.length > 0 || appliedOuterWheres.length > 0) return null;
     return `SELECT ${valueSql} AS ${quoteIdent("value")}`;
   }
-  if (sources.size > 1) return null;
+  // Multi-source scalar select: `Status.name ++ Priority.name` references
+  // two independent type roots. Cross-join them, alias each as g0/g1/…, and
+  // re-compile the value expression with a binding map so each pointer
+  // resolves to the right alias.
+  if (sources.size > 1) {
+    if (innerWheres.length > 0 || appliedOuterWheres.length > 0) return null;
+    const bindingAliases = new Map<string, string>();
+    const fromParts: string[] = [];
+    let idx = 0;
+    for (const [sid, sourceType] of sources.entries()) {
+      const a = `g${idx++}`;
+      const refCols = collectReferencedColumnsForSource(sourceSet, sid);
+      const polySql = compilePolymorphicSource(sourceType, false, a, refCols, options);
+      fromParts.push(polySql);
+      // The pathId key for these sources mirrors what collectScalarPointerSources
+      // built — `${qualifiedName}|${namespace}` — but pointer compilation
+      // looks up by the source-set's serialized pathId. Build that key too.
+      const syntheticRoot: Set = {
+        kind: "set",
+        expr: { kind: "type_root", typeref: sourceType, skipSubtypes: false, isCachedGlobal: false },
+        pathId: { kind: "path_id", namespace: [], isPointerPath: false, steps: [{ type: sourceType }] },
+        typeref: sourceType,
+        shape: [],
+        isBinding: false,
+        isMaterializedRef: false,
+        isSchemaAlias: false,
+      } as Set;
+      bindingAliases.set(pathIdKey(syntheticRoot), a);
+    }
+    const valueWithAliases = compileValueSetSQLWithAliases(sourceSet, bindingAliases, "g0", params, target, options);
+    if (!valueWithAliases) return null;
+    const base = `SELECT ${valueWithAliases} AS ${quoteIdent("value")} FROM ${fromParts.join(" CROSS JOIN ")}`;
+    // Apply the same strict-NULL filter we do for the single-source path so
+    // empty operands cause an empty result rather than a NULL row.
+    const exprIsStrictMulti = (() => {
+      let expr = sourceSet.expr;
+      while (expr.kind === "select_expr") expr = (expr as SelectExpr).result.expr;
+      if (expr.kind !== "operator_call") return false;
+      return STRICT_BINARY_OPS.has((expr as OperatorCall).operator);
+    })();
+    if (exprIsStrictMulti) {
+      return `SELECT ${quoteIdent("value")} FROM (${base}) WHERE ${quoteIdent("value")} IS NOT NULL`;
+    }
+    return base;
+  }
   const [typeRef] = sources.values();
   const projectedColumns = Array.from(new Set([
     ...collectReferencedColumns(sourceSet),
@@ -1998,6 +2111,24 @@ const compileScalarSelectSQLInner = (
     sql = `SELECT ${valueSql} AS ${quoteIdent("value")} FROM (SELECT NULL AS __anchor) __anchor LEFT JOIN ${sourceSql} ON 1=1`;
   } else {
     sql = `SELECT ${valueSql} AS ${quoteIdent("value")} FROM ${sourceSql}`;
+  }
+  // For strict-empty operators (`++`, `+`, `=` etc.) any NULL operand from a
+  // single-source pointer chain (`Issue.priority.name` is NULL when the
+  // priority link is empty) must skip the row entirely — EdgeQL semantics
+  // says cross-product with empty yields empty. The wrapper subquery filters
+  // out the synthesized NULLs without disturbing legitimate "no row" cases
+  // (which are already empty before the wrap).
+  const exprIsStrictMulti = (() => {
+    let expr = sourceSet.expr;
+    while (expr.kind === "select_expr") expr = (expr as SelectExpr).result.expr;
+    while (expr.kind === "type_cast") expr = (expr as TypeCast).expr.expr;
+    if (expr.kind === "index_expr" || expr.kind === "slice_expr") return true;
+    if (expr.kind !== "operator_call") return false;
+    const op = (expr as OperatorCall).operator;
+    return STRICT_BINARY_OPS.has(op);
+  })();
+  if (exprIsStrictMulti && innerWheres.length === 0 && appliedOuterWheres.length === 0) {
+    sql = `SELECT ${quoteIdent("value")} FROM (${sql}) WHERE ${quoteIdent("value")} IS NOT NULL`;
   }
   const whereSqls: string[] = [];
   const compileWhere = (where: Set): string | null => {
@@ -2076,9 +2207,12 @@ const pointerPathAliasColumns = (path: ScalarPointerPath): string[][] => {
   return columns.map((entry) => [...entry]);
 };
 
-const linkTableNameForPointer = (pointer: Pointer): string => {
+const linkTableNameForPointer = (pointer: Pointer, options?: GelIRCompileOptions): string => {
   const sourceType = pointer.direction === "inbound" ? pointer.ptrref.outSource : pointer.source.typeref;
-  return `${tableNameForType(qualifyTypeName(sourceType))}__${pointer.ptrref.shortName.toLowerCase()}`;
+  const sourceTypeName = qualifyTypeName(sourceType);
+  const linkName = pointer.ptrref.shortName;
+  const storage = options?.resolveLinkStorageType?.(sourceTypeName, linkName) ?? sourceTypeName;
+  return `${tableNameForType(storage)}__${linkName.toLowerCase()}`;
 };
 
 const scalarResultValueSQL = (sql: string, typeRef: TypeRef): string => (
@@ -2107,7 +2241,7 @@ const tryCompileScalarPointerPathSelectSQL = (
     const targetSource = compilePolymorphicSource(targetType, false, nextAlias, aliasColumns[index + 1]!, options);
     if (shouldUseLinkTable(link)) {
       const linkAlias = `pj${index}`;
-      const linkTable = linkTableNameForPointer(link);
+      const linkTable = linkTableNameForPointer(link, options);
       if (link.direction === "inbound") {
         fromSql += ` JOIN ${quoteIdent(linkTable)} ${linkAlias}`
           + ` ON ${linkAlias}.${quoteIdent("target")} = ${previousAlias}.${quoteIdent("id")}`
@@ -2158,7 +2292,7 @@ const buildCorrelatedScalarPointerPath = (
   let fromSql: string;
   let anchorWhere: string;
   if (shouldUseLinkTable(firstLink)) {
-    const linkTable = linkTableNameForPointer(firstLink);
+    const linkTable = linkTableNameForPointer(firstLink, options);
     const linkAlias = "cpj1";
     fromSql = `${quoteIdent(linkTable)} ${linkAlias} JOIN ${quoteIdent(resolveTypeTableName(firstTargetType, options))} ${firstAlias}`;
     if (firstLink.direction === "inbound") {
@@ -2183,7 +2317,7 @@ const buildCorrelatedScalarPointerPath = (
     const targetType = link.direction === "inbound" ? link.ptrref.outSource : link.ptrref.outTarget;
     const targetTable = resolveTypeTableName(targetType, options);
     if (shouldUseLinkTable(link)) {
-      const linkTable = linkTableNameForPointer(link);
+      const linkTable = linkTableNameForPointer(link, options);
       const linkAlias = `cpj${i + 1}`;
       if (link.direction === "inbound") {
         fromSql += ` JOIN ${quoteIdent(linkTable)} ${linkAlias} ON ${linkAlias}.${quoteIdent("target")} = ${prevAlias}.${quoteIdent("id")}`
@@ -2319,8 +2453,9 @@ const compileSelectSource = (
   options: GelIRCompileOptions,
   params: ScalarValue[] = [],
   target: RuntimeTarget = options.target ?? "sqlite",
+  aliasOverride?: string,
 ): { sql: string; alias: string } | null => {
-  const alias = "g0";
+  const alias = aliasOverride ?? "g0";
   const projectedColumns = collectProjectedColumns(sourceSet.shape, where, orderBy);
   if (sourceSet.expr.kind === "select_expr") {
     const selectExpr = sourceSet.expr as SelectExpr;
@@ -2354,6 +2489,23 @@ const compileSelectSource = (
     if (selects.some((entry) => !entry)) return null;
     return { sql: `(${(selects as string[]).join(" UNION ALL ")}) ${alias}`, alias };
   }
+  if (sourceSet.expr.kind === "operator_call"
+      && ((sourceSet.expr as OperatorCall).operator === "intersect"
+          || (sourceSet.expr as OperatorCall).operator === "except")) {
+    const op = (sourceSet.expr as OperatorCall).operator;
+    const args = orderedCallArgs((sourceSet.expr as OperatorCall).args);
+    // SQLite's INTERSECT/EXCEPT compare on every column in the projection;
+    // for object set-ops we want identity comparison only — narrow each
+    // branch to (id, __source_type) so two equivalent rows from different
+    // branches actually match.
+    const selects = args.map((arg) => {
+      const source = compileSelectSource(arg.expr, undefined, undefined, options, params, target);
+      return source ? `SELECT ${source.alias}.${quoteIdent("id")} AS ${quoteIdent("id")}, ${source.alias}.${quoteIdent("__source_type")} AS ${quoteIdent("__source_type")} FROM ${source.sql}` : null;
+    });
+    if (selects.some((entry) => !entry)) return null;
+    const joiner = op === "intersect" ? "INTERSECT" : "EXCEPT";
+    return { sql: `(${(selects as string[]).join(` ${joiner} `)}) ${alias}`, alias };
+  }
   if (sourceSet.expr.kind === "type_root") {
     const root = sourceSet.expr.typeref;
     return { sql: compilePolymorphicSource(root, sourceSet.expr.skipSubtypes, alias, projectedColumns, options), alias };
@@ -2361,29 +2513,98 @@ const compileSelectSource = (
   if (sourceSet.expr.kind !== "pointer") {
     return null;
   }
-  const pointer = sourceSet.expr as Pointer;
-  if (pointer.ptrref.outTarget.isScalar || pointer.source.expr.kind !== "type_root" || pointer.direction !== "outbound") {
-    return null;
+  // Generalised: walk arbitrary pointer chains rooted at a type_root and
+  // build the joined FROM in chain order. This subsumes the previous
+  // single-step outbound special-case and adds support for backlinks
+  // (`<owner`), multi-step chains (`.watchers.<owner[IS Issue]`), and
+  // intersections (the typeref on each chain link is the post-`[IS T]`
+  // type, so `compilePolymorphicSource` enumerates just the matching
+  // concrete subtypes).
+  const chain: Pointer[] = [];
+  {
+    let cursor: Expr = sourceSet.expr;
+    while (cursor.kind === "pointer") {
+      const ptr = cursor as Pointer;
+      if (ptr.ptrref.outTarget.isScalar || ptr.ptrref.isLinkProperty) return null;
+      // `__type__` doesn't materialize as a real link — the dedicated short-
+      // circuit in `compileScalarSelectSQL` handles `X.__type__.name`. Bail
+      // out so it can take over rather than building a JOIN against a
+      // non-existent `std__anytype` table.
+      if (ptr.ptrref.shortName === "__type__") return null;
+      chain.push(ptr);
+      cursor = ptr.source.expr;
+    }
+    if (cursor.kind !== "type_root") return null;
   }
-  const sourceAlias = "s0";
-  const sourceCols = shouldUseLinkTable(pointer)
-    ? ["id"]
-    : ["id", `${pointer.ptrref.shortName}_id`];
-  const sourceSql = compilePolymorphicSource(pointer.source.typeref, true, sourceAlias, sourceCols, options);
-  const targetAlias = "t0";
-  const targetSql = compilePolymorphicSource(pointer.ptrref.outTarget, false, targetAlias, projectedColumns, options);
-  if (shouldUseLinkTable(pointer)) {
-    const sourceType = qualifyTypeName(pointer.source.typeref);
-    const linkTable = `${tableNameForType(sourceType)}__${pointer.ptrref.shortName.toLowerCase()}`;
-    return {
-      sql: `(SELECT ${targetAlias}.* FROM ${targetSql} JOIN ${quoteIdent(linkTable)} j0 ON j0.${quoteIdent("target")} = ${targetAlias}.${quoteIdent("id")} JOIN ${sourceSql} ON ${sourceAlias}.${quoteIdent("id")} = j0.${quoteIdent("source")}) ${alias}`,
-      alias,
-    };
+  const links = chain.reverse();
+  const rootPointer = links[0]!;
+  const rootTyperef = rootPointer.source.typeref;
+  const rootAlias = "s0";
+  const rootCols = collectChainSourceColumns(links[0]!, "root");
+  let fromSql = compilePolymorphicSource(rootTyperef, false, rootAlias, rootCols, options);
+  let previousAlias = rootAlias;
+  let previousTyperef = rootTyperef;
+  for (let i = 0; i < links.length; i++) {
+    const link = links[i]!;
+    const isLeaf = i === links.length - 1;
+    const targetType = link.direction === "inbound" ? link.ptrref.outSource : link.ptrref.outTarget;
+    const targetAlias = isLeaf ? "t0" : `m${i}`;
+    // The join key for an inline-FK inbound link lives on this level's
+    // target row (e.g. `t0.status_id` for `Status.<status` against Issue).
+    // For a leaf, the user-projected columns wouldn't include it, so add it
+    // explicitly; for intermediate, `collectChainSourceColumns(next, "via")`
+    // handles the next-level FK separately.
+    const inlineInboundFK = (!shouldUseLinkTable(link) && link.direction === "inbound")
+      ? `${link.ptrref.shortName}_id`
+      : null;
+    const baseCols = isLeaf ? projectedColumns : collectChainSourceColumns(links[i + 1]!, "via");
+    const targetCols = inlineInboundFK ? [...new Set<string>([...baseCols, inlineInboundFK])] : baseCols;
+    const targetSql = compilePolymorphicSource(targetType, false, targetAlias, targetCols, options);
+    if (shouldUseLinkTable(link)) {
+      const linkTable = linkTableNameForPointer(link, options);
+      const linkAlias = `j${i}`;
+      if (link.direction === "inbound") {
+        fromSql += ` JOIN ${quoteIdent(linkTable)} ${linkAlias} ON ${linkAlias}.${quoteIdent("target")} = ${previousAlias}.${quoteIdent("id")}`
+          + ` JOIN ${targetSql} ON ${targetAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("source")}`;
+      } else {
+        fromSql += ` JOIN ${quoteIdent(linkTable)} ${linkAlias} ON ${linkAlias}.${quoteIdent("source")} = ${previousAlias}.${quoteIdent("id")}`
+          + ` JOIN ${targetSql} ON ${targetAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("target")}`;
+      }
+    } else {
+      const inlineColumn = `${link.ptrref.shortName}_id`;
+      if (link.direction === "inbound") {
+        fromSql += ` JOIN ${targetSql} ON ${targetAlias}.${quoteIdent(inlineColumn)} = ${previousAlias}.${quoteIdent("id")}`;
+      } else {
+        fromSql += ` JOIN ${targetSql} ON ${targetAlias}.${quoteIdent("id")} = ${previousAlias}.${quoteIdent(inlineColumn)}`;
+      }
+    }
+    previousAlias = targetAlias;
+    previousTyperef = targetType;
   }
+  void previousTyperef;
   return {
-    sql: `(SELECT ${targetAlias}.* FROM ${targetSql} JOIN ${sourceSql} ON ${targetAlias}.${quoteIdent("id")} = ${sourceAlias}.${quoteIdent(`${pointer.ptrref.shortName}_id`)}) ${alias}`,
+    sql: `(SELECT ${previousAlias}.* FROM ${fromSql}) ${alias}`,
     alias,
   };
+};
+
+// Column projection helper for chain joins. The root level needs id (plus
+// the FK column if the first link is inline outbound from the root). Each
+// intermediate level needs only id plus the connecting FK if the next link
+// is inline. Inbound links connect on the target side, so the inline FK
+// lives on the next type and is requested at that level instead.
+const collectChainSourceColumns = (
+  forLink: Pointer,
+  role: "root" | "via",
+): string[] => {
+  const cols = new globalThis.Set<string>(["id"]);
+  if (!shouldUseLinkTable(forLink) && forLink.direction === "outbound" && role === "root") {
+    cols.add(`${forLink.ptrref.shortName}_id`);
+  }
+  if (!shouldUseLinkTable(forLink) && forLink.direction === "inbound" && role === "via") {
+    cols.add(`${forLink.ptrref.shortName}_id`);
+  }
+  return [...cols];
 };
 
 // A level whose iterator was already lowered to a SQL subquery (select_expr,
@@ -2593,8 +2814,7 @@ const compileForExprSource = (
     }
 
     if (shouldUseLinkTable(pointer)) {
-      const sourceType = qualifyTypeName(pointer.direction === "inbound" ? pointer.ptrref.outSource : pointer.source.typeref);
-      const linkTable = `${tableNameForType(sourceType)}__${pointer.ptrref.shortName.toLowerCase()}`;
+      const linkTable = linkTableNameForPointer(pointer, options);
       const linkAlias = `j${i}`;
       const targetType = pointer.direction === "inbound" ? pointer.ptrref.outSource : pointer.ptrref.outTarget;
       const targetSource = compilePolymorphicSource(targetType, false, level.alias, projectedColumns, options);
@@ -3297,6 +3517,16 @@ const collectReferencedColumns = (set: Set): string[] => {
     }
     const expr = node.expr;
     if (expr.kind === "pointer") {
+      // Backlinks (`Status.<status`) and link-table walks (`User.todo`) anchor
+      // the correlated subquery on the outer row's `id`, so the outer FROM
+      // must surface it even when no shape element directly reads it.
+      const ptr = expr as Pointer;
+      if (ptr.direction === "inbound" || shouldUseLinkTable(ptr)) {
+        const rootSet = (ptr.source as Set);
+        if (rootSet.expr.kind === "type_root") {
+          out.add("id");
+        }
+      }
       visit((expr as Pointer).source);
       return;
     }
@@ -3523,6 +3753,26 @@ const compileShapeProjection = (
   target: RuntimeTarget,
   depth: number,
 ): string | null => {
+  // `__type__: { name | id }` arrives with a synthetic ptrref (no underlying
+  // table). Build the JSON object directly from the row's `__source_type`
+  // column so we don't try to JOIN a schema::ObjectType that doesn't exist.
+  const syntheticType = (shape as { targetPtr?: { shortName?: string } }).targetPtr;
+  if (syntheticType?.shortName === "__type__") {
+    const fields = (shape as { syntheticTypeFields?: string[] }).syntheticTypeFields ?? ["name"];
+    const pairs: string[] = [];
+    for (const f of fields) {
+      if (f === "name") {
+        pairs.push(`${quoteLiteral("name")}, ${sourceAlias}.${quoteIdent("__source_type")}`);
+      } else if (f === "id") {
+        // No real ObjectType row exists, so synthesize a stable id from the
+        // type-name string itself.
+        pairs.push(`${quoteLiteral("id")}, ${sourceAlias}.${quoteIdent("__source_type")}`);
+      }
+    }
+    const alias = shapeAliasForElement(shape, shape.expr, depth);
+    return `json_object(${pairs.join(", ")}) AS ${quoteIdent(alias)}`;
+  }
+
   const shapeExpr = unwrapSelectExprSet(shape.expr);
   if (shapeExpr.result.expr.kind === "pointer" && !shapeExpr.result.typeref.isScalar) {
     const linkExpr = compilePointerArrayExpr(
@@ -3536,6 +3786,21 @@ const compileShapeProjection = (
       shapeExpr.selectExpr,
     );
     const alias = shapeAliasForElement(shape, shape.expr, depth);
+    // Single-cardinality links surface as `owner: {…}`, not `owner: [{…}]`.
+    // The inner builder always emits a json_group_array because it doesn't
+    // know how many rows it'll get; unwrap the first element here when the
+    // shape declares the link is single (matches what
+    // `compilePublicShapeObjectExpr` does for nested shapes).
+    const linkPointer = shapeExpr.result.expr as Pointer;
+    const isSingleLink = shape.cardinality === "one"
+      || shape.cardinality === "at_most_one"
+      || (shape.cardinality === undefined
+          && linkPointer.ptrref.outCardinality !== "many"
+          && linkPointer.ptrref.outCardinality !== "at_least_one"
+          && linkPointer.direction !== "inbound");
+    if (isSingleLink) {
+      return `json(COALESCE(json_extract(${linkExpr}, '$[0]'), 'null')) AS ${quoteIdent(alias)}`;
+    }
     return `${linkExpr} AS ${quoteIdent(alias)}`;
   }
 
@@ -3549,6 +3814,60 @@ const compileShapeProjection = (
     const rawValue = `${sourceAlias}.${quoteIdent(projectedColumn)}`;
     const value = shapeExpr.result.typeref.collection ? `json(${rawValue})` : rawValue;
     return `${value} AS ${quoteIdent(shapeAliasForElement(shape, shapeExpr.result, depth))}`;
+  }
+
+  // Shape-value subquery: `shape_field := (SELECT T { … } FILTER … LIMIT 1)`.
+  // The inner Set's expr is a type_root (possibly wrapped in additional
+  // select_expr layers from parens around the body) with its own shape and
+  // optional clauses. Peel select_expr layers, accumulate clause overrides,
+  // and lower as an independent SELECT subquery so per-shape filter/limit
+  // actually apply.
+  let peeled = shapeExpr.result;
+  const peeledClauses: { where?: Set; orderBy?: SortExpr[]; limit?: Set; offset?: Set } = {};
+  if (shapeExpr.selectExpr) {
+    if (shapeExpr.selectExpr.where) peeledClauses.where = shapeExpr.selectExpr.where;
+    if (shapeExpr.selectExpr.orderBy && shapeExpr.selectExpr.orderBy.length) peeledClauses.orderBy = shapeExpr.selectExpr.orderBy;
+    if (shapeExpr.selectExpr.limit) peeledClauses.limit = shapeExpr.selectExpr.limit;
+    if (shapeExpr.selectExpr.offset) peeledClauses.offset = shapeExpr.selectExpr.offset;
+  }
+  while (peeled.expr.kind === "select_expr") {
+    const se = peeled.expr as SelectExpr;
+    if (se.where && !peeledClauses.where) peeledClauses.where = se.where;
+    if (se.orderBy && se.orderBy.length && !peeledClauses.orderBy) peeledClauses.orderBy = se.orderBy;
+    if (se.limit && !peeledClauses.limit) peeledClauses.limit = se.limit;
+    if (se.offset && !peeledClauses.offset) peeledClauses.offset = se.offset;
+    peeled = se.result;
+  }
+  if (
+    peeled.expr.kind === "type_root"
+    && peeled.shape.length > 0
+  ) {
+    const innerAlias = `sg${depth + 1}`;
+    const innerSource = compileSelectSource(peeled, undefined, undefined, options, params, target, innerAlias);
+    if (innerSource) {
+      const inner = compilePublicShapeObjectExpr(innerSource.alias, peeled.shape, params, options, target, depth + 1);
+      let subSql = `SELECT ${inner} AS ${quoteIdent("item")} FROM ${innerSource.sql}`;
+      if (peeledClauses.where) {
+        const w = compilePredicateSetSQL(peeledClauses.where, innerSource.alias, params, target, options)
+          ?? compileValueSetSQL(peeledClauses.where, innerSource.alias, params, target, options);
+        if (w) subSql += ` WHERE ${w}`;
+      }
+      if (peeledClauses.orderBy && peeledClauses.orderBy.length > 0) {
+        const orderSql = compileSortExprs(peeledClauses.orderBy, innerSource.alias, undefined, params, target, options);
+        if (orderSql) subSql += ` ORDER BY ${orderSql}`;
+      }
+      const limit = extractNumericLiteral(peeledClauses.limit);
+      if (limit !== undefined) subSql += ` LIMIT ${limit}`;
+      const offset = extractNumericLiteral(peeledClauses.offset);
+      if (offset !== undefined) subSql += ` OFFSET ${offset}`;
+      const alias = shapeAliasForElement(shape, shape.expr, depth);
+      // Single-cardinality default: peel the first item out of the grouped
+      // array. Multi shows up as a JSON array.
+      if (shape.cardinality === "many" || shape.cardinality === "at_least_one") {
+        return `COALESCE((SELECT json_group_array(json("item")) FROM (${subSql})), '[]') AS ${quoteIdent(alias)}`;
+      }
+      return `(SELECT json("item") FROM (${subSql}) LIMIT 1) AS ${quoteIdent(alias)}`;
+    }
   }
 
   const valueExpr = compileValueSetSQL(shapeExpr.result, sourceAlias, params, target, options);
@@ -3575,6 +3894,101 @@ const compileWhereClause = (
     return null;
   }
   return compiled;
+};
+
+// For `SELECT Issue.watchers { name } FILTER .name = …`, the IR's FILTER
+// expression is `(Issue.watchers).name = …` — a 2-step chain. The outer
+// FROM has already joined Issue→watchers→User and aliased the user row as
+// `g0`, so the chain's leaf scalar is just `g0.name`. Walk the filter set
+// and replace chained pointer references whose chain matches the outer
+// source's chain with bare type-root references — that makes
+// `compileValueSetSQL`'s `${sourceAlias}.${col}` path do the right thing.
+const rewriteFilterAgainstChainSource = (filterSet: Set, sourceSet: Set): Set => {
+  // Extract the source's chain from sourceSet (a pointer chain) so we know
+  // what to strip.
+  const sourceChain: Pointer[] = [];
+  {
+    let cur: Expr = sourceSet.expr;
+    while (cur.kind === "pointer") {
+      sourceChain.push(cur as Pointer);
+      cur = (cur as Pointer).source.expr;
+    }
+    if (cur.kind !== "type_root" || sourceChain.length === 0) return filterSet;
+  }
+  const sourceKey = sourceChain.slice().reverse().map((p) => p.ptrref.id).join("|");
+  const sourceRootSet: Set = (sourceChain[sourceChain.length - 1]!.source);
+  const sourceLeafType = sourceChain[0]!.ptrref.outTarget;
+
+  const rewriteSet = (s: Set): Set => {
+    const expr = s.expr;
+    if (expr.kind === "pointer") {
+      const ptr = expr as Pointer;
+      // Walk this set's chain and check whether it starts with the source
+      // chain. If so, the bottom levels are already materialized in `g0`,
+      // so swap the matching prefix for a fresh type-root anchored on the
+      // source's leaf type.
+      const chain: Pointer[] = [];
+      let cur: Set = s;
+      while (cur.expr.kind === "pointer") {
+        chain.push(cur.expr as Pointer);
+        cur = (cur.expr as Pointer).source;
+      }
+      if (cur.expr.kind === "type_root") {
+        const reversed = chain.slice().reverse();
+        if (reversed.length >= sourceChain.length) {
+          const prefix = reversed.slice(0, sourceChain.length);
+          const prefixKey = prefix.map((p) => p.ptrref.id).join("|");
+          if (prefixKey === sourceKey) {
+            // Replace the prefix with a synthetic root set typed as the
+            // source leaf, then re-thread the remaining pointers on top.
+            const newRoot: Set = {
+              ...sourceRootSet,
+              expr: { kind: "type_root", typeref: sourceLeafType, skipSubtypes: false, isCachedGlobal: false },
+              typeref: sourceLeafType,
+              pathId: sourceRootSet.pathId,
+            } as Set;
+            let result: Set = newRoot;
+            for (const ptrLink of reversed.slice(sourceChain.length)) {
+              result = { ...result, expr: { ...ptrLink, source: result }, typeref: ptrLink.ptrref.outTarget };
+            }
+            return result;
+          }
+        }
+      }
+      // Not a matching chain — descend into the pointer's source for any
+      // nested rewrite opportunities.
+      const newSource = rewriteSet(ptr.source);
+      if (newSource === ptr.source) return s;
+      return { ...s, expr: { ...ptr, source: newSource } };
+    }
+    if (expr.kind === "operator_call") {
+      const op = expr as OperatorCall;
+      const newArgs: Record<string, CallArg> = {};
+      let changed = false;
+      for (const [k, arg] of Object.entries(op.args)) {
+        const newExpr = rewriteSet(arg.expr);
+        if (newExpr !== arg.expr) changed = true;
+        newArgs[k] = { ...arg, expr: newExpr };
+      }
+      if (!changed) return s;
+      return { ...s, expr: { ...op, args: newArgs } };
+    }
+    if (expr.kind === "exists_expr") {
+      const ex = expr as ExistsExpr;
+      const newInner = rewriteSet(ex.expr);
+      if (newInner === ex.expr) return s;
+      return { ...s, expr: { ...ex, expr: newInner } };
+    }
+    if (expr.kind === "type_cast") {
+      const tc = expr as TypeCast;
+      const newInner = rewriteSet(tc.expr);
+      if (newInner === tc.expr) return s;
+      return { ...s, expr: { ...tc, expr: newInner } };
+    }
+    return s;
+  };
+
+  return rewriteSet(filterSet);
 };
 
 const normalizeOperator = (op: string): "=" | "!=" | "<" | "<=" | ">" | ">=" | null => {
@@ -3619,7 +4033,7 @@ const tryCompileMultiStepPointerExistsSQL = (
     const targetSource = compilePolymorphicSource(targetType, false, nextAlias, aliasColumns[index + 1]!, options);
     if (shouldUseLinkTable(link)) {
       const linkAlias = `lj${index}`;
-      const linkTable = linkTableNameForPointer(link);
+      const linkTable = linkTableNameForPointer(link, options);
       if (link.direction === "inbound") {
         if (!fromSql) {
           fromSql = `${quoteIdent(linkTable)} ${linkAlias} JOIN ${targetSource}`
@@ -3667,11 +4081,10 @@ const tryCompileMultiStepPointerExistsSQL = (
 };
 
 // `EXISTS Issue.priority` / `EXISTS Issue.<owner[IS Comment]` /
-// `EXISTS Issue.priority.id`: lower a pointer-(chain-)to-object/scalar
-// expression to a direct SQL existence check anchored on `sourceAlias`.
-// Returns null when the inner Set isn't a recognised pointer chain (computed
-// expressions, set ops, etc. fall back to the generic value-level path which
-// the caller wraps in `(… = json('true'))`).
+// `EXISTS Issue.priority.id` / `EXISTS Issue.owner.<owner[IS Comment]`: lower
+// a pointer-(chain-)to-object/scalar expression to a direct SQL existence
+// check anchored on `sourceAlias`. Returns null when the inner Set isn't a
+// recognised pointer chain.
 const tryCompileExistsObjectPointerSQL = (
   set: Set,
   sourceAlias: string,
@@ -3704,22 +4117,87 @@ const tryCompileExistsObjectPointerSQL = (
   }
   if (cursor.expr.kind !== "pointer") return null;
 
-  const pointer = cursor.expr as Pointer;
-  if (pointer.ptrref.isLinkProperty) return null;
-  if (pointer.source.expr.kind !== "type_root") return null;
-  if (shouldUseLinkTable(pointer)) {
-    const linkTable = linkTableNameForPointer(pointer);
-    const sideAnchor = pointer.direction === "inbound" ? "target" : "source";
-    return `EXISTS (SELECT 1 FROM ${quoteIdent(linkTable)} _ex WHERE _ex.${quoteIdent(sideAnchor)} = ${sourceAlias}.${quoteIdent("id")})`;
+  // Collect the object-pointer chain (outermost-first walking inwards), then
+  // check it terminates at a type_root. Multi-step chains let us handle
+  // `EXISTS Issue.owner.<owner[IS Comment]` by joining the chain levels in
+  // a single EXISTS subquery anchored on `sourceAlias.id`.
+  const chain: Pointer[] = [];
+  let walk: Set = cursor;
+  while (walk.expr.kind === "pointer") {
+    const ptr = walk.expr as Pointer;
+    if (ptr.ptrref.isLinkProperty) return null;
+    chain.push(ptr);
+    walk = ptr.source;
   }
-  if (pointer.direction === "inbound") {
-    const targetType = pointer.ptrref.outSource;
-    const targetTable = resolveTypeTableName(targetType, options);
+  if (walk.expr.kind !== "type_root") return null;
+  const links = chain.reverse();
+
+  if (links.length === 1) {
+    const pointer = links[0]!;
+    if (shouldUseLinkTable(pointer)) {
+      const linkTable = linkTableNameForPointer(pointer, options);
+      const sideAnchor = pointer.direction === "inbound" ? "target" : "source";
+      return `EXISTS (SELECT 1 FROM ${quoteIdent(linkTable)} _ex WHERE _ex.${quoteIdent(sideAnchor)} = ${sourceAlias}.${quoteIdent("id")})`;
+    }
+    if (pointer.direction === "inbound") {
+      const targetType = pointer.ptrref.outSource;
+      const targetTable = resolveTypeTableName(targetType, options);
+      const inlineColumn = `${pointer.ptrref.shortName}_id`;
+      return `EXISTS (SELECT 1 FROM ${quoteIdent(targetTable)} _ex WHERE _ex.${quoteIdent(inlineColumn)} = ${sourceAlias}.${quoteIdent("id")})`;
+    }
     const inlineColumn = `${pointer.ptrref.shortName}_id`;
-    return `EXISTS (SELECT 1 FROM ${quoteIdent(targetTable)} _ex WHERE _ex.${quoteIdent(inlineColumn)} = ${sourceAlias}.${quoteIdent("id")})`;
+    return `${sourceAlias}.${quoteIdent(inlineColumn)} IS NOT NULL`;
   }
-  const inlineColumn = `${pointer.ptrref.shortName}_id`;
-  return `${sourceAlias}.${quoteIdent(inlineColumn)} IS NOT NULL`;
+
+  // Multi-step: build a chain of joins inside a single EXISTS, anchored
+  // against the outer row's id via the first link.
+  let fromSql = "";
+  const whereSqls: string[] = [];
+  let prevAlias = sourceAlias;
+  for (let i = 0; i < links.length; i++) {
+    const link = links[i]!;
+    const isLeaf = i === links.length - 1;
+    const targetType = link.direction === "inbound" ? link.ptrref.outSource : link.ptrref.outTarget;
+    const targetAlias = `_ex${i}`;
+    const targetTable = resolveTypeTableName(targetType, options);
+    if (shouldUseLinkTable(link)) {
+      const linkTable = linkTableNameForPointer(link, options);
+      const linkAlias = `_lj${i}`;
+      if (link.direction === "inbound") {
+        if (i === 0) {
+          fromSql += `${quoteIdent(linkTable)} ${linkAlias} JOIN ${quoteIdent(targetTable)} ${targetAlias} ON ${targetAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("source")}`;
+          whereSqls.push(`${linkAlias}.${quoteIdent("target")} = ${prevAlias}.${quoteIdent("id")}`);
+        } else {
+          fromSql += ` JOIN ${quoteIdent(linkTable)} ${linkAlias} ON ${linkAlias}.${quoteIdent("target")} = ${prevAlias}.${quoteIdent("id")}`
+            + ` JOIN ${quoteIdent(targetTable)} ${targetAlias} ON ${targetAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("source")}`;
+        }
+      } else {
+        if (i === 0) {
+          fromSql += `${quoteIdent(linkTable)} ${linkAlias} JOIN ${quoteIdent(targetTable)} ${targetAlias} ON ${targetAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("target")}`;
+          whereSqls.push(`${linkAlias}.${quoteIdent("source")} = ${prevAlias}.${quoteIdent("id")}`);
+        } else {
+          fromSql += ` JOIN ${quoteIdent(linkTable)} ${linkAlias} ON ${linkAlias}.${quoteIdent("source")} = ${prevAlias}.${quoteIdent("id")}`
+            + ` JOIN ${quoteIdent(targetTable)} ${targetAlias} ON ${targetAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("target")}`;
+        }
+      }
+    } else {
+      const inlineColumn = `${link.ptrref.shortName}_id`;
+      if (i === 0) {
+        fromSql += `${quoteIdent(targetTable)} ${targetAlias}`;
+        whereSqls.push(link.direction === "inbound"
+          ? `${targetAlias}.${quoteIdent(inlineColumn)} = ${prevAlias}.${quoteIdent("id")}`
+          : `${targetAlias}.${quoteIdent("id")} = ${prevAlias}.${quoteIdent(inlineColumn)}`);
+      } else {
+        fromSql += ` JOIN ${quoteIdent(targetTable)} ${targetAlias} ON ${link.direction === "inbound"
+          ? `${targetAlias}.${quoteIdent(inlineColumn)} = ${prevAlias}.${quoteIdent("id")}`
+          : `${targetAlias}.${quoteIdent("id")} = ${prevAlias}.${quoteIdent(inlineColumn)}`}`;
+      }
+    }
+    void isLeaf;
+    prevAlias = targetAlias;
+  }
+  if (!fromSql) return null;
+  return `EXISTS (SELECT 1 FROM ${fromSql} WHERE ${whereSqls.join(" AND ")})`;
 };
 
 const compilePredicateSetSQL = (
@@ -3755,6 +4233,26 @@ const compilePredicateSetSQL = (
     }
     return `(${inner} = json('true'))`;
   }
+  // `FILTER X IS T` — type checks compile to a dynamic `__source_type IN (…)`
+  // test in the value path. Route them through the value compiler so the
+  // outer WHERE can use the resulting boolean directly.
+  if (set.expr.kind === "type_check_op") {
+    const value = compileValueSetSQL(set, sourceAlias, params, target, options, linkPropertyAlias);
+    if (value) return value;
+    params.length = checkpoint;
+    return null;
+  }
+  // `FILTER re_test(…)`, `FILTER str_lower(.x) = 'y'`, etc. — function-call
+  // predicates surface as bool-typed value expressions. Let compileValueSetSQL
+  // produce the SQL; the result is a truthy expression suitable for WHERE.
+  if (set.expr.kind === "function_call") {
+    if (process.env.DEBUG_PRED) console.log("[pred fn]", (set.expr as FunctionCall).functionName);
+    const value = compileValueSetSQL(set, sourceAlias, params, target, options, linkPropertyAlias);
+    if (process.env.DEBUG_PRED) console.log("[pred fn] value:", value);
+    if (value) return `(${value})`;
+    params.length = checkpoint;
+    return null;
+  }
   if (set.expr.kind !== "operator_call") {
     params.length = checkpoint;
     return null;
@@ -3767,8 +4265,15 @@ const compilePredicateSetSQL = (
       params.length = checkpoint;
       return null;
     }
-    const left = compilePredicateSetSQL(args[0].expr, sourceAlias, params, target, options, linkPropertyAlias);
-    const right = compilePredicateSetSQL(args[1].expr, sourceAlias, params, target, options, linkPropertyAlias);
+    // Each operand may be a boolean comparison the predicate path knows
+    // (`.val < 5`) or a value-level boolean expression that only the value
+    // path can compile (`.name like '%on'`, function calls). Try predicate
+    // first so AND/OR chains stay flat; fall back to value-level so we don't
+    // drop the entire conjunction whenever one side is something exotic.
+    const left = compilePredicateSetSQL(args[0].expr, sourceAlias, params, target, options, linkPropertyAlias)
+      ?? compileValueSetSQL(args[0].expr, sourceAlias, params, target, options, linkPropertyAlias);
+    const right = compilePredicateSetSQL(args[1].expr, sourceAlias, params, target, options, linkPropertyAlias)
+      ?? compileValueSetSQL(args[1].expr, sourceAlias, params, target, options, linkPropertyAlias);
     if (!left || !right) {
       params.length = checkpoint;
       return null;
@@ -3813,6 +4318,14 @@ const compilePredicateSetSQL = (
 
   const op = normalizeOperator(call.operator);
   if (!op) {
+    // `LIKE`/`ILIKE`/function-call/etc. predicates need to surface in WHERE
+    // too — fall back to value-level compilation, whose output is already a
+    // truthy SQL expression. Otherwise compileWhereClause would silently drop
+    // the FILTER and the query would return every row.
+    const valueSql = compileValueSetSQL(set, sourceAlias, params, target, options, linkPropertyAlias);
+    if (valueSql) {
+      return `(${valueSql})`;
+    }
     params.length = checkpoint;
     return null;
   }
@@ -4111,8 +4624,45 @@ const compileValueSetSQL = (
       if (typeCheck.op === "is") return "1";
       if (typeCheck.op === "is not") return "0";
     }
-    params.length = checkpoint;
-    return null;
+    // Dynamic case: the left source is an abstract/parent type and the right
+    // is a concrete subtype — runtime decides per row by comparing the
+    // polymorphic `__source_type` column. Build the list of qualified type
+    // names that should match (the right type and all its concrete subtypes).
+    const collectConcreteNames = (typeRef: TypeRef): string[] => {
+      const seen = new globalThis.Set<string>();
+      const out: string[] = [];
+      const walk = (t: TypeRef): void => {
+        const name = qualifyTypeName(t);
+        if (seen.has(name)) return;
+        seen.add(name);
+        if (!t.isAbstract) out.push(name);
+        for (const child of t.children ?? []) walk(child);
+      };
+      walk(typeRef);
+      return out;
+    };
+    const matchTypes = collectConcreteNames(typeCheck.right);
+    if (matchTypes.length === 0) {
+      params.length = checkpoint;
+      return null;
+    }
+    const leftSql = compileValueSetSQL(typeCheck.left, sourceAlias, params, target, options, linkPropertyAlias);
+    // When the left is the outer source itself (a type_root for the filter
+    // subject), use `${sourceAlias}.__source_type` directly. Otherwise we
+    // need an EXISTS-style check, but for now the common case (`Type IS T`
+    // in a FILTER) covers what the tests exercise.
+    const useSourceAlias = typeCheck.left.expr.kind === "type_root";
+    if (!useSourceAlias && !leftSql) {
+      params.length = checkpoint;
+      return null;
+    }
+    const tagSql = useSourceAlias
+      ? `${sourceAlias}.${quoteIdent("__source_type")}`
+      : `(${leftSql})`;
+    const placeholders = matchTypes.map(() => "?").join(", ");
+    params.push(...matchTypes);
+    const op = typeCheck.op === "is" ? "IN" : "NOT IN";
+    return `(${tagSql} ${op} (${placeholders}))`;
   }
 
   if (expr.kind === "coalesce_expr") {
@@ -4226,23 +4776,33 @@ const compileOperatorValueSQL = (
 ): string | null => {
   const checkpoint = params.length;
   if (call.operator === "and" || call.operator === "or" || call.operator === "not") {
-    return compilePredicateSetSQL(
-      {
-        kind: "set",
-        expr: call,
-        pathId: { kind: "path_id", namespace: [], isPointerPath: false, steps: [] },
-        typeref: call.returning,
-        shape: [],
-        isBinding: false,
-        isMaterializedRef: false,
-        isSchemaAlias: false,
-      },
-      sourceAlias,
-      params,
-      target,
-      options,
-      linkPropertyAlias,
-    );
+    // EdgeQL is strict-empty: `null AND false` should be NULL, not FALSE
+    // (SQL's three-valued logic would short-circuit to FALSE). Compile each
+    // operand once via the value path so we can detect NULL on either side
+    // and propagate it, then form the boolean expression. The CASE-VALUE
+    // wrapper turns 0/1/NULL into json('false')/json('true')/NULL for the
+    // JSON output the assertion layer expects.
+    const argSets = orderedCallArgs(call.args);
+    const operandSqls: string[] = [];
+    for (const arg of argSets) {
+      const v = compileValueSetSQL(arg.expr, sourceAlias, params, target, options, linkPropertyAlias);
+      if (!v) return null;
+      operandSqls.push(v);
+    }
+    // Wrap operand evaluation in a one-row subquery so each operand's SQL
+    // (with its `?` placeholders) is evaluated exactly once — splicing a
+    // `?`-bearing fragment twice into the same statement would over-consume
+    // parameters.
+    const truthy = (col: string): string => `(${col} = json('true') OR (${col} NOT IN (json('false')) AND ${col}))`;
+    if (call.operator === "not") {
+      if (operandSqls.length < 1) return null;
+      const p = operandSqls[0]!;
+      return `(SELECT CASE WHEN p IS NULL THEN NULL WHEN p = json('true') THEN json('false') WHEN p = json('false') THEN json('true') WHEN p THEN json('false') ELSE json('true') END FROM (SELECT (${p}) AS p))`;
+    }
+    if (operandSqls.length < 2) return null;
+    const [a, b] = operandSqls;
+    const op = call.operator === "and" ? "AND" : "OR";
+    return `(SELECT CASE WHEN a IS NULL OR b IS NULL THEN NULL WHEN ${truthy("a")} ${op} ${truthy("b")} THEN json('true') ELSE json('false') END FROM (SELECT (${a}) AS a, (${b}) AS b))`;
   }
   const op = normalizeOperator(call.operator);
   if (op) {
@@ -4257,8 +4817,11 @@ const compileOperatorValueSQL = (
       return null;
     }
     // Value-level emission: produce JSON booleans so downstream JSON.parse
-    // yields true/false rather than 1/0.
-    return `(CASE WHEN ${left} ${op} ${right} THEN json('true') ELSE json('false') END)`;
+    // yields true/false rather than 1/0. Empty-set semantics: if either
+    // operand is NULL the comparison's value is the empty set, surfaced as
+    // JSON null. The one-row subquery binds each side once so SQL `?`
+    // placeholders are not consumed twice.
+    return `(SELECT CASE WHEN l IS NULL OR r IS NULL THEN NULL WHEN l ${op} r THEN json('true') ELSE json('false') END FROM (SELECT (${left}) AS l, (${right}) AS r))`;
   }
   if (call.operator === "??") {
     const args = orderedCallArgs(call.args);
@@ -4756,14 +5319,13 @@ const compileOutboundLinkArrayExpr = (
 ): string => {
   const targetSource = compilePolymorphicSource(pointer.ptrref.outTarget, false, targetAlias, projectedCols, options);
   if (shouldUseLinkTable(pointer)) {
-    const sourceType = qualifyTypeName(pointer.source.typeref);
-    const linkTable = `${tableNameForType(sourceType)}__${pointer.ptrref.shortName.toLowerCase()}`;
-    const inner = compileLinkedInnerSelect(`SELECT ${rowExpr} AS ${quoteIdent("item")} FROM ${targetSource} JOIN ${quoteIdent(linkTable)} ${joinAlias} ON ${joinAlias}.${quoteIdent("target")} = ${targetAlias}.${quoteIdent("id")} WHERE ${joinAlias}.${quoteIdent("source")} = ${sourceAlias}.${quoteIdent("id")}`, modifiers, targetAlias, params, target, options, joinAlias);
+    const linkTable = linkTableNameForPointer(pointer, options);
+    const inner = compileLinkedInnerSelect(`SELECT ${rowExpr} AS ${quoteIdent("item")} FROM ${targetSource} JOIN ${quoteIdent(linkTable)} ${joinAlias} ON ${joinAlias}.${quoteIdent("target")} = ${targetAlias}.${quoteIdent("id")} WHERE ${joinAlias}.${quoteIdent("source")} = ${sourceAlias}.${quoteIdent("id")}`, modifiers, targetAlias, params, target, options, joinAlias, pointer);
     return `COALESCE((SELECT json_group_array(json(${quoteIdent("item")})) FROM (${inner})), '[]')`;
   }
 
   const inlineColumn = `${pointer.ptrref.shortName}_id`;
-  const inner = compileLinkedInnerSelect(`SELECT ${rowExpr} AS ${quoteIdent("item")} FROM ${targetSource} WHERE ${targetAlias}.${quoteIdent("id")} = ${sourceAlias}.${quoteIdent(inlineColumn)}`, modifiers, targetAlias, params, target, options);
+  const inner = compileLinkedInnerSelect(`SELECT ${rowExpr} AS ${quoteIdent("item")} FROM ${targetSource} WHERE ${targetAlias}.${quoteIdent("id")} = ${sourceAlias}.${quoteIdent(inlineColumn)}`, modifiers, targetAlias, params, target, options, undefined, pointer);
   return `COALESCE((SELECT json_group_array(json(${quoteIdent("item")})) FROM (${inner})), '[]')`;
 };
 
@@ -4785,14 +5347,75 @@ const compileBacklinkArrayExpr = (
     : [...new Set<string>([...projectedCols, `${pointer.ptrref.shortName}_id`])];
   const backlinkSource = compilePolymorphicSource(sourceType, false, backlinkAlias, projectedBacklinkCols, options);
   if (shouldUseLinkTable(pointer)) {
-    const linkTable = `${tableNameForType(qualifyTypeName(sourceType))}__${pointer.ptrref.shortName.toLowerCase()}`;
-    const inner = compileLinkedInnerSelect(`SELECT ${rowExpr} AS ${quoteIdent("item")} FROM ${backlinkSource} JOIN ${quoteIdent(linkTable)} ${joinAlias} ON ${joinAlias}.${quoteIdent("source")} = ${backlinkAlias}.${quoteIdent("id")} WHERE ${joinAlias}.${quoteIdent("target")} = ${sourceAlias}.${quoteIdent("id")}`, modifiers, backlinkAlias, params, target, options, joinAlias);
+    const linkTable = linkTableNameForPointer(pointer, options);
+    const inner = compileLinkedInnerSelect(`SELECT ${rowExpr} AS ${quoteIdent("item")} FROM ${backlinkSource} JOIN ${quoteIdent(linkTable)} ${joinAlias} ON ${joinAlias}.${quoteIdent("source")} = ${backlinkAlias}.${quoteIdent("id")} WHERE ${joinAlias}.${quoteIdent("target")} = ${sourceAlias}.${quoteIdent("id")}`, modifiers, backlinkAlias, params, target, options, joinAlias, pointer);
     return `COALESCE((SELECT json_group_array(json(${quoteIdent("item")})) FROM (${inner})), '[]')`;
   }
 
   const inlineColumn = `${pointer.ptrref.shortName}_id`;
-  const inner = compileLinkedInnerSelect(`SELECT ${rowExpr} AS ${quoteIdent("item")} FROM ${backlinkSource} WHERE ${backlinkAlias}.${quoteIdent(inlineColumn)} = ${sourceAlias}.${quoteIdent("id")}`, modifiers, backlinkAlias, params, target, options);
+  const inner = compileLinkedInnerSelect(`SELECT ${rowExpr} AS ${quoteIdent("item")} FROM ${backlinkSource} WHERE ${backlinkAlias}.${quoteIdent(inlineColumn)} = ${sourceAlias}.${quoteIdent("id")}`, modifiers, backlinkAlias, params, target, options, undefined, pointer);
   return `COALESCE((SELECT json_group_array(json(${quoteIdent("item")})) FROM (${inner})), '[]')`;
+};
+
+// Variant of `rewriteFilterAgainstChainSource` keyed on an enclosing
+// Pointer's target type — used by shape-value subqueries where the
+// "outer source" is the pointer being iterated rather than a select_stmt's
+// source set. Replaces chained references like `(Issue.<owner).number`
+// (resolved against the backlink-iteration set) with a fresh type-root
+// reference so they collapse to `targetAlias.column`.
+const rewriteFilterAgainstPointerChain = (filterSet: Set, outerPointer: Pointer): Set => {
+  const leafType = outerPointer.direction === "inbound" ? outerPointer.ptrref.outSource : outerPointer.ptrref.outTarget;
+  const rewriteSet = (s: Set): Set => {
+    const expr = s.expr;
+    if (expr.kind === "pointer") {
+      const ptr = expr as Pointer;
+      // If this pointer's source is the same kind of chain as outerPointer,
+      // replace with a direct type-root reference.
+      let innerSource = ptr.source;
+      const matches = (a: Set, b: Pointer): boolean => {
+        if (a.expr.kind !== "pointer") return false;
+        const aPtr = a.expr as Pointer;
+        return aPtr.ptrref.id === b.ptrref.id && aPtr.direction === b.direction;
+      };
+      if (matches(innerSource, outerPointer)) {
+        const newRoot: Set = {
+          ...innerSource,
+          expr: { kind: "type_root", typeref: leafType, skipSubtypes: false, isCachedGlobal: false },
+          typeref: leafType,
+        } as Set;
+        return { ...s, expr: { ...ptr, source: newRoot } };
+      }
+      const newSource = rewriteSet(ptr.source);
+      if (newSource === ptr.source) return s;
+      return { ...s, expr: { ...ptr, source: newSource } };
+    }
+    if (expr.kind === "operator_call") {
+      const op = expr as OperatorCall;
+      const newArgs: Record<string, CallArg> = {};
+      let changed = false;
+      for (const [k, arg] of Object.entries(op.args)) {
+        const newExpr = rewriteSet(arg.expr);
+        if (newExpr !== arg.expr) changed = true;
+        newArgs[k] = { ...arg, expr: newExpr };
+      }
+      if (!changed) return s;
+      return { ...s, expr: { ...op, args: newArgs } };
+    }
+    if (expr.kind === "exists_expr") {
+      const ex = expr as ExistsExpr;
+      const newInner = rewriteSet(ex.expr);
+      if (newInner === ex.expr) return s;
+      return { ...s, expr: { ...ex, expr: newInner } };
+    }
+    if (expr.kind === "type_cast") {
+      const tc = expr as TypeCast;
+      const newInner = rewriteSet(tc.expr);
+      if (newInner === tc.expr) return s;
+      return { ...s, expr: { ...tc, expr: newInner } };
+    }
+    return s;
+  };
+  return rewriteSet(filterSet);
 };
 
 const compileLinkedInnerSelect = (
@@ -4803,6 +5426,10 @@ const compileLinkedInnerSelect = (
   target: RuntimeTarget,
   options: GelIRCompileOptions,
   linkPropertyAlias?: string,
+  // The pointer whose target rows we're iterating — used as the "outer
+  // source" when rewriting filter chains so `.field` resolves to a column
+  // on the target alias rather than re-walking the chain.
+  outerPointer?: Pointer,
 ): string => {
   if (!modifiers) {
     return baseSql;
@@ -4810,8 +5437,14 @@ const compileLinkedInnerSelect = (
   let inner = baseSql;
   const clauses: string[] = [];
   if (modifiers.where) {
-    const where = compilePredicateSetSQL(modifiers.where, targetAlias, params, target, options, linkPropertyAlias)
-      ?? compileValueSetSQL(modifiers.where, targetAlias, params, target, options, linkPropertyAlias);
+    // Same trick as compileSelectStmtToSQL: when the filter references the
+    // outer pointer's chain, swap that prefix for a fresh root set typed at
+    // the chain's leaf so `.field` becomes `targetAlias.field`.
+    const filterToCompile = outerPointer
+      ? rewriteFilterAgainstPointerChain(modifiers.where, outerPointer)
+      : modifiers.where;
+    const where = compilePredicateSetSQL(filterToCompile, targetAlias, params, target, options, linkPropertyAlias)
+      ?? compileValueSetSQL(filterToCompile, targetAlias, params, target, options, linkPropertyAlias);
     if (where) {
       clauses.push(where);
     }
@@ -4820,7 +5453,7 @@ const compileLinkedInnerSelect = (
     inner += ` AND ${clauses.join(" AND ")}`;
   }
   if (modifiers.orderBy && modifiers.orderBy.length > 0) {
-    const orderSql = compileSortExprs(modifiers.orderBy, targetAlias, linkPropertyAlias);
+    const orderSql = compileSortExprs(modifiers.orderBy, targetAlias, linkPropertyAlias, params, target, options);
     if (orderSql) {
       inner += ` ORDER BY ${orderSql}`;
     }
@@ -4838,16 +5471,31 @@ const compileLinkedInnerSelect = (
   return inner;
 };
 
-const compileSortExprs = (orderBy: SortExpr[], sourceAlias: string, linkPropertyAlias?: string): string => {
+const compileSortExprs = (
+  orderBy: SortExpr[],
+  sourceAlias: string,
+  linkPropertyAlias?: string,
+  params?: ScalarValue[],
+  target?: RuntimeTarget,
+  options?: GelIRCompileOptions,
+): string => {
   return orderBy
     .map((entry) => {
       const column = compileSetColumnRef(entry.path, linkPropertyAlias);
-      if (!column) {
-        return "";
+      if (column) {
+        const isLinkPropertyPointer = entry.path.expr.kind === "pointer" && (entry.path.expr as Pointer).ptrref.isLinkProperty;
+        const orderAlias = isLinkPropertyPointer && linkPropertyAlias ? linkPropertyAlias : sourceAlias;
+        return `${orderAlias}.${quoteIdent(column)} ${entry.direction.toUpperCase()}`;
       }
-      const isLinkPropertyPointer = entry.path.expr.kind === "pointer" && (entry.path.expr as Pointer).ptrref.isLinkProperty;
-      const orderAlias = isLinkPropertyPointer && linkPropertyAlias ? linkPropertyAlias : sourceAlias;
-      return `${orderAlias}.${quoteIdent(column)} ${entry.direction.toUpperCase()}`;
+      // Expression sort keys (`ORDER BY len(.body)`) need the full value
+      // compiler — bare column references only cover the trivial pointer
+      // case. Caller must pass params/target/options for this to fire;
+      // legacy callers without them keep the column-only behaviour.
+      if (params && target && options) {
+        const sql = compileValueSetSQL(entry.path, sourceAlias, params, target, options, linkPropertyAlias);
+        if (sql) return `${sql} ${entry.direction.toUpperCase()}`;
+      }
+      return "";
     })
     .filter((entry) => entry.length > 0)
     .join(", ");
@@ -5149,12 +5797,14 @@ const STRICT_COMPARE_OPS = new Set(["=", "!=", "<", "<=", ">", ">="]);
 // Strict binary operators that propagate empty-set: comparisons, arithmetic,
 // concatenation, logical, and standard relational ops. NOT included: `??`,
 // `?=`, `?!=` (set-level coalescing), `union` (combines, doesn't propagate),
-// `distinct` (degenerates to empty itself), `and`/`or` (short-circuit at
-// boolean level — empty-bool is not empty-result).
+// `distinct` (degenerates to empty itself). `and`/`or` ARE strict — EdgeQL
+// `{a} OR {}` is `{}` even when `a` would be true (no short-circuit on
+// empty sets — the value of OR is a cross-product over both operands).
 const STRICT_BINARY_OPS = new Set([
   ...STRICT_COMPARE_OPS,
   "+", "-", "*", "/", "//", "%", "^", "++",
   "like", "ilike", "in", "not in",
+  "and", "or",
 ]);
 // Stdlib functions that DO NOT propagate empty-set: they yield a defined
 // result (false / 0 / [] / throw) when their arg is empty.
