@@ -200,6 +200,10 @@ export type ComputedDef = {
             functionName: "sum";
             link: string;
             field: string;
+          }
+        | {
+            kind: "edgeql_expr";
+            exprText: string;
           };
     }
   | {

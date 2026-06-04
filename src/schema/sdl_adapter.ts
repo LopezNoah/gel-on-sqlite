@@ -1251,6 +1251,17 @@ const parseComputedPropertyExpr = (text: string): Extract<ComputedDef, { kind: "
     return { kind: "function_call", name: callMatch[1], args: args as ScalarValue[] };
   }
 
+  // Fallback: store the raw EdgeQL text so the IR compiler can parse and lower
+  // it through the full pipeline (tokenizer→parser→AST→IR→SQL). This handles
+  // any expression beyond the curated literal/field/concat/call shapes above —
+  // e.g. `(SELECT ident(.title))`, set-of-aggregates over backlinks, etc.
+  try {
+    parseEdgeQL(`SELECT ${text}`);
+    return { kind: "edgeql_expr", exprText: text };
+  } catch {
+    // Fall through to unsupported() below if even parseEdgeQL can't read this.
+  }
+
   return unsupported(`Unsupported computed property declaration expression '${text}'`);
 };
 

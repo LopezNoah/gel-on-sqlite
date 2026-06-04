@@ -361,8 +361,20 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
                 field: member.expr.field,
               },
             });
+          } else if (member.expr.kind === "edgeql_expr") {
+            computeds.push({
+              kind: "property",
+              name: member.name,
+              required: member.required,
+              multi: member.multi,
+              annotations: member.annotations.length ? [...member.annotations] : undefined,
+              expr: {
+                kind: "edgeql_expr",
+                exprText: member.expr.exprText,
+              },
+            });
           } else {
-            throw new Error(`Computed '${member.name}' has invalid property expression kind '${member.expr.kind}'`);
+            throw new Error(`Computed '${member.name}' has invalid property expression kind '${(member.expr as { kind: string }).kind}'`);
           }
         } else {
           if (member.expr.kind === "backlink") {
@@ -1074,6 +1086,10 @@ const renderComputedExpr = (expr: Extract<TypeMember, { kind: "computed" }>['exp
   }
 
   if (expr.kind === "select_type") {
+    return expr.exprText;
+  }
+
+  if (expr.kind === "edgeql_expr") {
     return expr.exprText;
   }
 
