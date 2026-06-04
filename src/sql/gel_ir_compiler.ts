@@ -1121,7 +1121,10 @@ const describeSetLevelSide = (
     if (value === null) {
       return { kind: "always-empty" };
     }
-    params.push(typeof value === "boolean" ? Number(value) : (value as ScalarValue));
+    if (typeof value === "boolean") {
+      return { kind: "always-present", valueSQL: value ? "json('true')" : "json('false')" };
+    }
+    params.push(value as ScalarValue);
     return { kind: "always-present", valueSQL: "?" };
   }
 
@@ -1544,6 +1547,18 @@ const compileScalarSelectSQLInner = (
       if (inner.expr.kind === "array" && (inner.expr as ArrayExpr).elements.length === 1) {
         return compileScalarSelectSQL((inner.expr as ArrayExpr).elements[0]!, params, target, options, outerWheres);
       }
+      if (shortName === "array_unpack") {
+        // General `array_unpack(arr)` — explode the JSON array into one row
+        // per element with `json_each`. The array source may itself be an
+        // expression returning the JSON-encoded array; compile it as a value
+        // and feed it to json_each.
+        const checkpointBefore = params.length;
+        const arrSql = compileValueSetSQL(inner, "g_au", params, target, options);
+        if (arrSql) {
+          return `SELECT "value" FROM json_each(${arrSql})`;
+        }
+        params.length = checkpointBefore;
+      }
       if (shortName === "assert_single") {
         return compileScalarSelectSQL(inner, params, target, options, outerWheres);
       }
@@ -1681,7 +1696,16 @@ const compileScalarSelectSQLInner = (
       const alias = `tuple_${i}`;
       sources.push(`(${elementSql}) ${alias}`);
       const valueRef = `${alias}.${quoteIdent("value")}`;
-      values.push(setValueIsJson(element.val) ? `json(${valueRef})` : valueRef);
+      // Bool values are stored as TEXT `'true'`/`'false'` (the literal output
+      // of `json('true')`/`json('false')`). Without wrapping them with
+      // `json(...)` inside `json_array(...)`, SQLite treats them as strings
+      // and the tuple serialises to `["true", …]` instead of `[true, …]`.
+      const elementType = (element.val.typeref?.id ?? element.val.typeref?.nameHint ?? "").toLowerCase();
+      const isBoolType = elementType === "std::bool"
+        || elementType === "unknown:std::bool"
+        || elementType === "bool";
+      const wrapInJson = setValueIsJson(element.val) || isBoolType;
+      values.push(wrapInJson ? `json(${valueRef})` : valueRef);
     }
     const valueExpr = tuple.named
       ? `json_object(${tuple.elements.map((element, index) => `${quoteLiteral(element.name ?? String(index))}, ${values[index]}`).join(", ")})`
@@ -3121,7 +3145,12 @@ const compileValueSetSQLWithAliases = (
   if (literal !== undefined) {
     const inlineSql = inlineIntegerConstantSql(unwrapped.result.expr, literal);
     if (inlineSql !== undefined) return inlineSql;
-    params.push(typeof literal === "boolean" ? Number(literal) : literal);
+    if (typeof literal === "boolean") {
+      // Emit bool literals as their JSON-encoded form so the value column
+      // surfaces as `true`/`false` in the runtime decoder instead of `0`/`1`.
+      return literal ? "json('true')" : "json('false')";
+    }
+    params.push(literal);
     return "?";
   }
 
@@ -4440,7 +4469,10 @@ const compileValueSetSQL = (
   if (literal !== undefined) {
     const inlineSql = inlineIntegerConstantSql(unwrapped.result.expr, literal);
     if (inlineSql !== undefined) return inlineSql;
-    params.push(typeof literal === "boolean" ? Number(literal) : literal)
+    if (typeof literal === "boolean") {
+      return literal ? "json('true')" : "json('false')";
+    }
+    params.push(literal);
     return "?";
   }
 
@@ -4562,6 +4594,19 @@ const compileValueSetSQL = (
         const targetId = target.id ?? target.nameHint;
         if (targetId && (targetId.startsWith("std::") || targetId.startsWith("default::"))) {
           return targetId;
+        }
+      }
+      // `function_call` / `operator_call` / `type_cast` / `set` envelopes
+      // carry their inferred typeref on `typeCheck.left.typeref` (set during
+      // AST→IR). Pull it out so `<float64>x IS float64` and
+      // `math::mean(x) IS float64` resolve to the inferred concrete scalar
+      // instead of bottoming out at `anytype`.
+      const leftTyperef = (typeCheck.left as { typeref?: { id?: string; nameHint?: string } }).typeref;
+      if (leftTyperef) {
+        const id = leftTyperef.id ?? leftTyperef.nameHint ?? "";
+        const stripped = id.startsWith("unknown:") ? id.slice("unknown:".length) : id;
+        if (stripped.startsWith("std::") || stripped.startsWith("default::")) {
+          return stripped;
         }
       }
       return undefined;
@@ -4924,8 +4969,23 @@ const compileOperatorValueSQL = (
       return null;
     }
     const left = compileValueSetSQL(args[0].expr, sourceAlias, params, target, options, linkPropertyAlias);
+    if (!left) {
+      params.length = checkpoint;
+      return null;
+    }
+    // Prefer compiling the RHS as a value SELECT (`SELECT value FROM …`)
+    // so set-producing expressions like `array_unpack([…])` and pointer
+    // chains can serve as the right-hand side. Fall back to the scalar-
+    // value compilation when the SELECT form isn't available (literal
+    // arrays / tuples etc.). Wrap the boolean result so it surfaces as
+    // the JSON-encoded `true`/`false` other operators use.
+    const rightSelect = compileScalarSelectSQL(args[1].expr, params, target, options);
+    if (rightSelect) {
+      const op = call.operator === "in" ? "IN" : "NOT IN";
+      return `(CASE WHEN ${left} ${op} (${rightSelect}) THEN json('true') ELSE json('false') END)`;
+    }
     const right = compileValueSetSQL(args[1].expr, sourceAlias, params, target, options, linkPropertyAlias);
-    if (!left || !right) {
+    if (!right) {
       params.length = checkpoint;
       return null;
     }
@@ -5100,7 +5160,7 @@ const compileFunctionCallSQL = (
   // share the generic "compile the arg as a scalar value set, then wrap in
   // the SQL aggregate" shape.
   const shortName = call.functionName.split("::").pop() ?? "";
-  const aggregateOfType = ["count", "min", "max", "sum", "avg", "array_agg"].includes(shortName);
+  const aggregateOfType = ["count", "min", "max", "sum", "avg", "array_agg", "all", "any", "mean"].includes(shortName);
   if (aggregateOfType) {
     const argList = orderedCallArgs(call.args);
     // Empty-set short-circuit: EdgeQL aggregates over the empty set have
@@ -5111,7 +5171,9 @@ const compileFunctionCallSQL = (
       if (shortName === "count") return "0";
       if (shortName === "sum") return "0";
       if (shortName === "array_agg") return "json('[]')";
-      if (shortName === "min" || shortName === "max" || shortName === "avg") return "NULL";
+      if (shortName === "all") return "json('true')";
+      if (shortName === "any") return "json('false')";
+      if (shortName === "min" || shortName === "max" || shortName === "avg" || shortName === "mean") return "NULL";
     }
     if (shortName === "count" && argList.length === 1) {
       const countSql = compileCountOfSetSQL(argList[0].expr, params, target, options);
@@ -5153,17 +5215,38 @@ const compileFunctionCallSQL = (
           const orders = orderBy.map((sort) => `${quoteIdent("value")} ${sort.direction.toUpperCase()}`);
           inner = `${correlated} ORDER BY ${orders.join(", ")}`;
         }
+        // `all`/`any` are boolean aggregates: SQLite has no direct equivalent
+        // but the JSON-encoded values `'true'`/`'false'` compare
+        // lexicographically the way the predicate requires (false < true), so
+        // min/max give the correct answer. Empty-set identity (`all → true`,
+        // `any → false`) is recovered via IFNULL.
+        if (shortName === "all") {
+          return `(SELECT IFNULL(min(${quoteIdent("value")}), json('true')) FROM (${inner}) WHERE ${quoteIdent("value")} IS NOT NULL)`;
+        }
+        if (shortName === "any") {
+          return `(SELECT IFNULL(max(${quoteIdent("value")}), json('false')) FROM (${inner}) WHERE ${quoteIdent("value")} IS NOT NULL)`;
+        }
         const sqlAgg = shortName === "array_agg"
           ? `json_group_array(${quoteIdent("value")})`
-          : `${shortName}(${quoteIdent("value")})`;
+          : shortName === "mean"
+            ? `avg(${quoteIdent("value")})`
+            : `${shortName}(${quoteIdent("value")})`;
         return `(SELECT ${sqlAgg} FROM (${inner}))`;
       }
       const innerCheckpoint = params.length;
       const scalarSql = compileScalarSelectSQL(argList[0].expr, params, target, options);
       if (scalarSql) {
+        if (shortName === "all") {
+          return `(SELECT IFNULL(min(${quoteIdent("value")}), json('true')) FROM (${scalarSql}) WHERE ${quoteIdent("value")} IS NOT NULL)`;
+        }
+        if (shortName === "any") {
+          return `(SELECT IFNULL(max(${quoteIdent("value")}), json('false')) FROM (${scalarSql}) WHERE ${quoteIdent("value")} IS NOT NULL)`;
+        }
         const sqlAgg = shortName === "array_agg"
           ? `json_group_array(${setValueIsJson(argList[0].expr) ? `json(${quoteIdent("value")})` : quoteIdent("value")})`
-          : `${shortName}(${quoteIdent("value")})`;
+          : shortName === "mean"
+            ? `avg(${quoteIdent("value")})`
+            : `${shortName}(${quoteIdent("value")})`;
         return `(SELECT ${sqlAgg} FROM (${scalarSql}))`;
       }
       params.length = innerCheckpoint;

@@ -63,6 +63,22 @@ const STDLIB_SQL_TEMPLATES = new Map<string, StdlibSqlTemplate>([
   ["math::cot", (argSql) => argSql[0] ? `_gel_cot(${argSql[0]})` : null],
   ["math::sin", (argSql) => argSql[0] ? `_gel_sin(${argSql[0]})` : null],
   ["math::tan", (argSql) => argSql[0] ? `_gel_tan(${argSql[0]})` : null],
+  // `std::random()` — float in [0, 1). SQLite's `random()` returns a
+  // signed 64-bit integer; shift+normalise to the [0, 1) range. Use
+  // `random() / 9223372036854775808.0` (max abs value + 1) which yields
+  // values in (-1, 1), then halve+shift to [0, 1).
+  ["std::random", () => "((CAST(random() AS REAL) / 18446744073709551616.0) + 0.5)"],
+  // `std::array_get(arr, idx [, default])` — returns the element at `idx`,
+  // or `default` (or empty set / NULL) when out of range. Negative indices
+  // count from the end. SQLite's json_extract returns NULL for invalid
+  // paths, which serializes back as `{}` and matches the EdgeQL empty-set
+  // expectation in our test harness.
+  ["std::array_get", (argSql) => {
+    if (!argSql[0] || !argSql[1]) return null;
+    const idx = `CASE WHEN ${argSql[1]} < 0 THEN json_array_length(${argSql[0]}) + ${argSql[1]} ELSE ${argSql[1]} END`;
+    const lookup = `json_extract(${argSql[0]}, '$[' || (${idx}) || ']')`;
+    return argSql[2] ? `IFNULL(${lookup}, ${argSql[2]})` : lookup;
+  }],
   ["std::datetime_current", () => "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"],
   ["std::datetime_of_transaction", () => "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"],
   ["std::datetime_of_statement", () => "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"],

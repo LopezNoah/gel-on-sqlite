@@ -47,6 +47,8 @@ const BASE_SQL_NATIVE_STDLIB_LOWERING = new Set<string>([
   "std::find",
   "std::contains",
   "std::array_join",
+  "std::random",
+  "std::array_get",
 ]);
 
 const RUNTIME_TARGET_CAPABILITIES: Record<RuntimeTarget, RuntimeTargetCapabilities> = {

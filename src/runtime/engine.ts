@@ -538,15 +538,173 @@ const applyParsedFunctionDDL = (schema: SchemaSnapshot, ast: DDLStatement, defau
   });
 };
 
+// Tokenizer-based extraction of `create type Name [extending …] [{ body }]`.
+// Walking tokens lets the EXTENDING clause and the brace-delimited body fall
+// out of the lexical structure without bolting more captures onto the
+// statement-shape regex. The header (`create type Name extending Base, …`)
+// is consumed via the same Token stream the parser uses; the body — if any
+// — is sliced from the original source between the matched `{` and `}`
+// offsets so its inner DDL entries (property / link declarations) remain
+// available for downstream parsing.
+const parseCreateTypeHeader = (
+  statement: string,
+): { rawName: string; extendsList: string[] | undefined; bodyText: string } | null => {
+  let tokens: readonly Token[];
+  try {
+    tokens = tokenize(statement);
+  } catch {
+    return null;
+  }
+
+  const isNameLike = (tok: Token | undefined): tok is Token =>
+    !!tok && (tok.kind === "identifier" || tok.kind === "backtick_name");
+  const stripBackticks = (lexeme: string): string =>
+    lexeme.startsWith("`") && lexeme.endsWith("`") ? lexeme.slice(1, -1) : lexeme;
+  const consumeQualifiedName = (start: number): { name: string; next: number } | null => {
+    if (!isNameLike(tokens[start])) return null;
+    let name = stripBackticks(tokens[start]!.lexeme);
+    let j = start + 1;
+    while (tokens[j]?.kind === "coloncolon") {
+      const seg = tokens[j + 1];
+      if (!isNameLike(seg)) return null;
+      name += `::${stripBackticks(seg.lexeme)}`;
+      j += 2;
+    }
+    return { name, next: j };
+  };
+
+  if (tokens[0]?.kind !== "kw_create") return null;
+  if (tokens[1]?.lower !== "type") return null;
+
+  const nameParsed = consumeQualifiedName(2);
+  if (!nameParsed) return null;
+  let i = nameParsed.next;
+
+  let extendsList: string[] | undefined;
+  if (tokens[i]?.kind === "kw_extending") {
+    i += 1;
+    extendsList = [];
+    for (;;) {
+      const base = consumeQualifiedName(i);
+      if (!base) return null;
+      extendsList.push(base.name);
+      i = base.next;
+      if (tokens[i]?.kind === "comma") {
+        i += 1;
+        continue;
+      }
+      break;
+    }
+  }
+
+  let bodyText = "";
+  if (tokens[i]?.kind === "lbrace") {
+    const openOffset = tokens[i]!.offset;
+    let depth = 1;
+    let j = i + 1;
+    let closeOffset = -1;
+    while (j < tokens.length) {
+      const t = tokens[j]!;
+      if (t.kind === "eof") break;
+      if (t.kind === "lbrace") depth += 1;
+      else if (t.kind === "rbrace") {
+        depth -= 1;
+        if (depth === 0) {
+          closeOffset = t.offset;
+          j += 1;
+          break;
+        }
+      }
+      j += 1;
+    }
+    if (closeOffset < 0) return null;
+    bodyText = statement.slice(openOffset + 1, closeOffset);
+    i = j;
+  }
+
+  while (i < tokens.length && (tokens[i]!.kind === "semi" || tokens[i]!.kind === "eof")) i += 1;
+  if (i < tokens.length) return null;
+
+  return { rawName: nameParsed.name, extendsList, bodyText };
+};
+
+// Strip a trailing `{ … }` block (e.g. inline link-property declarations)
+// from a body entry so the existing link/property header regexes match the
+// declaration on its own. Token offsets are used to slice — no regex is
+// needed to find the brace.
+const stripTrailingBraceBlock = (entry: string): string => {
+  let tokens: readonly Token[];
+  try {
+    tokens = tokenize(entry);
+  } catch {
+    return entry;
+  }
+  // Find the last `{` token at depth 0 whose matching `}` ends the entry
+  // (i.e. only whitespace/`;` follow).
+  for (let i = tokens.length - 1; i >= 0; i -= 1) {
+    const t = tokens[i]!;
+    if (t.kind === "rbrace") {
+      // Walk forward from here: nothing meaningful should follow.
+      let trailingOk = true;
+      for (let k = i + 1; k < tokens.length; k += 1) {
+        const next = tokens[k]!;
+        if (next.kind === "eof" || next.kind === "semi") continue;
+        trailingOk = false;
+        break;
+      }
+      if (!trailingOk) return entry;
+      // Find the matching opening brace.
+      let depth = 1;
+      for (let j = i - 1; j >= 0; j -= 1) {
+        const u = tokens[j]!;
+        if (u.kind === "rbrace") depth += 1;
+        else if (u.kind === "lbrace") {
+          depth -= 1;
+          if (depth === 0) return entry.slice(0, u.offset).trimEnd();
+        }
+      }
+      return entry;
+    }
+    if (t.kind === "eof" || t.kind === "semi") continue;
+    return entry;
+  }
+  return entry;
+};
+
 const registerDynamicTypeDDL = (schema: SchemaSnapshot, statement: string, defaultModule = "default"): boolean => {
-  const match = /^create\s+type\s+([A-Za-z_][\w]*(?:::[A-Za-z_][\w]*)?)\s*(?:\{([\s\S]*)\})?\s*$/i.exec(statement.trim());
-  if (!match) return false;
-  const [, rawName, rawBody] = match;
+  const header = parseCreateTypeHeader(statement.trim());
+  if (!header) return false;
+  const { rawName, extendsList: extendsRaw, bodyText } = header;
   const { module, name } = dynamicQualifiedNameParts(rawName, defaultModule);
   const fields: FieldDef[] = [];
   const links: NonNullable<TypeDef["links"]> = [];
+  const extendsList = extendsRaw
+    ? extendsRaw.map((entry) => normalizeDynamicTypeName(entry, module)).filter((entry) => entry.length > 0)
+    : undefined;
 
-  for (const entry of splitTopLevelScriptStatements(rawBody ?? "")) {
+  // Inherit fields and links from base types so subtypes (`CREATE TYPE Baz
+  // EXTENDING Bar`) carry the parent shape forward. This mirrors the
+  // schema-loader behaviour for declarative schemas; without it,
+  // `INSERT Baz { name := … }` would fail to resolve `name`.
+  if (extendsList) {
+    for (const baseName of extendsList) {
+      const baseType = schema.getType(baseName);
+      if (!baseType) continue;
+      for (const field of baseType.fields) {
+        if (!fields.some((f) => f.name === field.name)) fields.push({ ...field });
+      }
+      for (const link of baseType.links ?? []) {
+        if (!links.some((l) => l.name === link.name)) links.push({ ...link });
+      }
+    }
+  }
+
+  for (const rawEntry of splitTopLevelScriptStatements(bodyText)) {
+    // Strip any inline `{ … }` block on the entry (e.g. link-property
+    // declarations inside a `create link x -> T { ... }`) using token offsets,
+    // not regex. The existing property/link header regexes still drive the
+    // field/link registration off the resulting header-only entry.
+    const entry = stripTrailingBraceBlock(rawEntry);
     const property = /^create\s+((?:(?:required|optional|multi|single)\s+)*)property\s+([A-Za-z_][\w]*)\s*->\s*([\s\S]+)$/i.exec(entry);
     if (property) {
       const [, modifiers, fieldName, rawType] = property;
@@ -581,6 +739,7 @@ const registerDynamicTypeDDL = (schema: SchemaSnapshot, statement: string, defau
     name,
     fields,
     links: links.length ? links : undefined,
+    extends: extendsList,
   });
   return true;
 };
@@ -7186,6 +7345,15 @@ export const executeQueryWithTrace = (
     validateParsedStatement(ast, { schema, module: ast.withModule });
     const statementType = statementTypeOf(ast);
     enforceBuiltinPermissions(context, statementType, ast.pos.line, ast.pos.column);
+    // `FOR g IN (GROUP …) UNION (…body…)` — the IR/SQL pipeline can't lower
+    // group_expr in iterator position. Route through the runtime FOR-group
+    // executor, which compiles the GROUP, runs runGroupIR, and evaluates the
+    // body per group row.
+    if (ast.kind === "for" && unwrapGroupIteratorExpr(ast.iteratorExpr) && ast.body.kind === "select_expr") {
+      const traces: QueryExecutionTrace[] = [];
+      executeForLoop(db, schema, ast, context, runtimeTarget, compilerService, [], traces);
+      if (traces.length > 0) return traces[0];
+    }
     const compiled = compilerService.compile(schema, ast, { globals: context.globals, target: runtimeTarget });
     const ir = compiled.ir;
     const subjectType = ir.kind === "insert" || ir.kind === "update" || ir.kind === "delete"
@@ -7224,12 +7392,12 @@ export const executeQueryWithTrace = (
         rows: runGelSelectSQL(db, schema, compiled.gelIr, context, sqlArtifact),
       };
     } else if (ir.kind === "group") {
-      throw new AppError(
-        "E_UNSUPPORTED",
-        "GROUP requires SQL lowering; runtime fallback disabled",
-        ast.pos.line,
-        ast.pos.column,
-      );
+      // Top-level `GROUP T BY …` — route through the existing runtime GROUP
+      // implementation (`runGroupIR`) used by `WITH G := GROUP …` and
+      // `FOR g IN GROUP …`. The function already compiles + runs the inner
+      // source SELECT and assembles the {key, elements, grouping} rows in JS.
+      const rows = runGroupIR(db, schema, ir, context, sqlTrail);
+      result = { kind: "select", rows };
     } else {
       const writeResult = runWriteWithAccessPolicies(db, schema, ast, ir, sqlArtifact, subjectType!, context);
 
@@ -7374,7 +7542,57 @@ export const executeQueryUnitWithTrace = (
     const traces: QueryExecutionTrace[] = [];
 
     const expanded: Statement[] = [];
-    for (const ast of statements) {
+    for (const rawAst of statements) {
+      // `SELECT (INSERT T { … })` / `SELECT (DELETE T)` / `SELECT (UPDATE T …)`
+      // — the parser wraps mutations used as expressions in a `select_expr`
+      // around either a bare `mutation_expr` or a `select_expr_subquery` of
+      // one (when there are inner WITH bindings). The new SQL pipeline
+      // treats this as a pure SELECT and never executes the mutation; unwrap
+      // both shapes so the INSERT/DELETE/UPDATE flows through the regular
+      // mutation handler that actually persists rows. WITH bindings on the
+      // outer SELECT and the inner subquery are merged onto the mutation so
+      // its values can resolve them.
+      let ast: Statement = rawAst;
+      const peelInnerMutation = (
+        outer: Extract<Statement, { kind: "select_expr" }>,
+      ): Statement | null => {
+        if (outer.filter !== undefined
+          || outer.orderBy !== undefined
+          || outer.limit !== undefined
+          || outer.offset !== undefined
+        ) {
+          return null;
+        }
+        let inner: FreeObjectExpr = outer.expr;
+        const innerWith: WithBinding[] = [];
+        if (inner.kind === "select_expr_subquery"
+          && inner.filter === undefined
+          && inner.orderBy === undefined
+          && inner.limit === undefined
+          && inner.offset === undefined
+        ) {
+          if (inner.clauses?._withBindings) {
+            innerWith.push(...inner.clauses._withBindings);
+          }
+          inner = inner.expr;
+        }
+        if (inner.kind !== "mutation_expr") return null;
+        const mutation = inner.statement;
+        if (mutation.kind !== "insert" && mutation.kind !== "update" && mutation.kind !== "delete") {
+          return null;
+        }
+        const mergedWith = [...(outer.with ?? []), ...innerWith, ...(mutation.with ?? [])];
+        return {
+          ...mutation,
+          with: mergedWith.length > 0 ? mergedWith : undefined,
+          withModule: mutation.withModule ?? outer.withModule,
+          withModuleAliases: mutation.withModuleAliases ?? outer.withModuleAliases,
+        } as Statement;
+      };
+      if (rawAst.kind === "select_expr") {
+        const peeled = peelInnerMutation(rawAst);
+        if (peeled) ast = peeled;
+      }
       if (ast.kind === "delete" || ast.kind === "update") {
         const expansion = expandPolymorphicMutation(schema, ast);
         if (expansion) {
@@ -7389,6 +7607,49 @@ export const executeQueryUnitWithTrace = (
     // (instead of appending at the end). Statement ordering matters: a later
     // INSERT may reference rows produced by an earlier FOR-INSERT, so the
     // expanded children must run *before* whatever followed the FOR.
+    // Peel `FOR y IN … UNION (SELECT (INSERT …))` / `FOR y IN … UNION
+    // (WITH … INSERT …)` down to the bare INSERT so the existing FOR-INSERT
+    // desugar can run. Body WITH bindings are forwarded to the INSERT's
+    // own WITH so they resolve at the same scope.
+    for (let stmtIdx = 0; stmtIdx < expanded.length; stmtIdx += 1) {
+      const ast = expanded[stmtIdx];
+      if (ast.kind === "for" && ast.body.kind === "select_expr") {
+        const outer = ast.body;
+        if (
+          outer.filter === undefined
+          && outer.orderBy === undefined
+          && outer.limit === undefined
+          && outer.offset === undefined
+        ) {
+          let bodyExpr: FreeObjectExpr = outer.expr;
+          const innerWith: WithBinding[] = [];
+          if (bodyExpr.kind === "select_expr_subquery"
+            && bodyExpr.filter === undefined
+            && bodyExpr.orderBy === undefined
+            && bodyExpr.limit === undefined
+            && bodyExpr.offset === undefined
+          ) {
+            if (bodyExpr.clauses?._withBindings) {
+              innerWith.push(...bodyExpr.clauses._withBindings);
+            }
+            bodyExpr = bodyExpr.expr;
+          }
+          if (bodyExpr.kind === "mutation_expr" && bodyExpr.statement.kind === "insert") {
+            const mutation = bodyExpr.statement;
+            const mergedWith = [...(outer.with ?? []), ...innerWith, ...(mutation.with ?? [])];
+            expanded[stmtIdx] = {
+              ...ast,
+              body: {
+                ...mutation,
+                with: mergedWith.length > 0 ? mergedWith : undefined,
+                withModule: mutation.withModule ?? outer.withModule,
+                withModuleAliases: mutation.withModuleAliases ?? outer.withModuleAliases,
+              },
+            } as Statement;
+          }
+        }
+      }
+    }
     for (let stmtIdx = 0; stmtIdx < expanded.length; stmtIdx += 1) {
       const ast = expanded[stmtIdx];
       if (ast.kind === "for" && ast.body.kind === "insert") {
@@ -8085,6 +8346,36 @@ const evaluateForIteratorValues = (
     return results.length > 0 ? results : [null];
   }
 
+  if (expr.kind === "set_expr") {
+    // Each value contributes its set of evaluations; flatten them into the
+    // FOR iterator output. Used by `FOR y in {<str>random(), …}` and
+    // similar set-comprehension iterators.
+    const out: unknown[] = [];
+    for (const value of (expr as { values: FreeObjectExpr[] }).values) {
+      out.push(...evaluateForIteratorValues(value as ForStatement["iteratorExpr"], schema, db, context));
+    }
+    return out;
+  }
+
+  if (expr.kind === "cast") {
+    const inner = evaluateForIteratorValues((expr as { expr: FreeObjectExpr }).expr as ForStatement["iteratorExpr"], schema, db, context);
+    const stripModule = (t: string): string => t.startsWith("std::") ? t.slice(5) : t;
+    const target = stripModule((expr as { castType?: string }).castType ?? "").toLowerCase();
+    return inner.map((value) => {
+      if (value === null || value === undefined) return value;
+      if (target === "str") return String(value);
+      if (target === "int16" || target === "int32" || target === "int64") {
+        const n = typeof value === "number" ? Math.trunc(value) : Number(value as number);
+        return Number.isFinite(n) ? n : value;
+      }
+      if (target === "float32" || target === "float64") {
+        return typeof value === "number" ? value : Number(value as number);
+      }
+      if (target === "bool") return Boolean(value);
+      return value;
+    });
+  }
+
   return [null];
 };
 
@@ -8104,9 +8395,11 @@ const tryEvaluateScalarIteratorValues = (
   switch (expr.kind) {
     case "literal":
     case "set_literal":
+    case "set_expr":
     case "concat":
     case "function_call":
     case "distinct":
+    case "cast":
       break;
     default:
       return undefined;
