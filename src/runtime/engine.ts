@@ -16,6 +16,12 @@ import type { AccessPolicyCondition, AccessPolicyDef, ComputedLinkPropertyExpr, 
 import { qualifiedTypeName } from "../schema/schema.js";
 import { populateSchemaIntrospection } from "../schema/schema_introspection.js";
 import { materializeSchema, type SQLiteDatabase } from "../runtime/database.js";
+import {
+  parseCreateTypeHeader,
+  stripTrailingBraceBlock,
+  validateScriptUserDDL,
+  validateUserDDLStatement,
+} from "./ddl.js";
 
 
 export interface QueryResult {
@@ -45,6 +51,14 @@ export interface SecurityContext {
   permissions?: string[];
   globals?: Record<string, ScalarValue>;
   runtimeTarget?: RuntimeTarget;
+  // Mirrors upstream's `INTERNAL_TESTMODE = False` test-class setting:
+  // when true, the engine enforces user-DDL restrictions (no generic
+  // types, no USING SQL bodies, no SET OF params, no CREATE INFIX
+  // OPERATOR / CREATE CAST / CREATE PSEUDO TYPE, no extending
+  // cfg::ConfigObject, ...). When false (the default, matching
+  // INTERNAL_TESTMODE = True), only safety checks like the read-only
+  // stdlib-module guard are applied. Read-only is always enforced.
+  strictUserDDL?: boolean;
 }
 
 const DEFAULT_SECURITY_CONTEXT: SecurityContext = {
@@ -538,138 +552,8 @@ const applyParsedFunctionDDL = (schema: SchemaSnapshot, ast: DDLStatement, defau
   });
 };
 
-// Tokenizer-based extraction of `create type Name [extending …] [{ body }]`.
-// Walking tokens lets the EXTENDING clause and the brace-delimited body fall
-// out of the lexical structure without bolting more captures onto the
-// statement-shape regex. The header (`create type Name extending Base, …`)
-// is consumed via the same Token stream the parser uses; the body — if any
-// — is sliced from the original source between the matched `{` and `}`
-// offsets so its inner DDL entries (property / link declarations) remain
-// available for downstream parsing.
-const parseCreateTypeHeader = (
-  statement: string,
-): { rawName: string; extendsList: string[] | undefined; bodyText: string } | null => {
-  let tokens: readonly Token[];
-  try {
-    tokens = tokenize(statement);
-  } catch {
-    return null;
-  }
-
-  const isNameLike = (tok: Token | undefined): tok is Token =>
-    !!tok && (tok.kind === "identifier" || tok.kind === "backtick_name");
-  const stripBackticks = (lexeme: string): string =>
-    lexeme.startsWith("`") && lexeme.endsWith("`") ? lexeme.slice(1, -1) : lexeme;
-  const consumeQualifiedName = (start: number): { name: string; next: number } | null => {
-    if (!isNameLike(tokens[start])) return null;
-    let name = stripBackticks(tokens[start]!.lexeme);
-    let j = start + 1;
-    while (tokens[j]?.kind === "coloncolon") {
-      const seg = tokens[j + 1];
-      if (!isNameLike(seg)) return null;
-      name += `::${stripBackticks(seg.lexeme)}`;
-      j += 2;
-    }
-    return { name, next: j };
-  };
-
-  if (tokens[0]?.kind !== "kw_create") return null;
-  if (tokens[1]?.lower !== "type") return null;
-
-  const nameParsed = consumeQualifiedName(2);
-  if (!nameParsed) return null;
-  let i = nameParsed.next;
-
-  let extendsList: string[] | undefined;
-  if (tokens[i]?.kind === "kw_extending") {
-    i += 1;
-    extendsList = [];
-    for (;;) {
-      const base = consumeQualifiedName(i);
-      if (!base) return null;
-      extendsList.push(base.name);
-      i = base.next;
-      if (tokens[i]?.kind === "comma") {
-        i += 1;
-        continue;
-      }
-      break;
-    }
-  }
-
-  let bodyText = "";
-  if (tokens[i]?.kind === "lbrace") {
-    const openOffset = tokens[i]!.offset;
-    let depth = 1;
-    let j = i + 1;
-    let closeOffset = -1;
-    while (j < tokens.length) {
-      const t = tokens[j]!;
-      if (t.kind === "eof") break;
-      if (t.kind === "lbrace") depth += 1;
-      else if (t.kind === "rbrace") {
-        depth -= 1;
-        if (depth === 0) {
-          closeOffset = t.offset;
-          j += 1;
-          break;
-        }
-      }
-      j += 1;
-    }
-    if (closeOffset < 0) return null;
-    bodyText = statement.slice(openOffset + 1, closeOffset);
-    i = j;
-  }
-
-  while (i < tokens.length && (tokens[i]!.kind === "semi" || tokens[i]!.kind === "eof")) i += 1;
-  if (i < tokens.length) return null;
-
-  return { rawName: nameParsed.name, extendsList, bodyText };
-};
-
-// Strip a trailing `{ … }` block (e.g. inline link-property declarations)
-// from a body entry so the existing link/property header regexes match the
-// declaration on its own. Token offsets are used to slice — no regex is
-// needed to find the brace.
-const stripTrailingBraceBlock = (entry: string): string => {
-  let tokens: readonly Token[];
-  try {
-    tokens = tokenize(entry);
-  } catch {
-    return entry;
-  }
-  // Find the last `{` token at depth 0 whose matching `}` ends the entry
-  // (i.e. only whitespace/`;` follow).
-  for (let i = tokens.length - 1; i >= 0; i -= 1) {
-    const t = tokens[i]!;
-    if (t.kind === "rbrace") {
-      // Walk forward from here: nothing meaningful should follow.
-      let trailingOk = true;
-      for (let k = i + 1; k < tokens.length; k += 1) {
-        const next = tokens[k]!;
-        if (next.kind === "eof" || next.kind === "semi") continue;
-        trailingOk = false;
-        break;
-      }
-      if (!trailingOk) return entry;
-      // Find the matching opening brace.
-      let depth = 1;
-      for (let j = i - 1; j >= 0; j -= 1) {
-        const u = tokens[j]!;
-        if (u.kind === "rbrace") depth += 1;
-        else if (u.kind === "lbrace") {
-          depth -= 1;
-          if (depth === 0) return entry.slice(0, u.offset).trimEnd();
-        }
-      }
-      return entry;
-    }
-    if (t.kind === "eof" || t.kind === "semi") continue;
-    return entry;
-  }
-  return entry;
-};
+// `parseCreateTypeHeader` and `stripTrailingBraceBlock` now live in
+// `src/runtime/ddl.ts`; this module imports them above.
 
 const registerDynamicTypeDDL = (schema: SchemaSnapshot, statement: string, defaultModule = "default"): boolean => {
   const header = parseCreateTypeHeader(statement.trim());
@@ -7289,6 +7173,10 @@ export const executeQuery = (
   const rewrittenQuery = injectRuntimeAliasBinding(schema, query);
   validateRestrictedLinkPropertyTokens(rewrittenQuery);
   const parsedQuery = parseEdgeQL(rewrittenQuery);
+  // Reject user-DDL targeting read-only modules (std/schema/cfg/sys/...)
+  // before any execution side-effects. Mirrors `validateScriptUserDDL` for
+  // the single-statement entry point.
+  validateUserDDLStatement(parsedQuery, securityContext.strictUserDDL ?? false);
   if (parsedQuery.kind === "for" && parsedQuery.body.kind === "insert") {
     const script = rewrittenQuery.trim().endsWith(";") ? rewrittenQuery : `${rewrittenQuery};`;
     return executeQueryUnitWithTrace(db, schema, script, securityContext).result;
@@ -7303,6 +7191,11 @@ export const executeScript = (
   securityContext: SecurityContext = DEFAULT_SECURITY_CONTEXT,
   parserOptions: ParseEdgeQLOptions = {},
 ): QueryResult => {
+  // Reject user-DDL targeting read-only modules before any pre-pass /
+  // registration runs. Otherwise `CREATE TYPE std::Foo` would be silently
+  // registered by `maybeRegisterDynamicDDLScript` before per-statement
+  // validation in `executeQueryUnitWithTrace` ever sees it.
+  validateScriptUserDDL(script, parserOptions, securityContext.strictUserDDL ?? false);
   maybeRegisterDynamicDDLScript(db, schema, script);
   if (maybeHandleAliasDDLScript(schema, script)) {
     // Alias state changed; refresh the schema::* introspection rows so
@@ -7529,6 +7422,9 @@ export const executeQueryUnitWithTrace = (
   parserOptions: ParseEdgeQLOptions = {},
 ): QueryUnitTrace => {
   try {
+    // Validate user-DDL accessibility before the pre-pass so read-only
+    // module targets (`CREATE TYPE std::Foo`, …) never get registered.
+    validateScriptUserDDL(script, parserOptions, securityContext.strictUserDDL ?? false);
     maybeRegisterDynamicDDLScript(db, schema, script);
     const context = normalizeSecurityContext(securityContext);
     const runtimeTarget = resolvedRuntimeTarget(context, db);
@@ -11259,6 +11155,7 @@ const normalizeSecurityContext = (context: SecurityContext): SecurityContext => 
     permissions: context.permissions ? [...context.permissions] : [...(DEFAULT_SECURITY_CONTEXT.permissions ?? [])],
     globals: { ...(DEFAULT_SECURITY_CONTEXT.globals ?? {}), ...(context.globals ?? {}) },
     runtimeTarget: context.runtimeTarget ?? DEFAULT_SECURITY_CONTEXT.runtimeTarget,
+    strictUserDDL: context.strictUserDDL ?? DEFAULT_SECURITY_CONTEXT.strictUserDDL,
   };
 };
 

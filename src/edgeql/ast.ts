@@ -908,6 +908,21 @@ export interface DDLStatement {
   name: string;
   value?: FreeObjectExpr;
   functionDecl?: FunctionDecl;
+  // DDL modifier keywords preceding the object kind, in source order
+  // (`abstract`, `required`, `infix`, `pseudo`, …). Used by validators that
+  // need to distinguish `CREATE PSEUDO TYPE foo` from `CREATE TYPE foo`
+  // without rerunning the tokenizer.
+  modifiers?: string[];
+  // Captured qualified names from the `EXTENDING base[, …]` clause when
+  // present. Lets validators (e.g. "cannot extend system type") inspect the
+  // bases without rescanning the source. Whitespace and `::` segments are
+  // preserved verbatim.
+  extendsList?: string[];
+  // Field names from top-level `SET <name> := ...` commands inside the
+  // statement body. Populated for CREATE FUNCTION / ALTER FUNCTION bodies so
+  // validators can reject forbidden settings like `fallback` or
+  // `force_return_cast` without re-parsing the source.
+  setCommands?: string[];
   pos: SourcePos;
 }
 

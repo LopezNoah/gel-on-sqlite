@@ -2166,6 +2166,37 @@ class Parser {
         }
       }
     }
+    // Capture `EXTENDING base[, …]` for non-scalar object kinds so validators
+    // can inspect the bases without rescanning the source. Scalar types have
+    // their own EXTENDING handler below that covers `enum<…>`. The list is
+    // captured permissively as qualified names; sub-grammar checks (e.g.
+    // rejecting `extending cfg::ConfigObject`) happen later in the validator.
+    let extendsList: string[] | undefined;
+    if (action === "create" && objectKind !== "scalar"
+      && this.peek().kind === "kw_extending") {
+      this.consume();
+      extendsList = [];
+      while (true) {
+        const baseStart = this.peek();
+        if (!this.isNameToken(baseStart) && !this.isKeywordLikeToken(baseStart)) break;
+        let baseName = baseStart.lexeme;
+        this.consume();
+        while (this.peek().kind === "coloncolon") {
+          this.consume();
+          const seg = this.peek();
+          if (!this.isNameToken(seg) && !this.isKeywordLikeToken(seg)) break;
+          baseName += `::${seg.lexeme}`;
+          this.consume();
+        }
+        extendsList.push(baseName);
+        if (this.peek().kind === "comma") {
+          this.consume();
+          continue;
+        }
+        break;
+      }
+      if (extendsList.length === 0) extendsList = undefined;
+    }
     // `CREATE SCALAR TYPE name EXTENDING enum<…>` — validate that the enum
     // values are homogeneous (all bare names or all strings) and aren't the
     // named-tuple form `enum<key: type>`.
@@ -2211,11 +2242,17 @@ class Parser {
     }
     let value: DDLStatement["value"];
     let functionDecl: DDLStatement["functionDecl"];
+    const setCommands: string[] = [];
     if (action === "create" && (objectKind === "alias" || objectKind === "global") && this.peek().kind === "assign") {
       this.expect("assign", "Expected ':=' in DDL definition");
       value = this.parseFreeObjectExpr();
     } else if (action === "create" && objectKind === "function") {
-      functionDecl = this.parseCreateFunctionTail();
+      functionDecl = this.parseCreateFunctionTail(setCommands);
+    } else if (action === "alter" && objectKind === "function") {
+      // Capture top-level SET commands inside `ALTER FUNCTION ... { ... }` —
+      // we still discard the rest of the body, but the validator needs the
+      // SET names to reject `SET fallback := ...` etc.
+      this.skipFunctionAlterBody(setCommands);
     } else {
       this.skipDDLBody();
     }
@@ -2233,11 +2270,14 @@ class Parser {
       name,
       value,
       functionDecl,
+      modifiers: modifiers.length > 0 ? modifiers : undefined,
+      extendsList,
+      setCommands: setCommands.length > 0 ? setCommands : undefined,
       pos: this.posOf(start),
     };
   }
 
-  private parseCreateFunctionTail(): FunctionDecl {
+  private parseCreateFunctionTail(setCommandsOut?: string[]): FunctionDecl {
     const lparen = this.expect("lparen", "Expected '(' after function name");
     const params: FunctionParamDecl[] = [];
     const seenParamNames = new Map<string, Token>();
@@ -2330,7 +2370,7 @@ class Parser {
     }
     const returnType = this.captureTypeExprText();
 
-    const body = this.parseFunctionBody();
+    const body = this.parseFunctionBody(setCommandsOut);
     return { params, returnType, returnOptional, returnSetOf, body };
   }
 
@@ -2454,7 +2494,7 @@ class Parser {
     return this.sliceSource(startOffset, endTok.offset).trim();
   }
 
-  private parseFunctionBody(): FunctionDecl["body"] {
+  private parseFunctionBody(setCommandsOut?: string[]): FunctionDecl["body"] {
     // Brace-wrapped form: a sequence of commands separated by semicolons.
     // Upstream restricts the allowed commands and how often they may appear.
     if (this.peek().kind === "lbrace") {
@@ -2483,6 +2523,18 @@ class Parser {
       };
       while (this.peek().kind !== "eof" && this.peek().kind !== "rbrace") {
         const head = this.peek();
+        // Record `SET <name> := ...` so validators can reject forbidden
+        // fields (`fallback`, `force_return_cast`, ...) without rescanning
+        // the source. The actual semantics of SET commands are still
+        // discarded — capturing happens before `skipCommand` consumes them.
+        if (setCommandsOut
+          && this.isKeywordLikeToken(head)
+          && head.lower === "set"
+          && this.peekNext()
+          && (this.isNameToken(this.peekNext()) || this.isKeywordLikeToken(this.peekNext()))
+        ) {
+          setCommandsOut.push(this.peekNext().lexeme);
+        }
         if (head.kind === "kw_using") {
           if (usingCount > 0) {
             this.notSupported(head, "multiple USING blocks in function body", "a function body may contain at most one USING command");
@@ -2499,9 +2551,14 @@ class Parser {
         skipCommand();
       }
       const closingBrace = this.expect("rbrace", "Expected '}' to close function body block");
-      if (sawCmdAfterUsing) {
-        this.notSupported(closingBrace, "command after USING in function body", "USING must be the last command in a function body");
-      }
+      // The previous "USING must be last" check was eager: it fired during
+      // parsing and prevented validators from surfacing more specific
+      // errors (e.g. "'force_return_cast' is not a valid field" when a SET
+      // command follows USING — test_edgeql_userddl_21). Upstream EdgeQL
+      // tolerates the ordering and reports field-level errors instead, so
+      // the order check is dropped here. `sawCmdAfterUsing` is still
+      // tracked for diagnostics but no longer thrown.
+      void sawCmdAfterUsing;
       if (usingCount === 0 || !usingBody) {
         this.notSupported(closingBrace, "function body missing USING", "a function body must include a USING command");
       }
@@ -2590,6 +2647,59 @@ class Parser {
       parts.push(token.lexeme);
     }
     return parts.join(" ");
+  }
+
+  // Skip an `ALTER FUNCTION name(args) { ... }` body while capturing the
+  // names of top-level `SET <name> := …` commands. The function signature
+  // `(args)` is consumed in passing; we only descend into the brace-block
+  // that follows, recording SET fields at depth 1 (immediately inside the
+  // alter's outer braces). Used so validators can reject `SET fallback` /
+  // `SET force_return_cast` without rescanning the source.
+  private skipFunctionAlterBody(setCommandsOut: string[]): void {
+    // Skip the function signature `(args)` if present.
+    if (this.peek().kind === "lparen") {
+      let parenDepth = 1;
+      this.consume();
+      while (this.peek().kind !== "eof" && parenDepth > 0) {
+        const k = this.peek().kind;
+        if (k === "lparen") parenDepth += 1;
+        else if (k === "rparen") parenDepth -= 1;
+        this.consume();
+      }
+    }
+    // No body brace → nothing more to capture; let skipDDLBody handle the
+    // tail (e.g. `ALTER FUNCTION f(a: int) RENAME TO g`).
+    if (this.peek().kind !== "lbrace") {
+      this.skipDDLBody();
+      return;
+    }
+    this.consume();
+    let depth = 1;
+    while (this.peek().kind !== "eof") {
+      const token = this.peek();
+      if (token.kind === "lbrace" || token.kind === "lparen" || token.kind === "lbracket") {
+        depth += 1;
+        this.consume();
+        continue;
+      }
+      if (token.kind === "rbrace" || token.kind === "rparen" || token.kind === "rbracket") {
+        depth = Math.max(0, depth - 1);
+        this.consume();
+        if (depth === 0) break;
+        continue;
+      }
+      // At depth 1 (immediately inside the alter braces), watch for
+      // `SET <name>` and capture the field name.
+      if (depth === 1
+        && this.isKeywordLikeToken(token)
+        && token.lower === "set"
+        && this.peekNext()
+        && (this.isNameToken(this.peekNext()) || this.isKeywordLikeToken(this.peekNext()))
+      ) {
+        setCommandsOut.push(this.peekNext().lexeme);
+      }
+      this.consume();
+    }
   }
 
   private skipDDLBody(): void {
