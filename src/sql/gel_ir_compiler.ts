@@ -3774,6 +3774,73 @@ const flattenTypeClosure = (root: TypeRef): TypeRef[] => {
   return out;
 };
 
+// `Text[IS Owned].owner = User` (inside a shape's correlated subquery): the
+// IR has the left as a Pointer to a non-scalar target whose source is a
+// polymorphic type_root narrowed by an [IS …] intersection, and the right
+// as a select of the outer subject's type. The current value-level SQL
+// compilation bails out because it can't reduce object-identity equality
+// between polymorphic operands to a single column. Lower the comparison
+// branch-by-branch: for each concrete subtype, gate by __source_type and
+// look up the link's storage table to obtain owner_id, then compare to the
+// outer row's id. Returns null when the IR doesn't match this shape.
+const tryCompilePolymorphicLinkEqualsOuterSubject = (
+  filterSet: Set,
+  innerAlias: string,
+  outerAlias: string,
+  outerTypeRef: TypeRef | undefined,
+  options: GelIRCompileOptions,
+): string | null => {
+  if (!outerTypeRef) return null;
+  if (filterSet.expr.kind !== "operator_call") return null;
+  const opCall = filterSet.expr as OperatorCall;
+  if (opCall.operator !== "=" && opCall.operator !== "!=") return null;
+  const args = orderedCallArgs(opCall.args);
+  if (args.length < 2) return null;
+
+  const tryOrder = (l: Set, r: Set): string | null => {
+    if (l.expr.kind !== "pointer") return null;
+    const pointer = l.expr as Pointer;
+    if (pointer.ptrref.isLinkProperty) return null;
+    if (pointer.ptrref.outTarget.isScalar) return null;
+    if (pointer.source.expr.kind !== "type_root") return null;
+    if (pointer.direction !== "outbound") return null;
+
+    let rightInner = r;
+    while (rightInner.expr.kind === "select_expr") {
+      rightInner = (rightInner.expr as SelectExpr).result;
+    }
+    if (rightInner.expr.kind !== "type_root") return null;
+    const rightTypeRef = (rightInner.expr as TypeRoot).typeref;
+    if (rightTypeRef.id !== outerTypeRef.id) return null;
+    if (rightTypeRef.id !== pointer.ptrref.outTarget.id) return null;
+
+    const sourceTypeRef = pointer.source.typeref;
+    const linkName = pointer.ptrref.shortName;
+
+    const branches = expandUnionTypeRefBranches(sourceTypeRef);
+    const candidates = branches.flatMap((branch) => flattenTypeClosure(branch));
+    const concrete = candidates.filter((candidate) => !candidate.isAbstract);
+    if (concrete.length === 0) return null;
+
+    const checks: string[] = [];
+    for (const subtype of concrete) {
+      const sourceTypeName = qualifyTypeName(subtype);
+      const storage = options.resolveLinkStorageType?.(sourceTypeName, linkName) ?? sourceTypeName;
+      const linkTable = `${tableNameForType(storage)}__${linkName.toLowerCase()}`;
+      checks.push(
+        `(${innerAlias}.${quoteIdent("__source_type")} = ${quoteLiteral(sourceTypeName)}`
+        + ` AND EXISTS (SELECT 1 FROM ${quoteIdent(linkTable)} _lp`
+        + ` WHERE _lp.${quoteIdent("source")} = ${innerAlias}.${quoteIdent("id")}`
+        + ` AND _lp.${quoteIdent("target")} = ${outerAlias}.${quoteIdent("id")}))`
+      );
+    }
+    const combined = checks.length === 1 ? checks[0]! : `(${checks.join(" OR ")})`;
+    return opCall.operator === "!=" ? `(NOT ${combined})` : combined;
+  };
+
+  return tryOrder(args[0]!.expr, args[1]!.expr) ?? tryOrder(args[1]!.expr, args[0]!.expr);
+};
+
 const compileShapeProjection = (
   shape: ShapeElement,
   sourceAlias: string,
@@ -3877,7 +3944,19 @@ const compileShapeProjection = (
       const inner = compilePublicShapeObjectExpr(innerSource.alias, peeled.shape, params, options, target, depth + 1);
       let subSql = `SELECT ${inner} AS ${quoteIdent("item")} FROM ${innerSource.sql}`;
       if (peeledClauses.where) {
-        const w = compilePredicateSetSQL(peeledClauses.where, innerSource.alias, params, target, options)
+        // First, try the polymorphic-link-equals-outer-subject pattern. This
+        // lifts `Text[IS Owned].owner = User` (and !=) into a per-subtype
+        // EXISTS against the outer row's id — the value-level path can't
+        // reduce object-identity comparison over a polymorphic chain to SQL.
+        const polyCorrelated = tryCompilePolymorphicLinkEqualsOuterSubject(
+          peeledClauses.where,
+          innerSource.alias,
+          sourceAlias,
+          shape.source.typeref,
+          options,
+        );
+        const w = polyCorrelated
+          ?? compilePredicateSetSQL(peeledClauses.where, innerSource.alias, params, target, options)
           ?? compileValueSetSQL(peeledClauses.where, innerSource.alias, params, target, options);
         if (w) subSql += ` WHERE ${w}`;
       }

@@ -5364,6 +5364,20 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
                   column: computed.expr.field,
                 },
               });
+            } else if (computed.expr.kind === "edgeql_expr") {
+              // Free-form EdgeQL bodies are lowered through the IR compiler's
+              // tryLowerComputedPropertyOnTypePath path. The semantic layer's
+              // legacy projection sees an opaque expression; emit a literal
+              // null marker so the shape stays well-formed.
+              shapeElements.push({
+                kind: "computed",
+                name: shapeElement.name,
+                pathId: toPathIdIR(elementPathId),
+                expr: {
+                  kind: "literal",
+                  value: null,
+                },
+              });
             } else {
               for (const part of computed.expr.parts) {
                 if (part.kind === "field_ref") {

@@ -78,6 +78,10 @@ export interface IRCompileContext {
   // (e.g. alias A := SELECT B; alias B := SELECT A) and to skip alias
   // resolution within an alias's own body.
   aliasResolutionStack?: globalThis.Set<string>;
+  // Stack of computed-property bodies currently being inlined (`Type.fieldName`
+  // keys). Prevents infinite recursion when a computed body references the
+  // same computed transitively.
+  computedExprResolutionStack?: globalThis.Set<string>;
 }
 
 const defaultCardinality: Cardinality = "unknown";
@@ -649,6 +653,39 @@ const tryLowerComputedPropertyOnTypePath = (
   }
   if (expr.kind === "set_literal") {
     return compileSetConstructor(expr.values.map((value) => literalToSet(value)), "set_literal");
+  }
+  if (expr.kind === "edgeql_expr") {
+    // Free-form EdgeQL computed body: parse, bind the current source as the
+    // subject so `.field` references inside the body resolve against the
+    // current row, then lower through compileFreeObjectExpr.
+    const text = expr.exprText.trim();
+    let parsed;
+    try {
+      parsed = parseEdgeQL(text.toLowerCase().startsWith("select ") ? text : `SELECT ${text}`);
+    } catch {
+      return undefined;
+    }
+    // Guard against direct self-reference recursion (`p := .p`): if the body
+    // is itself `.<fieldName>` it would loop forever.
+    if (ctx.computedExprResolutionStack?.has(`${typeDef.module}::${typeDef.name}.${fieldName}`)) {
+      return undefined;
+    }
+    if (!ctx.computedExprResolutionStack) {
+      ctx.computedExprResolutionStack = new globalThis.Set<string>();
+    }
+    const key = `${typeDef.module}::${typeDef.name}.${fieldName}`;
+    ctx.computedExprResolutionStack.add(key);
+    try {
+      const innerCtx = childScope(ctx);
+      bindValue(innerCtx, "__current__", source);
+      bindValue(innerCtx, "__subject__", source);
+      if (parsed.kind === "select_expr") {
+        return compileFreeObjectExpr(parsed.expr, innerCtx);
+      }
+      return undefined;
+    } finally {
+      ctx.computedExprResolutionStack.delete(key);
+    }
   }
   return undefined;
 };
@@ -4061,7 +4098,15 @@ const inferComputedShapeIsMany = (set: Set): boolean => {
       continue;
     }
     if (expr.kind === "select_expr") {
-      cur = (expr as SelectExpr).result;
+      const se = expr as SelectExpr;
+      // A bare `SELECT T { … } FILTER …` (no LIMIT) over a type_root is
+      // many-cardinality: the source table has N rows and the result yields
+      // up to N. Only a LIMIT clause collapses it to single. If the select
+      // wraps a deeper pointer/select, fall through and inspect that.
+      if (!se.limit && se.result.expr.kind === "type_root") {
+        return true;
+      }
+      cur = se.result;
       continue;
     }
     return false;
@@ -4404,6 +4449,37 @@ const compileShape = (
       }
       const ptrref = resolvePointerRef(ctx, subject.typeref, el.name);
       if (!ptrref) {
+        // Schema-declared property computeds aren't surfaced by resolvePointerRef
+        // (they aren't pointers, they're substituted expressions). Try lowering
+        // the computed body before surfacing the "no such property" error so
+        // `SELECT Publication { title1 }` works when title1 := (SELECT ident(.title)).
+        const computedSet = tryLowerComputedPropertyOnTypePath(ctx, subject, el.name);
+        if (computedSet) {
+          // Pull cardinality/required hints from the schema's computed declaration:
+          // `multi title5 := …` produces a multi shape element, even when the query
+          // doesn't repeat the modifier.
+          const computedDecl = ctx.schema
+            ?.getType(subject.typeref.id)
+            ?.computeds
+            ?.find((c) => c.kind === "property" && c.name === el.name);
+          const declMulti = computedDecl?.multi === true;
+          const declRequired = computedDecl?.required === true;
+          const inferredMulti = declMulti || computedSet.typeref.collection === "array";
+          const cardinality: Cardinality = inferredMulti
+            ? (declRequired ? "at_least_one" : "many")
+            : (declRequired ? "one" : "at_most_one");
+          out.push({
+            kind: "shape_element",
+            source: subject,
+            expr: withShapeModifiers(computedSet, el),
+            name: el.name,
+            shapeOp: el.operation,
+            shapeOrigin: resolveShapeOrigin(el),
+            required: el.required ?? declRequired,
+            cardinality: el.cardinality ?? cardinality,
+          });
+          continue;
+        }
         // `SELECT User { missing }` — user spelled a field name that doesn't
         // exist on the source type. Silently skipping turned every typo into
         // an empty-but-passing shape; surface it so query authors learn at
