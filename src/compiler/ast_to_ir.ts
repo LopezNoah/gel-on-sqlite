@@ -4099,14 +4099,21 @@ const inferComputedShapeIsMany = (set: Set): boolean => {
     }
     if (expr.kind === "select_expr") {
       const se = expr as SelectExpr;
-      // A bare `SELECT T { … } FILTER …` (no LIMIT) over a type_root is
-      // many-cardinality: the source table has N rows and the result yields
-      // up to N. Only a LIMIT clause collapses it to single. If the select
-      // wraps a deeper pointer/select, fall through and inspect that.
-      if (!se.limit && se.result.expr.kind === "type_root") {
+      // A bare `SELECT T { … } FILTER …` (no LIMIT *at any nesting level*) over
+      // a type_root is many-cardinality. Peel through nested select_expr layers
+      // (parens-induced) to find the innermost result; if any layer carries a
+      // LIMIT, the chain collapses to single.
+      let cursor: Set = se.result;
+      let foundLimit = !!se.limit;
+      while (cursor.expr.kind === "select_expr") {
+        const inner = cursor.expr as SelectExpr;
+        if (inner.limit) foundLimit = true;
+        cursor = inner.result;
+      }
+      if (!foundLimit && cursor.expr.kind === "type_root") {
         return true;
       }
-      cur = se.result;
+      cur = cursor;
       continue;
     }
     return false;
