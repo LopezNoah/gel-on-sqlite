@@ -1322,7 +1322,25 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           const resolveExpr = (e: FreeObjectExpr): ScalarValue => {
             if (e.kind === "literal") return e.value;
             if (e.kind === "binding_ref") return resolveWithBindingScalar(e.name);
-            if (e.kind === "cast") return resolveExpr(e.expr);
+            if (e.kind === "cast") {
+              const inner = resolveExpr(e.expr);
+              // EdgeQL casts coerce the value to the target scalar type.
+              // Without applying it here, `<str>random()` returns a JS number
+              // which then fails INSERT field validation ("Type mismatch").
+              const stripModule = (t: string): string => t.startsWith("std::") ? t.slice(5) : t;
+              const target = stripModule(e.castType ?? "").toLowerCase();
+              if (inner === null || inner === undefined) return inner as ScalarValue;
+              if (target === "str") return String(inner);
+              if (target === "int16" || target === "int32" || target === "int64") {
+                const n = typeof inner === "number" ? Math.trunc(inner) : Number(inner);
+                return Number.isFinite(n) ? n : inner;
+              }
+              if (target === "float32" || target === "float64") {
+                return typeof inner === "number" ? inner : Number(inner);
+              }
+              if (target === "bool") return Boolean(inner);
+              return inner;
+            }
             if (e.kind === "concat") {
               return e.parts.map((part) => {
                 const value = resolveExpr(part);

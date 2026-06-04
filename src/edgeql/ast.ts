@@ -433,6 +433,11 @@ export type FreeObjectExpr =
   | {
       kind: "literal";
       value: ScalarValue;
+      // Hint preserving the lexical shape of the source literal so type
+      // inference can distinguish `1` (int64) from `1.0` (float64) even
+      // though JS collapses both to the same Number. Set only by the parser
+      // when the difference matters.
+      numericKind?: "integer" | "float" | "bigint" | "decimal";
     }
   | SetLiteralValue
   | {

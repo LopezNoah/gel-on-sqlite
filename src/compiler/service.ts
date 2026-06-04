@@ -73,7 +73,32 @@ export class CompilerService {
     }
 
     this.misses += 1;
-    const { sql, gelIr } = compileSqlFromGelIR(schema, statement, context);
+    // `SELECT (GROUP X BY Y) FILTER …` parses as a select_expr wrapping a
+    // bare group_expr. The new gelIR pipeline doesn't model group_expr in
+    // expression position, but the legacy semantic.ts pipeline already peels
+    // the wrapper. Route the SQL stage past compileSqlFromGelIR for that
+    // shape so compileToIR (which calls peelGroupExprFromSelectExpr) can run.
+    const isSelectExprWrappingGroup =
+      statement.kind === "select_expr"
+      && (statement.expr.kind === "group_expr"
+        || (statement.expr.kind === "select_expr_subquery"
+          && statement.expr.expr.kind === "group_expr")
+        || (statement.expr.kind === "shape_projection"
+          && statement.expr.expr.kind === "group_expr"));
+    // GROUP doesn't lower to SQL — it's evaluated in the runtime by grouping
+    // the source SELECT's rows in JS. Skip the GelIR→SQL pipeline for `group`
+    // so the SqlFromGelIR guard doesn't reject the statement before we even
+    // reach the semantic compiler.
+    let sql: GelIRSQLArtifact;
+    let gelIr: GelIRStatement;
+    if (statement.kind === "group" || isSelectExprWrappingGroup) {
+      sql = { sql: "", params: [], loweringMode: "single_statement" } as GelIRSQLArtifact;
+      gelIr = { kind: "statement", expr: { kind: "set", expr: { kind: "type_root", typeref: { kind: "type_ref", id: "schema::Type", isScalar: false } }, pathId: { kind: "path_id", namespace: [], isPointerPath: false, steps: [] }, typeref: { kind: "type_ref", id: "schema::Type", isScalar: false }, shape: [], isBinding: false, isMaterializedRef: false, isSchemaAlias: false } } as unknown as GelIRStatement;
+    } else {
+      const compiled = compileSqlFromGelIR(schema, statement, context);
+      sql = compiled.sql;
+      gelIr = compiled.gelIr;
+    }
     const ir = needsLegacyRuntimeIR(statement)
       ? compileToIR(schema, statement, {
           overlays: context.overlays,
@@ -257,8 +282,22 @@ const compileSqlFromGelIR = (
   };
 };
 
-const needsLegacyRuntimeIR = (statement: Statement): boolean =>
-  statement.kind === "insert" || statement.kind === "update" || statement.kind === "delete" || statement.kind === "group";
+const needsLegacyRuntimeIR = (statement: Statement): boolean => {
+  if (statement.kind === "insert" || statement.kind === "update" || statement.kind === "delete" || statement.kind === "group") {
+    return true;
+  }
+  // `SELECT (GROUP X BY Y) [FILTER … ORDER BY …]` — peelGroupExprFromSelectExpr
+  // in compileToIR rewrites this to a GroupIR; routing it through the legacy
+  // IR builder is the only way the runtime grouper (runGroupIR) gets a
+  // GroupIR for this AST shape.
+  if (statement.kind === "select_expr") {
+    const inner = statement.expr;
+    return inner.kind === "group_expr"
+      || (inner.kind === "select_expr_subquery" && inner.expr.kind === "group_expr")
+      || (inner.kind === "shape_projection" && inner.expr.kind === "group_expr");
+  }
+  return false;
+};
 
 const traceIRFromGelIR = (statement: Statement, gelIr: GelIRStatement): IRStatement => {
   if (statement.kind === "select") {

@@ -2385,10 +2385,22 @@ class Parser {
 
   // Consume tokens forming a type expression (qualified name, possibly with
   // angle-bracketed parameters like `array<int64>`) and return the verbatim
-  // source slice covering them.
+  // source slice covering them. Union types (`File | URL`) are also accepted
+  // — the alternatives chain like additional qualified names with `|`
+  // between them.
   private captureTypeExprText(): string {
     const startTok = this.peek();
     const startOffset = startTok.offset;
+    this.captureSingleTypeExpr();
+    while (this.peek().kind === "pipe") {
+      this.consume();
+      this.captureSingleTypeExpr();
+    }
+    const endTok = this.peek();
+    return this.sliceSource(startOffset, endTok.offset).trim();
+  }
+
+  private captureSingleTypeExpr(): void {
     // Allow leading type-level modifiers that may appear after the param
     // colon (e.g. legacy "OPTIONAL str").
     while (true) {
@@ -2425,8 +2437,6 @@ class Parser {
         if (depth === 0) break;
       }
     }
-    const endTok = this.peek();
-    return this.sliceSource(startOffset, endTok.offset).trim();
   }
 
   // The default-value expression runs up to the next ',' or ')' at depth 0.
@@ -3723,7 +3733,17 @@ class Parser {
       this.consume();
       const values = this.parseDelimited("rbrace", () => this.parseFreeObjectExpr(), "Expected ',' in set literal");
       this.expect("rbrace", "Expected '}' after set literal");
-      if (values.every((v) => v.kind === "literal")) {
+      // Collapsing to a flat `set_literal` discards each element's
+      // `numericKind` hint; keep the rich set_expr form whenever any
+      // element carries a float/decimal/bigint marker so downstream type
+      // inference can still tell `{1.0, 2.0}` apart from `{1, 2}`.
+      const allLiterals = values.every((v) => v.kind === "literal");
+      const anyNonInteger = allLiterals
+        && values.some((v) => {
+          const lit = v as { kind: "literal"; numericKind?: string };
+          return lit.numericKind !== undefined && lit.numericKind !== "integer";
+        });
+      if (allLiterals && !anyNonInteger) {
         return { kind: "set_literal", values: values.map((v) => (v as { kind: "literal"; value: ScalarValue }).value) };
       }
       return { kind: "set_expr", values };
@@ -3903,9 +3923,38 @@ class Parser {
       };
     }
 
+    // Preserve the numeric kind of the literal so downstream type inference
+    // can tell `1` apart from `1.0` even after JS collapses both to the same
+    // Number value. Without this, `<float64>1.0 IS float64` mis-infers the
+    // operand as int64 and answers false.
+    const litToken = this.peek();
+    const litMinusFollowedByNumber = litToken.kind === "minus" && this.peekNext().kind === "number";
+    const litNumericToken = litToken.kind === "number"
+      ? litToken
+      : litMinusFollowedByNumber
+        ? this.peekNext()
+        : undefined;
+    const value = this.readScalarLikeValue();
+    if (litNumericToken && (typeof value === "number" || typeof value === "string")) {
+      // Classify the lexeme without regex. EdgeQL allows underscore digit
+      // separators (`1_000_000`), so strip them first via split/join. A
+      // trailing `n` marks bigint/decimal; presence of `.` or `e`/`E` marks
+      // a fractional form (float, or decimal when paired with `n`).
+      const lex = litNumericToken.lexeme.split("_").join("");
+      const isFractional = lex.includes(".") || lex.includes("e") || lex.includes("E");
+      let numericKind: "integer" | "float" | "bigint" | "decimal" | undefined;
+      if (lex.endsWith("n")) {
+        numericKind = isFractional ? "decimal" : "bigint";
+      } else if (isFractional) {
+        numericKind = "float";
+      } else {
+        numericKind = "integer";
+      }
+      return { kind: "literal", value, numericKind };
+    }
     return {
       kind: "literal",
-      value: this.readScalarLikeValue(),
+      value,
     };
   }
 
