@@ -61,6 +61,14 @@ export interface GelIRCompileOptions {
   target?: RuntimeTarget;
   parameterValues?: Record<string, ScalarValue>;
   globalValues?: Record<string, ScalarValue>;
+  // Stack of enclosing iteration scopes available to inner subqueries.
+  // EdgeQL's path-sharing semantics: a fresh `User` reference inside a
+  // shape projection on `User` refers to the OUTER iterator's current row,
+  // not a cross-product of all Users. The IR doesn't capture this binding
+  // (the inner reference is a fresh type_root with its own path), so the
+  // SQL compiler matches by typeref id here when resolving path
+  // references. Most-recent (innermost) scopes take precedence.
+  outerScopes?: ReadonlyArray<{ alias: string; typeref: TypeRef }>;
 }
 
 export const compileGelIRToSQL = (
@@ -2315,7 +2323,26 @@ const buildCorrelatedScalarPointerPath = (
   const firstAlias = "cp1";
   let fromSql: string;
   let anchorWhere: string;
-  if (shouldUseLinkTable(firstLink)) {
+  // For chains rooted at a *truly polymorphic* type_root (multiple concrete
+  // subtypes, with potentially different link storage tables per branch),
+  // the source's `${shortName}_id` column is already projected via
+  // compilePolymorphicSource's LinkProjection. Treat it like an inline FK
+  // instead of joining one canonical link table that wouldn't fit all
+  // branches. Concrete types with `children: [self]` keep the existing
+  // link-table-join path — the storage table is unambiguous there.
+  const rootIsPolymorphic = path.root.expr.kind === "type_root"
+    && isTrulyPolymorphicTypeRef((path.root.expr as TypeRoot).typeref);
+  const firstIsSingleLink = firstLink.ptrref.outCardinality === "one"
+    || firstLink.ptrref.outCardinality === "at_most_one";
+  const useProjectedFK = shouldUseLinkTable(firstLink)
+    && firstLink.direction === "outbound"
+    && firstIsSingleLink
+    && rootIsPolymorphic;
+  if (useProjectedFK) {
+    fromSql = `${quoteIdent(resolveTypeTableName(firstTargetType, options))} ${firstAlias}`;
+    const firstInlineColumn = `${firstLink.ptrref.shortName}_id`;
+    anchorWhere = `${firstAlias}.${quoteIdent("id")} = ${sourceAlias}.${quoteIdent(firstInlineColumn)}`;
+  } else if (shouldUseLinkTable(firstLink)) {
     const linkTable = linkTableNameForPointer(firstLink, options);
     const linkAlias = "cpj1";
     fromSql = `${quoteIdent(linkTable)} ${linkAlias} JOIN ${quoteIdent(resolveTypeTableName(firstTargetType, options))} ${firstAlias}`;
@@ -2532,7 +2559,18 @@ const compileSelectSource = (
   }
   if (sourceSet.expr.kind === "type_root") {
     const root = sourceSet.expr.typeref;
-    return { sql: compilePolymorphicSource(root, sourceSet.expr.skipSubtypes, alias, projectedColumns, options), alias };
+    // Collect any link-derived columns referenced in WHERE/ORDER BY/shape so
+    // the polymorphic UNION ALL surfaces them via LEFT JOIN against each
+    // branch's link storage table. Match against the type_root's typeref
+    // (the underlying schema type) so that `Text[IS Owned].owner` and
+    // `Text.body` references resolve to the same physical source.
+    const linkProjections = collectLinkProjectionsForSource(
+      sourceSet.shape ?? [],
+      where,
+      orderBy,
+      root.id,
+    );
+    return { sql: compilePolymorphicSource(root, sourceSet.expr.skipSubtypes, alias, projectedColumns, options, linkProjections), alias };
   }
   if (sourceSet.expr.kind !== "pointer") {
     return null;
@@ -3647,6 +3685,126 @@ const collectReferencedColumns = (set: Set): string[] => {
   return [...out];
 };
 
+// Walk the shape/where/orderBy and find pointers whose source is the outer
+// type_root and whose link uses link-table storage. Returns the list of
+// LinkProjections the polymorphic source must surface as columns so that
+// downstream code can compare `${sourceAlias}.${linkName}_id` directly.
+//
+// Without this, polymorphic chains like `Text[IS Owned].owner` (link table
+// because @note/@since live on the link) have no FK column to read from the
+// source SELECT, and the entire predicate compilation bails out.
+const collectLinkProjectionsForSource = (
+  shape: ShapeElement[],
+  where: Set | undefined,
+  orderBy: SortExpr[] | undefined,
+  sourceTypeRootId: string,
+): LinkProjection[] => {
+  const byLinkName = new Map<string, LinkProjection>();
+  const visit = (set: Set | undefined): void => {
+    if (!set) return;
+    const expr = set.expr;
+    if (expr.kind === "pointer") {
+      const ptr = expr as Pointer;
+      // Match pointers whose source unwraps to a type_root whose typeref
+      // matches the outer source's type_root typeref. Both `Text` (the
+      // SELECT subject) and `Text[IS Owned]` (the FILTER expression's
+      // narrowed view) have the SAME inner type_root.typeref.id; the
+      // narrowing only changes the Set wrapper's typeref. By comparing
+      // type_root ids we correctly recognize them as the same physical
+      // source. Only links using link-table storage need the JOIN — inline
+      // FK columns are already available via collectProjectedColumns'
+      // `${shortName}_id` rule.
+      let sourceExpr: Expr = ptr.source.expr;
+      while (sourceExpr.kind === "select_expr") {
+        sourceExpr = (sourceExpr as SelectExpr).result.expr;
+      }
+      const sourceTypeMatches = sourceExpr.kind === "type_root"
+        && (sourceExpr as TypeRoot).typeref.id === sourceTypeRootId;
+      // Only single-cardinality links can be safely LEFT JOINed into the
+      // polymorphic source — multi links produce N rows per source row,
+      // which would inflate the UNION ALL's row count and silently break
+      // any aggregate, count, or all-rows test downstream. Multi-link
+      // traversal stays on the separate-subquery path.
+      const isSingleLink = ptr.ptrref.outCardinality === "one"
+        || ptr.ptrref.outCardinality === "at_most_one";
+      if (
+        sourceTypeMatches
+        && !ptr.ptrref.isLinkProperty
+        && ptr.direction === "outbound"
+        && !ptr.ptrref.outTarget.isScalar
+        && isSingleLink
+        && shouldUseLinkTable(ptr)
+      ) {
+        const linkName = ptr.ptrref.shortName;
+        const outputColumn = `${linkName}_id`;
+        if (!byLinkName.has(linkName)) {
+          byLinkName.set(linkName, { linkName, outputColumn });
+        }
+      }
+      // Continue walking the source so chains like `.owner.todo` still pick
+      // up the inner `.owner` requirement.
+      visit(ptr.source);
+      return;
+    }
+    if (expr.kind === "operator_call") {
+      for (const arg of orderedCallArgs((expr as OperatorCall).args)) {
+        visit(arg.expr);
+      }
+      return;
+    }
+    if (expr.kind === "function_call") {
+      for (const arg of orderedCallArgs((expr as FunctionCall).args)) {
+        visit(arg.expr);
+      }
+      return;
+    }
+    if (expr.kind === "coalesce_expr") {
+      const c = expr as CoalesceExpr;
+      visit(c.left);
+      visit(c.right);
+      return;
+    }
+    if (expr.kind === "if_else_expr") {
+      const i = expr as IfElseExpr;
+      visit(i.condition);
+      visit(i.ifExpr);
+      visit(i.elseExpr);
+      return;
+    }
+    if (expr.kind === "type_cast") {
+      visit((expr as TypeCast).expr);
+      return;
+    }
+    if (expr.kind === "exists_expr") {
+      visit((expr as ExistsExpr).expr);
+      return;
+    }
+    if (expr.kind === "select_expr") {
+      const sel = expr as SelectExpr;
+      visit(sel.result);
+      visit(sel.where);
+      for (const sort of sel.orderBy ?? []) {
+        visit(sort.path);
+      }
+      visit(sel.limit);
+      visit(sel.offset);
+      return;
+    }
+    if (expr.kind === "tuple") {
+      for (const element of (expr as Tuple).elements) visit(element.val);
+      return;
+    }
+  };
+  for (const element of shape) {
+    visit(element.expr);
+  }
+  visit(where);
+  for (const sort of orderBy ?? []) {
+    visit(sort.path);
+  }
+  return [...byLinkName.values()];
+};
+
 const compileProjectedSourceColumnRef = (set: Set): string | null => {
   if (set.expr.kind !== "pointer") {
     return null;
@@ -3728,12 +3886,25 @@ const expandUnionTypeRefBranches = (typeRef: TypeRef): TypeRef[] => {
   });
 };
 
+// Request for an extra column derived from joining a link's storage table.
+// Per branch (concrete subtype), `compilePolymorphicSource` resolves the
+// link's actual storage owner via `options.resolveLinkStorageType` and LEFT
+// JOINs that table, surfacing its `target` column as `outputColumn`. This
+// lets downstream code treat `polySource.${outputColumn}` as a regular FK
+// column even when the link uses a link table (has properties, is multi,
+// or has different storage owners per subtype).
+type LinkProjection = {
+  linkName: string;
+  outputColumn: string;
+};
+
 const compilePolymorphicSource = (
   typeRef: TypeRef,
   skipSubtypes: boolean,
   alias: string,
   projectedColumns: string[],
   options: GelIRCompileOptions,
+  linkProjections: LinkProjection[] = [],
 ): string => {
   const branches = expandUnionTypeRefBranches(typeRef);
   const candidates = skipSubtypes
@@ -3746,12 +3917,48 @@ const compilePolymorphicSource = (
     const sourceTypeName = qualifyTypeName(source);
     const sourceTable = resolveTypeTableName(source, options);
     const available = options.resolveTypeColumns?.(sourceTypeName);
+    // When we need link-derived columns we alias the source table so
+    // LEFT JOINs can reference it unambiguously. Without link projections
+    // we keep the unaliased form to preserve the existing SQL shape.
+    const needsAlias = linkProjections.length > 0;
+    const tableAlias = needsAlias ? `_pb` : undefined;
+    const tableRef = tableAlias
+      ? `${quoteIdent(sourceTable)} ${tableAlias}`
+      : `${quoteIdent(sourceTable)}`;
+    const colPrefix = tableAlias ? `${tableAlias}.` : "";
     const cols = projectedColumns
       .map((column) => (!available || available.has(column)
-        ? `${quoteIdent(column)} AS ${quoteIdent(column)}`
+        ? `${colPrefix}${quoteIdent(column)} AS ${quoteIdent(column)}`
         : `NULL AS ${quoteIdent(column)}`))
       .join(", ");
-    return `SELECT ${quoteLiteral(sourceTypeName)} AS ${quoteIdent("__source_type")}, ${cols} FROM ${quoteIdent(sourceTable)}`;
+
+    const joins: string[] = [];
+    const linkCols: string[] = [];
+    linkProjections.forEach((proj, index) => {
+      // Not every concrete branch necessarily defines this link — e.g.
+      // `[IS Owned].owner` covers Comment/Issue/LogEntry but `[IS Issue].related_to`
+      // only applies to Issue. resolveLinkStorageType returns undefined when
+      // the branch has no such link; skip the JOIN and project NULL so the
+      // UNION ALL stays well-formed.
+      const storage = options.resolveLinkStorageType?.(sourceTypeName, proj.linkName);
+      if (storage === undefined) {
+        linkCols.push(`NULL AS ${quoteIdent(proj.outputColumn)}`);
+        return;
+      }
+      const linkTable = `${tableNameForType(storage)}__${proj.linkName.toLowerCase()}`;
+      const linkAlias = `_pl_${index}`;
+      // LEFT JOIN to preserve rows whose link is empty (single optional, or
+      // multi link with zero targets). The output column is NULL for those.
+      joins.push(
+        `LEFT JOIN ${quoteIdent(linkTable)} ${linkAlias}`
+        + ` ON ${linkAlias}.${quoteIdent("source")} = ${colPrefix}${quoteIdent("id")}`
+      );
+      linkCols.push(`${linkAlias}.${quoteIdent("target")} AS ${quoteIdent(proj.outputColumn)}`);
+    });
+
+    const allCols = [cols, ...linkCols].filter((entry) => entry.length > 0).join(", ");
+    const fromClause = joins.length > 0 ? `${tableRef} ${joins.join(" ")}` : tableRef;
+    return `SELECT ${quoteLiteral(sourceTypeName)} AS ${quoteIdent("__source_type")}, ${allCols} FROM ${fromClause}`;
   });
 
   return `(${selects.join(" UNION ALL ")}) ${alias}`;
@@ -3774,71 +3981,20 @@ const flattenTypeClosure = (root: TypeRef): TypeRef[] => {
   return out;
 };
 
-// `Text[IS Owned].owner = User` (inside a shape's correlated subquery): the
-// IR has the left as a Pointer to a non-scalar target whose source is a
-// polymorphic type_root narrowed by an [IS …] intersection, and the right
-// as a select of the outer subject's type. The current value-level SQL
-// compilation bails out because it can't reduce object-identity equality
-// between polymorphic operands to a single column. Lower the comparison
-// branch-by-branch: for each concrete subtype, gate by __source_type and
-// look up the link's storage table to obtain owner_id, then compare to the
-// outer row's id. Returns null when the IR doesn't match this shape.
-const tryCompilePolymorphicLinkEqualsOuterSubject = (
-  filterSet: Set,
-  innerAlias: string,
-  outerAlias: string,
-  outerTypeRef: TypeRef | undefined,
-  options: GelIRCompileOptions,
-): string | null => {
-  if (!outerTypeRef) return null;
-  if (filterSet.expr.kind !== "operator_call") return null;
-  const opCall = filterSet.expr as OperatorCall;
-  if (opCall.operator !== "=" && opCall.operator !== "!=") return null;
-  const args = orderedCallArgs(opCall.args);
-  if (args.length < 2) return null;
-
-  const tryOrder = (l: Set, r: Set): string | null => {
-    if (l.expr.kind !== "pointer") return null;
-    const pointer = l.expr as Pointer;
-    if (pointer.ptrref.isLinkProperty) return null;
-    if (pointer.ptrref.outTarget.isScalar) return null;
-    if (pointer.source.expr.kind !== "type_root") return null;
-    if (pointer.direction !== "outbound") return null;
-
-    let rightInner = r;
-    while (rightInner.expr.kind === "select_expr") {
-      rightInner = (rightInner.expr as SelectExpr).result;
-    }
-    if (rightInner.expr.kind !== "type_root") return null;
-    const rightTypeRef = (rightInner.expr as TypeRoot).typeref;
-    if (rightTypeRef.id !== outerTypeRef.id) return null;
-    if (rightTypeRef.id !== pointer.ptrref.outTarget.id) return null;
-
-    const sourceTypeRef = pointer.source.typeref;
-    const linkName = pointer.ptrref.shortName;
-
-    const branches = expandUnionTypeRefBranches(sourceTypeRef);
-    const candidates = branches.flatMap((branch) => flattenTypeClosure(branch));
-    const concrete = candidates.filter((candidate) => !candidate.isAbstract);
-    if (concrete.length === 0) return null;
-
-    const checks: string[] = [];
-    for (const subtype of concrete) {
-      const sourceTypeName = qualifyTypeName(subtype);
-      const storage = options.resolveLinkStorageType?.(sourceTypeName, linkName) ?? sourceTypeName;
-      const linkTable = `${tableNameForType(storage)}__${linkName.toLowerCase()}`;
-      checks.push(
-        `(${innerAlias}.${quoteIdent("__source_type")} = ${quoteLiteral(sourceTypeName)}`
-        + ` AND EXISTS (SELECT 1 FROM ${quoteIdent(linkTable)} _lp`
-        + ` WHERE _lp.${quoteIdent("source")} = ${innerAlias}.${quoteIdent("id")}`
-        + ` AND _lp.${quoteIdent("target")} = ${outerAlias}.${quoteIdent("id")}))`
-      );
-    }
-    const combined = checks.length === 1 ? checks[0]! : `(${checks.join(" OR ")})`;
-    return opCall.operator === "!=" ? `(NOT ${combined})` : combined;
-  };
-
-  return tryOrder(args[0]!.expr, args[1]!.expr) ?? tryOrder(args[1]!.expr, args[0]!.expr);
+// A typeref is "truly polymorphic" when compilePolymorphicSource would
+// expand it into more than one concrete branch. Concrete types whose
+// `children` array contains only the type itself (a quirk of how the IR
+// builder seeds children) are NOT polymorphic — their link storage tables
+// are unambiguous, so the standard link-table JOIN path applies.
+const isTrulyPolymorphicTypeRef = (typeRef: TypeRef): boolean => {
+  if (typeRef.isAbstract) return true;
+  const closure = flattenTypeClosure(typeRef);
+  const concrete = closure.filter((candidate) => !candidate.isAbstract);
+  const distinct = new Set(concrete.map((candidate) => candidate.id));
+  // More than one distinct concrete subtype → genuinely polymorphic.
+  if (distinct.size > 1) return true;
+  // Same id as the root and no other concrete subtypes → just self.
+  return false;
 };
 
 const compileShapeProjection = (
@@ -3939,29 +4095,49 @@ const compileShapeProjection = (
     && peeled.shape.length > 0
   ) {
     const innerAlias = `sg${depth + 1}`;
-    const innerSource = compileSelectSource(peeled, undefined, undefined, options, params, target, innerAlias);
+    // Build an options that exposes this shape's source as an OUTER scope
+    // for the inner subquery's WHERE/ORDER BY compilation. EdgeQL path
+    // sharing: `User.name` referenced inside `SELECT User { x := (SELECT ... FILTER User.name = ...) }`
+    // resolves to the outer User's name, not a fresh cross-product. We
+    // signal this to compileValueSetSQL by appending the outer source to
+    // options.outerScopes; it matches by typeref id.
+    const innerOptions: GelIRCompileOptions = {
+      ...options,
+      outerScopes: [
+        ...(options.outerScopes ?? []),
+        { alias: sourceAlias, typeref: shape.source.typeref },
+      ],
+    };
+    // Pass the peeled WHERE/ORDER BY into the inner source compilation so
+    // collectLinkProjectionsForSource sees them and the polymorphic UNION
+    // ALL can JOIN the per-branch link tables to expose `${linkName}_id`
+    // columns. Without this, the inner WHERE references like
+    // `sg1.owner_id` come back as "no such column".
+    const innerSource = compileSelectSource(
+      peeled,
+      peeledClauses.where,
+      peeledClauses.orderBy,
+      innerOptions,
+      params,
+      target,
+      innerAlias,
+    );
     if (innerSource) {
-      const inner = compilePublicShapeObjectExpr(innerSource.alias, peeled.shape, params, options, target, depth + 1);
+      const inner = compilePublicShapeObjectExpr(innerSource.alias, peeled.shape, params, innerOptions, target, depth + 1);
       let subSql = `SELECT ${inner} AS ${quoteIdent("item")} FROM ${innerSource.sql}`;
       if (peeledClauses.where) {
-        // First, try the polymorphic-link-equals-outer-subject pattern. This
-        // lifts `Text[IS Owned].owner = User` (and !=) into a per-subtype
-        // EXISTS against the outer row's id — the value-level path can't
-        // reduce object-identity comparison over a polymorphic chain to SQL.
-        const polyCorrelated = tryCompilePolymorphicLinkEqualsOuterSubject(
-          peeledClauses.where,
-          innerSource.alias,
-          sourceAlias,
-          shape.source.typeref,
-          options,
-        );
-        const w = polyCorrelated
-          ?? compilePredicateSetSQL(peeledClauses.where, innerSource.alias, params, target, options)
-          ?? compileValueSetSQL(peeledClauses.where, innerSource.alias, params, target, options);
+        // The generic predicate compiler now handles the polymorphic
+        // object-identity case: compileValueSetSQL surfaces
+        // `sg1.${linkName}_id` for non-scalar pointer-from-poly-source and
+        // `g0.id` for a bare outer-scope type_root reference, so
+        // `${left} = ${right}` ends up as `sg1.owner_id = g0.id` without
+        // any special-case helper.
+        const w = compilePredicateSetSQL(peeledClauses.where, innerSource.alias, params, target, innerOptions)
+          ?? compileValueSetSQL(peeledClauses.where, innerSource.alias, params, target, innerOptions);
         if (w) subSql += ` WHERE ${w}`;
       }
       if (peeledClauses.orderBy && peeledClauses.orderBy.length > 0) {
-        const orderSql = compileSortExprs(peeledClauses.orderBy, innerSource.alias, undefined, params, target, options);
+        const orderSql = compileSortExprs(peeledClauses.orderBy, innerSource.alias, undefined, params, target, innerOptions);
         if (orderSql) subSql += ` ORDER BY ${orderSql}`;
       }
       const limit = extractNumericLiteral(peeledClauses.limit);
@@ -4131,6 +4307,15 @@ const tryCompileMultiStepPointerExistsSQL = (
   }
 
   const aliasColumns = pointerPathAliasColumns(path);
+  // When the chain's root is a *truly polymorphic* type_root, the source
+  // SELECT (alias = sourceAlias) already projects `${shortName}_id` for any
+  // single link with link-table storage — collectLinkProjectionsForSource
+  // sees these references and compilePolymorphicSource LEFT JOINs each
+  // branch's storage table. Treat that column as an inline FK so the chain
+  // doesn't try to join one canonical link table that doesn't fit all
+  // branches.
+  const rootIsPolymorphic = path.root.expr.kind === "type_root"
+    && isTrulyPolymorphicTypeRef((path.root.expr as TypeRoot).typeref);
   let fromSql = "";
   const whereSqls: string[] = [];
   let previousAlias = sourceAlias;
@@ -4139,7 +4324,23 @@ const tryCompileMultiStepPointerExistsSQL = (
     const nextAlias = `lt${index}`;
     const targetType = link.direction === "inbound" ? link.ptrref.outSource : link.ptrref.outTarget;
     const targetSource = compilePolymorphicSource(targetType, false, nextAlias, aliasColumns[index + 1]!, options);
-    if (shouldUseLinkTable(link)) {
+    const isFirstStepFromPolyRoot = index === 0 && rootIsPolymorphic;
+    const isSingleLink = link.ptrref.outCardinality === "one"
+      || link.ptrref.outCardinality === "at_most_one";
+    const useProjectedFK = shouldUseLinkTable(link)
+      && link.direction === "outbound"
+      && isSingleLink
+      && isFirstStepFromPolyRoot;
+    if (useProjectedFK) {
+      const inlineColumn = `${link.ptrref.shortName}_id`;
+      const joinSql = `${nextAlias}.${quoteIdent("id")} = ${previousAlias}.${quoteIdent(inlineColumn)}`;
+      if (!fromSql) {
+        fromSql = targetSource;
+        whereSqls.push(joinSql);
+      } else {
+        fromSql += ` JOIN ${targetSource} ON ${joinSql}`;
+      }
+    } else if (shouldUseLinkTable(link)) {
       const linkAlias = `lj${index}`;
       const linkTable = linkTableNameForPointer(link, options);
       if (link.direction === "inbound") {
@@ -4503,6 +4704,44 @@ const extractInPredicateLiteralValues = (set: Set): ScalarValue[] | null => {
   return null;
 };
 
+// EdgeQL path-sharing helper: when `set` is just a type_root (possibly
+// wrapped in clauseless select_expr layers) whose typeref matches an
+// enclosing iteration scope, return `${outerAlias}.id`. That lets a fresh
+// `User` reference inside a shape on User compile as a reference to the
+// outer row's identity rather than a cross-product subquery.
+const tryResolveOuterScopeIdRef = (
+  set: Set,
+  options: GelIRCompileOptions,
+): string | null => {
+  if (!options.outerScopes || options.outerScopes.length === 0) return null;
+  // Peel select_expr wrappers as long as they carry no semantic clauses —
+  // `(SELECT User)` is a no-op around `User`. A real clause (FILTER, ORDER
+  // BY, LIMIT) makes the subquery meaningful and we leave it to
+  // compileSelectExprSubquery.
+  let cursor: Set = set;
+  while (cursor.expr.kind === "select_expr") {
+    const se = cursor.expr as SelectExpr;
+    if (se.where || (se.orderBy && se.orderBy.length > 0) || se.limit || se.offset) {
+      return null;
+    }
+    cursor = se.result;
+  }
+  if (cursor.expr.kind !== "type_root") return null;
+  // A shape with elements other than the implicit `id` would project a
+  // structured object — that's not just an identity reference.
+  const meaningfulShape = (cursor.shape ?? []).some((el) => {
+    const elName = (el as { name?: string }).name;
+    if (elName === "id") return false;
+    if (el.shapeOrigin === "default") return false;
+    return true;
+  });
+  if (meaningfulShape) return null;
+  const typeId = (cursor.expr as TypeRoot).typeref.id;
+  const match = [...options.outerScopes].reverse().find((scope) => scope.typeref.id === typeId);
+  if (!match) return null;
+  return `${match.alias}.${quoteIdent("id")}`;
+};
+
 const compileValueSetSQL = (
   set: Set,
   sourceAlias: string,
@@ -4513,6 +4752,13 @@ const compileValueSetSQL = (
 ): string | null => {
   const checkpoint = params.length;
   const unwrapped = unwrapSelectExprSet(set);
+  // EdgeQL path sharing: a bare reference to an outer iterator's type
+  // (e.g. `User` inside `SELECT User { x := (SELECT … FILTER … = User) }`)
+  // resolves to the OUTER row's identity (id), not a fresh cross-product.
+  // Recognize this when the set unwraps to just a type_root with no
+  // clauses and the typeref matches an enclosing scope.
+  const outerScopeIdRef = tryResolveOuterScopeIdRef(set, options);
+  if (outerScopeIdRef) return outerScopeIdRef;
   if (unwrapped.selectExpr) {
     const subquery = compileSelectExprSubquery(unwrapped.selectExpr, sourceAlias, params, target, options, linkPropertyAlias);
     if (!subquery) {
@@ -4531,7 +4777,40 @@ const compileValueSetSQL = (
       return `${alias}.${quoteIdent(col)}`;
     }
     if (!pointer.ptrref.outTarget.isScalar) {
+      // Non-scalar outbound link from a *truly polymorphic* source: the
+      // source SELECT already projects `${shortName}_id` via
+      // compilePolymorphicSource's LinkProjection. Surface that column so
+      // object-identity comparisons (`Text[IS Owned].owner = User`) can
+      // reduce to `${sourceAlias}.${linkName}_id = <outer-row-id>` at the
+      // predicate level — no per-shape special-case needed.
+      const isSingleLink = pointer.ptrref.outCardinality === "one"
+        || pointer.ptrref.outCardinality === "at_most_one";
+      if (
+        pointer.source.expr.kind === "type_root"
+        && pointer.direction === "outbound"
+        && isSingleLink
+        && shouldUseLinkTable(pointer)
+        && isTrulyPolymorphicTypeRef((pointer.source.expr as TypeRoot).typeref)
+      ) {
+        return `${sourceAlias}.${quoteIdent(`${pointer.ptrref.shortName}_id`)}`;
+      }
       return null;
+    }
+    // EdgeQL path sharing: when the immediate source of a scalar pointer is
+    // a fresh type_root that matches an enclosing iteration scope, resolve
+    // to the outer alias's column. This is how `User.name` inside a shape
+    // computable on `User` becomes the OUTER User's name rather than a
+    // cross-product with every User row. Inner-source bindings still take
+    // precedence — the inner alias is `sourceAlias` and would already
+    // handle them; outerScopes only carries PARENT scopes.
+    if (pointer.source.expr.kind === "type_root") {
+      const innerTypeId = (pointer.source.expr as TypeRoot).typeref.id;
+      const outerMatch = options.outerScopes && options.outerScopes.length > 0
+        ? [...options.outerScopes].reverse().find((scope) => scope.typeref.id === innerTypeId)
+        : undefined;
+      if (outerMatch) {
+        return `${outerMatch.alias}.${quoteIdent(col)}`;
+      }
     }
     // Chained pointer (e.g. `.parent.val`): the immediate source isn't the
     // outer row, so a bare `${sourceAlias}.val` would read the wrong column.
