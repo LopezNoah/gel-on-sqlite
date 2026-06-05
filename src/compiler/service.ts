@@ -79,12 +79,7 @@ export class CompilerService {
     // the wrapper. Route the SQL stage past compileSqlFromGelIR for that
     // shape so compileToIR (which calls peelGroupExprFromSelectExpr) can run.
     const isSelectExprWrappingGroup =
-      statement.kind === "select_expr"
-      && (statement.expr.kind === "group_expr"
-        || (statement.expr.kind === "select_expr_subquery"
-          && statement.expr.expr.kind === "group_expr")
-        || (statement.expr.kind === "shape_projection"
-          && statement.expr.expr.kind === "group_expr"));
+      statement.kind === "select_expr" && selectExprContainsGroup(statement);
     // GROUP doesn't lower to SQL — it's evaluated in the runtime by grouping
     // the source SELECT's rows in JS. Skip the GelIR→SQL pipeline for `group`
     // so the SqlFromGelIR guard doesn't reject the statement before we even
@@ -291,10 +286,40 @@ const needsLegacyRuntimeIR = (statement: Statement): boolean => {
   // IR builder is the only way the runtime grouper (runGroupIR) gets a
   // GroupIR for this AST shape.
   if (statement.kind === "select_expr") {
-    const inner = statement.expr;
-    return inner.kind === "group_expr"
-      || (inner.kind === "select_expr_subquery" && inner.expr.kind === "group_expr")
-      || (inner.kind === "shape_projection" && inner.expr.kind === "group_expr");
+    return selectExprContainsGroup(statement);
+  }
+  return false;
+};
+
+// Detect a `group_expr` anywhere inside a select_expr statement — directly in
+// the result expression (under any chain of shape_projection / subquery /
+// field-access wrappers) or inside a WITH binding's value. Any such statement
+// must route through the legacy semantic.ts pipeline (compileToIR), whose
+// peelGroupExprFromSelectExpr lowers the GROUP to a runtime GroupIR; the GelIR
+// pipeline has no model for group_expr in expression position.
+const nodeContainsGroup = (node: unknown, seen: Set<unknown>): boolean => {
+  if (!node || typeof node !== "object") return false;
+  if (seen.has(node)) return false;
+  seen.add(node);
+  if ((node as { kind?: unknown }).kind === "group_expr") return true;
+  if (Array.isArray(node)) {
+    return node.some((item) => nodeContainsGroup(item, seen));
+  }
+  for (const value of Object.values(node as Record<string, unknown>)) {
+    if (value && typeof value === "object" && nodeContainsGroup(value, seen)) {
+      return true;
+    }
+  }
+  return false;
+};
+
+const selectExprContainsGroup = (
+  statement: Extract<Statement, { kind: "select_expr" }>,
+): boolean => {
+  const seen = new Set<unknown>();
+  if (nodeContainsGroup(statement.expr, seen)) return true;
+  for (const binding of statement.with ?? []) {
+    if (nodeContainsGroup(binding.value, seen)) return true;
   }
   return false;
 };

@@ -6,3 +6,4 @@ ui/.astro
 ui/
 .artifacts/
 .DS_Store
+.claude/worktrees/

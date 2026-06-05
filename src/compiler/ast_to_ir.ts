@@ -306,6 +306,16 @@ const resolveTypeRef = (ctx: IRCompileContext, name: string): TypeRef => {
   if (isUniversalObjectRefName(name)) {
     return universalObjectTypeRef(ctx, name);
   }
+  // Parametric tuple types (`tuple<…>`) resolve into a structured TypeRef
+  // carrying `collection` + `subtypes` so SQL lowering reads tuple slots from
+  // structure instead of re-parsing the type name. Scoped to tuples on purpose:
+  // `array<…>` is intentionally left to the `unknownTypeRef` fallback below, so
+  // the existing array-comparison lowering (which keys off the `unknown:`-
+  // prefixed id form) is unaffected.
+  const tupleRef = parseTupleStructuredTypeRef(ctx, name);
+  if (tupleRef) {
+    return tupleRef;
+  }
   // Unqualified builtin scalars (`str`, `int64`, …) should resolve as
   // `std::*` rather than `<active-module>::*` so downstream SQL lowering
   // recognises them via `sqlCastTarget` / `qualifyTypeName`.
@@ -313,6 +323,77 @@ const resolveTypeRef = (ctx: IRCompileContext, name: string): TypeRef => {
     return unknownTypeRef(BUILTIN_SCALAR_NAMES[name]);
   }
   return unknownTypeRef(qualifyTypeName(name, ctx.module));
+};
+
+// Parse a parametric tuple type *name* (`tuple<a: str, b: int64>`,
+// `tuple<str, int64>`, optionally `default::`/`std::`-prefixed) into a
+// structured TypeRef with `collection: "tuple"`, recursively-resolved
+// `subtypes`, and per-slot `elementName` for named tuples. Returns undefined
+// for anything that isn't a tuple (including `array<…>`).
+//
+// IMPORTANT: this is the ONE legitimate place a tuple type *name* string is
+// turned into structure — the IR boundary where names become TypeRefs.
+// Downstream stages (notably SQL lowering in gel_ir_compiler.ts's
+// `tupleTypeSlots`) MUST read `collection` / `subtypes` / `elementName` instead
+// of re-parsing the name. The remaining upstream string-collapse is the parser
+// (`parseCastTypeName` flattens cast types back to a string); if that ever
+// emits a structured AST node, this becomes a thin adapter rather than a parser.
+const parseTupleStructuredTypeRef = (ctx: IRCompileContext, name: string): TypeRef | undefined => {
+  const trimmed = name.trim();
+  const open = trimmed.indexOf("<");
+  if (open < 0 || !trimmed.endsWith(">")) return undefined;
+  const head = trimmed.slice(0, open).trim();
+  const bare = head.includes("::") ? (head.split("::").pop() ?? head) : head;
+  if (bare !== "tuple") return undefined;
+  const collection = "tuple" as const;
+  const inner = trimmed.slice(open + 1, -1);
+  // Depth-aware split on top-level commas so nested `tuple<…>` / `array<…>`
+  // arguments stay intact.
+  const parts: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i <= inner.length; i += 1) {
+    const c = inner[i];
+    if (c === "<") depth += 1;
+    else if (c === ">") depth -= 1;
+    if ((c === "," && depth === 0) || i === inner.length) {
+      const part = inner.slice(start, i).trim();
+      start = i + 1;
+      if (part.length > 0) parts.push(part);
+    }
+  }
+  const subtypes: TypeRef[] = parts.map((part) => {
+    // Named tuple element: `name: type`. Only a lone `:` at depth 0 counts —
+    // a `::` (qualified name like `std::int64`) is a positional element.
+    let colonIdx = -1;
+    let d = 0;
+    for (let j = 0; j < part.length; j += 1) {
+      const ch = part[j];
+      if (ch === "<") d += 1;
+      else if (ch === ">") d -= 1;
+      else if (ch === ":" && d === 0 && part[j + 1] !== ":" && part[j - 1] !== ":") {
+        colonIdx = j;
+        break;
+      }
+    }
+    if (collection === "tuple" && colonIdx > 0) {
+      const elementName = part.slice(0, colonIdx).trim();
+      return { ...resolveTypeRef(ctx, part.slice(colonIdx + 1).trim()), elementName };
+    }
+    return resolveTypeRef(ctx, part);
+  });
+  const qualified = qualifyTypeName(name, ctx.module);
+  return {
+    kind: "type_ref",
+    id: qualified,
+    nameHint: qualified,
+    module: qualified.includes("::") ? (qualified.split("::")[0] ?? "std") : "std",
+    isView: false,
+    isScalar: false,
+    isAbstract: false,
+    collection,
+    subtypes,
+  };
 };
 
 const isUniversalObjectRefName = (name: string): boolean => {
@@ -401,15 +482,27 @@ const createRootScope = (): ScopeTreeNode => ({
   optional: false,
 });
 
-const unknownTypeRef = (nameHint: string): TypeRef => ({
-  kind: "type_ref",
-  id: `unknown:${nameHint}`,
-  nameHint,
-  module: nameHint.includes("::") ? nameHint.split("::")[0]! : "default",
-  isView: false,
-  isScalar: false,
-  isAbstract: false,
-});
+const unknownTypeRef = (nameHint: string): TypeRef => {
+  const ref: TypeRef = {
+    kind: "type_ref",
+    id: `unknown:${nameHint}`,
+    nameHint,
+    module: nameHint.includes("::") ? nameHint.split("::")[0]! : "default",
+    isView: false,
+    isScalar: false,
+    isAbstract: false,
+  };
+  // Collection-typed names (`array<...>`, `tuple<...>`, `range<...>`) carry
+  // a `collection` marker that downstream shape-projection / SQL-lowering
+  // code uses to decide whether to wrap the value with `json(...)` (so the
+  // JSON structure is preserved through aggregation) vs treat it as an
+  // opaque scalar.
+  if (nameHint.startsWith("array<")) ref.collection = "array";
+  else if (nameHint.startsWith("tuple<")) ref.collection = "tuple";
+  else if (nameHint.startsWith("range<")) ref.collection = "range";
+  else if (nameHint.startsWith("multirange<")) ref.collection = "multirange";
+  return ref;
+};
 
 const defaultPathId = (name: string): PathId => ({
   kind: "path_id",
@@ -1530,6 +1623,12 @@ const inferAstExprTypeName = (expr: FreeObjectExpr, ctx: IRCompileContext): stri
         return undefined;
       }
       if (shortName === "array_agg") return first ? `array<${first}>` : undefined;
+      // `re_match(pattern, str)` / `re_match_all(pattern, str)` return an
+      // array of capture-group strings per match. Mark them as `array<str>`
+      // so downstream code knows the projection produces a JSON-shaped
+      // value (the cross-product over multi-scalar args relies on this to
+      // emit the right `json_group_array(json(...))` wrapping).
+      if (shortName === "re_match" || shortName === "re_match_all") return "array<std::str>";
       return undefined;
     }
     default:
