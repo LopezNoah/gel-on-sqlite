@@ -172,7 +172,11 @@ const schemaModelCache = new WeakMap<SchemaSnapshot, GeneratedSchema>();
 
 export const getOrGenerateSchemaModel = (schema: SchemaSnapshot): GeneratedSchema => {
   const existing = schemaModelCache.get(schema);
-  if (existing) {
+  // The cache is keyed on the schema instance, but DDL mutates the same
+  // SchemaSnapshot in place (CREATE TYPE / CREATE LINK extend `links` etc.).
+  // Detect that drift by comparing live type counts and regenerating when
+  // they disagree, so cached models don't shadow DDL-added types.
+  if (existing && existing.typeNames.length === schema.listTypes().length) {
     return existing;
   }
   const generated = generateSchemaModel(schema);

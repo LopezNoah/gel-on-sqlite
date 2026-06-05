@@ -353,6 +353,7 @@ export interface LinkPropertyDef {
   type: ScalarType;
   required?: boolean;
   hasDefault?: boolean;
+  defaultExpr?: FieldDefaultExpr;
   readonly?: boolean;
   collection?: CollectionTypeDef;
   annotations?: AnnotationDef[];
