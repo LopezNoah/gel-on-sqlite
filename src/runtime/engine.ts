@@ -1157,6 +1157,11 @@ const tryRuntimeSelectExprEvaluationAst = (
       }
       case "for_expr":
         return true;
+      case "free_object_constructor":
+        // Top-level free objects (`{a:=1, b:={2,3,4}, c:={d:=5}}`) must
+        // materialise at runtime as a single row whose multi-valued entries
+        // are arrays — SQL lowering can't express the free-object set shape.
+        return true;
       case "field_access":
         return needsRuntimeEval(expr.expr);
       case "distinct":
@@ -2067,6 +2072,9 @@ const tryRuntimeSelectExprEvaluationAst = (
           if (body.kind === "for_expr") return true;
           if (body.kind === "set_expr") return true;
           if (body.kind === "distinct") return isSetProducing(body.expr);
+          // A shape projection over a set-producing base is itself a set
+          // (e.g. `for n in {8,9} select User{name, b:=n}` flattens its rows).
+          if (body.kind === "shape_projection") return isSetProducing(body.expr);
           if (body.kind === "field_access") return true;
           if (body.kind === "path_steps") return true;
           return false;
@@ -8098,13 +8106,20 @@ const executeForLoop = (
     const groupRows = ir.kind === "group"
       ? runGroupIR(db, schema, ir, context, sqlTrail)
       : [];
-    const outputRows = groupRows.map((groupRow) => {
+    const outputRows = groupRows.flatMap((groupRow): Record<string, unknown>[] => {
       const bindings = new Map<string, unknown>([[ast.variable, groupRow]]);
-      const result = evalGroupRowExpr(body.expr, groupRow, bindings);
-      if (result && typeof result === "object" && !Array.isArray(result)) {
-        return result as Record<string, unknown>;
+      const result = evalGroupRowExpr(body.expr, groupRow, bindings, { db, schema });
+      // A body that produces a SET (array) — e.g. `FOR g IN GROUP … UNION (…)`
+      // bodies or nested FOR — unwinds into multiple output rows, one per item.
+      if (Array.isArray(result)) {
+        return result.map((item) => (item && typeof item === "object" && !Array.isArray(item)
+          ? item as Record<string, unknown>
+          : { value: item }));
       }
-      return { value: result };
+      if (result && typeof result === "object") {
+        return [result as Record<string, unknown>];
+      }
+      return [{ value: result }];
     });
     traces.push({
       ast,
@@ -9628,6 +9643,18 @@ const runGroupIR = (
   // compile+runGelSelectSQL, then grouped in TS below.
   // GROUP should be a first-class IR/SQL operation.
   let rows: Record<string, unknown>[] = [];
+
+  // The source SELECT may itself contain (or terminate in) a GROUP — e.g.
+  // `GROUP (GROUP Card BY .element) BY ...` or a field-access onto a group.
+  // Recursively evaluate that inner group via runGroupIR and apply any trailing
+  // field-access steps, then use the resulting set as our source rows.
+  const nestedSource = ir.source.kind === "select_expr"
+    ? evaluateNestedGroupSource(db, schema, ir.source, context, sqlTrail)
+    : undefined;
+  if (nestedSource) {
+    return finishNestedGroup(db, schema, ir, nestedSource, context, sqlTrail);
+  }
+
   const tryExpr = ir.source.kind === "select_expr"
     ? tryRuntimeSelectExprEvaluationAst(db, schema, ir.source, context)
     : undefined;
@@ -9653,20 +9680,42 @@ const runGroupIR = (
           const exprRows = runGelSelectSQL(db, schema, sourceCompiled.gelIr, context, sourceCompiled.sql);
           rows = exprRows.filter((row): row is Record<string, unknown> => row !== null && typeof row === "object");
         }
-      } catch {
-        // Source couldn't be lowered — leave rows empty so the caller surfaces
-        // an empty group result instead of a hard error.
+      } catch (error) {
+        // Source couldn't be lowered. Re-throw genuine semantic/runtime errors
+        // (AppError) so the caller surfaces them; only swallow lowering misses
+        // (leaving rows empty -> empty group result) for non-AppError failures.
+        if (error instanceof AppError) {
+          throw error;
+        }
       }
     }
   }
 
-  const hidden = new Set(ir.hiddenByFields);
+  return partitionAndPostProcessGroup(db, schema, ir, rows);
+};
 
-  const stripElement = (row: Record<string, unknown>): Record<string, unknown> => {
+// Partition the gathered source rows into {key, elements, grouping} group rows
+// and apply postShape / postFilter / postOrderBy / postLimit / postFieldPath.
+// Shared by the top-level GROUP path and the nested-GROUP source path.
+const partitionAndPostProcessGroup = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  ir: GroupIR,
+  rows: unknown[],
+): Record<string, unknown>[] => {
+  const hidden = new Set(ir.hiddenByFields);
+  const ctx: GroupRowCtx = { db, schema };
+
+  // C4: scalar / array (tuple) source values pass through unchanged. Only
+  // strip hiddenByFields from plain object rows.
+  const stripElement = (value: unknown): unknown => {
+    if (value == null || typeof value !== "object" || Array.isArray(value)) {
+      return value;
+    }
     const element: Record<string, unknown> = {};
-    for (const [name, value] of Object.entries(row)) {
+    for (const [name, v] of Object.entries(value as Record<string, unknown>)) {
       if (hidden.has(name)) continue;
-      element[name] = value;
+      element[name] = v;
     }
     return element;
   };
@@ -9676,11 +9725,20 @@ const runGroupIR = (
   // other key fields (e.g. `b`) set to NULL, and `grouping: ["a"]`.
   let groupRows: Record<string, unknown>[] = [];
   for (const set of ir.groupingSets) {
-    const partitions = new Map<string, { key: Record<string, unknown>; elements: Record<string, unknown>[] }>();
+    const partitions = new Map<string, { key: Record<string, unknown>; elements: unknown[] }>();
     for (const row of rows) {
+      if (row == null) continue;
+      const isObjectRow = typeof row === "object" && !Array.isArray(row);
       const key: Record<string, unknown> = {};
       for (const atom of ir.byAtoms) {
-        key[atom] = set.includes(atom) ? (row[atom] ?? null) : null;
+        if (!set.includes(atom)) {
+          key[atom] = null;
+          continue;
+        }
+        // For scalar/array (tuple) source rows, a BY atom that names a
+        // self-binding alias keys on the whole value. JSON.stringify gives a
+        // stable key that distinguishes array tuples from scalars.
+        key[atom] = isObjectRow ? ((row as Record<string, unknown>)[atom] ?? null) : (row ?? null);
       }
       const keyStr = JSON.stringify(key);
       let bucket = partitions.get(keyStr);
@@ -9701,30 +9759,20 @@ const runGroupIR = (
 
   // Shape projection runs first: filter / order / limit on `SELECT (GROUP …) { shape }`
   // reference the projected field names, not the raw `{key, elements}` row.
+  // Delegate to projectShape so link/backlink sub-shapes (e.g.
+  // `elements: { name }`, `key: { cost }`) are projected recursively.
   if (ir.postShape) {
-    groupRows = groupRows.map((row) => {
-      const projected: Record<string, unknown> = {};
-      for (const element of ir.postShape!) {
-        if (element.kind === "field") {
-          projected[element.name] = row[element.name] ?? null;
-          continue;
-        }
-        if (element.kind === "computed") {
-          projected[element.name] = evalGroupRowComputed(element.expr, row);
-          continue;
-        }
-      }
-      return projected;
-    });
+    const postShape = ir.postShape;
+    groupRows = groupRows.map((row) => projectShape(row, postShape, undefined, ctx) as Record<string, unknown>);
   }
 
   if (ir.postFilter) {
-    groupRows = groupRows.filter((row) => Boolean(evalGroupRowExpr(ir.postFilter!, row)));
+    groupRows = groupRows.filter((row) => Boolean(evalGroupRowExpr(ir.postFilter!, row, undefined, ctx)));
   }
 
   if (ir.postOrderBy) {
     const orderBy = ir.postOrderBy;
-    groupRows = [...groupRows].sort((a, b) => compareByOrderChain(a, b, orderBy));
+    groupRows = [...groupRows].sort((a, b) => compareByOrderChain(a, b, orderBy, ctx));
   }
 
   if (typeof ir.postOffset === "number") {
@@ -9734,13 +9782,176 @@ const runGroupIR = (
     groupRows = groupRows.slice(0, ir.postLimit);
   }
 
+  // C1: a trailing field-access chain that destructures the group output
+  // directly — e.g. `(GROUP Card BY .element).elements`. Applied AFTER all
+  // other post-processing. Each step is walked per row; array steps flatten
+  // one level (set-union), scalars/objects contribute themselves.
+  const postFieldPath = (ir as { postFieldPath?: string[] }).postFieldPath;
+  if (postFieldPath && postFieldPath.length > 0) {
+    const flat: unknown[] = [];
+    for (const groupRow of groupRows) {
+      let current: unknown = groupRow;
+      for (const step of postFieldPath) {
+        current = stepGroupRowField(current, step, ctx);
+      }
+      if (current == null) continue;
+      if (Array.isArray(current)) flat.push(...current);
+      else flat.push(current);
+    }
+    return flat as Record<string, unknown>[];
+  }
+
   return groupRows;
+};
+
+// Detect & evaluate a GROUP whose source SELECT contains (or terminates in) a
+// nested group_expr — `GROUP (GROUP Card BY .element) BY ...`, possibly with a
+// trailing field-access / select wrapper. Returns the inner group's output set
+// (with any trailing field-access applied) or undefined if no nested group.
+const evaluateNestedGroupSource = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  source: SelectExprStatement,
+  context: SecurityContext,
+  sqlTrail: SQLArtifact[],
+): unknown[] | undefined => {
+  // Unwrap select wrappers / field-access chains down to a group_expr, tracking
+  // any trailing field-access steps to re-apply onto the inner group output.
+  const trailingSteps: string[] = [];
+  let cursor: FreeObjectExpr | undefined = source.expr;
+  while (cursor) {
+    if (cursor.kind === "select_expr_subquery" || cursor.kind === "distinct") {
+      cursor = cursor.expr;
+      continue;
+    }
+    if (cursor.kind === "field_access") {
+      trailingSteps.unshift(cursor.field);
+      cursor = cursor.expr;
+      continue;
+    }
+    break;
+  }
+  if (!cursor || cursor.kind !== "group_expr") {
+    return undefined;
+  }
+  const innerGroupExpr = cursor;
+  const groupStatement = {
+    kind: "group" as const,
+    source: innerGroupExpr.source,
+    using: innerGroupExpr.using,
+    by: innerGroupExpr.by,
+    with: source.with,
+    withModule: source.withModule,
+    withModuleAliases: source.withModuleAliases,
+    pos: { line: 1, column: 1 },
+  };
+  const compiled = getCompilerService().compile(schema, groupStatement, {
+    globals: context.globals,
+    target: resolvedRuntimeTarget(context, db),
+  });
+  if (compiled.ir.kind !== "group") {
+    return undefined;
+  }
+  sqlTrail.push(compiled.sql);
+  let innerRows: unknown[] = runGroupIR(db, schema, compiled.ir, context, sqlTrail);
+  // Apply any trailing field-access (e.g. `(GROUP …).elements`) onto the inner
+  // group rows, flattening array steps one level (set semantics).
+  const ctx: GroupRowCtx = { db, schema };
+  for (const step of trailingSteps) {
+    const next: unknown[] = [];
+    for (const groupRow of innerRows) {
+      const stepped = stepGroupRowField(groupRow, step, ctx);
+      if (stepped == null) continue;
+      if (Array.isArray(stepped)) next.push(...stepped);
+      else next.push(stepped);
+    }
+    innerRows = next;
+  }
+  return innerRows;
+};
+
+// Group an already-materialized set of source rows (from a nested GROUP).
+const finishNestedGroup = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  ir: GroupIR,
+  rows: unknown[],
+  _context: SecurityContext,
+  _sqlTrail: SQLArtifact[],
+): Record<string, unknown>[] => partitionAndPostProcessGroup(db, schema, ir, rows);
+
+// Optional database/schema handle so group-row expressions can resolve
+// backlink steps (`.elements.<owner`) against live data during JS GROUP
+// evaluation. Pure expressions (no backlink) work without it.
+interface GroupRowCtx {
+  db: SQLiteDatabase;
+  schema: SchemaSnapshot;
+}
+
+// Advance one path step over `current`. When `current` is an array (a set —
+// e.g. `g.elements`), the step is mapped over every element and the results
+// are flattened one level (EdgeQL set semantics: `g.elements.name` is the set
+// of all names). A leading `<` marks a backlink step which is resolved against
+// the DB for each (object) element.
+const stepGroupRowField = (
+  current: unknown,
+  step: string,
+  ctx?: GroupRowCtx,
+): unknown => {
+  if (current == null) return null;
+  if (Array.isArray(current)) {
+    const out: unknown[] = [];
+    for (const item of current) {
+      const stepped = stepGroupRowField(item, step, ctx);
+      if (stepped == null) continue;
+      if (Array.isArray(stepped)) out.push(...stepped);
+      else out.push(stepped);
+    }
+    return out;
+  }
+  // Backlink step, e.g. `<owner` or `<awards[is User]`.
+  if (step.startsWith("<")) {
+    if (!ctx) return null;
+    const linkBody = parseBacklinkStep(step);
+    if (!linkBody) return null;
+    if (typeof current !== "object") return null;
+    const id = (current as Record<string, unknown>).id;
+    if (typeof id !== "string") return null;
+    const sources = collectBacklinkSourceRows(ctx.db, ctx.schema, linkBody, id);
+    return sources.map((s) => s.row);
+  }
+  if (typeof current !== "object") return null;
+  return (current as Record<string, unknown>)[step] ?? null;
+};
+
+// Parse a backlink path step like `<owner` or `<awards[is User]` into the
+// backlink_path body understood by collectBacklinkSourceRows.
+const parseBacklinkStep = (
+  step: string,
+): { kind: "backlink_path"; link: string; sourceType?: string } | undefined => {
+  const m = /^<([A-Za-z_][\w]*)(?:\s*\[\s*is\s+([\w:]+)\s*\])?$/.exec(step);
+  if (!m) return undefined;
+  return { kind: "backlink_path", link: m[1]!, sourceType: m[2] };
+};
+
+// Convert a parsed PathStep into the string step name understood by
+// stepGroupRowField. Inbound (backlink) `ptr` steps become `<link[is Type]`.
+const pathStepToFieldName = (step: PathStep): string | undefined => {
+  if (step.kind === "object_ref") return step.name;
+  if (step.kind === "ptr") {
+    if (step.direction === "inbound") {
+      return step.typeFilter ? `<${step.name}[is ${step.typeFilter}]` : `<${step.name}`;
+    }
+    return step.name;
+  }
+  return undefined;
 };
 
 const evalGroupRowExpr = (
   expr: FreeObjectExpr,
   row: Record<string, unknown>,
   bindings?: ReadonlyMap<string, unknown>,
+  ctx?: GroupRowCtx,
 ): unknown => {
   switch (expr.kind) {
     case "literal":
@@ -9754,64 +9965,68 @@ const evalGroupRowExpr = (
       return null;
     }
     case "path": {
+      // `head.tail` where head is a binding (e.g. `g.elements`). Set-flatten
+      // the tail step so `g.elements` (an array) yields the flat field set.
       const head = bindings?.get(expr.head);
-      if (head == null || typeof head !== "object") {
-        return null;
+      let current = stepGroupRowField(head, expr.tail, ctx);
+      for (const step of expr.steps ?? []) {
+        const name = pathStepToFieldName(step);
+        if (name === undefined) continue;
+        current = stepGroupRowField(current, name, ctx);
       }
-      return (head as Record<string, unknown>)[expr.tail] ?? null;
+      return current;
     }
     case "path_chain": {
       let current: unknown = bindings?.get(expr.parts[0]!);
       for (let i = 1; i < expr.parts.length; i += 1) {
-        if (current == null || typeof current !== "object") {
-          return null;
-        }
-        current = (current as Record<string, unknown>)[expr.parts[i]!] ?? null;
+        current = stepGroupRowField(current, expr.parts[i]!, ctx);
+      }
+      for (const step of expr.steps ?? []) {
+        const name = pathStepToFieldName(step);
+        if (name === undefined) continue;
+        current = stepGroupRowField(current, name, ctx);
       }
       return current;
     }
     case "field_access": {
-      const target = evalGroupRowExpr(expr.expr, row, bindings);
-      if (target == null || typeof target !== "object") {
-        return null;
-      }
-      return (target as Record<string, unknown>)[expr.field] ?? null;
+      const target = evalGroupRowExpr(expr.expr, row, bindings, ctx);
+      return stepGroupRowField(target, expr.field, ctx);
     }
     case "select_expr_subquery":
     case "distinct":
-      return evalGroupRowExpr(expr.expr, row, bindings);
+      return evalGroupRowExpr(expr.expr, row, bindings, ctx);
     case "shape_projection": {
-      const base = evalGroupRowExpr(expr.expr, row, bindings);
+      const base = evalGroupRowExpr(expr.expr, row, bindings, ctx);
       if (Array.isArray(base)) {
-        return base.map((item) => projectShape(item, expr.shape, bindings));
+        return base.map((item) => projectShape(item, expr.shape, bindings, ctx));
       }
       if (base == null || typeof base !== "object") {
         return null;
       }
-      return projectShape(base, expr.shape, bindings);
+      return projectShape(base, expr.shape, bindings, ctx);
     }
     case "free_object_constructor": {
       const out: Record<string, unknown> = {};
       for (const entry of expr.entries) {
-        out[entry.name] = evalGroupRowExpr(entry.expr, row, bindings);
+        out[entry.name] = evalGroupRowExpr(entry.expr, row, bindings, ctx);
       }
       return out;
     }
     case "compare":
     case "logical": {
-      const left = evalGroupRowExpr(expr.left, row, bindings);
-      const right = evalGroupRowExpr(expr.right, row, bindings);
+      const left = evalGroupRowExpr(expr.left, row, bindings, ctx);
+      const right = evalGroupRowExpr(expr.right, row, bindings, ctx);
       return applyComparisonOp(expr.op, left, right);
     }
     case "unary": {
-      const inner = evalGroupRowExpr(expr.expr, row, bindings);
+      const inner = evalGroupRowExpr(expr.expr, row, bindings, ctx);
       if (expr.op === "not") return !inner;
       if (expr.op === "neg") return -Number(inner);
       return null;
     }
     case "math": {
-      const left = Number(evalGroupRowExpr(expr.left, row, bindings) ?? 0);
-      const right = Number(evalGroupRowExpr(expr.right, row, bindings) ?? 0);
+      const left = Number(evalGroupRowExpr(expr.left, row, bindings, ctx) ?? 0);
+      const right = Number(evalGroupRowExpr(expr.right, row, bindings, ctx) ?? 0);
       switch (expr.op) {
         case "+": return left + right;
         case "-": return left - right;
@@ -9821,20 +10036,55 @@ const evalGroupRowExpr = (
         default: return null;
       }
     }
+    case "concat": {
+      // `++` over sets is the cartesian set-concat: `{a,b} ++ {"!","?"}` →
+      // `{"a!","a?","b!","b?"}`. Evaluate each part, expand singletons to
+      // 1-element lists, and string-concat the cartesian product.
+      const partLists = expr.parts.map((part) => {
+        const value = evalGroupRowExpr(part, row, bindings, ctx);
+        return Array.isArray(value) ? value : value == null ? [] : [value];
+      });
+      let acc: unknown[] = [""];
+      for (const list of partLists) {
+        const next: unknown[] = [];
+        for (const prefix of acc) {
+          for (const item of list) {
+            next.push(`${String(prefix)}${String(item)}`);
+          }
+        }
+        acc = next;
+      }
+      return acc;
+    }
+    case "for_expr": {
+      // Bind the inner loop var per item, eval body per item, flatten results.
+      const iterator = evalGroupRowExpr(expr.iterator, row, bindings, ctx);
+      const items = Array.isArray(iterator) ? iterator : iterator == null ? [] : [iterator];
+      const out: unknown[] = [];
+      for (const item of items) {
+        const innerBindings = new Map<string, unknown>(bindings ?? []);
+        innerBindings.set(expr.variable, item);
+        const bodyValue = evalGroupRowExpr(expr.body, row, innerBindings, ctx);
+        if (bodyValue == null) continue;
+        if (Array.isArray(bodyValue)) out.push(...bodyValue);
+        else out.push(bodyValue);
+      }
+      return out;
+    }
     case "function_call":
-      return evalGroupRowFunctionCall(expr.call, row, bindings);
+      return evalGroupRowFunctionCall(expr.call, row, bindings, ctx);
     case "cast": {
-      const value = evalGroupRowExpr(expr.expr, row, bindings);
+      const value = evalGroupRowExpr(expr.expr, row, bindings, ctx);
       return value;
     }
     case "if_else": {
-      const cond = evalGroupRowExpr(expr.condition, row, bindings);
+      const cond = evalGroupRowExpr(expr.condition, row, bindings, ctx);
       return cond
-        ? evalGroupRowExpr(expr.thenExpr, row, bindings)
-        : evalGroupRowExpr(expr.elseExpr, row, bindings);
+        ? evalGroupRowExpr(expr.thenExpr, row, bindings, ctx)
+        : evalGroupRowExpr(expr.elseExpr, row, bindings, ctx);
     }
     case "tuple":
-      return expr.values.map((value) => evalGroupRowExpr(value, row, bindings));
+      return expr.values.map((value) => evalGroupRowExpr(value, row, bindings, ctx));
     default:
       return null;
   }
@@ -9844,6 +10094,7 @@ const projectShape = (
   base: unknown,
   shape: ShapeElement[],
   bindings?: ReadonlyMap<string, unknown>,
+  ctx?: GroupRowCtx,
 ): unknown => {
   if (base == null || typeof base !== "object" || Array.isArray(base)) {
     return null;
@@ -9856,7 +10107,7 @@ const projectShape = (
       continue;
     }
     if (element.kind === "computed") {
-      projected[element.name] = evalGroupRowComputed(element.expr, baseRow, bindings);
+      projected[element.name] = evalGroupRowComputed(element.expr, baseRow, bindings, ctx);
       continue;
     }
     if (element.kind === "link" || element.kind === "backlink") {
@@ -9867,9 +10118,9 @@ const projectShape = (
         continue;
       }
       if (Array.isArray(linkValue)) {
-        projected[element.name] = linkValue.map((item) => projectShape(item, linkShape, bindings));
+        projected[element.name] = linkValue.map((item) => projectShape(item, linkShape, bindings, ctx));
       } else if (linkValue && typeof linkValue === "object") {
-        projected[element.name] = projectShape(linkValue, linkShape, bindings);
+        projected[element.name] = projectShape(linkValue, linkShape, bindings, ctx);
       } else {
         projected[element.name] = null;
       }
@@ -9883,6 +10134,7 @@ const evalGroupRowComputed = (
   expr: ComputedExpr | BacklinkExpr,
   row: Record<string, unknown>,
   bindings?: ReadonlyMap<string, unknown>,
+  ctx?: GroupRowCtx,
 ): unknown => {
   if (!("kind" in expr)) {
     return null;
@@ -9893,9 +10145,9 @@ const evalGroupRowComputed = (
     case "field_ref":
       return row[expr.field] ?? null;
     case "select_expr":
-      return evalGroupRowExpr(expr.expr, row, bindings);
+      return evalGroupRowExpr(expr.expr, row, bindings, ctx);
     case "function_call":
-      return evalGroupRowFunctionCall(expr.call, row, bindings);
+      return evalGroupRowFunctionCall(expr.call, row, bindings, ctx);
     case "binding_ref":
       return bindings?.get(expr.name) ?? null;
     default:
@@ -9907,10 +10159,11 @@ const evalGroupRowFunctionCall = (
   call: FunctionCallExpr,
   row: Record<string, unknown>,
   bindings?: ReadonlyMap<string, unknown>,
+  ctx?: GroupRowCtx,
 ): unknown => {
   const args = call.args.map((arg) => {
     if (arg.kind === "expr") {
-      return evalGroupRowExpr(arg.expr, row, bindings);
+      return evalGroupRowExpr(arg.expr, row, bindings, ctx);
     }
     if (arg.kind === "literal") {
       return arg.value;
@@ -9999,12 +10252,13 @@ const compareByOrderChain = (
   a: Record<string, unknown>,
   b: Record<string, unknown>,
   chain: OrderExprChain,
+  ctx?: GroupRowCtx,
 ): number => {
-  const aValue = evalGroupRowExpr(chain.expr, a);
-  const bValue = evalGroupRowExpr(chain.expr, b);
+  const aValue = evalGroupRowExpr(chain.expr, a, undefined, ctx);
+  const bValue = evalGroupRowExpr(chain.expr, b, undefined, ctx);
   let cmp = compareScalar(aValue, bValue);
   if (cmp === 0 && chain.then) {
-    return compareByOrderChain(a, b, chain.then);
+    return compareByOrderChain(a, b, chain.then, ctx);
   }
   if (chain.direction === "desc") cmp = -cmp;
   return cmp;

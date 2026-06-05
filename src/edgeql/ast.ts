@@ -676,7 +676,11 @@ export interface GroupUsingBinding {
 
 export type GroupByAtom =
   | { kind: "field_ref"; field: string }
-  | { kind: "name_ref"; name: string };
+  | { kind: "name_ref"; name: string }
+  // A BY atom that references a link property, written `@name`. The semantic
+  // layer surfaces the link property as a field on the source rows and runs
+  // its own validation/collision checks (see contract C2/C3).
+  | { kind: "link_property_ref"; name: string };
 
 // Top-level BY entries combine to form one or more "grouping sets" — each set
 // is a list of atom names. Plain `BY a, b` → one set [a, b]; `BY {a, b}` →

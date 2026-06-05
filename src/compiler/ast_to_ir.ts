@@ -1,5 +1,6 @@
 import { AppError } from "../errors.js";
 import { parseEdgeQL } from "../edgeql/parser.js";
+import { validateGroupByAtomCollisions } from "./semantic.js";
 import type {
   Statement as EdgeQLStatement,
   ComputedExpr,
@@ -3690,6 +3691,18 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
         isMaterializedRef: false,
         isSchemaAlias: false,
       };
+    }
+
+    case "group_expr": {
+      // The modern GelIR pipeline cannot model a `group_expr` in expression
+      // position (e.g. `SELECT Card { x := (GROUP .avatar BY @text, .text) }`),
+      // so this still throws "not implemented". But Contract C3 BY-clause
+      // collision diagnostics must fire here too — run them first so the user
+      // sees the precise error rather than the generic unsupported message.
+      validateGroupByAtomCollisions(expr.by, (message) => {
+        throw new AppError("E_SEMANTIC", message, 1, 1);
+      });
+      throw new AppError("E_RUNTIME", `AST->IR is not implemented yet for '${expr.kind}'`, 1, 1);
     }
 
     default:

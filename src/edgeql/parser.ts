@@ -989,11 +989,11 @@ class Parser {
       }
 
       if (token.kind === "kw_create" || token.kind === "kw_alter" || token.kind === "kw_drop") {
-        // `WITH MODULE foo CREATE DATABASE bar` and similar combinations are
-        // rejected upstream — DDL statements don't accept a WITH prefix.
-        if (withClause.with !== undefined
-          || withClause.withModuleAliases !== undefined
-          || (withClause.withModule !== undefined && withClause.withModule !== this.defaultModule)) {
+        // A bare `WITH MODULE <name>` (and module aliases) IS allowed before
+        // CREATE/ALTER/DROP — it sets the DDL name-resolution default module.
+        // Only expression WITH bindings (`WITH x := ...`) remain rejected
+        // before DDL, since DDL doesn't accept computed WITH bindings.
+        if (withClause.with !== undefined) {
           this.notSupported(
             token,
             "WITH before DDL",
@@ -1008,7 +1008,10 @@ class Parser {
           && this.peekNext().lower === "current") {
           return this.parsePassthroughStatement(token);
         }
-        return this.parseDDL();
+        // Thread the WITH MODULE / module aliases onto the DDL node so the
+        // integrator can use them as the name-resolution default. (Policy-eval
+        // and resolution itself happen downstream.)
+        return this.parseDDL(withClause.withModule, withClause.withModuleAliases);
       }
 
       // Bare top-level expression (`'a' if true else 'b'`, `1 + 2`,
@@ -1382,23 +1385,34 @@ class Parser {
   private parseGroupByElement(): GroupByElement {
     const token = this.peek();
 
-    // `BY { atom, atom, … }` — comma-separated grouping sets. Upstream
-    // accepts nested grouping sets (`{a, {b, CUBE(c)}}`) and trailing
-    // commas; parse-only consumes the entire `{ ... }` block opaquely.
+    // `BY { atom, atom, … }` — comma-separated grouping sets. EACH
+    // comma-separated entry is its own grouping set (its own `GroupByAtom[]`):
+    // a single atom entry `a` -> `[a]`, a parenthesized multi-atom entry
+    // `(a, b)` -> `[a, b]`. So `BY {.element, nowners}` ->
+    // sets: [[{field_ref element}], [{name_ref nowners}]]. Trailing commas and
+    // an empty `{}` are accepted.
     if (token.kind === "lbrace") {
       this.consume();
-      let depth = 1;
-      while (this.peek().kind !== "eof" && depth > 0) {
-        const k = this.peek().kind;
-        if (k === "lbrace" || k === "lparen" || k === "lbracket") depth += 1;
-        else if (k === "rbrace" || k === "rparen" || k === "rbracket") {
-          depth -= 1;
-          if (depth === 0) break;
+      const sets: GroupByAtom[][] = [];
+      while (this.peek().kind !== "rbrace" && this.peek().kind !== "eof") {
+        if (this.peek().kind === "lparen") {
+          // Parenthesized entry `(a, b)` — a single grouping set of >1 atom.
+          this.consume();
+          const innerAtoms = this.parseGroupByAtomList();
+          this.expect("rparen", "Expected ')' in BY grouping set entry");
+          sets.push(innerAtoms);
+        } else {
+          // A single atom entry forms its own one-atom grouping set.
+          sets.push([this.parseGroupByAtom()]);
+        }
+        if (this.peek().kind !== "comma") {
+          break;
         }
         this.consume();
+        // Trailing comma before the closing brace is accepted.
       }
       this.expect("rbrace", "Expected '}' after BY grouping sets");
-      return { kind: "sets", sets: [] };
+      return { kind: "sets", sets };
     }
 
     if (this.isNameToken(token) && token.lower === "cube" && this.peekNext().kind === "lparen") {
@@ -1429,7 +1443,16 @@ class Parser {
   private parseGroupByAtom(): GroupByAtom {
     const token = this.peek();
     if (token.kind === "at") {
-      throw new AppError("E_SYNTAX", "BY clause cannot refer to link properties (parser does not yet support '@<name>' in BY)", ...this.posPair(token));
+      // `@name` — a link-property BY atom. We parse it as a dedicated atom
+      // variant; the semantic layer surfaces the link property as a field and
+      // runs validation/collision checks (contract C2/C3).
+      this.consume();
+      const nameToken = this.peek();
+      if (!this.isNameToken(nameToken)) {
+        throw new AppError("E_SYNTAX", "Expected link property name after '@' in BY clause", ...this.posPair(nameToken));
+      }
+      const name = this.consume().lexeme;
+      return { kind: "link_property_ref", name };
     }
     if (token.kind === "dot") {
       this.consume();
@@ -1920,7 +1943,7 @@ class Parser {
     return parts.join("::");
   }
 
-  private parseDDL(): DDLStatement {
+  private parseDDL(withModule?: string, withModuleAliases?: WithModuleAlias[]): DDLStatement {
     const start = this.expectAny(["kw_create", "kw_alter", "kw_drop"], "Expected 'create', 'alter', or 'drop'");
     let action: DDLStatement["action"];
     if (start.kind === "kw_create") {
@@ -2278,6 +2301,10 @@ class Parser {
       modifiers: modifiers.length > 0 ? modifiers : undefined,
       extendsList,
       setCommands: setCommands.length > 0 ? setCommands : undefined,
+      // A bare `WITH MODULE <name>` prefix supplies the DDL name-resolution
+      // default module; thread it (and any module aliases) onto the node.
+      withModule: withModule !== undefined && withModule !== this.defaultModule ? withModule : undefined,
+      withModuleAliases,
       pos: this.posOf(start),
     };
   }
@@ -5464,6 +5491,26 @@ class Parser {
     if (this.peek().kind === "lparen" && this.peekNext().kind === "kw_with") {
       this.consume();
       const withClause = this.parseWithClause();
+      // The WITH body need not be a `select`: it may be a `for ... union (...)`
+      // expression or a bare parenthesized free-object arm (e.g.
+      // `groups := (with z := ... for z in z union (even := ..., elements := ...))`).
+      // When the body doesn't begin with `select`, parse it with the general
+      // free-object parser, which handles for/union/free-object-constructor.
+      if (this.peek().kind !== "kw_select") {
+        const bodyExpr = this.parseFreeObjectExpr();
+        const bodyClauses = this.parseClauseChain();
+        this.expect("rparen", "Expected ')' after computed subquery expression");
+        return {
+          kind: "select_expr",
+          expr: bodyExpr,
+          clauses: {
+            ...bodyClauses,
+            _withBindings: withClause.with,
+            _withModule: withClause.withModule,
+            _withModuleAliases: withClause.withModuleAliases,
+          },
+        };
+      }
       this.expect("kw_select", "Expected 'select' in computed subquery expression");
       if (this.isNameToken(this.peek()) && (this.peekNext().kind === "lbrace" || this.peekNext().kind === "kw_filter" || this.peekNext().kind === "kw_order" || this.peekNext().kind === "kw_limit" || this.peekNext().kind === "kw_offset")) {
         const nested = this.parseInlineSelectExpr();
@@ -5494,6 +5541,25 @@ class Parser {
           _withModule: withClause.withModule,
           _withModuleAliases: withClause.withModuleAliases,
         },
+      };
+    }
+
+    // `( GROUP ... )` — an embedded (expression-position) GROUP in a computed
+    // shape entry, e.g. `SELECT Card { x := (GROUP .avatar BY @text, .text) }`.
+    // Route it through parseGroupExpr so its BY clause is parsed by the same
+    // group-by parser (parseGroupByList/parseGroupByAtom) — `@text` becomes a
+    // link_property_ref atom rather than being consumed by the scalar-value
+    // reader (contract C3). atParenthesizedSelect() doesn't recognise GROUP, so
+    // this case must precede that guard.
+    if (this.peek().kind === "lparen" && this.peekNext().kind === "kw_group") {
+      this.consume();
+      const group = this.parseGroupExpr();
+      const clauses = this.parseClauseChain();
+      this.expect("rparen", "Expected ')' after embedded GROUP expression");
+      return {
+        kind: "select_expr",
+        expr: group,
+        clauses,
       };
     }
 
