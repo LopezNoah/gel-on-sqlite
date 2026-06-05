@@ -1115,6 +1115,22 @@ const withBindings = (ctx: IRCompileContext, bindings: WithBinding[] | undefined
         set = literalToSet(null);
         break;
     }
+    // Tag object identity aliases so a later bare reference to the same type
+    // is distinguishable from the WITH binding in SQL outer-scope matching.
+    if (
+      !set.typeref.isScalar
+      && set.expr.kind === "type_root"
+      && set.pathId
+    ) {
+      const ns = `with:${binding.name}:${ctx.nextScopeId++}`;
+      set = {
+        ...set,
+        pathId: {
+          ...set.pathId,
+          namespace: [...(set.pathId.namespace ?? []), ns],
+        },
+      };
+    }
     bindValue(scoped, binding.name, set);
   }
   return scoped;
@@ -5913,6 +5929,15 @@ const compileSelectStatement = (rawStatement: SelectStatement, ctx: IRCompileCon
   bindValue(scoped, "__subject__", subject);
   bindValue(scoped, "__current__", subject);
   const shaped = compileShape(subject, statement.shape, scoped);
+  // Expose the computed shape elements to FILTER / ORDER BY so `.n1` etc.
+  // resolve to the corresponding shape entry rather than failing with a
+  // "no link or property" error. The non-shaped `subject` continues to
+  // back path-sharing inside the shape itself.
+  const shapedSubject: Set = shaped.length > 0 ? { ...subject, shape: shaped } : subject;
+  if (shaped.length > 0) {
+    bindValue(scoped, "__current__", shapedSubject);
+    bindValue(scoped, "__subject__", shapedSubject);
+  }
   const compileOrderEntry = (entry: { field?: string; expr?: FreeObjectExpr; direction: "asc" | "desc"; then?: any }): SortExpr => {
     // The parser stamps `field = "__expr__"` when ORDER BY carries an
     // arbitrary expression (`ORDER BY count(...)`), with the real expr
@@ -5949,7 +5974,7 @@ const compileSelectStatement = (rawStatement: SelectStatement, ctx: IRCompileCon
     kind: "select_stmt",
     expr: { ...subject, shape: shaped },
     ...statementBase(scoped),
-    where: compileFilterToSet(statement.filter, subject, scoped),
+    where: compileFilterToSet(statement.filter, shapedSubject, scoped),
     orderBy,
     // Forward LIMIT/OFFSET literals from the parsed clause chain into the IR;
     // they were being dropped on the floor, so `SELECT Issue {…} LIMIT 3`

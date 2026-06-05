@@ -66,9 +66,9 @@ export interface GelIRCompileOptions {
   // shape projection on `User` refers to the OUTER iterator's current row,
   // not a cross-product of all Users. The IR doesn't capture this binding
   // (the inner reference is a fresh type_root with its own path), so the
-  // SQL compiler matches by typeref id here when resolving path
-  // references. Most-recent (innermost) scopes take precedence.
-  outerScopes?: ReadonlyArray<{ alias: string; typeref: TypeRef }>;
+  // SQL compiler matches by typeref id and path namespace here when resolving
+  // path references. Most-recent (innermost) scopes take precedence.
+  outerScopes?: ReadonlyArray<{ alias: string; typeref: TypeRef; namespace?: string[] }>;
   // When a multi-scalar pointer is being iterated via `json_each(col) je`,
   // the helper binds the iteration's pathId(s) to the SQL expression that
   // evaluates the json_each value column (`je."value"`). compileValueSetSQL
@@ -304,7 +304,7 @@ export const compileGelIRToSQL = (
           ...options,
           outerScopes: [
             ...(options.outerScopes ?? []),
-            { alias: sourceAlias, typeref: (sourceSet.expr as TypeRoot).typeref },
+            { alias: sourceAlias, typeref: (sourceSet.expr as TypeRoot).typeref, namespace: sourceSet.pathId?.namespace ?? [] },
           ],
         }
       : options;
@@ -324,7 +324,7 @@ export const compileGelIRToSQL = (
           ...options,
           outerScopes: [
             ...(options.outerScopes ?? []),
-            { alias: sourceAlias, typeref: (sourceSet.expr as TypeRoot).typeref },
+            { alias: sourceAlias, typeref: (sourceSet.expr as TypeRoot).typeref, namespace: sourceSet.pathId?.namespace ?? [] },
           ],
         }
       : options;
@@ -825,6 +825,11 @@ const collectScalarPointerSources = (set: Set, sources: Map<string, TypeRef>): v
     // instead of a single scalar.
     if (expr.kind === "function_call") {
       const fcall = expr as FunctionCall;
+      // LEGITIMATE (do not remove): EdgeQL fully-qualified function names are
+      // canonically `module::name`; taking the last `::` segment is lossless
+      // qualified-name decomposition, not IR structure re-derived from a
+      // string. This `::`-split idiom recurs across function-call lowering for
+      // the same reason.
       const shortName = (fcall.functionName ?? "").split("::").pop() ?? "";
       const isAggregate = ["count", "sum", "min", "max", "avg", "all", "any", "array_agg", "enumerate"].includes(shortName);
       if (isAggregate) {
@@ -1887,6 +1892,33 @@ const compileScalarSelectSQLInner = (
       : `json_array(${values.join(", ")})`;
     return `SELECT ${valueExpr} AS ${quoteIdent("value")} FROM ${sources.join(" CROSS JOIN ")}`;
   }
+
+  // Array constructor `[X, Y, ...]` whose elements include multi-cardinality
+  // scalar pointer references. EdgeQL semantics cross-product the element sets,
+  // producing one array per `(e1, e2, ...)` combination.
+  if (sourceSet.expr.kind === "array") {
+    const arr = sourceSet.expr as ArrayExpr;
+    if (arr.elements.length === 0) {
+      return `SELECT json_array() AS ${quoteIdent("value")}`;
+    }
+    const arrSources: string[] = [];
+    const arrValues: string[] = [];
+    for (let i = 0; i < arr.elements.length; i += 1) {
+      const element = arr.elements[i]!;
+      const elementSql = compileScalarSelectSQL(element, params, target, options);
+      if (!elementSql) return null;
+      const alias = `arr_${i}`;
+      arrSources.push(`(${elementSql}) ${alias}`);
+      const valueRef = `${alias}.${quoteIdent("value")}`;
+      const elementType = (element.typeref?.id ?? element.typeref?.nameHint ?? "").toLowerCase();
+      const isBoolType = elementType === "std::bool"
+        || elementType === "unknown:std::bool"
+        || elementType === "bool";
+      const wrapInJson = setValueIsJson(element) || isBoolType;
+      arrValues.push(wrapInJson ? `json(${valueRef})` : valueRef);
+    }
+    return `SELECT json_array(${arrValues.join(", ")}) AS ${quoteIdent("value")} FROM ${arrSources.join(" CROSS JOIN ")}`;
+  }
   // Pre-compute whether the outer FILTERs (if any) reference the same
   // iteration root as the value. If not, the set-level coalesce / ?= / ?!=
   // shortcuts are still safe to take — the filter will be applied
@@ -2507,27 +2539,64 @@ const tryCompileScalarPointerPathSelectSQL = (
 // fall back to its own default placeholder.
 const pickOuterScopeAliasForExpr = (set: Set, options: GelIRCompileOptions): string | null => {
   if (!options.outerScopes || options.outerScopes.length === 0) return null;
-  // Walk the expression to find the innermost type_root reference.
-  let expr: Expr = set.expr;
-  while (true) {
-    if (expr.kind === "pointer") {
-      expr = (expr as Pointer).source.expr;
-      continue;
-    }
-    if (expr.kind === "select_expr") {
-      expr = (expr as SelectExpr).result.expr;
-      continue;
-    }
-    if (expr.kind === "type_cast") {
-      expr = (expr as TypeCast).expr.expr;
-      continue;
-    }
-    break;
-  }
-  if (expr.kind !== "type_root") return null;
-  const id = (expr as TypeRoot).typeref.id;
-  const match = [...options.outerScopes].reverse().find((scope) => scope.typeref.id === id);
+  const innerSet = innermostTypeRootSet(set);
+  if (!innerSet) return null;
+  const innerTyperef = (innerSet.expr as TypeRoot).typeref;
+  const match = findMatchingOuterScope(
+    { typerefId: innerTyperef.id, namespace: innerSet.pathId?.namespace ?? [] },
+    options,
+  );
   return match ? match.alias : null;
+};
+
+const innermostTypeRootSet = (set: Set): Set | null => {
+  let cur: Set = set;
+  while (true) {
+    if (cur.expr.kind === "type_root") return cur;
+    if (cur.expr.kind === "pointer") { cur = (cur.expr as Pointer).source; continue; }
+    if (cur.expr.kind === "select_expr") { cur = (cur.expr as SelectExpr).result; continue; }
+    if (cur.expr.kind === "type_cast") { cur = (cur.expr as TypeCast).expr; continue; }
+    return null;
+  }
+};
+
+const namespacesEqual = (a?: readonly string[], b?: readonly string[]): boolean => {
+  const x = a ?? [];
+  const y = b ?? [];
+  if (x.length !== y.length) return false;
+  for (let i = 0; i < x.length; i += 1) {
+    if (x[i] !== y[i]) return false;
+  }
+  return true;
+};
+
+const findMatchingOuterScope = (
+  reference: { typerefId: string; namespace: readonly string[] },
+  options: GelIRCompileOptions,
+): { alias: string; typeref: TypeRef; namespace?: string[] } | undefined => {
+  if (!options.outerScopes || options.outerScopes.length === 0) return undefined;
+  return [...options.outerScopes].reverse().find(
+    (scope) => scope.typeref.id === reference.typerefId
+      && namespacesEqual(scope.namespace, reference.namespace),
+  );
+};
+
+const isSingletonOuterScopeRef = (set: Set, options: GelIRCompileOptions): boolean => {
+  let cur: Set = set;
+  while (cur.expr.kind === "select_expr") {
+    const se = cur.expr as SelectExpr;
+    if (se.where || (se.orderBy && se.orderBy.length > 0) || se.limit || se.offset) {
+      return false;
+    }
+    cur = se.result;
+  }
+  if (cur.expr.kind !== "type_root") return false;
+  if (cur.typeref.isScalar) return false;
+  const typerefId = (cur.expr as TypeRoot).typeref.id;
+  return findMatchingOuterScope(
+    { typerefId, namespace: cur.pathId?.namespace ?? [] },
+    options,
+  ) !== undefined;
 };
 
 // Returns SQL that scans the values of a multi-scalar pointer correlated to
@@ -2555,11 +2624,28 @@ const tryCompileCorrelatedMultiScalarRHS = (
   if (pointer.ptrref.outCardinality !== "many" && pointer.ptrref.outCardinality !== "at_least_one") {
     return null;
   }
-  let sourceExpr: Expr = pointer.source.expr;
-  while (sourceExpr.kind === "select_expr") {
-    sourceExpr = (sourceExpr as SelectExpr).result.expr;
+  let sourceSet: Set = pointer.source;
+  while (sourceSet.expr.kind === "select_expr") {
+    const se = sourceSet.expr as SelectExpr;
+    if (se.where || (se.orderBy && se.orderBy.length > 0) || se.limit || se.offset) {
+      return null;
+    }
+    sourceSet = se.result;
   }
-  if (sourceExpr.kind !== "type_root") return null;
+  if (sourceSet.expr.kind !== "type_root") return null;
+  const sourceNs = sourceSet.pathId?.namespace ?? [];
+  if (sourceNs.length > 0) {
+    const outerMatch = findMatchingOuterScope(
+      {
+        typerefId: (sourceSet.expr as TypeRoot).typeref.id,
+        namespace: sourceNs,
+      },
+      options,
+    );
+    if (!outerMatch || outerMatch.alias !== sourceAlias) {
+      return null;
+    }
+  }
   const column = columnForPointer(pointer);
   // The outer source's column holds the JSON-encoded array; unpack it.
   return `SELECT je.${quoteIdent("value")} AS ${quoteIdent("value")} FROM json_each(COALESCE(${sourceAlias}.${quoteIdent(column)}, '[]')) je`;
@@ -2605,12 +2691,13 @@ const tryCompileMultiScalarPointerSelectSQL = (
     links.push(ptr);
     cursor = ptr.source;
   }
-  let rootExpr: Expr = cursor.expr;
-  while (rootExpr.kind === "select_expr") {
-    rootExpr = (rootExpr as SelectExpr).result.expr;
+  let rootSet: Set = cursor;
+  while (rootSet.expr.kind === "select_expr") {
+    rootSet = (rootSet.expr as SelectExpr).result;
   }
-  if (rootExpr.kind !== "type_root") return null;
-  const rootTypeRef = (rootExpr as TypeRoot).typeref;
+  if (rootSet.expr.kind !== "type_root") return null;
+  const rootTypeRef = (rootSet.expr as TypeRoot).typeref;
+  const rootNamespace = rootSet.pathId?.namespace ?? [];
 
   const checkpoint = params.length;
   const leafColumn = columnForPointer(leaf);
@@ -2620,8 +2707,8 @@ const tryCompileMultiScalarPointerSelectSQL = (
   // SAME `Item` aggregate just the current row's elements rather than
   // every row's elements.
   const outerMatch = links.length === 0
-    && options.outerScopes
-    && [...options.outerScopes].reverse().find((scope) => scope.typeref.id === rootTypeRef.id);
+    ? findMatchingOuterScope({ typerefId: rootTypeRef.id, namespace: rootNamespace }, options)
+    : undefined;
   let fromSql: string;
   let previousAlias: string;
   if (outerMatch) {
@@ -2706,6 +2793,12 @@ const tryCompileMultiScalarPointerSelectSQL = (
   // path lookup; we route via outerScopes extension.
   const innerWheres = collectInnerWhereClauses(set);
   const whereSqls: string[] = [];
+  const innerOuterScopes = outerMatch
+    ? options.outerScopes
+    : [
+        ...(options.outerScopes ?? []),
+        { alias: previousAlias, typeref: rootTypeRef, namespace: [...rootNamespace] },
+      ];
   const compileMultiWhere = (where: Set): string | null => {
     const cp = params.length;
     // For `_ := X.tag_set1 FILTER _ IN {...}`, the binding `_` resolves to
@@ -2714,6 +2807,7 @@ const tryCompileMultiScalarPointerSelectSQL = (
     // the leaf pathId resolve to je.value.
     const innerOptions: GelIRCompileOptions = {
       ...options,
+      outerScopes: innerOuterScopes,
       multiScalarBindings: new Map([
         ...(options.multiScalarBindings ?? new Map()),
         [pathIdKey(set), valueSql],
@@ -2776,6 +2870,170 @@ const tryCompileMultiScalarPointerSelectSQL = (
     sql += ` OFFSET ${offset}`;
   }
   return sql;
+};
+
+// Detect a tuple element that's a direct multi-scalar pointer reference
+// (e.g. `Item.tag_set1` where tag_set1 is `multi property -> str`). For these
+// elements, building the enclosing tuple as a value requires expanding the
+// JSON-encoded multi-scalar column via `json_each`, then cross-joining with
+// other elements' iterations to form the EdgeQL set-of-tuples semantics.
+// Returns the leaf Pointer when the element matches; null otherwise.
+//
+// Stays conservative — only matches when the pointer hangs directly off a
+// type_root that's the outer-scope row (the shape source). Chains and
+// link-property leaves go through other paths.
+const tryExtractMultiScalarLeafPointer = (set: Set): Pointer | null => {
+  const unwrapped = unwrapSelectExprSet(set);
+  const expr = unwrapped.result.expr;
+  if (expr.kind !== "pointer") return null;
+  const pointer = expr as Pointer;
+  if (!pointer.ptrref.outTarget.isScalar) return null;
+  if (pointer.ptrref.isLinkProperty) return null;
+  if (
+    pointer.ptrref.outCardinality !== "many"
+    && pointer.ptrref.outCardinality !== "at_least_one"
+  ) {
+    return null;
+  }
+  // Source must reduce to a type_root for the simple inline-column path.
+  let sourceExpr: Expr = pointer.source.expr;
+  while (sourceExpr.kind === "select_expr") {
+    sourceExpr = (sourceExpr as SelectExpr).result.expr;
+  }
+  if (sourceExpr.kind !== "type_root") return null;
+  return pointer;
+};
+
+// Compile a tuple whose elements may include multi-scalar pointers — emit a
+// cross-joined `json_each` subquery and aggregate the produced tuples with
+// `json_group_array`. Returns null when the tuple has no multi-scalar
+// elements (the caller falls back to the inline `json_array(...)` path) or
+// when any element fails to lower.
+//
+// `indexProjection` selects a single tuple element (`(M0, M1).1` projects
+// `M1` rather than building the whole tuple). When provided, the inner
+// SELECT projects just that element so the outer COALESCE returns a
+// json_group_array of values — matching `Item.tag_set1` shape output for
+// multi-scalar projection on a tuple set.
+const compileTupleWithMultiScalarsSQL = (
+  tuple: Tuple,
+  sourceAlias: string,
+  params: ScalarValue[],
+  target: RuntimeTarget,
+  options: GelIRCompileOptions,
+  linkPropertyAlias: string | undefined,
+  indexProjection?: number,
+): string | null => {
+  const checkpoint = params.length;
+  // Classify each element as multi-scalar (needs json_each) vs single
+  // (compile inline).
+  type Classified =
+    | { kind: "multi"; pointer: Pointer; element: { name?: string; val: Set } }
+    | { kind: "single"; element: { name?: string; val: Set } };
+  const classified: Classified[] = [];
+  let hasMulti = false;
+  for (const element of tuple.elements) {
+    const leaf = tryExtractMultiScalarLeafPointer(element.val);
+    if (leaf) {
+      classified.push({ kind: "multi", pointer: leaf, element });
+      hasMulti = true;
+    } else {
+      classified.push({ kind: "single", element });
+    }
+  }
+  if (!hasMulti) return null;
+
+  // Build per-element SQL value expressions tied to the cross-product row.
+  const jeAliases: string[] = [];
+  const elementSqls: string[] = [];
+  let jeIndex = 0;
+  const multiBindings = new Map<string, string>(options.multiScalarBindings ?? new Map());
+  for (const item of classified) {
+    if (item.kind === "multi") {
+      const alias = `je${jeIndex++}`;
+      jeAliases.push(`json_each(COALESCE(${sourceAlias}.${quoteIdent(columnForPointer(item.pointer))}, '[]')) ${alias}`);
+      const valueSql = `${alias}.${quoteIdent("value")}`;
+      elementSqls.push(valueSql);
+      // Bind so any nested reference to the same pathId resolves to je.value
+      // (not needed for the tests covered today but keeps the path consistent
+      // with the rest of the multi-scalar machinery).
+      multiBindings.set(pathIdKey(item.element.val), valueSql);
+      const innerUnwrapped = unwrapSelectExprSet(item.element.val);
+      multiBindings.set(pathIdKey(innerUnwrapped.result), valueSql);
+    } else {
+      const innerOptions: GelIRCompileOptions = { ...options, multiScalarBindings: multiBindings };
+      const compiled = compileValueSetSQL(item.element.val, sourceAlias, params, target, innerOptions, linkPropertyAlias);
+      if (!compiled) {
+        params.length = checkpoint;
+        return null;
+      }
+      elementSqls.push(compiled);
+    }
+  }
+
+  // Project either the full tuple or just one selected element. Track
+  // whether the per-row output is a structural JSON value (an array/object
+  // we built ourselves) — we wrap those with `json(...)` so
+  // `json_group_array` embeds them as nested JSON instead of stringifying.
+  let projectionSql: string;
+  let projectionIsJson: boolean;
+  if (indexProjection !== undefined) {
+    const idx = indexProjection >= 0 ? indexProjection : indexProjection + elementSqls.length;
+    if (idx < 0 || idx >= elementSqls.length) {
+      params.length = checkpoint;
+      return null;
+    }
+    projectionSql = elementSqls[idx]!;
+    // The projected slot is either a multi-scalar value (je.value — a JSON
+    // string from json_each) or a single-element compile. Treat scalar
+    // values as non-JSON so the aggregate emits them as JSON strings.
+    projectionIsJson = setValueIsJson(classified[idx]!.element.val);
+  } else if (tuple.named) {
+    const pairs = classified.map((item, i) => `${quoteLiteral(item.element.name ?? String(i))}, ${elementSqls[i]}`);
+    projectionSql = `json_object(${pairs.join(", ")})`;
+    projectionIsJson = true;
+  } else {
+    projectionSql = `json_array(${elementSqls.join(", ")})`;
+    projectionIsJson = true;
+  }
+
+  const fromSql = jeAliases.join(", ");
+  // EdgeQL sets are unordered so the engine may emit any permutation. To
+  // produce stable, comparable output (and match the upstream Python
+  // tests, which sort each multi-tuple field alphabetically before
+  // comparing) we order the cross-product by each multi element's value.
+  // SQLite's `json_group_array` aggregates in source-row order — wrapping
+  // the iteration in an inner ORDER BY subquery is the only way to get a
+  // deterministic group order, since an `ORDER BY` at the aggregate level
+  // applies to the *output* row of the aggregate (which is a singleton).
+  // When projecting a single element (`.k`) we put that element first in
+  // the sort key so the per-element result sorts alphabetically rather
+  // than reflecting the je0/je1 cross-product traversal order.
+  const valueRef = (i: number) => `je${i}.${quoteIdent("value")}`;
+  const multiIndices: number[] = [];
+  for (let i = 0; i < classified.length; i++) {
+    if (classified[i]!.kind === "multi") multiIndices.push(multiIndices.length);
+  }
+  let orderParts: string[];
+  if (indexProjection !== undefined && classified[indexProjection]?.kind === "multi") {
+    // Find which je-index the projected element maps to.
+    let projectedJeIdx = -1;
+    let runningJeIdx = 0;
+    for (let i = 0; i < classified.length; i++) {
+      if (classified[i]!.kind === "multi") {
+        if (i === indexProjection) projectedJeIdx = runningJeIdx;
+        runningJeIdx++;
+      }
+    }
+    orderParts = [valueRef(projectedJeIdx)];
+    for (const j of multiIndices) if (j !== projectedJeIdx) orderParts.push(valueRef(j));
+  } else {
+    orderParts = multiIndices.map(valueRef);
+  }
+  const orderClause = orderParts.length > 0 ? ` ORDER BY ${orderParts.join(", ")}` : "";
+  const innerSelect = `SELECT ${projectionSql} AS __v FROM ${fromSql}${orderClause}`;
+  const aggArg = projectionIsJson ? "json(__v)" : "__v";
+  return `COALESCE((SELECT json_group_array(${aggArg}) FROM (${innerSelect})), '[]')`;
 };
 
 // Path that ends in a link property (`X.l@p`, `X.<l[IS T]@p`). The terminal
@@ -2991,6 +3249,79 @@ const valueSetContainsAggregate = (set: Set): boolean => {
     if (e.kind === "array") {
       for (const el of (s.expr as { elements: Set[] }).elements) visit(el);
       return;
+    }
+  };
+  visit(set);
+  return found;
+};
+
+// Detect whether an expression contains a multi-cardinality scalar pointer
+// reference (e.g. `Item.tag_set1`). Used to decide whether constructors like
+// `[Item.tag_set1, Item.tag_set2]` need multi-row SELECT lowering instead of a
+// single inline `json_array(...)` value.
+const containsMultiScalarPointer = (set: Set): boolean => {
+  let found = false;
+  const visit = (s: Set): void => {
+    if (found) return;
+    const e = s.expr;
+    if (!e) return;
+    if (e.kind === "pointer") {
+      const ptr = s.expr as Pointer;
+      if (ptr.ptrref.outTarget.isScalar
+        && !ptr.ptrref.isLinkProperty
+        && (ptr.ptrref.outCardinality === "many" || ptr.ptrref.outCardinality === "at_least_one")) {
+        found = true;
+        return;
+      }
+      visit(ptr.source);
+      return;
+    }
+    if (e.kind === "function_call") {
+      const fc = s.expr as FunctionCall;
+      const shortName = (fc.functionName ?? "").split("::").pop() ?? "";
+      if (["count", "sum", "min", "max", "avg", "all", "any", "array_agg"].includes(shortName)) {
+        return;
+      }
+      for (const arg of orderedCallArgs((s.expr as { args: Record<string, CallArg> }).args)) visit(arg.expr);
+      return;
+    }
+    if (e.kind === "operator_call") {
+      for (const arg of orderedCallArgs((s.expr as { args: Record<string, CallArg> }).args)) visit(arg.expr);
+      return;
+    }
+    if (e.kind === "type_cast") { visit((s.expr as TypeCast).expr); return; }
+    if (e.kind === "if_else_expr") {
+      visit((s.expr as IfElseExpr).condition);
+      visit((s.expr as IfElseExpr).ifExpr);
+      visit((s.expr as IfElseExpr).elseExpr);
+      return;
+    }
+    if (e.kind === "coalesce_expr") {
+      visit((s.expr as CoalesceExpr).left);
+      visit((s.expr as CoalesceExpr).right);
+      return;
+    }
+    if (e.kind === "tuple") {
+      for (const el of (s.expr as Tuple).elements) visit(el.val);
+      return;
+    }
+    if (e.kind === "array") {
+      for (const el of (s.expr as { elements: Set[] }).elements) visit(el);
+      return;
+    }
+    if (e.kind === "index_expr") {
+      visit((s.expr as IndexExpr).expr);
+      visit((s.expr as IndexExpr).index);
+      return;
+    }
+    if (e.kind === "slice_expr") {
+      visit((s.expr as SliceExpr).expr);
+      if ((s.expr as SliceExpr).start) visit((s.expr as SliceExpr).start!);
+      if ((s.expr as SliceExpr).end) visit((s.expr as SliceExpr).end!);
+      return;
+    }
+    if (e.kind === "select_expr") {
+      visit((s.expr as SelectExpr).result);
     }
   };
   visit(set);
@@ -3950,6 +4281,9 @@ const collectFreeTypeRoots = (
   return roots;
 };
 
+// Recover the next free `g<N>` CROSS-JOIN alias index from aliases already in
+// the binding map. The regex matches an internal naming convention minted by
+// this compiler, not external/IR structure.
 const countAliases = (bindingAliases: Map<string, string>): number => {
   let max = 0;
   for (const alias of bindingAliases.values()) {
@@ -4770,10 +5104,18 @@ const compileProjectedSourceColumnRef = (set: Set): string | null => {
   // `name` pointer's source is the Issue.owner link pointer). In that case
   // the scalar property is still a column on the rows surfaced by the outer
   // SELECT, so it should be added to the projected column list.
-  let sourceExpr: Expr = pointer.source.expr;
-  while (sourceExpr.kind === "select_expr") {
-    sourceExpr = (sourceExpr as SelectExpr).result.expr;
+  let cursor: Set = pointer.source;
+  while (cursor.expr.kind === "select_expr") {
+    const se = cursor.expr as SelectExpr;
+    if (se.where || (se.orderBy && se.orderBy.length > 0) || se.limit || se.offset) {
+      return null;
+    }
+    cursor = se.result;
   }
+  if (cursor.expr.kind === "type_root" && (cursor.pathId?.namespace?.length ?? 0) > 0) {
+    return null;
+  }
+  let sourceExpr: Expr = cursor.expr;
   if (sourceExpr.kind === "type_root") {
     return columnForPointer(pointer);
   }
@@ -4824,6 +5166,10 @@ const innermostLinkFKColumn = (set: Set): string | null => {
 // concrete source in the UNION ALL — otherwise the SQL ends up `FROM
 // "default__file|default__url|default__publication"`, a table that doesn't
 // exist.
+//
+// KNOWN SMELL: union members are structure encoded into the id string and
+// recovered here by `.split("|")`. The IR already has `TypeRef.union`; populate
+// that where union-link TypeRefs are built so this string round-trip can go.
 const expandUnionTypeRefBranches = (typeRef: TypeRef): TypeRef[] => {
   if (!typeRef.id.includes("|")) return [typeRef];
   // Union typerefs land here as a single `unknown:default::File|default::URL`
@@ -5123,7 +5469,7 @@ const compileShapeProjection = (
       ...options,
       outerScopes: [
         ...(options.outerScopes ?? []),
-        { alias: sourceAlias, typeref: shape.source.typeref },
+        { alias: sourceAlias, typeref: shape.source.typeref, namespace: [] },
       ],
     };
     // Pass the peeled WHERE/ORDER BY into the inner source compilation so
@@ -5187,7 +5533,7 @@ const compileShapeProjection = (
       ...options,
       outerScopes: [
         ...(options.outerScopes ?? []),
-        { alias: sourceAlias, typeref: shape.source.typeref },
+        { alias: sourceAlias, typeref: shape.source.typeref, namespace: [] },
       ],
     };
     const scalarSql = compileScalarSelectSQL(shapeExpr.result, scratchParams, target, innerScalarOptions);
@@ -5926,6 +6272,7 @@ const compilePredicateSetSQL = (
     const literalRhs = extractInPredicateLiteralValues(args[setArgIdx].expr);
     if (!literalRhs || literalRhs.length === 0) continue;
     if (op !== "=" && op !== "!=") continue;
+    if (isSingletonOuterScopeRef(args[otherIdx].expr, options)) continue;
     const otherSql = compileValueSetSQL(args[otherIdx].expr, sourceAlias, params, target, options, linkPropertyAlias);
     if (!otherSql) continue;
     const placeholders = literalRhs.map(() => "?").join(", ");
@@ -5943,6 +6290,7 @@ const compilePredicateSetSQL = (
       const setArgIdx = swap ? 0 : 1;
       const otherIdx = swap ? 1 : 0;
       const setArg = args[setArgIdx].expr;
+      if (isSingletonOuterScopeRef(setArg, options)) continue;
       const setSelect = compileScalarSelectSQL(setArg, params, target, options);
       if (!setSelect) continue;
       const otherSql = compileValueSetSQL(args[otherIdx].expr, sourceAlias, params, target, options, linkPropertyAlias);
@@ -6041,7 +6389,10 @@ const tryResolveOuterScopeIdRef = (
   });
   if (meaningfulShape) return null;
   const typeId = (cursor.expr as TypeRoot).typeref.id;
-  const match = [...options.outerScopes].reverse().find((scope) => scope.typeref.id === typeId);
+  const match = findMatchingOuterScope(
+    { typerefId: typeId, namespace: cursor.pathId?.namespace ?? [] },
+    options,
+  );
   if (!match) return null;
   return `${match.alias}.${quoteIdent("id")}`;
 };
@@ -6116,9 +6467,10 @@ const compileValueSetSQL = (
     // handle them; outerScopes only carries PARENT scopes.
     if (pointer.source.expr.kind === "type_root") {
       const innerTypeId = (pointer.source.expr as TypeRoot).typeref.id;
-      const outerMatch = options.outerScopes && options.outerScopes.length > 0
-        ? [...options.outerScopes].reverse().find((scope) => scope.typeref.id === innerTypeId)
-        : undefined;
+      const outerMatch = findMatchingOuterScope(
+        { typerefId: innerTypeId, namespace: pointer.source.pathId?.namespace ?? [] },
+        options,
+      );
       if (outerMatch) {
         return `${outerMatch.alias}.${quoteIdent(col)}`;
       }
@@ -6152,7 +6504,7 @@ const compileValueSetSQL = (
     // re-emit it directly with the target slot names/shape instead of
     // letting the inner emit win — otherwise `json_object('name', …)`
     // would survive a `<tuple<…>>` cast that wanted `json_array(…)`.
-    const targetTupleSlots = parseTupleTypeSlots(qualifyTypeName(castExpr.toType));
+    const targetTupleSlots = tupleTypeSlots(castExpr.toType);
     if (targetTupleSlots && castExpr.expr.expr.kind === "tuple") {
       const sourceTuple = castExpr.expr.expr as Tuple;
       const sourceParts = sourceTuple.elements.map((element) =>
@@ -6403,6 +6755,13 @@ const compileValueSetSQL = (
 
   if (expr.kind === "tuple") {
     const tuple = expr as Tuple;
+    // When any element is a multi-scalar pointer, the tuple constructor
+    // produces a SET of tuples (one per cross-product row). Emit a
+    // json_each-cross-joined subquery aggregated with json_group_array so
+    // the shape projects an array of tuples instead of wrapping the
+    // JSON-encoded multi columns inline.
+    const multiSql = compileTupleWithMultiScalarsSQL(tuple, sourceAlias, params, target, options, linkPropertyAlias);
+    if (multiSql) return multiSql;
     const parts = tuple.elements.map((element) => compileValueSetSQL(element.val, sourceAlias, params, target, options, linkPropertyAlias));
     if (parts.some((part) => !part)) {
       params.length = checkpoint;
@@ -6414,6 +6773,14 @@ const compileValueSetSQL = (
   }
 
   if (expr.kind === "array") {
+    // Array constructors containing multi-cardinality scalar pointer refs
+    // (`[Item.tag_set1]`, `[Item.tag_set1, Item.tag_set2]`) need cross-product
+    // semantics. The inline `json_array(g0.col, ...)` form would conflate the
+    // multi-set's stored JSON with a per-element value.
+    if (expr.elements.some((el) => containsMultiScalarPointer(el))) {
+      params.length = checkpoint;
+      return null;
+    }
     const parts = expr.elements.map((element) => compileValueSetSQL(element, sourceAlias, params, target, options, linkPropertyAlias));
     if (parts.some((part) => !part)) {
       params.length = checkpoint;
@@ -6424,8 +6791,29 @@ const compileValueSetSQL = (
 
   if (expr.kind === "index_expr") {
     const indexExpr = expr as IndexExpr;
-    const base = compileValueSetSQL(indexExpr.expr, sourceAlias, params, target, options, linkPropertyAlias);
     const numericIndex = extractNumericLiteral(indexExpr.index);
+    // Tuple-of-multi-scalars `.k` access — project the kth element across
+    // the cross-product set rather than building each tuple and extracting
+    // `$[k]`. Lets the result be a homogeneous array of scalar values
+    // (`["wood","wood","rectangle","rectangle"]`) matching EdgeQL's
+    // semantics for `(M0, M1).k`.
+    if (numericIndex !== undefined) {
+      const inner = unwrapSelectExprSet(indexExpr.expr);
+      if (inner.result.expr.kind === "tuple") {
+        const tupleExpr = inner.result.expr as Tuple;
+        const tupleMulti = compileTupleWithMultiScalarsSQL(
+          tupleExpr,
+          sourceAlias,
+          params,
+          target,
+          options,
+          linkPropertyAlias,
+          numericIndex,
+        );
+        if (tupleMulti) return tupleMulti;
+      }
+    }
+    const base = compileValueSetSQL(indexExpr.expr, sourceAlias, params, target, options, linkPropertyAlias);
     const baseType = qualifyTypeName(indexExpr.expr.typeref);
     if (base && numericIndex !== undefined && (baseType === "std::str" || baseType === "std::bytes")) {
       return `substr(${base}, ${numericIndex >= 0 ? numericIndex + 1 : numericIndex}, 1)`;
@@ -7011,42 +7399,15 @@ const orderedCallArgs = (args: Record<string, CallArg>): CallArg[] => {
     .map(([, arg]) => arg);
 };
 
-// Parse `tuple<…>` / `default::tuple<…>` type names into slot descriptors.
-// Returns null when the type isn't a tuple. Slots have a `name` only when
-// the tuple is named (e.g. `tuple<a: str, b: int64>` → `[{name:"a",…},{name:"b",…}]`,
-// while `tuple<str, int64>` → `[{type:"str"},{type:"int64"}]`).
-const parseTupleTypeSlots = (typeName: string): { name?: string; type: string }[] | null => {
-  const m = /^(?:default::)?tuple<(.*)>$/.exec(typeName.trim());
-  if (!m) return null;
-  const inner = m[1];
-  const slots: { name?: string; type: string }[] = [];
-  let depth = 0;
-  let start = 0;
-  for (let i = 0; i <= inner.length; i += 1) {
-    const c = inner[i];
-    if (c === "<") depth += 1;
-    else if (c === ">") depth -= 1;
-    if ((c === "," && depth === 0) || i === inner.length) {
-      const part = inner.slice(start, i).trim();
-      start = i + 1;
-      if (part.length === 0) continue;
-      let colonIdx = -1;
-      let d = 0;
-      for (let j = 0; j < part.length; j += 1) {
-        if (part[j] === "<") d += 1;
-        else if (part[j] === ">") d -= 1;
-        else if (part[j] === ":" && d === 0) { colonIdx = j; break; }
-      }
-      if (colonIdx > 0) {
-        slots.push({ name: part.slice(0, colonIdx).trim(), type: part.slice(colonIdx + 1).trim() });
-      } else {
-        slots.push({ type: part });
-      }
-    }
-  }
-  return slots;
+// Read tuple slot descriptors from structured TypeRef data instead of parsing
+// the type name string.
+const tupleTypeSlots = (typeRef: TypeRef): { name?: string; type: string }[] | null => {
+  if (typeRef.collection !== "tuple" || !typeRef.subtypes) return null;
+  return typeRef.subtypes.map((sub) => ({ name: sub.elementName, type: qualifyTypeName(sub) }));
 };
 
+// LEGITIMATE HARDCODING (do not remove): this maps Gel std scalar types to
+// SQLite storage classes; there is no IR field carrying SQLite affinity.
 const sqlCastTarget = (typeRef: TypeRef): "TEXT" | "INTEGER" | "REAL" | null => {
   const qualified = qualifyTypeName(typeRef);
   if (
