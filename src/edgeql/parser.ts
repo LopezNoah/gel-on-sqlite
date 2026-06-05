@@ -593,6 +593,11 @@ class Parser {
   // expression (not for array indexes / slices, which are free to be huge).
   // Mirrors `errors.EdgeQLSyntaxError` for: number too large (integer), float
   // exponent too large / too small (under-/overflow Number).
+  //
+  // LEGITIMATE REGEX (do not remove): this is lexer-level numeric-literal
+  // classification operating on a raw token lexeme. Regex on lexeme text is
+  // the correct tool at the tokenizer/parser boundary — it is not type/IR
+  // structure being re-derived from a string.
   private validateNumericLiteralToken(token: Token): void {
     if (token.kind !== "number") return;
     const lex = token.lexeme;

@@ -58,9 +58,17 @@ function canonical(value: unknown): string {
 // template expects unordered matching. Returns a value whose canonical form is
 // directly comparable with the expected side.
 function normalizeAgainstTemplate(actual: unknown, expected: unknown): unknown {
-  // Mirror expectLike's "str" placeholder: any string in actual matches.
+  // Mirror expectLike's scalar-type placeholders: any value of the matching
+  // runtime type in actual matches.
   if (expected === "str" && typeof actual === "string") {
     return "str";
+  }
+  if ((expected === "int" || expected === "float" || expected === "decimal")
+      && typeof actual === "number") {
+    return expected;
+  }
+  if (expected === "bool" && typeof actual === "boolean") {
+    return "bool";
   }
   if (isUnorderedBag(expected) || isUnorderedSet(expected)) {
     // The engine sometimes returns set-typed values pre-wrapped as
@@ -176,6 +184,13 @@ export function expectLike(actual: unknown, expected: unknown): void {
   }
 
   if (expected === "str" && typeof actual === "string") {
+    return;
+  }
+  if ((expected === "int" || expected === "float" || expected === "decimal")
+      && typeof actual === "number") {
+    return;
+  }
+  if (expected === "bool" && typeof actual === "boolean") {
     return;
   }
 

@@ -51,6 +51,9 @@ export const quoteLiteral = (value: ScalarValue): string => {
   return `'${String(value).replaceAll("'", "''")}'`;
 };
 
+// LEGITIMATE REGEX (do not remove): sanitizes an arbitrary table name into a
+// safe SQL identifier for a generated trigger name. This is output-side
+// identifier construction, not parsing structure out of a string.
 const triggerName = (table: string, suffix: string): string =>
   `${table.replaceAll(/[^A-Za-z0-9_]/g, "_")}__${suffix}`;
 

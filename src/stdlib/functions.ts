@@ -160,6 +160,12 @@ export const tryResolveStdlibFunction = (name: string, arity: number, activeModu
 // EdgeQL regex flags are embedded as `(?xyz)` at the start of the pattern.
 // JS regex doesn't understand most of these inline groups, so strip them and
 // map known flags (i, m, s, x) into JS flags. Unknown flags are dropped.
+//
+// LEGITIMATE REGEX (do not remove): the EdgeQL std `re_test` / `re_match` /
+// `re_replace` builtins ARE regular-expression operations by definition. This
+// helper and the `new RegExp(...)` calls below implement those runtime
+// functions over user-supplied patterns — they are not parsing IR/type
+// structure out of a string.
 const parseEdgeQLRegex = (pattern: string): { source: string; flags: string } => {
   const match = /^\(\?([a-zA-Z]+)\)(.*)$/s.exec(pattern);
   if (!match) return { source: pattern, flags: "" };
@@ -725,6 +731,10 @@ const stddev = (values: number[], sample: boolean): number | null => {
   return Math.sqrt(varValue);
 };
 
+// LEGITIMATE REGEX (do not remove): the helpers below validate and decode
+// runtime scalar *values* — ISO-8601 datetime/date/time and ISO-8601 duration
+// strings. Regex on a value's textual representation is the correct tool here;
+// these are temporal data formats, not IR/type structure being re-parsed.
 const parseDateTime = (arg: RuntimeFunctionArg): string => {
   const scalar = extractScalar(arg);
   const date = new Date(String(scalar ?? ""));

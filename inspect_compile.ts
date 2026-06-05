@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import { parseEdgeQL } from "./src/edgeql/parser.js";
-import { compileToIR } from "./src/compiler/semantic.js";
-import { expandSchemaAliasesInStatement } from "./src/compiler/ast_to_ir.js";
+import { compileASTToGelIR, expandSchemaAliasesInStatement } from "./src/compiler/ast_to_ir.js";
 import { parseDeclarativeSchema } from "./src/schema/sdl_adapter.js";
 import { schemaSnapshotFromDeclarative } from "./src/schema/uiSchema.js";
 
@@ -20,7 +19,7 @@ for (const q of queries) {
     const ast: any = parseEdgeQL(q);
     const stmt = Array.isArray(ast) ? ast[0] : ast;
     const expanded = expandSchemaAliasesInStatement(stmt, schema);
-    const ir = compileToIR(schema, expanded);
+    const ir = compileASTToGelIR(expanded, { schema });
     console.log("Compiled OK");
     console.log(JSON.stringify(ir, null, 2).slice(0, 2000));
   } catch (e: any) {

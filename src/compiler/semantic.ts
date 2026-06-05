@@ -2709,6 +2709,11 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       && filter.op === "="
       && resolvedFilterValue === true
     ) {
+      // KNOWN SMELL: `filter.target.field` is a flattened path string
+      // (`link.@prop`) so the link/link-property split is recovered by regex
+      // here. TODO: carry the link-property access as structured AST/IR (a
+      // path with a link step + link-property step) so this never round-trips
+      // through a string.
       const linkPropertyMatch = /^([A-Za-z_][\w]*)\.@([A-Za-z_][\w]*)$/.exec(filter.target.field)
         ?? /^([A-Za-z_][\w]*)@([A-Za-z_][\w]*)$/.exec(filter.target.field);
       if (linkPropertyMatch && options.subjectType) {
@@ -8698,6 +8703,12 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           // type annotation in evaluation.
           return innerEntry;
         }
+        // KNOWN SMELL (interpreter path, not SQL lowering): `resolvedCastType`
+        // is the cast type *name* string, so collection-ness is detected by
+        // regex here. The SQL-lowering path instead reads structure from
+        // `TypeRef.collection`/`subtypes` (built in compiler/ast_to_ir.ts's
+        // `resolveTypeRef`). TODO: thread a structured cast type through the
+        // interpreter so these `array<…>`/`tuple<…>` regexes can be dropped.
         if (/^(default::)?array<.*>$/.test(resolvedCastType)) {
           // Preserve the array<...> cast so runtime evaluation can coerce
           // JSON-null sources into an empty array. Pass-through loses that
@@ -10263,6 +10274,10 @@ const coerceRuntimeScalarValue = (value: unknown, context: string): ScalarValue 
   throw new AppError("E_SEMANTIC", `Expected scalar runtime value for ${context}`, 1, 1);
 };
 
+// LEGITIMATE REGEX (do not remove): the temporal cases below validate/decode
+// runtime scalar *values* (ISO-8601 datetime/date/time/duration text). Regex
+// on a value's textual form is the right tool — these are data formats, not
+// IR/type structure being recovered from a string.
 const coerceCastScalarValue = (castType: string, value: unknown, context: string): ScalarValue => {
   const scalar = coerceRuntimeScalarValue(value, context);
 
