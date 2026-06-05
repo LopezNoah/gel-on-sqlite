@@ -6870,6 +6870,7 @@ class Parser {
       const lookahead = this.peek();
       const useFreeExpr =
         lookahead.kind === "lparen"
+        || lookahead.kind === "dot"
         || (this.isNameToken(lookahead) && this.peekNext().kind === "dot")
         || (this.isNameToken(lookahead) && this.peekNext().kind === "backward_link")
         || (this.isNameToken(lookahead) && this.peekNext().kind === "at")

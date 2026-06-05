@@ -349,7 +349,9 @@ const pointerRefFromField = (source: TypeRef, field: FieldDef): PointerRef => ({
   shortName: field.name,
   outSource: source,
   outTarget: scalarTypeRef(field.type),
-  outCardinality: field.required ? "one" : "at_most_one",
+  outCardinality: field.multi
+    ? (field.required ? "at_least_one" : "many")
+    : (field.required ? "one" : "at_most_one"),
   inCardinality: "many",
   isComputed: false,
   isIdPointer: field.name === "id",
@@ -5799,17 +5801,38 @@ const compileSelectStatement = (rawStatement: SelectStatement, ctx: IRCompileCon
   bindValue(scoped, "__subject__", subject);
   bindValue(scoped, "__current__", subject);
   const shaped = compileShape(subject, statement.shape, scoped);
-  const orderBy: SortExpr[] | undefined = statement.orderBy
-    ? [{
-        kind: "sort_expr",
-        path: (() => {
-          const ptrref = resolvePointerRef(scoped, subject.typeref, statement.orderBy!.field);
-          return ptrref ? extendPathSet(subject, ptrref) : literalToSet(null);
-        })(),
-        direction: statement.orderBy.direction,
-        nonesOrder: "last",
-      }]
-    : undefined;
+  const compileOrderEntry = (entry: { field?: string; expr?: FreeObjectExpr; direction: "asc" | "desc"; then?: any }): SortExpr => {
+    // The parser stamps `field = "__expr__"` when ORDER BY carries an
+    // arbitrary expression (`ORDER BY count(...)`), with the real expr
+    // hanging off `entry.expr`. Falling back to resolvePointerRef on the
+    // sentinel name would drop the order; route through compileFreeObjectExpr
+    // so complex paths survive.
+    let path: Set;
+    if (entry.expr) {
+      path = compileFreeObjectExpr(entry.expr, scoped);
+    } else if (entry.field) {
+      const ptrref = resolvePointerRef(scoped, subject.typeref, entry.field);
+      path = ptrref ? extendPathSet(subject, ptrref) : literalToSet(null);
+    } else {
+      path = literalToSet(null);
+    }
+    return {
+      kind: "sort_expr",
+      path,
+      direction: entry.direction,
+      nonesOrder: "last",
+    };
+  };
+  const orderBy: SortExpr[] | undefined = (() => {
+    if (!statement.orderBy) return undefined;
+    const out: SortExpr[] = [];
+    let cursor: any = statement.orderBy;
+    while (cursor) {
+      out.push(compileOrderEntry(cursor));
+      cursor = cursor.then;
+    }
+    return out;
+  })();
   return {
     kind: "select_stmt",
     expr: { ...subject, shape: shaped },
