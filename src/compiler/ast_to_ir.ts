@@ -22,6 +22,8 @@ import type {
   OrderExpr,
   OrderExprChain,
   PathStep as EdgeQLPathStep,
+  GroupByElement,
+  GroupByAtom,
 } from "../edgeql/ast.js";
 import type {
   Cardinality,
@@ -47,6 +49,7 @@ import type {
   UpdateExpr,
   DeleteExpr,
   ForExpr,
+  EmbeddedGroupExpr,
   Pointer,
   PointerRef,
   SelectExpr,
@@ -424,6 +427,24 @@ const universalObjectTypeRef = (ctx: IRCompileContext, name: string): TypeRef =>
   return typeRef;
 };
 
+// The implicit `id` pointer every object carries. It isn't stored in
+// `typeDef.fields`, so `resolvePointerRef` can't find it — both the splat
+// expansion and an explicit `{ id }` shape element synthesise it from here.
+const idPointerRef = (source: TypeRef): PointerRef => ({
+  kind: "pointer_ref",
+  id: `${source.id}.id`,
+  name: "id",
+  shortName: "id",
+  outSource: source,
+  outTarget: { kind: "type_ref", id: "std::uuid", nameHint: "std::uuid", module: "std", isView: false, isScalar: true, isAbstract: false, inSchema: true },
+  outCardinality: "one",
+  inCardinality: "many",
+  isComputed: false,
+  isIdPointer: true,
+  isLinkProperty: false,
+  hasProperties: false,
+});
+
 const pointerRefFromField = (source: TypeRef, field: FieldDef): PointerRef => ({
   kind: "pointer_ref",
   id: `${source.id}.field::${field.name}`,
@@ -455,7 +476,13 @@ const pointerRefFromLink = (source: TypeRef, target: TypeRef, link: LinkDef): Po
     shortName: link.name,
     outSource: source,
     outTarget: target,
-    outCardinality: link.multi ? "many" : "at_most_one",
+    // Mirror pointerRefFromField: a `required` link has a lower bound of one
+    // (`one` / `at_least_one`), so `.owner` on a required link is single-and-
+    // present — not `at_most_one`, which would mislead cardinality inference
+    // into thinking `owner := .owner` may be empty.
+    outCardinality: link.multi
+      ? (link.required ? "at_least_one" : "many")
+      : (link.required ? "one" : "at_most_one"),
     inCardinality: isExclusive ? "at_most_one" : "many",
     isComputed: false,
     isIdPointer: false,
@@ -537,27 +564,20 @@ const setFromTypeRoot = (typeref: TypeRef): Set => ({
   isSchemaAlias: false,
 });
 
-const extendPathSet = (source: Set, ptrref: PointerRef): Set => ({
-  kind: "set",
-  expr: {
-    kind: "pointer",
-    source,
-    ptrref,
-    direction: "outbound",
-    isDefinition: false,
-  } as Pointer,
-  pathId: {
-    kind: "path_id",
-    namespace: source.pathId?.namespace ?? [],
-    isPointerPath: true,
-    steps: [...(source.pathId?.steps ?? [{ type: source.typeref }]), { type: ptrref.outTarget, pointer: ptrref }],
-  },
-  typeref: ptrref.outTarget,
-  shape: [],
-  isBinding: false,
-  isMaterializedRef: false,
-  isSchemaAlias: false,
-});
+const extendPathSet = (source: Set, ptrref: PointerRef): Set =>
+  // A computed link alias defined as a backlink (`link winner := .<awards[is
+  // User]`) carries `computedLinkAliasIsBackward`; traversing it walks the
+  // underlying pointer *backward* (target -> source). Honour that here so the
+  // single source of truth for building a pointer step is direction-aware,
+  // rather than special-casing the flag at every call site.
+  extendPathSetDirectional(source, ptrref, ptrref.computedLinkAliasIsBackward ? "inbound" : "outbound");
+
+// The cardinality of a pointer step as seen from the *result* of traversing it.
+// A forward step uses `outCardinality`; a backward-traversed computed alias
+// (`link winner := .<awards[is User]`) uses `inCardinality` — e.g. an exclusive
+// `awards` link makes the inverse `winner` single rather than many.
+const effectivePointerCardinality = (ptrref: PointerRef): Cardinality =>
+  ptrref.computedLinkAliasIsBackward ? ptrref.inCardinality : ptrref.outCardinality;
 
 const extendPathSetDirectional = (source: Set, ptrref: PointerRef, direction: "outbound" | "inbound"): Set => {
   const resultType = direction === "outbound" ? ptrref.outTarget : ptrref.outSource;
@@ -2085,6 +2105,80 @@ const tryBuildInlinedUDFBody = (
 
 let inlineCallCounter = 0;
 
+// Lower `(GROUP <link> BY <atoms>) [{ key:{…}, elements:{…} }]` (a group in
+// expression/shape position) to an `embedded_group` Set. The SQL stage turns
+// this into a correlated `GROUP BY` subquery over the link.
+const compileEmbeddedGroup = (
+  groupExpr: Extract<FreeObjectExpr, { kind: "group_expr" }>,
+  trailingShape: EdgeQLShapeElement[] | undefined,
+  ctx: IRCompileContext,
+): Set => {
+  validateGroupByAtomCollisions(groupExpr.by, (message) => {
+    throw new AppError("E_SEMANTIC", message, 1, 1);
+  });
+  // Compile the link bare (`.deck`); a shape on the source (`.deck { name }`)
+  // is the element projection, re-rooted at the target type below so its
+  // columns read off the grouped target row rather than re-walking the link.
+  let sourceAst = groupExpr.source;
+  let sourceShapeAst: EdgeQLShapeElement[] = [];
+  if (sourceAst.kind === "shape_projection") {
+    sourceShapeAst = sourceAst.shape;
+    sourceAst = sourceAst.expr;
+  }
+  const sourceSet = compileFreeObjectExpr(sourceAst, ctx);
+  const targetRoot = setFromTypeRoot(sourceSet.typeref);
+
+  const atomsOf = (el: GroupByElement): GroupByAtom[] => {
+    if (el.kind === "field_ref" || el.kind === "name_ref" || el.kind === "link_property_ref") return [el];
+    if (el.kind === "sets") return el.sets.flat();
+    return el.atoms; // cube / rollup
+  };
+  const byAtoms = groupExpr.by.flatMap(atomsOf).map((atom) => ({
+    name: atom.kind === "field_ref" ? atom.field : atom.name,
+    isLinkProperty: atom.kind === "link_property_ref",
+  }));
+
+  // A trailing shape projects the group result's virtual fields. `key`'s inner
+  // shape names the key fields to emit; `elements`'s inner shape becomes the
+  // element projection. Both are interpreted here, not via the generic shape
+  // compiler (which would reject `key`/`elements` as non-existent members).
+  let keyFields: string[] | undefined;
+  let trailingElementsAst: EdgeQLShapeElement[] | undefined;
+  for (const el of trailingShape ?? []) {
+    if (!("name" in el)) continue;
+    if (el.name === "key" && "shape" in el && el.shape) {
+      keyFields = el.shape
+        .filter((s): s is Extract<EdgeQLShapeElement, { name: string }> => "name" in s && typeof s.name === "string")
+        .map((s) => s.name);
+    } else if (el.name === "elements" && "shape" in el && el.shape) {
+      trailingElementsAst = el.shape;
+    }
+  }
+  const rawElementsShape = trailingElementsAst ?? sourceShapeAst;
+  const elementsShape = rawElementsShape.length > 0
+    ? compileShape(targetRoot, rawElementsShape, ctx)
+    : undefined;
+
+  return {
+    kind: "set",
+    expr: {
+      kind: "embedded_group",
+      source: sourceSet,
+      byAtoms,
+      keyFields,
+      elementsShape,
+      hasTrailingShape: trailingShape !== undefined,
+      typeref: sourceSet.typeref,
+    } as EmbeddedGroupExpr,
+    pathId: defaultPathId("embedded_group"),
+    typeref: sourceSet.typeref,
+    shape: [],
+    isBinding: false,
+    isMaterializedRef: false,
+    isSchemaAlias: false,
+  };
+};
+
 const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompileContext): Set => {
   const resolveHeadSet = (name: string): Set => {
     const bound = resolveBinding(ctx, name);
@@ -2896,6 +2990,13 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
 
     case "shape_projection": {
       validateShapeProjectionLinkPropContext(expr);
+      // `(GROUP … ) { key: {…}, elements: {…} }` — the trailing shape projects
+      // the group result's virtual `key`/`grouping`/`elements`, which aren't
+      // real pointers, so compile the group with the shape rather than running
+      // the generic shape compiler against the (non-existent) members.
+      if (expr.expr.kind === "group_expr") {
+        return compileEmbeddedGroup(expr.expr, expr.shape, ctx);
+      }
       const base = compileFreeObjectExpr(expr.expr, ctx);
       const projectedShape = compileShape(base, expr.shape, ctx);
       return {
@@ -3710,15 +3811,11 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
     }
 
     case "group_expr": {
-      // The modern GelIR pipeline cannot model a `group_expr` in expression
-      // position (e.g. `SELECT Card { x := (GROUP .avatar BY @text, .text) }`),
-      // so this still throws "not implemented". But Contract C3 BY-clause
-      // collision diagnostics must fire here too — run them first so the user
-      // sees the precise error rather than the generic unsupported message.
-      validateGroupByAtomCollisions(expr.by, (message) => {
-        throw new AppError("E_SEMANTIC", message, 1, 1);
-      });
-      throw new AppError("E_RUNTIME", `AST->IR is not implemented yet for '${expr.kind}'`, 1, 1);
+      // `(GROUP <link> BY <key>)` in expression position with no trailing
+      // shape — emits the full default group row (`key` + `grouping` +
+      // `elements`). A trailing `{ … }` shape is handled by the
+      // `shape_projection` case, which routes here with the shape.
+      return compileEmbeddedGroup(expr, undefined, ctx);
     }
 
     default:
@@ -4740,21 +4837,7 @@ const compileShape = (
     // `id` from result rows unless a shape element with that name is
     // present, so this is what surfaces it in the public JSON shape.
     if (!skipNames.has("id")) {
-      const idPtrRef: PointerRef = {
-        kind: "pointer_ref",
-        id: `${targetType.id}.id`,
-        name: "id",
-        shortName: "id",
-        outSource: targetType,
-        outTarget: { kind: "type_ref", id: "std::uuid", nameHint: "std::uuid", module: "std", isView: false, isScalar: true, isAbstract: false, inSchema: true },
-        outCardinality: "one",
-        inCardinality: "many",
-        isComputed: false,
-        isIdPointer: true,
-        isLinkProperty: false,
-        hasProperties: false,
-      };
-      const expr = extendPathSet(baseSet, idPtrRef);
+      const expr = extendPathSet(baseSet, idPointerRef(targetType));
       expanded.push({
         kind: "shape_element",
         source: baseSet,
@@ -5087,6 +5170,25 @@ const compileShape = (
         }
         continue;
       }
+      // Explicit `{ id }`: `id` is implicit (not in the schema's field list),
+      // so resolvePointerRef can't see it. Synthesise the id pointer so the
+      // element surfaces `id` in the projection (and keeps it in materialised
+      // rows the GROUP runtime traverses) instead of being silently dropped.
+      if (el.name === "id" && !resolvePointerRef(ctx, subject.typeref, "id")
+        && Boolean(getResolvedSchemaType(ctx, subject.typeref.id) ?? ctx.schema?.getType(subject.typeref.id))) {
+        const idPtr = idPointerRef(subject.typeref);
+        out.push({
+          kind: "shape_element",
+          source: subject,
+          expr: withShapeModifiers(extendPathSet(subject, idPtr), el),
+          shapeOp: el.operation,
+          shapeOrigin: resolveShapeOrigin(el),
+          required: true,
+          cardinality: "one",
+          name: "id",
+        });
+        continue;
+      }
       const ptrref = resolvePointerRef(ctx, subject.typeref, el.name);
       if (!ptrref) {
         // Schema-declared property computeds aren't surfaced by resolvePointerRef
@@ -5144,8 +5246,14 @@ const compileShape = (
         expr: withShapeModifiers(expr, el),
         shapeOp: el.operation,
         shapeOrigin: resolveShapeOrigin(el),
-        required: el.required ?? (ptrref.outCardinality === "one"),
-        cardinality: el.cardinality ?? ptrref.outCardinality,
+        required: el.required ?? (effectivePointerCardinality(ptrref) === "one"),
+        cardinality: el.cardinality ?? effectivePointerCardinality(ptrref),
+        // Project under the requested field name. For a plain field this equals
+        // `ptrref.shortName`, but a computed link alias (`winner := .<awards`)
+        // resolves to a pointer whose `shortName` is the underlying link
+        // (`awards`); without `name` the SQL emitter would label the column
+        // `awards`, breaking `GROUP … BY .winner` and `.key.winner`.
+        name: el.name,
       });
       continue;
     }
@@ -5315,15 +5423,26 @@ const compileShape = (
       if (expanded.length > 0) {
         out.push(...expanded);
       } else {
-        out.push({
-          kind: "shape_element",
-          source: subject,
-          expr: withShapeModifiers(subject, el),
-          shapeOp: el.operation,
-          shapeOrigin: resolveShapeOrigin(el),
-          required: el.required ?? false,
-          cardinality: el.cardinality ?? "unknown",
-        });
+        // A splat that expands to nothing on a real object type means every
+        // member it would project is already listed explicitly (e.g.
+        // `User { *, id, name }`, where `*` is fully shadowed by the explicit
+        // `id`/`name`). The explicit elements cover the projection, so emit
+        // nothing. The whole-subject fallback below only makes sense for an
+        // opaque set with no resolvable members (scalar / computed value),
+        // where `json(value)` on a bare object id would be malformed JSON.
+        const splatType = el.sourceType ? resolveTypeRef(ctx, el.sourceType) : subject.typeref;
+        const isObjectType = Boolean(getResolvedSchemaType(ctx, splatType.id) ?? ctx.schema?.getType(splatType.id));
+        if (!isObjectType) {
+          out.push({
+            kind: "shape_element",
+            source: subject,
+            expr: withShapeModifiers(subject, el),
+            shapeOp: el.operation,
+            shapeOrigin: resolveShapeOrigin(el),
+            required: el.required ?? false,
+            cardinality: el.cardinality ?? "unknown",
+          });
+        }
       }
     }
   }

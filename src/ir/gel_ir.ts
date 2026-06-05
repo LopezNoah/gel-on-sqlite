@@ -301,6 +301,7 @@ export type Expr =
   | TypeCheckOpExpr
   | FTSDocumentExpr
   | StaticIntrospectionExpr
+  | EmbeddedGroupExpr
   | TriggerAnchor;
 
 export interface EmptySet extends Base {
@@ -569,6 +570,35 @@ export interface TriggerAnchor extends Base {
   kind: "trigger_anchor";
   anchor: "__old__" | "__new__";
   set: Set;
+}
+
+// `(GROUP <link> BY <key>)` in expression / shape position. Unlike a top-level
+// GROUP (which runs in the runtime grouper), this lowers directly to a
+// correlated `GROUP BY` subquery over the link, emitting one JSON object per
+// group: `{ key: {...}, [grouping: [...],] elements: [...] }`.
+export interface EmbeddedGroupExpr extends Base {
+  kind: "embedded_group";
+  // The link set being grouped (e.g. `.deck`), as a pointer Set correlated to
+  // the enclosing row. Its `shape` is the default `elements` projection.
+  source: Set;
+  byAtoms: EmbeddedGroupAtom[];
+  typeref: TypeRef;
+  // Trailing `{ key: {...} }` field names, if a shape was written. Absent ⇒
+  // default key (one entry per BY atom).
+  keyFields?: string[];
+  // Trailing `{ elements: {...} }` projection, if written; else the source
+  // link's own shape is used.
+  elementsShape?: ShapeElement[];
+  // Whether a trailing `{ … }` shape was written at all. When false the full
+  // default group row (`key` + `grouping` + `elements`) is emitted.
+  hasTrailingShape: boolean;
+}
+
+export interface EmbeddedGroupAtom {
+  // Key field name (`count` for `@count`, `element` for `.element`).
+  name: string;
+  // `@count` keys on the link table; `.element` keys on the target row.
+  isLinkProperty: boolean;
 }
 
 export interface FTSDocumentExpr extends Base {

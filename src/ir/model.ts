@@ -938,6 +938,10 @@ export interface GroupIR {
   // Field names that the source select materialises but that should be
   // stripped from `elements`, e.g. BY-only fields or USING aliases.
   hiddenByFields: string[];
+  // USING aliases that name the source binding itself (`GROUP X USING z := X
+  // BY z`). These are not materialised as object fields; the runtime groups on
+  // the whole source row/value for the alias.
+  selfBindingAliases?: string[];
   // Post-process the {key, elements, grouping} group rows. These are AST
   // nodes evaluated by the engine against each row as `current_item`.
   postFilter?: FreeObjectExpr;

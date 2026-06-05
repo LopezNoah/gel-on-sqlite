@@ -1,0 +1,314 @@
+================================================================================
+ Target SQL for the "Iterator-Produced Object Grouping" tests (problem set #5)
+ Source: tests/test_edgeql_group.py  (TestEdgeQLGroup)
+ Schema: tests/schemas/cards.esdl   Setup: tests/schemas/cards_setup.edgeql
+================================================================================
+
+NOTE
+----
+This is the SQL these queries *should* compile to, hand-derived from the
+project's existing IR->SQL idioms. It is NOT produced by running the compiler.
+Today `compileGroupStmtToSQL` (src/sql/gel_ir_compiler.ts:696) is a stub that
+only emits `SELECT <subject> AS "group_subject"`, so the top-level GROUP
+statement is not actually lowered yet. The SQL below is the model to implement.
+
+No CTEs are used -- the subject set is an inline subquery in the FROM clause,
+matching the project's dominant idiom (e.g. `(SELECT ... UNION ALL ...) g0`).
+
+Idioms reused (all already present in src/sql/gel_ir_compiler.ts):
+  * Object shape  -> json_object('k', col, ...)            (compile*ShapeObjectExpr)
+  * Set of objs   -> COALESCE(json_group_array(...), json('[]'))   (embedded group)
+  * group output  -> json_object('key',..,'grouping',..,'elements',..)
+  * FOR n in {8,9}-> (SELECT 8 AS "value" UNION ALL SELECT 9 AS "value") g0
+  * free type root-> CROSS JOIN (SELECT ... FROM "cards__user") g1   (line ~150)
+  * cards::User   -> table "cards__user", columns "id","name", lit "__source_type"
+
+Each top-level group produces one result row per group; the group object lives
+in the "value" column (same column the runtime collects for scalar/free selects).
+Element ordering is unspecified under SQLite GROUP BY; the tests use tb.bag()
+(order-independent), so no ORDER BY is required for correctness. A
+`ORDER BY <rowid>` could be added for determinism, mirroring the embedded-group
+lowering.
+
+Relevant data: cards::User rows = Alice, Bob, Carol, Dave (4 users).
+
+
+================================================================================
+ 1. test_edgeql_group_iterator_ptr_sets_01            (line 547)
+================================================================================
+EdgeQL:
+    group (
+        for n in { 8, 9 }
+            select cards::User { name, b := n }
+    ) by .name;
+
+Subject = 4 users x 2 iterations = 8 rows {name, b}. GROUP BY name -> 4 groups,
+2 elements each ({...,b:8} and {...,b:9}).
+
+SQL:
+    SELECT json_object(
+        'key',      json_object('name', s."name"),
+        'grouping', json_array('name'),
+        'elements', COALESCE(
+            json_group_array(json_object('name', s."name", 'b', s."b")),
+            json('[]'))
+    ) AS "value"
+    FROM (
+        SELECT
+            g1."name"  AS "name",
+            g0."value" AS "b"
+        FROM (SELECT 8 AS "value" UNION ALL SELECT 9 AS "value") g0
+        CROSS JOIN (
+            SELECT 'cards::User' AS "__source_type", "id" AS "id", "name" AS "name"
+            FROM "cards__user"
+        ) g1
+    ) s
+    GROUP BY s."name";
+
+
+================================================================================
+ 2. test_edgeql_group_iterator_ptr_sets_02            (line 591)   -- by .b
+================================================================================
+EdgeQL:
+    group (
+        for n in { 8, 9 }
+            select cards::User { name, b := n }
+    ) by .b;
+
+Same 8-row subject. GROUP BY b -> 2 groups (b=8, b=9), 4 elements each
+(one per user).
+
+SQL:
+    SELECT json_object(
+        'key',      json_object('b', s."b"),
+        'grouping', json_array('b'),
+        'elements', COALESCE(
+            json_group_array(json_object('name', s."name", 'b', s."b")),
+            json('[]'))
+    ) AS "value"
+    FROM (
+        SELECT
+            g1."name"  AS "name",
+            g0."value" AS "b"
+        FROM (SELECT 8 AS "value" UNION ALL SELECT 9 AS "value") g0
+        CROSS JOIN (
+            SELECT 'cards::User' AS "__source_type", "id" AS "id", "name" AS "name"
+            FROM "cards__user"
+        ) g1
+    ) s
+    GROUP BY s."b";
+
+
+================================================================================
+ 3. test_edgeql_group_iterator_ptr_free_object_01     (line 751)   -- by .a
+================================================================================
+EdgeQL:
+    group (
+        for n in { 8, 9 }
+            select { a := 1, b := n }
+    ) by .a;
+
+Free object (no type root -> no CROSS JOIN). Subject = 2 rows {a:1,b:8/9}.
+GROUP BY a -> 1 group, 2 elements.
+
+SQL:
+    SELECT json_object(
+        'key',      json_object('a', s."a"),
+        'grouping', json_array('a'),
+        'elements', COALESCE(
+            json_group_array(json_object('a', s."a", 'b', s."b")),
+            json('[]'))
+    ) AS "value"
+    FROM (
+        SELECT
+            1          AS "a",
+            g0."value" AS "b"
+        FROM (SELECT 8 AS "value" UNION ALL SELECT 9 AS "value") g0
+    ) s
+    GROUP BY s."a";
+
+
+================================================================================
+ 4. test_edgeql_group_iterator_ptr_free_object_02     (line 771)   -- by .b
+================================================================================
+EdgeQL:
+    group (
+        for n in { 8, 9 }
+            select { a := 1, b := n }
+    ) by .b;
+
+Same 2-row subject. GROUP BY b -> 2 groups (b=8, b=9), 1 element each.
+
+SQL:
+    SELECT json_object(
+        'key',      json_object('b', s."b"),
+        'grouping', json_array('b'),
+        'elements', COALESCE(
+            json_group_array(json_object('a', s."a", 'b', s."b")),
+            json('[]'))
+    ) AS "value"
+    FROM (
+        SELECT
+            1          AS "a",
+            g0."value" AS "b"
+        FROM (SELECT 8 AS "value" UNION ALL SELECT 9 AS "value") g0
+    ) s
+    GROUP BY s."b";
+
+
+================================================================================
+ 5. test_edgeql_group_binding_iterator_ptr_set_02     (line 2163)
+================================================================================
+EdgeQL:
+    with X := (
+        for n in { 8, 9 }
+            select cards::User { name, b := n }
+    )
+    group X { name } by .name;
+
+The WITH binding inlines into the subject subquery (it's just an aliased set).
+Output shape RE-PROJECTS to { name } only -- b is dropped from `elements`
+(but is still produced in the subject because it could be needed by a key).
+GROUP BY name -> 4 groups, 2 *duplicate* {name} elements each.
+
+SQL:
+    SELECT json_object(
+        'key',      json_object('name', s."name"),
+        'grouping', json_array('name'),
+        'elements', COALESCE(
+            json_group_array(json_object('name', s."name")),   -- only name
+            json('[]'))
+    ) AS "value"
+    FROM (
+        SELECT
+            g1."name"  AS "name",
+            g0."value" AS "b"
+        FROM (SELECT 8 AS "value" UNION ALL SELECT 9 AS "value") g0
+        CROSS JOIN (
+            SELECT 'cards::User' AS "__source_type", "id" AS "id", "name" AS "name"
+            FROM "cards__user"
+        ) g1
+    ) s
+    GROUP BY s."name";
+
+
+================================================================================
+ 6. test_edgeql_group_binding_iterator_ptr_set_03     (line 2209)
+================================================================================
+EdgeQL:
+    with X := (
+        for n in { 8, 9 }
+            select cards::User { name, b := n }
+    )
+    group (select X { name, b }) by .name;
+
+Wrapping the subject in `select X {name, b}` is a no-op shape pass-through:
+identical to test #1. 4 groups, 2 elements {name,b} each.
+
+SQL:
+    SELECT json_object(
+        'key',      json_object('name', s."name"),
+        'grouping', json_array('name'),
+        'elements', COALESCE(
+            json_group_array(json_object('name', s."name", 'b', s."b")),
+            json('[]'))
+    ) AS "value"
+    FROM (
+        SELECT
+            g1."name"  AS "name",
+            g0."value" AS "b"
+        FROM (SELECT 8 AS "value" UNION ALL SELECT 9 AS "value") g0
+        CROSS JOIN (
+            SELECT 'cards::User' AS "__source_type", "id" AS "id", "name" AS "name"
+            FROM "cards__user"
+        ) g1
+    ) s
+    GROUP BY s."name";
+
+
+================================================================================
+ 7. test_edgeql_group_binding_iterator_ptr_set_04     (line 2255)   -- by .b
+================================================================================
+EdgeQL:
+    with X := (
+        for n in { 8, 9 }
+            select cards::User { name, b := n }
+    )
+    group X { name } by .b;
+
+Output { name } only, but the key reads the still-available `b` column.
+GROUP BY b -> 2 groups (b=8, b=9), 4 {name} elements each.
+
+SQL:
+    SELECT json_object(
+        'key',      json_object('b', s."b"),
+        'grouping', json_array('b'),
+        'elements', COALESCE(
+            json_group_array(json_object('name', s."name")),   -- only name
+            json('[]'))
+    ) AS "value"
+    FROM (
+        SELECT
+            g1."name"  AS "name",
+            g0."value" AS "b"
+        FROM (SELECT 8 AS "value" UNION ALL SELECT 9 AS "value") g0
+        CROSS JOIN (
+            SELECT 'cards::User' AS "__source_type", "id" AS "id", "name" AS "name"
+            FROM "cards__user"
+        ) g1
+    ) s
+    GROUP BY s."b";
+
+
+================================================================================
+ 8. test_edgeql_group_binding_iterator_ptr_free_object_03   (line 2617)
+================================================================================
+EdgeQL:
+    with X := (
+        for n in { 8, 9 }
+            select { a := 1, b := n }
+    )
+    group (select X { a, b }) by .a;
+
+Free object, output {a,b}, group by a. Identical shape to test #3.
+1 group, 2 elements.
+
+SQL:
+    SELECT json_object(
+        'key',      json_object('a', s."a"),
+        'grouping', json_array('a'),
+        'elements', COALESCE(
+            json_group_array(json_object('a', s."a", 'b', s."b")),
+            json('[]'))
+    ) AS "value"
+    FROM (
+        SELECT
+            1          AS "a",
+            g0."value" AS "b"
+        FROM (SELECT 8 AS "value" UNION ALL SELECT 9 AS "value") g0
+    ) s
+    GROUP BY s."a";
+
+
+================================================================================
+ Implementation notes (for wiring this into compileGroupStmtToSQL)
+================================================================================
+1. The subject set is already compilable: when statement.subject is a
+   for_expr, compileForExprSource() produces the FROM (UNION ALL + CROSS JOIN
+   for the free type root). For a plain bound/aliased set it is a normal
+   select source. Emit that as an inline `(...) s` subquery in the FROM,
+   projecting every column referenced by either the BY atoms or the output
+   shape. (No CTE needed.)
+
+2. The BY atoms (.name / .b / .a) become the GROUP BY columns AND the
+   'key' json_object pairs. 'grouping' is json_array of the distinct BY atom
+   names (mirrors compileEmbeddedGroupSQL, line ~7546).
+
+3. The output shape (default = subject's shape; or the re-projection in
+   `group X { name } ...` / `group (select X {..}) ...`) drives the per-element
+   json_object inside json_group_array. Note tests 5 & 7 prove the output
+   shape is independent of the key: `b` stays available for the key even when
+   dropped from `elements`.
+
+4. Wrap each json_object(...) AS "value" so the runtime collects one group
+   per row, exactly like scalar/free-object selects.

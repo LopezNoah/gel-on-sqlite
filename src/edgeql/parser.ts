@@ -1000,6 +1000,16 @@ class Parser {
             `DDL statements cannot be prefixed with a WITH block`,
           );
         }
+        if ((token.kind === "kw_create" || token.kind === "kw_drop")
+            && this.isKeywordLikeToken(this.peekNext())
+            && this.peekNext().lower === "database"
+            && withClause.withModule !== this.defaultModule) {
+          this.notSupported(
+            token,
+            "WITH MODULE before database DDL",
+            `DATABASE statements cannot be prefixed with WITH MODULE`,
+          );
+        }
         // `ALTER CURRENT MIGRATION REJECT PROPOSED` is migration control;
         // route through the passthrough parser since it's not a regular DDL
         // CREATE/ALTER/DROP of a named object kind.
@@ -1402,8 +1412,15 @@ class Parser {
           this.expect("rparen", "Expected ')' in BY grouping set entry");
           sets.push(innerAtoms);
         } else {
-          // A single atom entry forms its own one-atom grouping set.
-          sets.push([this.parseGroupByAtom()]);
+          const entry = this.parseGroupByElement();
+          if (entry.kind === "sets") {
+            sets.push(...entry.sets);
+          } else if (entry.kind === "cube" || entry.kind === "rollup") {
+            sets.push(entry.atoms);
+          } else {
+            // A single atom entry forms its own one-atom grouping set.
+            sets.push([entry]);
+          }
         }
         if (this.peek().kind !== "comma") {
           break;
@@ -1482,7 +1499,16 @@ class Parser {
       // Tuple atoms `(.foo, .bar)` are accepted as a single grouping atom.
       // We consume the parens and the inner atom list — the runtime treats
       // tuple atoms as a single grouping key.
-      if (this.peek().kind === "lparen") {
+      if (this.peek().kind === "lbrace") {
+        const entry = this.parseGroupByElement();
+        if (entry.kind === "sets") {
+          for (const set of entry.sets) atoms.push(...set);
+        } else if (entry.kind === "cube" || entry.kind === "rollup") {
+          atoms.push(...entry.atoms);
+        } else {
+          atoms.push(entry);
+        }
+      } else if (this.peek().kind === "lparen") {
         const inner = this.attempt<GroupByAtom>(() => {
           this.consume();
           const innerAtoms: GroupByAtom[] = [];

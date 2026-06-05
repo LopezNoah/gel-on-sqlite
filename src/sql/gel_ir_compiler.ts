@@ -10,6 +10,7 @@ import type {
   ExistsExpr,
   DeleteExpr,
   DeleteStmt,
+  EmbeddedGroupExpr,
   Expr,
   ForExpr,
   FunctionCall,
@@ -1869,6 +1870,7 @@ const compileScalarSelectSQLInner = (
     }
     const sources: string[] = [];
     const values: string[] = [];
+    const valueRefs: string[] = [];
     for (let i = 0; i < tuple.elements.length; i += 1) {
       const element = tuple.elements[i]!;
       const elementSql = compileScalarSelectSQL(element.val, params, target, options);
@@ -1876,6 +1878,7 @@ const compileScalarSelectSQLInner = (
       const alias = `tuple_${i}`;
       sources.push(`(${elementSql}) ${alias}`);
       const valueRef = `${alias}.${quoteIdent("value")}`;
+      valueRefs.push(valueRef);
       // Bool values are stored as TEXT `'true'`/`'false'` (the literal output
       // of `json('true')`/`json('false')`). Without wrapping them with
       // `json(...)` inside `json_array(...)`, SQLite treats them as strings
@@ -1890,7 +1893,7 @@ const compileScalarSelectSQLInner = (
     const valueExpr = tuple.named
       ? `json_object(${tuple.elements.map((element, index) => `${quoteLiteral(element.name ?? String(index))}, ${values[index]}`).join(", ")})`
       : `json_array(${values.join(", ")})`;
-    return `SELECT ${valueExpr} AS ${quoteIdent("value")} FROM ${sources.join(" CROSS JOIN ")}`;
+    return `SELECT CASE WHEN ${valueRefs.map((ref) => `${ref} IS NULL`).join(" OR ")} THEN NULL ELSE ${valueExpr} END AS ${quoteIdent("value")} FROM ${sources.join(" CROSS JOIN ")}`;
   }
 
   // Array constructor `[X, Y, ...]` whose elements include multi-cardinality
@@ -4396,6 +4399,26 @@ const collectForExprProjectedColumns = (sourceSet: Set, where?: Set, orderBy?: S
   return [...columns];
 };
 
+// Build a tuple value that is NULL when any element is empty. The element SQL
+// (`parts`) may contain `?` placeholders whose params were already pushed, so
+// each part must appear exactly once — referencing it in both the NULL guard
+// and the json constructor would emit `?` twice without re-pushing the param
+// ("Too few parameter values"). We compute the parts once into aliased columns
+// of a correlated subquery, then guard/construct off those aliases.
+const nullPropagatingTupleSQL = (tuple: Tuple, parts: Array<string | null>): string => {
+  const aliases = parts.map((_, idx) => `t${idx}`);
+  // A nested tuple/array part is JSON text once selected into an alias column;
+  // SQLite's JSON subtype doesn't survive that round-trip, so re-`json(...)` it
+  // to embed it as nested JSON rather than a quoted string.
+  const valueOf = (idx: number): string =>
+    setValueIsJson(tuple.elements[idx]!.val) ? `json(${aliases[idx]})` : aliases[idx]!;
+  const projected = tuple.named
+    ? `json_object(${tuple.elements.map((element, idx) => `${quoteLiteral(element.name ?? String(idx))}, ${valueOf(idx)}`).join(", ")})`
+    : `json_array(${tuple.elements.map((_, idx) => valueOf(idx)).join(", ")})`;
+  const inner = `SELECT ${parts.map((part, idx) => `(${part}) AS ${aliases[idx]}`).join(", ")}`;
+  return `(SELECT CASE WHEN ${aliases.map((a) => `${a} IS NULL`).join(" OR ")} THEN NULL ELSE ${projected} END FROM (${inner}))`;
+};
+
 const compileValueSetSQLWithAliases = (
   set: Set,
   bindingAliases: Map<string, string>,
@@ -4436,6 +4459,25 @@ const compileValueSetSQLWithAliases = (
     const scalarAlias = scalarBindingAliases.get(key);
     if (scalarAlias) {
       return `${scalarAlias}.${quoteIdent("value")}`;
+    }
+  }
+
+  // FOR body that's a bare `Type { name, b := n }` (a type_root carrying a
+  // shape, no enclosing `select_expr`). The surrounding FOR has already added
+  // `Type` as a cross-join level (collectFreeTypeRoots), so resolve the shape
+  // against that level's alias and compile each computed element through the
+  // aliased path so iterator refs (`b := n`) lower to the iterator's column
+  // instead of decorrelating into a fresh set subquery.
+  if ((unwrapped.result.expr.kind === "type_root" || unwrapped.result.expr.kind === "pointer")
+    && unwrapped.result.shape && unwrapped.result.shape.length > 0) {
+    const typeAlias = bindingAliases.get(pathIdKey(unwrapped.result));
+    if (typeAlias) {
+      const obj = compileShapeObjectWithAliases(
+        unwrapped.result, typeAlias, bindingAliases, params, target, options,
+        linkPropertyAliases, scalarBindingAliases, tupleIterAliases,
+      );
+      if (obj) return obj;
+      params.length = checkpoint;
     }
   }
 
@@ -4483,9 +4525,7 @@ const compileValueSetSQLWithAliases = (
       params.length = checkpoint;
       return null;
     }
-    return tuple.named
-      ? `json_object(${tuple.elements.map((element, idx) => `${quoteLiteral(element.name ?? String(idx))}, ${parts[idx]}`).join(", ")})`
-      : `json_array(${parts.join(", ")})`;
+    return nullPropagatingTupleSQL(tuple, parts);
   }
 
   if (expr.kind === "type_cast") {
@@ -4591,36 +4631,13 @@ const compileValueSetSQLWithAliases = (
       selectExpr = selectExpr.result.expr as SelectExpr;
     }
     if (selectExpr.result.expr.kind === "type_root" && selectExpr.result.shape && selectExpr.result.shape.length > 0) {
-      const resultKey = pathIdKey(selectExpr.result);
-      const typeAlias = bindingAliases.get(resultKey);
+      const typeAlias = bindingAliases.get(pathIdKey(selectExpr.result));
       if (typeAlias) {
-        // Compile each shape element with the bindings so computed exprs
-        // (like `letter := letter`) resolve to the iterator's column.
-        const pairs: string[] = [];
-        let ok = true;
-        for (const element of selectExpr.result.shape) {
-          const elemExpr = element.expr;
-          // Scalar field shorthand (`name`): emit alias.column directly.
-          if (elemExpr.expr.kind === "pointer" && elemExpr.typeref.isScalar) {
-            const ptr = elemExpr.expr as Pointer;
-            const col = columnForPointer(ptr);
-            pairs.push(`${quoteLiteral(ptr.ptrref.shortName)}, ${typeAlias}.${quoteIdent(col)}`);
-            continue;
-          }
-          // Computed scalar: compile via the aliased path so binding refs
-          // (`letter := letter`) lower correctly.
-          const computed = compileValueSetSQLWithAliases(elemExpr, bindingAliases, typeAlias, params, target, options, linkPropertyAliases, scalarBindingAliases, tupleIterAliases);
-          if (!computed) { ok = false; break; }
-          const key = element.name
-            ? quoteLiteral(element.name)
-            : (elemExpr.expr.kind === "pointer")
-              ? quoteLiteral((elemExpr.expr as Pointer).ptrref.shortName)
-              : quoteLiteral(shapeAliasForElement(element, elemExpr, 0));
-          pairs.push(`${key}, ${computed}`);
-        }
-        if (ok && pairs.length > 0) {
-          return `json_object(${pairs.join(", ")})`;
-        }
+        const obj = compileShapeObjectWithAliases(
+          selectExpr.result, typeAlias, bindingAliases, params, target, options,
+          linkPropertyAliases, scalarBindingAliases, tupleIterAliases,
+        );
+        if (obj) return obj;
         params.length = checkpoint;
       }
     }
@@ -4631,6 +4648,46 @@ const compileValueSetSQLWithAliases = (
     params.length = checkpoint;
   }
   return value;
+};
+
+// Compile a shaped object (`Type { name, b := n }`) anchored at a known
+// cross-join alias, threading FOR-iterator binding maps so computed elements
+// (`b := n`) resolve to the iterator's column rather than decorrelating into a
+// fresh set subquery. Shared by the bare-type-root and select_expr-wrapped
+// shape branches of compileValueSetSQLWithAliases. Returns null if any element
+// can't be lowered (caller rolls back params and falls through).
+const compileShapeObjectWithAliases = (
+  resultSet: Set,
+  typeAlias: string,
+  bindingAliases: Map<string, string>,
+  params: ScalarValue[],
+  target: RuntimeTarget,
+  options: GelIRCompileOptions,
+  linkPropertyAliases?: Map<string, string>,
+  scalarBindingAliases?: Map<string, string>,
+  tupleIterAliases?: Map<string, string>,
+): string | null => {
+  const pairs: string[] = [];
+  for (const element of resultSet.shape) {
+    const elemExpr = element.expr;
+    // Scalar field shorthand (`name`): emit alias.column directly.
+    if (elemExpr.expr.kind === "pointer" && elemExpr.typeref.isScalar) {
+      const ptr = elemExpr.expr as Pointer;
+      pairs.push(`${quoteLiteral(ptr.ptrref.shortName)}, ${typeAlias}.${quoteIdent(columnForPointer(ptr))}`);
+      continue;
+    }
+    // Computed scalar (`b := n`): compile via the aliased path so binding
+    // refs lower correctly.
+    const computed = compileValueSetSQLWithAliases(elemExpr, bindingAliases, typeAlias, params, target, options, linkPropertyAliases, scalarBindingAliases, tupleIterAliases);
+    if (!computed) return null;
+    const key = element.name
+      ? quoteLiteral(element.name)
+      : (elemExpr.expr.kind === "pointer")
+        ? quoteLiteral((elemExpr.expr as Pointer).ptrref.shortName)
+        : quoteLiteral(shapeAliasForElement(element, elemExpr, 0));
+    pairs.push(`${key}, ${computed}`);
+  }
+  return pairs.length > 0 ? `json_object(${pairs.join(", ")})` : null;
 };
 
 const compilePredicateWithAliases = (
@@ -5112,9 +5169,6 @@ const compileProjectedSourceColumnRef = (set: Set): string | null => {
     }
     cursor = se.result;
   }
-  if (cursor.expr.kind === "type_root" && (cursor.pathId?.namespace?.length ?? 0) > 0) {
-    return null;
-  }
   let sourceExpr: Expr = cursor.expr;
   if (sourceExpr.kind === "type_root") {
     return columnForPointer(pointer);
@@ -5333,6 +5387,10 @@ const compileShapeProjection = (
   }
 
   const shapeExpr = unwrapSelectExprSet(shape.expr);
+  if (shapeExpr.result.expr.kind === "embedded_group") {
+    const alias = shapeAliasForElement(shape, shape.expr, depth);
+    return `${compileEmbeddedGroupSQL(shapeExpr.result.expr, sourceAlias, params, options, target, depth)} AS ${quoteIdent(alias)}`;
+  }
   if (shapeExpr.result.expr.kind === "pointer" && !shapeExpr.result.typeref.isScalar) {
     const linkExpr = compilePointerArrayExpr(
       shapeExpr.result.expr,
@@ -6767,9 +6825,7 @@ const compileValueSetSQL = (
       params.length = checkpoint;
       return null;
     }
-    return tuple.named
-      ? `json_object(${tuple.elements.map((element, idx) => `${quoteLiteral(element.name ?? String(idx))}, ${parts[idx]}`).join(", ")})`
-      : `json_array(${parts.join(", ")})`;
+    return nullPropagatingTupleSQL(tuple, parts);
   }
 
   if (expr.kind === "array") {
@@ -7442,6 +7498,117 @@ const compileSetColumnRef = (set: Set, linkPropertyAlias?: string): string | nul
   return null;
 };
 
+// For a multi-step object pointer like `Comment.issue.owner`, the leaf link
+// (`owner`) is not anchored at the outer row (`Comment`) but at the
+// intermediate set (`.issue`). Resolve that intermediate set's id(s) as SQL
+// correlated to `rootAlias`, so the leaf join correlates on the right row.
+// Returns a fragment usable directly inside `… IN (<here>)` (a bare column ref
+// or a `SELECT …` body), or null for a chain shape we can't yet lower.
+const compileChainSourceIdSetSQL = (
+  source: Set,
+  rootAlias: string,
+  options: GelIRCompileOptions,
+): string | null => {
+  if (source.expr.kind === "type_root") {
+    return `${rootAlias}.${quoteIdent("id")}`;
+  }
+  if (source.expr.kind !== "pointer") return null;
+  const ptr = source.expr as Pointer;
+  const parent = compileChainSourceIdSetSQL(ptr.source, rootAlias, options);
+  if (parent === null) return null;
+  const shortName = ptr.ptrref.shortName;
+  if (ptr.direction === "outbound") {
+    if (shouldUseLinkTable(ptr)) {
+      const lt = linkTableNameForPointer(ptr, options);
+      return `SELECT ${quoteIdent("target")} FROM ${quoteIdent(lt)} WHERE ${quoteIdent("source")} IN (${parent})`;
+    }
+    // Inline single-link FK column lives on the source row.
+    const srcTable = tableNameForType(qualifyTypeName(ptr.ptrref.outSource));
+    return `SELECT ${quoteIdent(`${shortName}_id`)} FROM ${quoteIdent(srcTable)} WHERE ${quoteIdent("id")} IN (${parent})`;
+  }
+  // Inbound (backlink) step.
+  if (shouldUseLinkTable(ptr)) {
+    const lt = linkTableNameForPointer(ptr, options);
+    return `SELECT ${quoteIdent("source")} FROM ${quoteIdent(lt)} WHERE ${quoteIdent("target")} IN (${parent})`;
+  }
+  const childTable = tableNameForType(qualifyTypeName(ptr.ptrref.outSource));
+  return `SELECT ${quoteIdent("id")} FROM ${quoteIdent(childTable)} WHERE ${quoteIdent(`${shortName}_id`)} IN (${parent})`;
+};
+
+// Lower `(GROUP <link> BY <atoms>) { … }` (embedded group) to a correlated
+// `GROUP BY` subquery over the link, emitting one JSON object per group:
+//   COALESCE((SELECT json_group_array(json(g."item")) FROM (
+//     SELECT json_object('key', …, ['grouping', …,] 'elements', …) AS "item"
+//     FROM <linkTable> d JOIN (<target>) c ON c."id" = d."target"
+//     WHERE d."source" = <outer>."id"
+//     GROUP BY <key cols>
+//   ) g), json('[]'))
+const compileEmbeddedGroupSQL = (
+  group: EmbeddedGroupExpr,
+  sourceAlias: string,
+  params: ScalarValue[],
+  options: GelIRCompileOptions,
+  target: RuntimeTarget,
+  depth: number,
+): string => {
+  const link = group.source.expr;
+  if (link.kind !== "pointer" || !shouldUseLinkTable(link)) {
+    // Only link-table links (multi / link-property-bearing, e.g. `.deck`) are
+    // supported here — that's where a `@prop` group key lives.
+    return "json('[]')";
+  }
+  const linkAlias = "d";
+  const targetAlias = "c";
+  const targetType = link.ptrref.outTarget;
+  const linkTable = linkTableNameForPointer(link, options);
+
+  // SQL for a BY atom: a link property reads the link table, a target field
+  // reads the grouped target row.
+  const atomColumn = (atom: { name: string; isLinkProperty: boolean }): string =>
+    atom.isLinkProperty
+      ? `${linkAlias}.${quoteIdent(atom.name)}`
+      : `${targetAlias}.${quoteIdent(atom.name)}`;
+
+  const elementsShape = group.elementsShape ?? [];
+  const elementCols = collectProjectedColumns(elementsShape);
+  const targetFieldKeys = group.byAtoms.filter((a) => !a.isLinkProperty).map((a) => a.name);
+  const targetCols = [...new Set<string>(["id", ...elementCols, ...targetFieldKeys])];
+  const targetSource = compilePolymorphicSource(targetType, false, targetAlias, targetCols, options);
+
+  // key: one entry per requested key field (default: one per BY atom).
+  const keyFieldNames = group.keyFields ?? [...new Set(group.byAtoms.map((a) => a.name))];
+  const keyPairs = keyFieldNames.map((name) => {
+    const atom = group.byAtoms.find((a) => a.name === name) ?? group.byAtoms[0]!;
+    return `${quoteLiteral(name)}, ${atomColumn(atom)}`;
+  });
+  const itemPairs = [`${quoteLiteral("key")}, json_object(${keyPairs.join(", ")})`];
+
+  // grouping: emitted only for the full default row (no trailing shape).
+  if (!group.hasTrailingShape) {
+    const names = [...new Set(group.byAtoms.map((a) => a.name))];
+    itemPairs.push(`${quoteLiteral("grouping")}, json_array(${names.map((n) => quoteLiteral(n)).join(", ")})`);
+  }
+
+  const elementObj = elementsShape.length > 0
+    ? compilePublicShapeObjectExpr(targetAlias, elementsShape, params, options, target, depth + 1)
+    : "json_object()";
+  // Order elements by link-table insertion order so the grouped set is
+  // deterministic (SQLite's `json_group_array` order under GROUP BY is
+  // otherwise unspecified) and matches the source set's order.
+  itemPairs.push(`${quoteLiteral("elements")}, COALESCE(json_group_array(${elementObj} ORDER BY ${linkAlias}.rowid), json('[]'))`);
+
+  // Dedup redundant key columns (`BY (@count, @count)` → `GROUP BY d."count"`)
+  // so the grouping — and the resulting element order — is stable.
+  const groupByCols = [...new Set(group.byAtoms.map(atomColumn))].join(", ");
+  const innerSelect = `SELECT json_object(${itemPairs.join(", ")}) AS ${quoteIdent("item")}`
+    + ` FROM ${quoteIdent(linkTable)} ${linkAlias}`
+    + ` JOIN ${targetSource} ON ${targetAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("target")}`
+    + ` WHERE ${linkAlias}.${quoteIdent("source")} = ${sourceAlias}.${quoteIdent("id")}`
+    + ` GROUP BY ${groupByCols}`;
+
+  return `COALESCE((SELECT json_group_array(json(${quoteIdent("item")})) FROM (${innerSelect}) g), json('[]'))`;
+};
+
 const compilePointerArrayExpr = (
   pointer: Pointer,
   sourceAlias: string,
@@ -7485,14 +7652,25 @@ const compileOutboundLinkArrayExpr = (
   target: RuntimeTarget,
 ): string => {
   const targetSource = compilePolymorphicSource(pointer.ptrref.outTarget, false, targetAlias, projectedCols, options);
+  // `Comment.issue.owner`: the leaf (`owner`) anchors on the intermediate
+  // `.issue`, not the outer `Comment` row. Resolve the intermediate id-set.
+  const chainedSourceIds = pointer.source.expr.kind === "pointer"
+    ? compileChainSourceIdSetSQL(pointer.source, sourceAlias, options)
+    : null;
   if (shouldUseLinkTable(pointer)) {
     const linkTable = linkTableNameForPointer(pointer, options);
-    const inner = compileLinkedInnerSelect(`SELECT ${rowExpr} AS ${quoteIdent("item")} FROM ${targetSource} JOIN ${quoteIdent(linkTable)} ${joinAlias} ON ${joinAlias}.${quoteIdent("target")} = ${targetAlias}.${quoteIdent("id")} WHERE ${joinAlias}.${quoteIdent("source")} = ${sourceAlias}.${quoteIdent("id")}`, modifiers, targetAlias, params, target, options, joinAlias, pointer);
+    const sourceMatch = chainedSourceIds !== null
+      ? `${joinAlias}.${quoteIdent("source")} IN (${chainedSourceIds})`
+      : `${joinAlias}.${quoteIdent("source")} = ${sourceAlias}.${quoteIdent("id")}`;
+    const inner = compileLinkedInnerSelect(`SELECT ${rowExpr} AS ${quoteIdent("item")} FROM ${targetSource} JOIN ${quoteIdent(linkTable)} ${joinAlias} ON ${joinAlias}.${quoteIdent("target")} = ${targetAlias}.${quoteIdent("id")} WHERE ${sourceMatch}`, modifiers, targetAlias, params, target, options, joinAlias, pointer);
     return `COALESCE((SELECT json_group_array(json(${quoteIdent("item")})) FROM (${inner})), '[]')`;
   }
 
   const inlineColumn = `${pointer.ptrref.shortName}_id`;
-  const inner = compileLinkedInnerSelect(`SELECT ${rowExpr} AS ${quoteIdent("item")} FROM ${targetSource} WHERE ${targetAlias}.${quoteIdent("id")} = ${sourceAlias}.${quoteIdent(inlineColumn)}`, modifiers, targetAlias, params, target, options, undefined, pointer);
+  const targetMatch = chainedSourceIds !== null
+    ? `${targetAlias}.${quoteIdent("id")} IN (SELECT ${quoteIdent(inlineColumn)} FROM ${quoteIdent(tableNameForType(qualifyTypeName(pointer.ptrref.outSource)))} WHERE ${quoteIdent("id")} IN (${chainedSourceIds}))`
+    : `${targetAlias}.${quoteIdent("id")} = ${sourceAlias}.${quoteIdent(inlineColumn)}`;
+  const inner = compileLinkedInnerSelect(`SELECT ${rowExpr} AS ${quoteIdent("item")} FROM ${targetSource} WHERE ${targetMatch}`, modifiers, targetAlias, params, target, options, undefined, pointer);
   return `COALESCE((SELECT json_group_array(json(${quoteIdent("item")})) FROM (${inner})), '[]')`;
 };
 
@@ -7513,14 +7691,25 @@ const compileBacklinkArrayExpr = (
     ? projectedCols
     : [...new Set<string>([...projectedCols, `${pointer.ptrref.shortName}_id`])];
   const backlinkSource = compilePolymorphicSource(sourceType, false, backlinkAlias, projectedBacklinkCols, options);
+  // A backlink reached through a chain (`X.link.<other`) anchors on the
+  // intermediate set rather than the outer row.
+  const chainedSourceIds = pointer.source.expr.kind === "pointer"
+    ? compileChainSourceIdSetSQL(pointer.source, sourceAlias, options)
+    : null;
   if (shouldUseLinkTable(pointer)) {
     const linkTable = linkTableNameForPointer(pointer, options);
-    const inner = compileLinkedInnerSelect(`SELECT ${rowExpr} AS ${quoteIdent("item")} FROM ${backlinkSource} JOIN ${quoteIdent(linkTable)} ${joinAlias} ON ${joinAlias}.${quoteIdent("source")} = ${backlinkAlias}.${quoteIdent("id")} WHERE ${joinAlias}.${quoteIdent("target")} = ${sourceAlias}.${quoteIdent("id")}`, modifiers, backlinkAlias, params, target, options, joinAlias, pointer);
+    const targetMatch = chainedSourceIds !== null
+      ? `${joinAlias}.${quoteIdent("target")} IN (${chainedSourceIds})`
+      : `${joinAlias}.${quoteIdent("target")} = ${sourceAlias}.${quoteIdent("id")}`;
+    const inner = compileLinkedInnerSelect(`SELECT ${rowExpr} AS ${quoteIdent("item")} FROM ${backlinkSource} JOIN ${quoteIdent(linkTable)} ${joinAlias} ON ${joinAlias}.${quoteIdent("source")} = ${backlinkAlias}.${quoteIdent("id")} WHERE ${targetMatch}`, modifiers, backlinkAlias, params, target, options, joinAlias, pointer);
     return `COALESCE((SELECT json_group_array(json(${quoteIdent("item")})) FROM (${inner})), '[]')`;
   }
 
   const inlineColumn = `${pointer.ptrref.shortName}_id`;
-  const inner = compileLinkedInnerSelect(`SELECT ${rowExpr} AS ${quoteIdent("item")} FROM ${backlinkSource} WHERE ${backlinkAlias}.${quoteIdent(inlineColumn)} = ${sourceAlias}.${quoteIdent("id")}`, modifiers, backlinkAlias, params, target, options, undefined, pointer);
+  const fkMatch = chainedSourceIds !== null
+    ? `${backlinkAlias}.${quoteIdent(inlineColumn)} IN (${chainedSourceIds})`
+    : `${backlinkAlias}.${quoteIdent(inlineColumn)} = ${sourceAlias}.${quoteIdent("id")}`;
+  const inner = compileLinkedInnerSelect(`SELECT ${rowExpr} AS ${quoteIdent("item")} FROM ${backlinkSource} WHERE ${fkMatch}`, modifiers, backlinkAlias, params, target, options, undefined, pointer);
   return `COALESCE((SELECT json_group_array(json(${quoteIdent("item")})) FROM (${inner})), '[]')`;
 };
 
