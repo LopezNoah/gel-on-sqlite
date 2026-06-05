@@ -1074,7 +1074,16 @@ const parseFieldDefaultExpr = (text: string): FieldDefaultExpr | undefined => {
     };
   }
 
-  const trimmed = text.trim();
+  // Peel a surrounding `(SELECT …)` envelope so defaults written as
+  // `default := (SELECT datetime_current())` lower the same way as a bare
+  // `datetime_current()` call. This is a common SDL idiom — without the
+  // peel the call-shape regex below misses and the runtime falls back to
+  // NULL.
+  let trimmed = stripOuterParens(text);
+  const selectStripped = stripLeadingSelectKeyword(trimmed);
+  if (selectStripped !== undefined) {
+    trimmed = stripOuterParens(selectStripped);
+  }
   const callMatch = trimmed.match(/^([A-Za-z_][A-Za-z0-9_:]*)\s*\((.*)\)$/s);
   if (!callMatch) {
     return undefined;
@@ -1099,6 +1108,19 @@ const parseFieldDefaultExpr = (text: string): FieldDefaultExpr | undefined => {
     name: callMatch[1],
     args: args as ScalarValue[],
   };
+};
+
+// Strip a leading case-insensitive `select` keyword followed by whitespace.
+// Returns `undefined` when the text doesn't start with `select`, so callers
+// can preserve their existing fall-through semantics.
+const stripLeadingSelectKeyword = (text: string): string | undefined => {
+  const t = text.trimStart();
+  if (t.length < 7) return undefined;
+  const head = t.slice(0, 6).toLowerCase();
+  const ws = t[6];
+  if (head !== "select") return undefined;
+  if (ws !== " " && ws !== "\t" && ws !== "\n" && ws !== "\r") return undefined;
+  return t.slice(7).trimStart();
 };
 
 const parseCastScalarLiteral = (text: string): ScalarValue | undefined => {
@@ -1206,6 +1228,36 @@ const parseComputedValuePart = (text: string): ComputedValuePart => {
   return unsupported(`Unsupported computed declaration expression part '${text}'`);
 };
 
+// Token-driven detection of the `count(.<linkname>)` shape used as a
+// schema-level computed body (`num_watchers := count(.watchers)`). Uses the
+// EdgeQL parser to inspect structure — no regex.
+const detectCountOfLink = (exprText: string): string | undefined => {
+  let parsed;
+  try {
+    parsed = parseEdgeQL(`SELECT ${exprText}`);
+  } catch {
+    return undefined;
+  }
+  // SELECT wraps the body in a `select_expr` with `.expr` set to the value.
+  // Peel until we reach a `function_call`.
+  const root = (parsed as { kind: string; expr?: unknown }).expr as { kind?: string } | undefined;
+  if (!root || root.kind !== "function_call") return undefined;
+  const call = root as { kind: "function_call"; call: { name: string; args: Array<{ kind?: string; expr?: unknown }> } };
+  // Normalise stdlib name (`std::count` vs `count`).
+  const last = call.call.name.split("::").pop() ?? call.call.name;
+  if (last !== "count") return undefined;
+  if (call.call.args.length !== 1) return undefined;
+  const argWrapper = call.call.args[0]!;
+  // Args arrive as `{ kind: "expr", expr: <FreeObjectExpr> }`.
+  const argExpr = argWrapper.kind === "expr"
+    ? (argWrapper as unknown as { expr: { kind?: string } }).expr
+    : (argWrapper as unknown as { kind?: string });
+  if (!argExpr || (argExpr as { kind?: string }).kind !== "field_access") return undefined;
+  const fa = argExpr as { kind: "field_access"; expr: { kind?: string }; field: string };
+  if (fa.expr.kind !== "current_item") return undefined;
+  return fa.field;
+};
+
 const parseComputedPropertyExpr = (text: string): Extract<ComputedDef, { kind: "property" }>["expr"] => {
   const trimmed = stripOuterParens(text);
   const aggregateMatch = /^sum\(\.([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\)$/i.exec(trimmed);
@@ -1216,6 +1268,14 @@ const parseComputedPropertyExpr = (text: string): Extract<ComputedDef, { kind: "
       link: aggregateMatch[1],
       field: aggregateMatch[2],
     };
+  }
+  // `count(.link)` is a link-counting aggregate. Detect it via the EdgeQL
+  // parser so we can read it back as a `link_aggregate` (the IR splat
+  // expansion checks `kind === "link_aggregate"` when deciding whether the
+  // `no_linkful_computed_splats` future flag should drop it).
+  const countLink = detectCountOfLink(trimmed);
+  if (countLink !== undefined) {
+    return { kind: "link_aggregate", functionName: "count", link: countLink };
   }
 
   const concatParts = splitComputedConcatParts(trimmed);
@@ -1527,6 +1587,44 @@ const convertAnnotation = (moduleName: string, node: AnnotationAssignmentNode): 
   };
 };
 
+// Pluck `splat_strategy := 'Implicit' | 'Explicit'` out of a property/link
+// body's `options` list. Returns undefined when the option isn't present or
+// the literal can't be parsed — the caller treats that as the default
+// (`Implicit`).
+const extractSplatStrategyOption = (
+  options: AnnotationAssignmentNode[] | undefined,
+): "Implicit" | "Explicit" | undefined => {
+  if (!options) return undefined;
+  for (const opt of options) {
+    const name = qualifiedNameToString(opt.name);
+    if (name !== "splat_strategy") continue;
+    const value = parseStringLiteral(opt.value.text);
+    if (value === "Implicit" || value === "Explicit") return value;
+  }
+  return undefined;
+};
+
+// Some links list `splat_strategy := …` inside the link body. The schema
+// tokenizer parses that as an implicit (computed) property declaration whose
+// `name` is `splat_strategy`. Distinguish that pseudo-property so the link's
+// real property list doesn't include it, and surface the value as a
+// splat-strategy hint instead.
+const extractSplatStrategyFromLinkProperties = (
+  properties: PropertyDeclarationNode[],
+): { strategy: "Implicit" | "Explicit" | undefined; remaining: PropertyDeclarationNode[] } => {
+  let strategy: "Implicit" | "Explicit" | undefined;
+  const remaining: PropertyDeclarationNode[] = [];
+  for (const prop of properties) {
+    if (prop.computed && prop.expr && qualifiedNameToString(prop.name) === "splat_strategy") {
+      const value = parseStringLiteral(prop.expr.text.trim());
+      if (value === "Implicit" || value === "Explicit") strategy = value;
+      continue;
+    }
+    remaining.push(prop);
+  }
+  return { strategy, remaining };
+};
+
 const resolveFieldTargetTypeName = (moduleName: string, declaredType: string, enumTypeName?: string): string | undefined => {
   if (enumTypeName) {
     return normalizeTypeName(moduleName, enumTypeName);
@@ -1733,6 +1831,7 @@ const convertPropertyMember = (
     targetTypeName: collection ? undefined : resolveFieldTargetTypeName(moduleName, declaredType, scalarResolution.enumTypeName),
     enumValues: scalarResolution.enumValues,
     enumTypeName: scalarResolution.enumTypeName,
+    splatStrategy: extractSplatStrategyOption(body?.options),
     constraints: (body?.constraints ?? []).map((constraint) =>
       convertConstraint(moduleName, constraint, constraintParamNames),
     ),
@@ -1767,8 +1866,8 @@ const convertLinkMember = (
     unsupported("Link-level indexes are not supported by the new SDL adapter yet");
   }
 
-  const linkProperties = (body?.properties ?? [])
-    .map((property) => convertLinkProperty(moduleName, property, scalarRegistry));
+  const { strategy: linkSplatFromProps, remaining: storedProperties } = extractSplatStrategyFromLinkProperties(body?.properties ?? []);
+  const linkProperties = storedProperties.map((property) => convertLinkProperty(moduleName, property, scalarRegistry));
   const multi = node.cardinality === "multi";
 
   return {
@@ -1784,6 +1883,7 @@ const convertLinkMember = (
     onTargetDelete: body?.onTargetDelete ? parseOnTargetDeleteAction(body.onTargetDelete) : undefined,
     annotations: (body?.annotations ?? []).map((annotation) => convertAnnotation(moduleName, annotation)),
     properties: linkProperties,
+    splatStrategy: linkSplatFromProps,
     constraints: (body?.constraints ?? []).length > 0
       ? (body?.constraints ?? []).map((constraint) => convertConstraint(moduleName, constraint, constraintParamNames))
       : undefined,
@@ -1822,6 +1922,7 @@ const convertInferredLinkMember = (
     readonly: body?.readonly ?? false,
     annotations: (body?.annotations ?? []).map((annotation) => convertAnnotation(moduleName, annotation)),
     properties: [],
+    splatStrategy: extractSplatStrategyOption(body?.options),
     constraints: (body?.constraints ?? []).length > 0
       ? (body?.constraints ?? []).map((constraint) => convertConstraint(moduleName, constraint, constraintParamNames))
       : undefined,

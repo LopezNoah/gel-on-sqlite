@@ -43,6 +43,7 @@ export interface PropertyMember {
   targetTypeName?: string;
   enumValues?: string[];
   enumTypeName?: string;
+  splatStrategy?: "Implicit" | "Explicit";
   rewrite?: {
     onInsert?: MutationRewriteExpr;
     onUpdate?: MutationRewriteExpr;
@@ -86,6 +87,7 @@ export interface LinkMember {
   annotations: AnnotationDef[];
   properties: LinkMemberProperty[];
   constraints?: ConstraintDef[];
+  splatStrategy?: "Implicit" | "Explicit";
 }
 
 export interface ComputedMember {

@@ -451,6 +451,48 @@ export const parseCreateTypeHeader = (
 // Strip a trailing `{ … }` block (e.g. inline link-property declarations)
 // from a body entry so the existing link/property header regexes match the
 // declaration on its own. Token offsets are used to slice — no regex needed.
+// Return the text inside the entry's trailing `{ … }` block, if any.
+// Mirrors `stripTrailingBraceBlock` but returns the body content (excluding
+// the surrounding braces) rather than the prefix. Returns `undefined` when
+// no balanced trailing block exists.
+export const extractTrailingBraceBlock = (entry: string): string | undefined => {
+  let tokens: readonly Token[];
+  try {
+    tokens = tokenize(entry);
+  } catch {
+    return undefined;
+  }
+  for (let i = tokens.length - 1; i >= 0; i -= 1) {
+    const t = tokens[i]!;
+    if (t.kind === "rbrace") {
+      let trailingOk = true;
+      for (let k = i + 1; k < tokens.length; k += 1) {
+        const next = tokens[k]!;
+        if (next.kind === "eof" || next.kind === "semi") continue;
+        trailingOk = false;
+        break;
+      }
+      if (!trailingOk) return undefined;
+      let depth = 1;
+      for (let j = i - 1; j >= 0; j -= 1) {
+        const u = tokens[j]!;
+        if (u.kind === "rbrace") depth += 1;
+        else if (u.kind === "lbrace") {
+          depth -= 1;
+          if (depth === 0) {
+            const inner = entry.slice(u.offset + 1, t.offset).trim();
+            return inner;
+          }
+        }
+      }
+      return undefined;
+    }
+    if (t.kind === "eof" || t.kind === "semi") continue;
+    return undefined;
+  }
+  return undefined;
+};
+
 export const stripTrailingBraceBlock = (entry: string): string => {
   let tokens: readonly Token[];
   try {

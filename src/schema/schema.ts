@@ -19,6 +19,10 @@ export class SchemaSnapshot {
   private readonly aliasesByName: Map<string, AliasDef>;
   private readonly scalarTypesByName: Map<string, ScalarTypeDeclaration>;
   private readonly globalsByName: Map<string, GlobalDef>;
+  // Active `CREATE FUTURE <flag>` directives (e.g.
+  // `no_linkful_computed_splats`). They modify splat semantics without
+  // changing the underlying type model.
+  private readonly futureFlagsSet: Set<string> = new Set<string>();
 
   constructor(types: TypeDef[] = [], functions: FunctionDef[] = [], aliases: AliasDef[] = [], scalarTypes: ScalarTypeDeclaration[] = [], globals: GlobalDef[] = []) {
     this.typesByName = new Map(types.map((t) => [qualifiedTypeName(t), cloneTypeDef(t)]));
@@ -81,6 +85,15 @@ export class SchemaSnapshot {
     this.typesByName.set(qualifiedTypeName(typeDef), cloneTypeDef(typeDef));
   }
 
+  setFutureFlag(name: string, enabled: boolean): void {
+    if (enabled) this.futureFlagsSet.add(name);
+    else this.futureFlagsSet.delete(name);
+  }
+
+  listFutureFlags(): string[] {
+    return [...this.futureFlagsSet];
+  }
+
   getAlias(name: string): AliasDef | undefined {
     const existing = this.aliasesByName.get(name);
     return existing ? cloneAliasDef(existing) : undefined;
@@ -130,6 +143,16 @@ export class SchemaSnapshot {
 
       return this.isSubtypeOf(candidate, targetName);
     });
+  }
+
+  // Public wrapper for the recursive private check: is `child` (qualified
+  // name or TypeDef) a subtype of `ancestor`? Returns true when they're the
+  // same name, when `child` directly extends `ancestor`, or transitively.
+  isTypeSubtypeOf(childQualifiedName: string, ancestorQualifiedName: string): boolean {
+    if (childQualifiedName === ancestorQualifiedName) return true;
+    const childDef = this.getType(childQualifiedName);
+    if (!childDef) return false;
+    return this.isSubtypeOf(childDef, ancestorQualifiedName);
   }
 
   private isSubtypeOf(typeDef: TypeDef, targetQualifiedName: string, seen = new Set<string>()): boolean {

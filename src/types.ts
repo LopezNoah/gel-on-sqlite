@@ -197,9 +197,9 @@ export type ComputedDef = {
           }
         | {
             kind: "link_aggregate";
-            functionName: "sum";
+            functionName: "sum" | "count";
             link: string;
-            field: string;
+            field?: string;
           }
         | {
             kind: "edgeql_expr";
@@ -346,6 +346,12 @@ export interface FieldDef {
   targetTypeName?: string;
   enumValues?: string[];
   enumTypeName?: string;
+  splatStrategy?: "Implicit" | "Explicit";
+  // True when this field is the synthetic `<link>_id` column the runtime
+  // adds for inline single-target links. Such columns aren't user-visible
+  // properties — splat expansion must skip them so `Type { * }` doesn't
+  // surface `status_id`, `priority_id`, etc.
+  isLinkColumn?: boolean;
 }
 
 export interface LinkPropertyDef {
@@ -382,6 +388,7 @@ export interface LinkDef {
   computedProperties?: ComputedLinkPropertyDef[];
   annotations?: AnnotationDef[];
   constraints?: ConstraintDef[];
+  splatStrategy?: "Implicit" | "Explicit";
 }
 
 export interface TypeDef {

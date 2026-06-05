@@ -272,6 +272,7 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
           targetTypeName: member.targetTypeName,
           enumValues: member.enumValues,
           enumTypeName: member.enumTypeName,
+          splatStrategy: member.splatStrategy,
         });
 
         if (!member.multi && (member.rewrite?.onInsert || member.rewrite?.onUpdate)) {
@@ -458,6 +459,7 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
         defaultTargetValues: member.defaultTargetValues ? [...member.defaultTargetValues] : undefined,
         annotations: (member.annotations ?? []).length ? [...member.annotations] : undefined,
         constraints: (member.constraints ?? []).length ? [...(member.constraints ?? [])] : undefined,
+        splatStrategy: member.splatStrategy,
       });
 
       if (!member.multi && storedProperties.length === 0) {
@@ -466,6 +468,7 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
           type: "uuid",
           required: false,
           hasDefault: member.hasDefault,
+          isLinkColumn: true,
         });
       }
     }
@@ -1024,13 +1027,27 @@ const mergeOverloadedMember = (
   }
 
   if (overloadedMember.kind === "link" && baseMember.kind === "link") {
+    // Merge link properties: keep base's by default, let the overload
+    // override per name. Without this, `overloaded link owner { property
+    // since: datetime }` would shadow Owned.owner's `note` property and
+    // splats over the inherited link would silently drop `@note`.
+    const propsByName = new Map<string, typeof overloadedMember.properties[number]>();
+    for (const property of baseMember.properties) {
+      propsByName.set(property.name, {
+        ...property,
+        annotations: [...property.annotations],
+      });
+    }
+    for (const property of overloadedMember.properties) {
+      propsByName.set(property.name, {
+        ...property,
+        annotations: [...property.annotations],
+      });
+    }
     return {
       ...overloadedMember,
       annotations: baseAnnotations,
-      properties: overloadedMember.properties.map((property) => ({
-        ...property,
-        annotations: [...property.annotations],
-      })),
+      properties: [...propsByName.values()],
     };
   }
 
