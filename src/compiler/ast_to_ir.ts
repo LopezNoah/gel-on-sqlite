@@ -88,6 +88,54 @@ const defaultCardinality: Cardinality = "unknown";
 const defaultMultiplicity: Multiplicity = "unknown";
 const defaultVolatility: Volatility = "stable";
 
+// Normalize a string literal that targets `std::datetime` into Gel's canonical
+// form: `YYYY-MM-DDTHH:MM:SS+HH:MM` (always two-digit hour/minute/second, full
+// timezone offset). Accepts the shorthand `+HH` zone Gel emits in fixtures by
+// padding it to `+HH:00` before delegating to `Date`. Returns `undefined` if
+// the input doesn't parse — the callsite then falls back to passing the raw
+// literal through `CAST(... AS TEXT)` so the runtime surfaces a real error.
+const normalizeDateTimeLiteral = (literal: string): string | undefined => {
+  const trimmed = literal.trim();
+  // Expand `+00` / `-05` zones to `+00:00` / `-05:00`. The check looks at the
+  // last 3 chars: a `+`/`-` sign followed by two digits. SQLite's `Date`
+  // doesn't accept the shorthand, so without this pad ISO casts that pass on
+  // Python silently fail here.
+  const isDigit = (ch: string): boolean => ch >= "0" && ch <= "9";
+  const lastSign = Math.max(trimmed.lastIndexOf("+"), trimmed.lastIndexOf("-"));
+  let toParse = trimmed;
+  if (lastSign > 10 /* past the date part */ && trimmed.length - lastSign === 3) {
+    const sign = trimmed[lastSign];
+    const h1 = trimmed[lastSign + 1] ?? "";
+    const h2 = trimmed[lastSign + 2] ?? "";
+    if ((sign === "+" || sign === "-") && isDigit(h1) && isDigit(h2)) {
+      toParse = `${trimmed.slice(0, lastSign)}${sign}${h1}${h2}:00`;
+    }
+  }
+  const date = new Date(toParse);
+  if (Number.isNaN(date.getTime())) return undefined;
+  const pad = (n: number, w = 2): string => String(n).padStart(w, "0");
+  // We always normalize to UTC since `Date` collapses to a fixed instant. The
+  // EdgeQL test fixtures stamp `+00` zones, so this preserves the expected
+  // wall-clock representation while widening the offset to `+00:00`.
+  const yyyy = pad(date.getUTCFullYear(), 4);
+  const mm = pad(date.getUTCMonth() + 1);
+  const dd = pad(date.getUTCDate());
+  const hh = pad(date.getUTCHours());
+  const min = pad(date.getUTCMinutes());
+  const ss = pad(date.getUTCSeconds());
+  const ms = date.getUTCMilliseconds();
+  // Trim trailing zeros from the millisecond fraction without using a regex.
+  let frac = "";
+  if (ms !== 0) {
+    let msStr = pad(ms, 3);
+    while (msStr.length > 1 && msStr.endsWith("0")) {
+      msStr = msStr.slice(0, -1);
+    }
+    frac = `.${msStr}`;
+  }
+  return `${yyyy}-${mm}-${dd}T${hh}:${min}:${ss}${frac}+00:00`;
+};
+
 const scalarToStdName = (scalar: ScalarType): string => {
   switch (scalar) {
     case "str":
@@ -611,9 +659,59 @@ const resolveBacklinkPointerRef = (
     return undefined;
   }
   const sourceHint = sourceTypeName ? resolveTypeRef(ctx, sourceTypeName).id : undefined;
+  const hintTypeDef = sourceHint ? ctx.schema?.getType(sourceHint) : undefined;
+  // Set of concrete-subtype ids that should be considered when `[IS T]` filters
+  // by an abstract (or otherwise polymorphic) supertype. When the filter is a
+  // concrete type, this collapses to `{filter id}`.
+  const allowedSourceIds = sourceHint
+    ? new globalThis.Set<string>([sourceHint, ...(hintTypeDef ? ctx.schema!.listConcreteTypesAssignableTo(sourceHint).map((td) => qualifyTypeNameOf(td)) : [])])
+    : undefined;
+  // Targets accepted by this backlink. Includes the requested type and any
+  // ancestor whose link target is a union (`Issue.references: File | URL | …`)
+  // that contains the requested type — the backlink should match when the
+  // file's id appears as a `target` in the union link's storage table.
+  const targetMatches = (linkTargetTypeName: string): boolean => {
+    if (linkTargetTypeName === target.id) return true;
+    if (!linkTargetTypeName.includes("|")) return false;
+    return linkTargetTypeName
+      .split("|")
+      .map((part) => part.trim())
+      .some((part) => {
+        const resolved = resolveTypeRef(ctx, part);
+        if (resolved.id === target.id) return true;
+        // Union branch may itself be a supertype of the requested target;
+        // accept that too so `<references[IS Issue]` on a File still matches.
+        const branchAssignable = ctx.schema?.listConcreteTypesAssignableTo(part).map(qualifyTypeNameOf) ?? [];
+        return branchAssignable.includes(target.id);
+      });
+  };
+  const matches: PointerRef[] = [];
+  // When the backlink is unqualified (no `[IS T]`), Python errors if ANY type
+  // in the schema defines the link as computed — the result set's identity
+  // can't be reasoned about. Surface the same error here so users get the
+  // canonical message instead of a partially-correct result that quietly
+  // drops computed-link rows.
+  if (!sourceHint) {
+    // Computed-link aliases live on the schema snapshot's `computeds` (the
+    // generated schema model drops them), so consult `ctx.schema` directly.
+    const allTypeDefs = ctx.schema?.listTypes() ?? [];
+    for (const typeDef of allTypeDefs) {
+      const computed = (typeDef.computeds ?? []).find(
+        (candidate) => candidate.kind === "link" && candidate.name === linkName,
+      );
+      if (computed) {
+        throw new AppError(
+          "E_SEMANTIC",
+          `cannot follow backlink '${linkName}' because link '${linkName}' of object type '${qualifyTypeNameOf(typeDef)}' is computed`,
+          1,
+          1,
+        );
+      }
+    }
+  }
   for (const typeDef of listSchemaTypeDefs(ctx)) {
     const sourceRef = typeRefFromTypeDef(ctx, typeDef);
-    if (sourceHint && sourceRef.id !== sourceHint) {
+    if (allowedSourceIds && !allowedSourceIds.has(sourceRef.id)) {
       continue;
     }
     const link = (typeDef.links ?? []).find((candidate) => candidate.name === linkName);
@@ -621,13 +719,28 @@ const resolveBacklinkPointerRef = (
       continue;
     }
     const linkTarget = resolveTypeRef(ctx, link.targetType);
-    if (linkTarget.id !== target.id) {
+    if (!targetMatches(link.targetType)) {
       continue;
     }
-    return pointerRefFromLink(sourceRef, linkTarget, link);
+    matches.push(pointerRefFromLink(sourceRef, linkTarget, link));
   }
-  return undefined;
+  if (matches.length === 0) return undefined;
+  if (matches.length === 1) return matches[0];
+  // Abstract `[IS T]` covering multiple concrete sources: surface a union
+  // ptrref. The SQL compiler reads `outSource` / `unionComponents` when
+  // building the polymorphic FROM, and the link table is per-concrete-type.
+  const merged: PointerRef = { ...matches[0]! };
+  merged.unionComponents = matches;
+  // outSource broadens to the requested abstract type so downstream type
+  // queries (e.g. `[IS Named]`) reason against the filter, not just the
+  // first concrete source.
+  if (sourceHint) {
+    merged.outSource = resolveTypeRef(ctx, sourceHint);
+  }
+  return merged;
 };
+
+const qualifyTypeNameOf = (typeDef: TypeDef): string => `${typeDef.module}::${typeDef.name}`;
 
 // `T.<computed-property>` resolves at AST→IR time by substituting the
 // computed body. Supports the structured property-computed shapes the SDL
@@ -2136,27 +2249,129 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
     }
 
     case "field_access": {
+      // `X.<l.field` (no `[IS T]` narrowing): Python treats untyped backlinks
+      // as `std::BaseObject` — only `id` / `__type__` survive, accessing any
+      // other field errors with "no link or property 'field'". Mirror that
+      // behaviour here so the SQL pipeline never sees the dangling path.
+      if (!expr.field.startsWith("@")
+          && expr.field !== "id"
+          && expr.field !== "__type__"
+          && expr.expr.kind === "for_expr"
+          && (expr.expr as Extract<FreeObjectExpr, { kind: "for_expr" }>).variable === "__gel_backlink_item__"
+          && (expr.expr as Extract<FreeObjectExpr, { kind: "for_expr" }>).body.kind === "backlink_path"
+          && (((expr.expr as Extract<FreeObjectExpr, { kind: "for_expr" }>).body as Extract<FreeObjectExpr, { kind: "backlink_path" }>).sourceType === undefined)) {
+        throw new AppError(
+          "E_SEMANTIC",
+          `object type 'std::BaseObject' has no link or property '${expr.field}'`,
+          1,
+          1,
+        );
+      }
+
+      // `@<name>` is only valid when applied directly to a link path step.
+      // EdgeQL rejects link-property access on SET OF expressions — a
+      // parenthesized SELECT (`select_expr_subquery`), an array constructor,
+      // a tuple, or a free-object literal all produce one of those. Other
+      // forms (path / field_access / backlink_path / a FOR over a backlink,
+      // which is how the parser models `.<l[IS T]`) yield a pointer and pass
+      // through to the regular link-property handler below.
+      if (expr.field.startsWith("@")) {
+        const innerKind = expr.expr.kind;
+        const rejectedInner = new Set([
+          "select_expr_subquery",
+          "array_literal_expr",
+          "tuple",
+          "free_object_constructor",
+          "set_literal",
+          "set_expr",
+        ]);
+        if (rejectedInner.has(innerKind)) {
+          const propName = expr.field.slice(1);
+          throw new AppError(
+            "E_SEMANTIC",
+            `unexpected reference to link property '${propName}' outside of a path expression`,
+            1,
+            1,
+          );
+        }
+        // `X.<l[IS T]@p` where T's subtype set contains no concrete type with
+        // link `l`: the parser wraps the backlink in a `for_expr` over a
+        // `backlink_path` body. Verify the chosen `[IS T]` filter actually
+        // includes at least one source type that defines `l`; otherwise no
+        // amount of polymorphic expansion will surface `@p` and we should
+        // mirror Python's "property does not exist because there are no
+        // 'l' links" error.
+        if (expr.expr.kind === "for_expr"
+            && (expr.expr as Extract<FreeObjectExpr, { kind: "for_expr" }>).variable === "__gel_backlink_item__"
+            && (expr.expr as Extract<FreeObjectExpr, { kind: "for_expr" }>).body.kind === "backlink_path") {
+          const backlink = (expr.expr as Extract<FreeObjectExpr, { kind: "for_expr" }>).body as Extract<FreeObjectExpr, { kind: "backlink_path" }>;
+          // Use the iterator's typeref as the link target. compileFreeObjectExpr
+          // would do the same; we recompute here just to peek at the resolution.
+          const iteratorSet = compileFreeObjectExpr((expr.expr as Extract<FreeObjectExpr, { kind: "for_expr" }>).iterator, ctx);
+          const probe = resolveBacklinkPointerRef(ctx, iteratorSet.typeref, backlink.link, backlink.sourceType);
+          if (!probe) {
+            const propName = expr.field.slice(1);
+            throw new AppError(
+              "E_SEMANTIC",
+              `property '${propName}' does not exist because there are no '${backlink.link}' links`,
+              1,
+              1,
+            );
+          }
+        }
+      }
+
       const source = compileFreeObjectExpr(expr.expr, ctx);
 
       if (expr.field.startsWith("@") && source.expr.kind === "pointer") {
         const linkPointer = source.expr as Pointer;
         if (!linkPointer.ptrref.isLinkProperty) {
-          const linkOwnerTypeRef = linkPointer.direction === "inbound"
-            ? linkPointer.ptrref.outSource
-            : linkPointer.source.typeref;
-          const linkOwnerResolved = getResolvedSchemaType(ctx, linkOwnerTypeRef.id);
-          const linkDef = linkOwnerResolved?.resolvedLinks.find((candidate) => candidate.name === linkPointer.ptrref.shortName);
           const propName = expr.field.slice(1);
-          const propDef = linkDef?.properties?.find((property) => property.name === propName);
-          if (propDef) {
+          // Concrete subtypes contributing to this pointer's source. For a
+          // simple pointer this is just the declaring type; for a polymorphic
+          // backlink (`<owner[IS Text]`) it's the abstract filter's concrete
+          // subtypes — each must expose the link property, or the access is
+          // semantically invalid even if the filter type itself doesn't carry
+          // the link.
+          const components = linkPointer.ptrref.unionComponents?.length
+            ? linkPointer.ptrref.unionComponents
+            : [linkPointer.ptrref];
+          const propDefs: Array<{ owner: string; prop: { name: string; type: string; required?: boolean } }> = [];
+          let anyComponentDefinesLink = false;
+          for (const comp of components) {
+            const linkOwnerTypeRef = linkPointer.direction === "inbound"
+              ? comp.outSource
+              : linkPointer.source.typeref;
+            const linkOwnerResolved = getResolvedSchemaType(ctx, linkOwnerTypeRef.id);
+            const linkDef = linkOwnerResolved?.resolvedLinks.find((candidate) => candidate.name === linkPointer.ptrref.shortName);
+            if (linkDef) {
+              anyComponentDefinesLink = true;
+              const propDef = linkDef.properties?.find((property) => property.name === propName);
+              if (propDef) {
+                propDefs.push({ owner: linkOwnerTypeRef.id, prop: propDef });
+              } else {
+                // A concrete subtype is missing the property — Python reports
+                // the same `link 'l' has no property 'p'` error even when other
+                // subtypes have it, because the union must agree on schema.
+                throw new AppError(
+                  "E_SEMANTIC",
+                  `link '${linkPointer.ptrref.shortName}' has no property '${propName}'`,
+                  1,
+                  1,
+                );
+              }
+            }
+          }
+          if (propDefs.length > 0) {
+            const first = propDefs[0]!.prop;
             const propertyPtrRef: PointerRef = {
               kind: "pointer_ref",
               id: `${linkPointer.ptrref.id}.${expr.field}`,
               name: expr.field,
               shortName: expr.field,
               outSource: source.typeref,
-              outTarget: scalarTypeRef(propDef.type),
-              outCardinality: propDef.required ? "one" : "at_most_one",
+              outTarget: scalarTypeRef(first.type),
+              outCardinality: first.required ? "one" : "at_most_one",
               inCardinality: "many",
               isComputed: false,
               isLinkProperty: true,
@@ -2164,10 +2379,13 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
             };
             return extendPathSet(source, propertyPtrRef);
           }
-          if (linkDef) {
+          if (!anyComponentDefinesLink && linkPointer.direction === "inbound") {
+            // Type-intersection that matches no concrete subtype with this
+            // link: Python surfaces this as
+            // `property 'p' does not exist because there are no 'l' links`.
             throw new AppError(
               "E_SEMANTIC",
-              `link '${linkPointer.ptrref.shortName}' has no property '${propName}'`,
+              `property '${propName}' does not exist because there are no '${linkPointer.ptrref.shortName}' links`,
               1,
               1,
             );
@@ -2177,9 +2395,23 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
 
       const ptrref = resolvePointerRef(ctx, source.typeref, expr.field);
       if (ptrref) {
-        return ptrref.computedLinkAliasIsBackward
+        const extended = ptrref.computedLinkAliasIsBackward
           ? extendPathSetDirectional(source, ptrref, "inbound")
           : extendPathSet(source, ptrref);
+        // `(SELECT Type { l: { x } }).l` — the outer SELECT's shape element
+        // for `l` carries a nested `{ x }` projection we want to surface on
+        // the resulting pointer set. Inherit it so the SQL pipeline projects
+        // `x` instead of returning bare `{}` objects.
+        const shapeEntry = source.shape?.find(
+          (entry) => entry.name === expr.field
+            && entry.expr.shape
+            && entry.expr.shape.length > 0
+            && !entry.expr.typeref?.isScalar,
+        );
+        if (shapeEntry?.expr.shape && shapeEntry.expr.shape.length > 0 && (!extended.shape || extended.shape.length === 0)) {
+          return { ...extended, shape: shapeEntry.expr.shape };
+        }
+        return extended;
       }
       // No direct pointer / link / backlink — try computed-property
       // substitution before the unknown-type fallback. Lets `Type.computedP`
@@ -3078,6 +3310,15 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
         // an int-valued inner survives unchanged and the runtime ends up
         // formatting it via SQLite's default REAL coercion (e.g. `99` →
         // `'99.0'`).
+      }
+
+      if (expr.castType === "datetime") {
+        const innerSet = compileFreeObjectExpr(innerExpr, ctx);
+        const literal = tryExtractStringConstant(innerSet);
+        if (literal !== undefined) {
+          const normalized = normalizeDateTimeLiteral(literal);
+          if (normalized !== undefined) return enumLiteralSet(normalized);
+        }
       }
 
       const inner = compileFreeObjectExpr(innerExpr, ctx);
@@ -4334,8 +4575,25 @@ const compileShape = (
     }
     const where = el.where ? compileFreeObjectExpr(el.where, ctx) : undefined;
     const orderBy = el.orderBy?.map((entry) => {
-      const ptrref = resolvePointerRef(ctx, expr.typeref, entry.field);
-      const path = ptrref ? extendPathSet(expr, ptrref) : literalToSet(null);
+      // `entry.field` is the dotted path written after `ORDER BY` (the parser
+      // has already stripped the leading subject — `User.todo.number` arrives
+      // here as `todo.number`). Walk each segment so multi-step paths into the
+      // shape's iteration target (`todo` link → `Issue.number`) lower as a
+      // pointer chain rather than collapsing to a NULL literal. Try resolving
+      // first against the shape's iteration target (`.number`) and fall back
+      // to walking from the enclosing subject (`User.todo.number` style).
+      const segments = entry.field.split(".");
+      const walkFrom = (start: Set): Set | undefined => {
+        let cursor: Set | undefined = start;
+        for (const segment of segments) {
+          if (!cursor) return undefined;
+          const ptrref = resolvePointerRef(ctx, cursor.typeref, segment);
+          if (!ptrref) return undefined;
+          cursor = extendPathSet(cursor, ptrref);
+        }
+        return cursor;
+      };
+      const path = walkFrom(expr) ?? walkFrom(subject) ?? literalToSet(null);
       return {
         kind: "sort_expr",
         path,
@@ -4410,6 +4668,7 @@ const compileShape = (
                 shapeOrigin: resolveShapeOrigin(el),
                 required: el.required ?? propDef.required ?? false,
                 cardinality: el.cardinality ?? (propDef.required ? "one" : "at_most_one"),
+                name: el.name,
               };
             }
           }
@@ -4442,6 +4701,7 @@ const compileShape = (
       shapeOrigin: resolveShapeOrigin(el),
       required: el.required ?? false,
       cardinality: el.cardinality ?? "at_most_one",
+      name: el.name,
     };
   };
 
@@ -4542,6 +4802,7 @@ const compileShape = (
             shapeOrigin: resolveShapeOrigin(el),
             required: el.required ?? false,
             cardinality: el.cardinality ?? "at_most_one",
+            name: el.name,
           });
           continue;
         }
@@ -4642,6 +4903,7 @@ const compileShape = (
         shapeOrigin: resolveShapeOrigin(el),
         required: el.required ?? (ptrref.outCardinality === "one"),
         cardinality: el.cardinality ?? ptrref.outCardinality,
+        name: el.name,
       });
       continue;
     }

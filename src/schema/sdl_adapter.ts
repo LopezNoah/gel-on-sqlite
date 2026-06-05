@@ -1678,6 +1678,7 @@ const convertLinkProperty = (
     required: node.required === true,
     computed: false,
     hasDefault: body?.default !== null && body?.default !== undefined,
+    defaultExpr: body?.default ? parseFieldDefaultExpr(body.default.text) : undefined,
     readonly: body?.readonly ?? false,
     collection,
     annotations: (body?.annotations ?? []).map((annotation) => convertAnnotation(moduleName, annotation)),

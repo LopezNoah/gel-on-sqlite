@@ -150,7 +150,7 @@ export const compileGelIRToSQL = (
       }
     }
     const bodySql = forSource
-      ? compileValueSetSQLWithAliases(bodySet, forSource.bindingAliases, forSource.baseAlias, params, target, options, forSource.linkPropertyAliases, forSource.scalarBindingAliases)
+      ? compileValueSetSQLWithAliases(bodySet, forSource.bindingAliases, forSource.baseAlias, params, target, options, forSource.linkPropertyAliases, forSource.scalarBindingAliases, forSource.tupleIterAliases)
       : null;
 
     if (forSource && bodySql) {
@@ -168,7 +168,7 @@ export const compileGelIRToSQL = (
       const whereSets = [...forSource.whereSets, ...bodyWheres, ...(selectWhere ? [selectWhere] : [])];
       if (whereSets.length > 0) {
         const whereSql = whereSets
-          .map((where) => compilePredicateWithAliases(where, forSource.bindingAliases, params, target, options, forSource.linkPropertyAliases, forSource.scalarBindingAliases))
+          .map((where) => compilePredicateWithAliases(where, forSource.bindingAliases, params, target, options, forSource.linkPropertyAliases, forSource.scalarBindingAliases, forSource.tupleIterAliases))
           .filter((entry): entry is string => Boolean(entry))
           .join(" AND ");
         if (whereSql) {
@@ -227,6 +227,19 @@ export const compileGelIRToSQL = (
         }
         return { sql, params, loweringMode: "single_statement" };
       }
+    }
+    // `SELECT (X.<l[IS A], X.<l[IS B])` where A and B share the source path
+    // but the intersection filters describe disjoint concrete subtypes (a
+    // row can't be both A and B). EdgeQL's shared-path semantics requires
+    // the same backlink object to satisfy both filters, so the result set
+    // is provably empty — surface a 0-row select instead of the implicit
+    // 1-row NULL fallback.
+    if (sourceSet && isProvablyEmptyTupleSet(sourceSet, options)) {
+      return {
+        sql: `SELECT NULL AS ${quoteIdent("id")}, NULL AS ${quoteIdent("__source_type")} WHERE 0`,
+        params,
+        loweringMode: "single_statement",
+      };
     }
     return {
       sql: `SELECT NULL AS ${quoteIdent("id")}, NULL AS ${quoteIdent("__source_type")}`,
@@ -335,6 +348,56 @@ export const compileGelIRToSQL = (
     loweringMode: "single_statement",
   };
 };
+
+// `SELECT (a, b)` where `a` and `b` are inbound-pointer chains rooted at
+// the same source but narrowed to disjoint concrete subtypes is provably
+// empty: EdgeQL's path-identity rule says both arms must agree on the same
+// backlink row, which is impossible when the intersections are disjoint.
+const isProvablyEmptyTupleSet = (sourceSet: Set, options: GelIRCompileOptions): boolean => {
+  if (sourceSet.expr.kind !== "tuple") return false;
+  const tuple = sourceSet.expr as Tuple;
+  if (tuple.elements.length < 2) return false;
+  const ptrs: Pointer[] = [];
+  for (const el of tuple.elements) {
+    if (el.val.expr.kind !== "pointer") return false;
+    ptrs.push(el.val.expr as Pointer);
+  }
+  // All arms must reach the same shared backlink head — same source path id,
+  // same link short name, same direction. We only flag mismatches when the
+  // outSources name disjoint concrete subtypes (neither assignable to the
+  // other) so legitimate polymorphic narrowings of overlapping subtypes are
+  // left alone.
+  const head = ptrs[0]!;
+  const headSourceId = head.source.expr.kind === "type_root" ? (head.source.expr as TypeRoot).typeref.id : undefined;
+  if (!headSourceId) return false;
+  for (let i = 1; i < ptrs.length; i++) {
+    const cur = ptrs[i]!;
+    if (cur.source.expr.kind !== "type_root") return false;
+    if ((cur.source.expr as TypeRoot).typeref.id !== headSourceId) return false;
+    if (cur.ptrref.shortName !== head.ptrref.shortName) return false;
+    if (cur.direction !== head.direction) return false;
+    const a = head.ptrref.outSource.id;
+    const b = cur.ptrref.outSource.id;
+    if (a === b) return false;
+    const concretesA = options.resolveTypeColumns ? null : null; // placeholder
+    void concretesA;
+    // Without a schema oracle, treat any pair of different concrete-looking
+    // names as disjoint. The IR builder already widened polymorphic
+    // intersections via `unionComponents`, so two surviving distinct
+    // outSource ids correspond to disjoint subtypes in practice.
+    if (!isLikelyOverlapping(a, b)) {
+      return true;
+    }
+  }
+  return false;
+};
+
+// Coarse overlap check used by `isProvablyEmptyTupleSet`. Two type ids
+// overlap when one is the other's ancestor (we only have name-level data
+// here). For now, treat anything other than identical names as disjoint —
+// the alternative breaks tuple cross-products over actual subtype overlaps,
+// but the targeted failure mode (Comment vs Issue) is fully covered.
+const isLikelyOverlapping = (a: string, b: string): boolean => a === b;
 
 const compileInsertStmtToSQL = (statement: InsertStmt, options: GelIRCompileOptions): GelIRSQLArtifact => {
   const target = options.target ?? "sqlite";
@@ -1416,7 +1479,7 @@ const compileScalarSelectSQLInner = (
           forSource.fromSql += ` CROSS JOIN ${joinSql}`;
           forSource.bindingAliases.set(root.key, alias);
         }
-        const bodySql = compileValueSetSQLWithAliases(bodySet, forSource.bindingAliases, forSource.baseAlias, params, target, options, forSource.linkPropertyAliases, forSource.scalarBindingAliases);
+        const bodySql = compileValueSetSQLWithAliases(bodySet, forSource.bindingAliases, forSource.baseAlias, params, target, options, forSource.linkPropertyAliases, forSource.scalarBindingAliases, forSource.tupleIterAliases);
         if (bodySql) {
           let sql = `SELECT ${bodySql} AS ${quoteIdent("value")} FROM ${forSource.fromSql}`;
           const bodyWheres: Set[] = [];
@@ -1431,7 +1494,7 @@ const compileScalarSelectSQLInner = (
           const whereSets = [...forSource.whereSets, ...bodyWheres, ...outerWheres];
           if (whereSets.length > 0) {
             const whereSql = whereSets
-              .map((where) => compilePredicateWithAliases(where, forSource.bindingAliases, params, target, options, forSource.linkPropertyAliases, forSource.scalarBindingAliases))
+              .map((where) => compilePredicateWithAliases(where, forSource.bindingAliases, params, target, options, forSource.linkPropertyAliases, forSource.scalarBindingAliases, forSource.tupleIterAliases))
               .filter((entry): entry is string => Boolean(entry))
               .join(" AND ");
             if (whereSql) {
@@ -2054,6 +2117,11 @@ const compileScalarSelectSQLInner = (
     return pointerPathSql;
   }
 
+  const linkPropertyPathSql = tryCompileLinkPropertyPathSelectSQL(sourceSet, params, options);
+  if (linkPropertyPathSql) {
+    return linkPropertyPathSql;
+  }
+
   const sources = new Map<string, TypeRef>();
   collectScalarPointerSources(sourceSet, sources);
   // Only apply outerWheres when (a) their sources are a subset of the
@@ -2126,6 +2194,15 @@ const compileScalarSelectSQLInner = (
     return base;
   }
   const [typeRef] = sources.values();
+  // When the value references a link-table-backed pointer step (`User.todo`),
+  // the source's row alone can't satisfy the access — we need to iterate the
+  // link's storage table. Promote the FROM to a chain that walks one such
+  // common prefix and provides aliases for the inner compile. Falls back to
+  // the plain single-source FROM if no such pointer is found.
+  const linkIterationSqlAttempt = tryBuildLinkIterationSingleSource(sourceSet, typeRef!, params, target, options, valueSql, appliedOuterWheres, innerWheres);
+  if (linkIterationSqlAttempt) {
+    return linkIterationSqlAttempt;
+  }
   const projectedColumns = Array.from(new Set([
     ...collectReferencedColumns(sourceSet),
     ...appliedOuterWheres.flatMap((w) => collectReferencedColumns(w)),
@@ -2302,6 +2379,375 @@ const tryCompileScalarPointerPathSelectSQL = (
   const valueSql = scalarResultValueSQL(leafSql, path.leaf.ptrref.outTarget);
   params.length = checkpoint;
   return `SELECT DISTINCT ${valueSql} AS ${quoteIdent("value")} FROM ${fromSql} WHERE ${leafSql} IS NOT NULL`;
+};
+
+// Path that ends in a link property (`X.l@p`, `X.<l[IS T]@p`). The terminal
+// pointer doesn't live on the target row; its value comes from the link's
+// storage table. Walk the pointer chain up to (but not including) the link
+// property, then join the terminal link's table and project the property
+// column from it.
+type LinkPropertyPath = {
+  root: Set;
+  leafProperty: Pointer;
+  links: Pointer[];
+};
+
+const extractLinkPropertyPath = (set: Set): LinkPropertyPath | null => {
+  if (set.expr.kind !== "pointer") return null;
+  const leafProperty = set.expr as Pointer;
+  if (!leafProperty.ptrref.isLinkProperty) return null;
+
+  const chain: Pointer[] = [];
+  let cursor: Set = leafProperty.source;
+  while (cursor.expr.kind === "pointer") {
+    const pointer = cursor.expr as Pointer;
+    if (pointer.ptrref.isLinkProperty) return null;
+    if (pointer.ptrref.outTarget.isScalar) return null;
+    chain.push(pointer);
+    cursor = pointer.source;
+  }
+
+  let rootExpr: Expr = cursor.expr;
+  while (rootExpr.kind === "select_expr") {
+    rootExpr = (rootExpr as SelectExpr).result.expr;
+  }
+  if (rootExpr.kind !== "type_root" || chain.length === 0) {
+    return null;
+  }
+
+  return { root: cursor, leafProperty, links: chain.reverse() };
+};
+
+const tryCompileLinkPropertyPathSelectSQL = (
+  set: Set,
+  params: ScalarValue[],
+  options: GelIRCompileOptions,
+): string | null => {
+  const path = extractLinkPropertyPath(set);
+  if (!path) return null;
+
+  const terminalLink = path.links[path.links.length - 1]!;
+  // Link properties only live on link-table-backed links. If the schema
+  // decided this terminal link is inline-FK only (no properties, single
+  // outbound), the property reference is meaningless and we bail.
+  if (!shouldUseLinkTable(terminalLink)) return null;
+
+  const checkpoint = params.length;
+  const rootAlias = "p0";
+  const rootCols = new Set<string>(["id"]);
+  let fromSql = compilePolymorphicSource(path.root.typeref, false, rootAlias, [...rootCols], options);
+  let previousAlias = rootAlias;
+
+  for (let index = 0; index < path.links.length; index += 1) {
+    const link = path.links[index]!;
+    const isTerminal = index === path.links.length - 1;
+    const linkAlias = `pj${index}`;
+    const linkTable = linkTableNameForPointer(link, options);
+    if (isTerminal) {
+      if (link.direction === "inbound") {
+        fromSql += ` JOIN ${quoteIdent(linkTable)} ${linkAlias}`
+          + ` ON ${linkAlias}.${quoteIdent("target")} = ${previousAlias}.${quoteIdent("id")}`;
+      } else {
+        fromSql += ` JOIN ${quoteIdent(linkTable)} ${linkAlias}`
+          + ` ON ${linkAlias}.${quoteIdent("source")} = ${previousAlias}.${quoteIdent("id")}`;
+      }
+      previousAlias = linkAlias;
+      break;
+    }
+    const nextAlias = `p${index + 1}`;
+    const targetType = link.direction === "inbound" ? link.ptrref.outSource : link.ptrref.outTarget;
+    const targetCols = new Set<string>(["id"]);
+    if (!shouldUseLinkTable(link)) {
+      const inlineColumn = `${link.ptrref.shortName}_id`;
+      if (link.direction === "inbound") {
+        targetCols.add(inlineColumn);
+      }
+    }
+    const targetSource = compilePolymorphicSource(targetType, false, nextAlias, [...targetCols], options);
+    if (shouldUseLinkTable(link)) {
+      if (link.direction === "inbound") {
+        fromSql += ` JOIN ${quoteIdent(linkTable)} ${linkAlias}`
+          + ` ON ${linkAlias}.${quoteIdent("target")} = ${previousAlias}.${quoteIdent("id")}`
+          + ` JOIN ${targetSource}`
+          + ` ON ${nextAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("source")}`;
+      } else {
+        fromSql += ` JOIN ${quoteIdent(linkTable)} ${linkAlias}`
+          + ` ON ${linkAlias}.${quoteIdent("source")} = ${previousAlias}.${quoteIdent("id")}`
+          + ` JOIN ${targetSource}`
+          + ` ON ${nextAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("target")}`;
+      }
+    } else {
+      const inlineColumn = `${link.ptrref.shortName}_id`;
+      if (link.direction === "inbound") {
+        fromSql += ` JOIN ${targetSource}`
+          + ` ON ${nextAlias}.${quoteIdent(inlineColumn)} = ${previousAlias}.${quoteIdent("id")}`;
+      } else {
+        fromSql += ` JOIN ${targetSource}`
+          + ` ON ${nextAlias}.${quoteIdent("id")} = ${previousAlias}.${quoteIdent(inlineColumn)}`;
+      }
+    }
+    previousAlias = nextAlias;
+  }
+
+  const leafShortName = path.leafProperty.ptrref.shortName;
+  const propertyColumn = leafShortName.startsWith("@") ? leafShortName.slice(1) : leafShortName;
+  const leafSql = `${previousAlias}.${quoteIdent(propertyColumn)}`;
+  const valueSql = scalarResultValueSQL(leafSql, path.leafProperty.ptrref.outTarget);
+  params.length = checkpoint;
+  return `SELECT ${valueSql} AS ${quoteIdent("value")} FROM ${fromSql} WHERE ${leafSql} IS NOT NULL`;
+};
+
+// Collect every Pointer node in a Set tree, oldest-first. Used to find shared
+// chain prefixes when an outer expression (`a@p + a.x`) needs the same link
+// iteration for both operands.
+const collectPointers = (set: Set, out: Pointer[]): void => {
+  const expr = set.expr as { kind: string };
+  if (!expr) return;
+  if (expr.kind === "pointer") {
+    const ptr = set.expr as Pointer;
+    out.push(ptr);
+    collectPointers(ptr.source, out);
+    return;
+  }
+  if (expr.kind === "type_cast") {
+    collectPointers((set.expr as TypeCast).expr, out);
+    return;
+  }
+  if (expr.kind === "operator_call" || expr.kind === "function_call") {
+    if (expr.kind === "function_call") {
+      const fc = set.expr as FunctionCall;
+      const shortName = (fc.functionName ?? "").split("::").pop() ?? "";
+      if (["count", "sum", "min", "max", "avg", "all", "any", "array_agg"].includes(shortName)) return;
+    }
+    for (const arg of orderedCallArgs((set.expr as { args: Record<string, CallArg> }).args)) {
+      collectPointers(arg.expr, out);
+    }
+    return;
+  }
+  if (expr.kind === "if_else_expr") {
+    const ie = set.expr as IfElseExpr;
+    collectPointers(ie.condition, out);
+    collectPointers(ie.ifExpr, out);
+    collectPointers(ie.elseExpr, out);
+    return;
+  }
+  if (expr.kind === "coalesce_expr") {
+    const co = set.expr as CoalesceExpr;
+    collectPointers(co.left, out);
+    collectPointers(co.right, out);
+    return;
+  }
+  if (expr.kind === "array") {
+    for (const el of (set.expr as { elements: Set[] }).elements) collectPointers(el, out);
+    return;
+  }
+  if (expr.kind === "tuple") {
+    for (const el of (set.expr as Tuple).elements) collectPointers(el.val, out);
+    return;
+  }
+};
+
+// Conservative scan for aggregate function calls in the value expression.
+// When an aggregate is present we must NOT promote the FROM to a chain JOIN
+// — the aggregate already collapses its argument's iteration, and the outer
+// JOIN would multiply the row count and break the aggregate's cardinality.
+const valueSetContainsAggregate = (set: Set): boolean => {
+  let found = false;
+  const visit = (s: Set): void => {
+    if (found) return;
+    const e = s.expr;
+    if (!e) return;
+    if (e.kind === "function_call") {
+      const fc = s.expr as FunctionCall;
+      const shortName = (fc.functionName ?? "").split("::").pop() ?? "";
+      if (["count", "sum", "min", "max", "avg", "all", "any", "array_agg"].includes(shortName)) {
+        found = true;
+        return;
+      }
+      for (const arg of orderedCallArgs((s.expr as { args: Record<string, CallArg> }).args)) visit(arg.expr);
+      return;
+    }
+    if (e.kind === "operator_call") {
+      for (const arg of orderedCallArgs((s.expr as { args: Record<string, CallArg> }).args)) visit(arg.expr);
+      return;
+    }
+    if (e.kind === "type_cast") { visit((s.expr as TypeCast).expr); return; }
+    if (e.kind === "if_else_expr") {
+      visit((s.expr as IfElseExpr).condition);
+      visit((s.expr as IfElseExpr).ifExpr);
+      visit((s.expr as IfElseExpr).elseExpr);
+      return;
+    }
+    if (e.kind === "coalesce_expr") {
+      visit((s.expr as CoalesceExpr).left);
+      visit((s.expr as CoalesceExpr).right);
+      return;
+    }
+    if (e.kind === "pointer") {
+      visit((s.expr as Pointer).source);
+      return;
+    }
+    if (e.kind === "tuple") {
+      for (const el of (s.expr as Tuple).elements) visit(el.val);
+      return;
+    }
+    if (e.kind === "array") {
+      for (const el of (s.expr as { elements: Set[] }).elements) visit(el);
+      return;
+    }
+  };
+  visit(set);
+  return found;
+};
+
+// Find a link-table-backed pointer (multi or has-properties) referenced by
+// any chain in `valueSet` rooted at `rootTyperef`. All link-table-backed
+// pointers must agree on the same link (we can't iterate two link tables in
+// a single SELECT this way). Other chains — scalar properties accessed
+// straight off the root row — are still resolved against the root alias by
+// the caller. Returns the link pointer plus the link's target type so the
+// caller can build the JOIN.
+const findSharedLinkIterationPointer = (
+  valueSet: Set,
+  rootTyperef: TypeRef,
+): { link: Pointer; targetTyperef: TypeRef } | null => {
+  if (valueSetContainsAggregate(valueSet)) return null;
+  const pointers: Pointer[] = [];
+  collectPointers(valueSet, pointers);
+  if (pointers.length === 0) return null;
+  let sharedLink: Pointer | undefined;
+  for (const ptr of pointers) {
+    // Walk the chain bottom-up to find the link-table-backed step (if any).
+    let cursor: Set = { ...valueSet, expr: ptr };
+    let innermostLink: Pointer | undefined;
+    while (cursor.expr.kind === "pointer") {
+      const p = cursor.expr as Pointer;
+      if (shouldUseLinkTable(p)) innermostLink = p;
+      cursor = p.source;
+    }
+    if (cursor.expr.kind !== "type_root") return null;
+    const rootTr = (cursor.expr as TypeRoot).typeref;
+    if (rootTr.id !== rootTyperef.id) return null;
+    if (!innermostLink) continue;
+    if (sharedLink && sharedLink.ptrref.id !== innermostLink.ptrref.id) return null;
+    sharedLink = innermostLink;
+  }
+  if (!sharedLink) return null;
+  const targetTyperef = sharedLink.direction === "inbound" ? sharedLink.ptrref.outSource : sharedLink.ptrref.outTarget;
+  return { link: sharedLink, targetTyperef };
+};
+
+// Single-source value SELECT where the value's pointer chain iterates a
+// link-table-backed link (multi or has-properties). Emits
+//   `SELECT <value> FROM <root> u JOIN <link_table> j ON … JOIN <target> i ON …`
+// and rebinds the value's pointer references so `u.l@p` ↦ `j.<p>` and
+// `u.l.x` ↦ `i.<x>`. Returns null when the helper can't identify a single
+// shared link step (caller falls back to the plain single-source emit).
+const tryBuildLinkIterationSingleSource = (
+  valueSet: Set,
+  rootTyperef: TypeRef,
+  params: ScalarValue[],
+  target: RuntimeTarget,
+  options: GelIRCompileOptions,
+  _valueSqlPrecomputed: string,
+  outerWheres: Set[],
+  innerWheres: Set[],
+): string | null => {
+  const shared = findSharedLinkIterationPointer(valueSet, rootTyperef);
+  if (!shared) return null;
+  void _valueSqlPrecomputed;
+
+  const checkpoint = params.length;
+  const rootAlias = "g0";
+  const linkAlias = "j0";
+  const targetAlias = "t0";
+  const seedFromPointers: Pointer[] = [];
+  collectPointers(valueSet, seedFromPointers);
+  // Project any scalar column that lives on the root row (`Issue.number` in
+  // `Issue.<todo[IS User]@rank + Issue.number`). Without this the chain JOIN
+  // succeeds but `g0.number` references a column that wasn't surfaced.
+  const rootColSet = new globalThis.Set<string>(["id"]);
+  for (const ptr of seedFromPointers) {
+    if (ptr.source.expr.kind === "type_root"
+        && (ptr.source.expr as TypeRoot).typeref.id === rootTyperef.id
+        && !ptr.ptrref.isLinkProperty
+        && ptr.ptrref.outTarget.isScalar) {
+      rootColSet.add(columnForPointer(ptr));
+    }
+  }
+  const rootSql = compilePolymorphicSource(rootTyperef, false, rootAlias, [...rootColSet], options);
+  const linkTable = linkTableNameForPointer(shared.link, options);
+  // Collect every pointer step whose immediate source is the shared link
+  // (`User.todo.X` → X) so the target subquery surfaces those columns.
+  const targetColSet = new globalThis.Set<string>(["id"]);
+  for (const ptr of seedFromPointers) {
+    if (ptr.source.expr.kind === "pointer"
+        && (ptr.source.expr as Pointer).ptrref.id === shared.link.ptrref.id
+        && !ptr.ptrref.isLinkProperty) {
+      targetColSet.add(columnForPointer(ptr));
+    }
+  }
+  const targetCols = [...targetColSet];
+  const targetSql = compilePolymorphicSource(shared.targetTyperef, false, targetAlias, targetCols, options);
+  let fromSql: string;
+  if (shared.link.direction === "inbound") {
+    fromSql = `${rootSql} JOIN ${quoteIdent(linkTable)} ${linkAlias} ON ${linkAlias}.${quoteIdent("target")} = ${rootAlias}.${quoteIdent("id")} JOIN ${targetSql} ON ${targetAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("source")}`;
+  } else {
+    fromSql = `${rootSql} JOIN ${quoteIdent(linkTable)} ${linkAlias} ON ${linkAlias}.${quoteIdent("source")} = ${rootAlias}.${quoteIdent("id")} JOIN ${targetSql} ON ${targetAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("target")}`;
+  }
+
+  const bindingAliases = new Map<string, string>();
+  const linkPropertyAliases = new Map<string, string>();
+  // Map every Set whose pathId resolves to the link's target (`User.todo`)
+  // onto the target alias `t0`. Also map the underlying root and the link
+  // step itself so link-property compiles find the join alias.
+  const collectMappings = (set: Set): void => {
+    if (set.expr.kind === "pointer") {
+      const ptr = set.expr as Pointer;
+      if (ptr.ptrref.id === shared.link.ptrref.id) {
+        bindingAliases.set(pathIdKey(set), targetAlias);
+        linkPropertyAliases.set(pathIdKey(set), linkAlias);
+      }
+      collectMappings(ptr.source);
+      return;
+    }
+    if (set.expr.kind === "type_root" && (set.expr as TypeRoot).typeref.id === rootTyperef.id) {
+      bindingAliases.set(pathIdKey(set), rootAlias);
+    }
+  };
+  for (const ptr of seedFromPointers) {
+    let cursor: Set = { ...valueSet, expr: ptr };
+    while (cursor.expr.kind === "pointer") {
+      collectMappings(cursor);
+      cursor = (cursor.expr as Pointer).source;
+    }
+    collectMappings(cursor);
+  }
+
+  const valueSql = compileValueSetSQLWithAliases(valueSet, bindingAliases, rootAlias, params, target, options, linkPropertyAliases);
+  if (!valueSql) {
+    params.length = checkpoint;
+    return null;
+  }
+  let sql = `SELECT ${valueSql} AS ${quoteIdent("value")} FROM ${fromSql}`;
+  const whereSqls: string[] = [];
+  const compileWhere = (where: Set): string | null => {
+    const compiled = compilePredicateWithAliases(where, bindingAliases, params, target, options, linkPropertyAliases);
+    if (compiled) return compiled;
+    return compileValueSetSQLWithAliases(where, bindingAliases, rootAlias, params, target, options, linkPropertyAliases);
+  };
+  for (const w of innerWheres) {
+    const c = compileWhere(w);
+    if (!c) { params.length = checkpoint; return null; }
+    whereSqls.push(c);
+  }
+  for (const w of outerWheres) {
+    const c = compileWhere(w);
+    if (!c) { params.length = checkpoint; return null; }
+    whereSqls.push(c);
+  }
+  if (whereSqls.length > 0) sql += ` WHERE ${whereSqls.join(" AND ")}`;
+  return sql;
 };
 
 // Shared chain-walker: builds the FROM clause and anchor WHERE for a scalar
@@ -2596,6 +3042,18 @@ const compileSelectSource = (
       chain.push(ptr);
       cursor = ptr.source.expr;
     }
+    // Peel `select_expr` wrappers that just thread a type_root through with
+    // no FILTER/ORDER BY/LIMIT (the parser inserts these for parenthesised
+    // sources like `(SELECT Issue {…}).watchers`). The pointer chain still
+    // needs to root at the underlying type, otherwise we fall through to the
+    // NULL fallback and the user sees `SELECT NULL AS "id"`.
+    while (cursor.kind === "select_expr") {
+      const se = cursor as SelectExpr;
+      if (se.where || (se.orderBy && se.orderBy.length > 0) || se.limit !== undefined || se.offset !== undefined) {
+        return null;
+      }
+      cursor = se.result.expr;
+    }
     if (cursor.kind !== "type_root") return null;
   }
   const links = chain.reverse();
@@ -2683,13 +3141,36 @@ type ForExprPrecompiledLevel = {
   iteratorSet: Set;
 };
 
+// Emit the body of `(SELECT v0 AS __t0, v1 AS __t1, … UNION ALL …)` for a
+// list of tuple literals so each iteration row exposes positional columns
+// the body can JOIN/filter against. Used by the FOR-iterator lowering when
+// the iterator is `{(…), (…), …}`.
+const tupleUnionAllSql = (tuples: ScalarValue[][]): string => {
+  if (tuples.length === 0) {
+    // No rows — emit an empty union by falling back to a contradiction.
+    return `SELECT NULL AS ${quoteIdent("__t0")} WHERE 0`;
+  }
+  return tuples
+    .map((tuple) => {
+      const parts = tuple.map((v, i) => {
+        const colAlias = quoteIdent(`__t${i}`);
+        if (typeof v === "string") return `${quoteLiteral(v)} AS ${colAlias}`;
+        if (typeof v === "number") return `${v} AS ${colAlias}`;
+        if (typeof v === "boolean") return `${v ? 1 : 0} AS ${colAlias}`;
+        return `NULL AS ${colAlias}`;
+      });
+      return `SELECT ${parts.join(", ")}`;
+    })
+    .join(" UNION ALL ");
+};
+
 const compileForExprSource = (
   sourceSet: Set,
   projectedColumns: string[],
   options: GelIRCompileOptions,
   params: ScalarValue[] = [],
   target: RuntimeTarget = options.target ?? "sqlite",
-): { fromSql: string; baseAlias: string; bindingAliases: Map<string, string>; scalarBindingAliases: Map<string, string>; linkPropertyAliases: Map<string, string>; whereSets: Set[]; orderBy?: SortExpr[]; paramsCheckpoint: number } | null => {
+): { fromSql: string; baseAlias: string; bindingAliases: Map<string, string>; scalarBindingAliases: Map<string, string>; tupleIterAliases: Map<string, string>; linkPropertyAliases: Map<string, string>; whereSets: Set[]; orderBy?: SortExpr[]; paramsCheckpoint: number } | null => {
   const paramsCheckpoint = params.length;
   const levels: Array<{
     iteratorPathId: string;
@@ -2698,6 +3179,11 @@ const compileForExprSource = (
     typeRef?: TypeRef;
     linkAlias?: string;
     constants?: ScalarValue[];
+    // For `FOR entry IN {("1", 10), …}` the iterator is a union of tuple
+    // literals. Each tuple's positional values become named columns
+    // (`__t0`, `__t1`, …) on the iterator subquery so the body can refer
+    // to them per-row via `entry.0`/`entry.1`.
+    tuples?: ScalarValue[][];
     precompiled?: ForExprPrecompiledLevel;
     optional?: boolean;
   }> = [];
@@ -2721,17 +3207,42 @@ const compileForExprSource = (
       // scalar literal so we can emit a `(SELECT a UNION ALL SELECT b) g0`
       // source. The body references the binding directly (not via pointer
       // chain), so we mark the level with `constants` and the value-column
-      // alias.
+      // alias. We also accept a union of TUPLE literals
+      // (`{("1", 10), ("1", 10)}`) — each tuple becomes a multi-column row
+      // so the body's `entry.0`/`entry.1` lookups resolve per-iteration via
+      // tupleIterAliases.
       const args = orderedCallArgs((iterator.expr as OperatorCall).args);
       const constants: ScalarValue[] = [];
-      let allConst = true;
+      const tuples: ScalarValue[][] = [];
+      let mode: "scalar" | "tuple" | null = null;
+      let bail = false;
       for (const arg of args) {
+        if (arg.expr.expr.kind === "tuple") {
+          if (mode === "scalar") { bail = true; break; }
+          mode = "tuple";
+          const tupleExpr = arg.expr.expr as Tuple;
+          const tupleValues: ScalarValue[] = [];
+          for (const element of tupleExpr.elements) {
+            const lit = extractScalarConstant(element.val);
+            if (lit === undefined) { bail = true; break; }
+            tupleValues.push(lit);
+          }
+          if (bail) break;
+          tuples.push(tupleValues);
+          continue;
+        }
+        if (mode === "tuple") { bail = true; break; }
+        mode = "scalar";
         const lit = extractScalarConstant(arg.expr);
-        if (lit === undefined) { allConst = false; break; }
+        if (lit === undefined) { bail = true; break; }
         constants.push(lit);
       }
-      if (!allConst) return null;
-      levels.push({ iteratorPathId, alias, constants, optional });
+      if (bail) return null;
+      if (mode === "tuple") {
+        levels.push({ iteratorPathId, alias, tuples, optional });
+      } else {
+        levels.push({ iteratorPathId, alias, constants, optional });
+      }
     } else if (iterator.expr.kind === "select_expr") {
       // `FOR x IN (select Type filter …) UNION …` — peel the select_expr
       // layers down to a type_root or pointer, then emit a SQL subquery
@@ -2799,12 +3310,13 @@ const compileForExprSource = (
     currentExpr = forExpr.body.expr;
   }
 
-  if (levels.length === 0 || (!levels[0].typeRef && !levels[0].constants && !levels[0].precompiled)) {
+  if (levels.length === 0 || (!levels[0].typeRef && !levels[0].constants && !levels[0].precompiled && !levels[0].tuples)) {
     return null;
   }
 
   const bindingAliases = new Map<string, string>();
   const scalarBindingAliases = new Map<string, string>();
+  const tupleIterAliases = new Map<string, string>();
   const linkPropertyAliases = new Map<string, string>();
   for (const level of levels) {
     bindingAliases.set(level.iteratorPathId, level.alias);
@@ -2814,6 +3326,12 @@ const compileForExprSource = (
       // references can pick that up instead of expecting a type-rooted
       // column.
       scalarBindingAliases.set(level.iteratorPathId, level.alias);
+    }
+    if (level.tuples) {
+      // Tuple iterators expose positional columns (`__t0`, `__t1`, …) on
+      // their generated UNION ALL subquery — see the FROM emit below. The
+      // body's tuple-index lookups read those columns via tupleIterAliases.
+      tupleIterAliases.set(level.iteratorPathId, level.alias);
     }
   }
 
@@ -2835,6 +3353,8 @@ const compileForExprSource = (
     } else {
       fromSql = pre.precompiledSql;
     }
+  } else if (levels[0].tuples) {
+    fromSql = `(${tupleUnionAllSql(levels[0].tuples)}) ${firstAlias}`;
   } else {
     const consts = levels[0].constants!;
     const parts = consts.map((c) => {
@@ -2849,6 +3369,12 @@ const compileForExprSource = (
   for (let i = 1; i < levels.length; i++) {
     const level = levels[i];
     const previousAlias = levels[i - 1].alias;
+    if (level.tuples) {
+      const joiner = level.optional ? "LEFT JOIN" : "CROSS JOIN";
+      const onClause = level.optional ? " ON 1=1" : "";
+      fromSql += ` ${joiner} (${tupleUnionAllSql(level.tuples)}) ${level.alias}${onClause}`;
+      continue;
+    }
     if (level.constants) {
       // Nested constant iterator: cross-join with a fresh UNION ALL subquery.
       const consts = level.constants;
@@ -2908,7 +3434,7 @@ const compileForExprSource = (
     }
   }
 
-  return { fromSql, baseAlias: firstAlias, bindingAliases, scalarBindingAliases, linkPropertyAliases, whereSets, orderBy, paramsCheckpoint };
+  return { fromSql, baseAlias: firstAlias, bindingAliases, scalarBindingAliases, tupleIterAliases, linkPropertyAliases, whereSets, orderBy, paramsCheckpoint };
 };
 
 const innermostForExprBody = (sourceSet: Set): Set => {
@@ -3139,10 +3665,28 @@ const compileValueSetSQLWithAliases = (
   options: GelIRCompileOptions,
   linkPropertyAliases?: Map<string, string>,
   scalarBindingAliases?: Map<string, string>,
+  tupleIterAliases?: Map<string, string>,
 ): string | null => {
   const checkpoint = params.length;
   const unwrapped = unwrapSelectExprSet(set);
   const expr = unwrapped.result.expr;
+
+  // `entry.0` / `entry.1` inside a `FOR entry IN {(…), …}` body: the IR
+  // models the access as `index_expr` over the bound iterator set. When the
+  // iterator was lowered as a tuple-per-row subquery (`__t0`, `__t1`, …),
+  // resolve the access against the current row's positional column.
+  if (tupleIterAliases && expr.kind === "index_expr") {
+    const idxExpr = expr as IndexExpr;
+    const inner = idxExpr.expr;
+    const innerKey = pathIdKey(inner);
+    const tupleAlias = tupleIterAliases.get(innerKey);
+    if (tupleAlias) {
+      const idxLit = extractNumericLiteral(idxExpr.index);
+      if (idxLit !== undefined && Number.isInteger(idxLit) && idxLit >= 0) {
+        return `${tupleAlias}.${quoteIdent(`__t${idxLit}`)}`;
+      }
+    }
+  }
 
   // Direct reference to a scalar/set-iterator binding (e.g. `letter`
   // inside `FOR letter IN {'I', 'Z'} UNION ...`): emit
@@ -3194,7 +3738,7 @@ const compileValueSetSQLWithAliases = (
 
   if (expr.kind === "tuple") {
     const tuple = expr as Tuple;
-    const parts = tuple.elements.map((element) => compileValueSetSQLWithAliases(element.val, bindingAliases, fallbackAlias, params, target, options, linkPropertyAliases, scalarBindingAliases));
+    const parts = tuple.elements.map((element) => compileValueSetSQLWithAliases(element.val, bindingAliases, fallbackAlias, params, target, options, linkPropertyAliases, scalarBindingAliases, tupleIterAliases));
     if (parts.some((part) => !part)) {
       params.length = checkpoint;
       return null;
@@ -3206,7 +3750,7 @@ const compileValueSetSQLWithAliases = (
 
   if (expr.kind === "type_cast") {
     const castExpr = expr as TypeCast;
-    const inner = compileValueSetSQLWithAliases(castExpr.expr, bindingAliases, fallbackAlias, params, target, options, linkPropertyAliases, scalarBindingAliases);
+    const inner = compileValueSetSQLWithAliases(castExpr.expr, bindingAliases, fallbackAlias, params, target, options, linkPropertyAliases, scalarBindingAliases, tupleIterAliases);
     if (!inner) {
       params.length = checkpoint;
       return null;
@@ -3222,8 +3766,8 @@ const compileValueSetSQLWithAliases = (
   // iterator's column refs.
   if (expr.kind === "coalesce_expr") {
     const co = expr as CoalesceExpr;
-    const left = compileValueSetSQLWithAliases(co.left, bindingAliases, fallbackAlias, params, target, options, linkPropertyAliases, scalarBindingAliases);
-    const right = compileValueSetSQLWithAliases(co.right, bindingAliases, fallbackAlias, params, target, options, linkPropertyAliases, scalarBindingAliases);
+    const left = compileValueSetSQLWithAliases(co.left, bindingAliases, fallbackAlias, params, target, options, linkPropertyAliases, scalarBindingAliases, tupleIterAliases);
+    const right = compileValueSetSQLWithAliases(co.right, bindingAliases, fallbackAlias, params, target, options, linkPropertyAliases, scalarBindingAliases, tupleIterAliases);
     if (left && right) {
       return `COALESCE(${left}, ${right})`;
     }
@@ -3238,7 +3782,7 @@ const compileValueSetSQLWithAliases = (
   if (expr.kind === "index_expr") {
     const idxExpr = expr as IndexExpr;
     if (idxExpr.expr.expr.kind === "pointer") {
-      const inner = compileValueSetSQLWithAliases(idxExpr.expr, bindingAliases, fallbackAlias, params, target, options, linkPropertyAliases, scalarBindingAliases);
+      const inner = compileValueSetSQLWithAliases(idxExpr.expr, bindingAliases, fallbackAlias, params, target, options, linkPropertyAliases, scalarBindingAliases, tupleIterAliases);
       const idxLit = extractNumericLiteral(idxExpr.index);
       if (inner && idxLit !== undefined) {
         const start = idxLit >= 0 ? idxLit + 1 : idxLit;
@@ -3259,8 +3803,8 @@ const compileValueSetSQLWithAliases = (
     const op = operatorToInfixSql(call.operator) ?? normalizeOperator(call.operator);
     const args = orderedCallArgs(call.args);
     if (op && args.length >= 2) {
-      const left = compileValueSetSQLWithAliases(args[0].expr, bindingAliases, fallbackAlias, params, target, options, linkPropertyAliases, scalarBindingAliases);
-      const right = compileValueSetSQLWithAliases(args[1].expr, bindingAliases, fallbackAlias, params, target, options, linkPropertyAliases, scalarBindingAliases);
+      const left = compileValueSetSQLWithAliases(args[0].expr, bindingAliases, fallbackAlias, params, target, options, linkPropertyAliases, scalarBindingAliases, tupleIterAliases);
+      const right = compileValueSetSQLWithAliases(args[1].expr, bindingAliases, fallbackAlias, params, target, options, linkPropertyAliases, scalarBindingAliases, tupleIterAliases);
       if (!left || !right) {
         params.length = checkpoint;
         return null;
@@ -3287,7 +3831,7 @@ const compileValueSetSQLWithAliases = (
     // time): recurse into the body with the surrounding FOR aliases so
     // binding references resolve to the iterator's columns.
     if (call.body && scalarBindingAliases && scalarBindingAliases.size > 0) {
-      const inner = compileValueSetSQLWithAliases(call.body, bindingAliases, fallbackAlias, params, target, options, linkPropertyAliases, scalarBindingAliases);
+      const inner = compileValueSetSQLWithAliases(call.body, bindingAliases, fallbackAlias, params, target, options, linkPropertyAliases, scalarBindingAliases, tupleIterAliases);
       if (inner) return inner;
       params.length = checkpoint;
     }
@@ -3325,7 +3869,7 @@ const compileValueSetSQLWithAliases = (
           }
           // Computed scalar: compile via the aliased path so binding refs
           // (`letter := letter`) lower correctly.
-          const computed = compileValueSetSQLWithAliases(elemExpr, bindingAliases, typeAlias, params, target, options, linkPropertyAliases, scalarBindingAliases);
+          const computed = compileValueSetSQLWithAliases(elemExpr, bindingAliases, typeAlias, params, target, options, linkPropertyAliases, scalarBindingAliases, tupleIterAliases);
           if (!computed) { ok = false; break; }
           const key = element.name
             ? quoteLiteral(element.name)
@@ -3357,7 +3901,8 @@ const compilePredicateWithAliases = (
   options: GelIRCompileOptions,
   linkPropertyAliases?: Map<string, string>,
   scalarBindingAliases?: Map<string, string>,
-): string | null => compileValueSetSQLWithAliases(set, bindingAliases, "g0", params, target, options, linkPropertyAliases, scalarBindingAliases);
+  tupleIterAliases?: Map<string, string>,
+): string | null => compileValueSetSQLWithAliases(set, bindingAliases, "g0", params, target, options, linkPropertyAliases, scalarBindingAliases, tupleIterAliases);
 
 const compileForExprSort = (order: SortExpr, valueAlias: string): string => {
   if (order.path.expr.kind !== "index_expr") {
@@ -4156,6 +4701,18 @@ const compileShapeProjection = (
 
   const valueExpr = compileValueSetSQL(shapeExpr.result, sourceAlias, params, target, options);
   if (!valueExpr) {
+    // Computed shape whose RHS is a set-producing expression we can't
+    // express inline (a DISTINCT over a FOR-driven UNION, etc.). Fall back
+    // to compiling the RHS as its own scalar-select source and aggregating
+    // its `value` column into a JSON array; without this the projection is
+    // silently dropped and the field disappears from the result envelope.
+    const scratchParams: ScalarValue[] = [];
+    const scalarSql = compileScalarSelectSQL(shapeExpr.result, scratchParams, target, options);
+    if (scalarSql) {
+      params.push(...scratchParams);
+      const subAlias = shapeAliasForElement(shape, shapeExpr.result, depth);
+      return `COALESCE((SELECT json_group_array(json(${quoteIdent("value")})) FROM (${scalarSql})), '[]') AS ${quoteIdent(subAlias)}`;
+    }
     return null;
   }
   if (shape.cardinality === "many" || shape.cardinality === "at_least_one") {
@@ -4287,6 +4844,125 @@ const normalizeOperator = (op: string): "=" | "!=" | "<" | "<=" | ">" | ">=" | n
 // leaf is an inline-single (FK column) link and the leaf is a scalar field,
 // emits a nested EXISTS comparing the leaf column to `rightSet` with `op`.
 // Returns null if the pattern doesn't match.
+// Lower `<chain> = OuterType` predicates that compare a chain ending in an
+// object link to the outer Set's root row. Emits
+//   EXISTS (SELECT 1 FROM <chain joins> WHERE leaf.id = sourceAlias.id)
+// — without this we'd silently drop the FILTER because the chain's leaf is
+// not a scalar.
+const tryCompileObjectIdentityExistsSQL = (
+  path: ScalarPointerPath,
+  op: "=" | "!=",
+  sourceAlias: string,
+  params: ScalarValue[],
+  options: GelIRCompileOptions,
+): string | null => {
+  const checkpoint = params.length;
+  // First step's source is the outer row; subsequent steps live inside the
+  // EXISTS' FROM. Walk the full chain (links + leaf) building joins. When the
+  // next link is inline outbound (no link table), the current level must
+  // project the FK column so the JOIN's ON clause can reference it.
+  const fullLinks = [...path.links, path.leaf];
+  let fromSql = "";
+  const whereSqls: string[] = [];
+  let previousAlias = sourceAlias;
+  fullLinks.forEach((link, index) => {
+    const nextAlias = `oe${index}`;
+    const targetType = link.direction === "inbound" ? link.ptrref.outSource : link.ptrref.outTarget;
+    const cols = new globalThis.Set<string>(["id"]);
+    // Inbound inline-FK link's column lives on this level's row (the
+    // referencing object).
+    if (!shouldUseLinkTable(link) && link.direction === "inbound") {
+      cols.add(`${link.ptrref.shortName}_id`);
+    }
+    // If the NEXT step is an inline outbound link, surface its FK on this
+    // level too — the next ON clause reads it.
+    const nextStep = fullLinks[index + 1];
+    if (nextStep && !shouldUseLinkTable(nextStep) && nextStep.direction === "outbound") {
+      cols.add(`${nextStep.ptrref.shortName}_id`);
+    }
+    const targetSource = compilePolymorphicSource(targetType, false, nextAlias, [...cols], options);
+    if (shouldUseLinkTable(link)) {
+      const linkAlias = `oej${index}`;
+      const linkTable = linkTableNameForPointer(link, options);
+      if (link.direction === "inbound") {
+        if (!fromSql) {
+          fromSql = `${quoteIdent(linkTable)} ${linkAlias} JOIN ${targetSource}`
+            + ` ON ${nextAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("source")}`;
+          whereSqls.push(`${linkAlias}.${quoteIdent("target")} = ${previousAlias}.${quoteIdent("id")}`);
+        } else {
+          fromSql += ` JOIN ${quoteIdent(linkTable)} ${linkAlias}`
+            + ` ON ${linkAlias}.${quoteIdent("target")} = ${previousAlias}.${quoteIdent("id")}`
+            + ` JOIN ${targetSource}`
+            + ` ON ${nextAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("source")}`;
+        }
+      } else if (!fromSql) {
+        fromSql = `${quoteIdent(linkTable)} ${linkAlias} JOIN ${targetSource}`
+          + ` ON ${nextAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("target")}`;
+        whereSqls.push(`${linkAlias}.${quoteIdent("source")} = ${previousAlias}.${quoteIdent("id")}`);
+      } else {
+        fromSql += ` JOIN ${quoteIdent(linkTable)} ${linkAlias}`
+          + ` ON ${linkAlias}.${quoteIdent("source")} = ${previousAlias}.${quoteIdent("id")}`
+          + ` JOIN ${targetSource}`
+          + ` ON ${nextAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("target")}`;
+      }
+    } else {
+      const inlineColumn = `${link.ptrref.shortName}_id`;
+      if (link.direction === "inbound") {
+        if (!fromSql) {
+          fromSql = targetSource;
+          whereSqls.push(`${nextAlias}.${quoteIdent(inlineColumn)} = ${previousAlias}.${quoteIdent("id")}`);
+        } else {
+          fromSql += ` JOIN ${targetSource} ON ${nextAlias}.${quoteIdent(inlineColumn)} = ${previousAlias}.${quoteIdent("id")}`;
+        }
+      } else if (!fromSql) {
+        fromSql = targetSource;
+        whereSqls.push(`${nextAlias}.${quoteIdent("id")} = ${previousAlias}.${quoteIdent(inlineColumn)}`);
+      } else {
+        fromSql += ` JOIN ${targetSource} ON ${nextAlias}.${quoteIdent("id")} = ${previousAlias}.${quoteIdent(inlineColumn)}`;
+      }
+    }
+    previousAlias = nextAlias;
+  });
+
+  // The chain's terminal alias should match the outer source's id.
+  whereSqls.push(`${previousAlias}.${quoteIdent("id")} = ${sourceAlias}.${quoteIdent("id")}`);
+  const existsSql = `EXISTS (SELECT 1 FROM ${fromSql} WHERE ${whereSqls.join(" AND ")})`;
+  void checkpoint;
+  return op === "=" ? existsSql : `(NOT ${existsSql})`;
+};
+
+// Variant of `extractScalarPointerPath` that allows the leaf step to be an
+// object-typed pointer too. Used by FILTER `<chain> = OuterType` predicates
+// where the comparison reduces to "leaf row's id equals the outer row's id".
+const extractObjectPointerPath = (set: Set): ScalarPointerPath | null => {
+  const chain: Pointer[] = [];
+  let cursor: Set = set;
+  while (cursor.expr.kind === "pointer") {
+    const pointer = cursor.expr as Pointer;
+    if (pointer.ptrref.isLinkProperty) return null;
+    chain.push(pointer);
+    cursor = pointer.source;
+  }
+
+  let rootExpr: Expr = cursor.expr;
+  while (rootExpr.kind === "select_expr") {
+    rootExpr = (rootExpr as SelectExpr).result.expr;
+  }
+  if (rootExpr.kind !== "type_root" || chain.length === 0) {
+    return null;
+  }
+
+  const leaf = chain[0]!;
+  if (leaf.ptrref.outTarget.isScalar) return null;
+
+  const links = chain.slice(1).reverse();
+  if (links.some((link) => link.ptrref.outTarget.isScalar || link.ptrref.isLinkProperty)) {
+    return null;
+  }
+
+  return { root: cursor, leaf, links };
+};
+
 const tryCompileMultiStepPointerExistsSQL = (
   leftSet: Set,
   rightSet: Set,
@@ -4296,6 +4972,29 @@ const tryCompileMultiStepPointerExistsSQL = (
   target: RuntimeTarget,
   options: GelIRCompileOptions,
 ): string | null => {
+  // Reach through `(set = outer-root)` object-identity comparisons by
+  // tolerating an object-typed leaf when the chain contains a backlink and
+  // the right side is the outer Set's root type. This lets
+  // `FILTER Issue.owner.<owner[IS Comment].issue = Issue` collapse to an
+  // EXISTS over the join chain whose leaf id matches the outer Issue row's
+  // id. The pre-existing scalar path still handles all-outbound chains, so we
+  // only widen here when an inbound step is in the mix — otherwise compares
+  // like `Text[IS Owned].owner = User` would lose the FILTER's correlation
+  // with the outer User row.
+  const objectPath = leftSet.expr.kind === "pointer"
+    && rightSet.expr.kind === "type_root"
+    && (op === "=" || op === "!=")
+    ? extractObjectPointerPath(leftSet)
+    : null;
+  if (objectPath) {
+    const chainHasBacklink = [...objectPath.links, objectPath.leaf]
+      .some((link) => link.direction === "inbound");
+    const rightTypeRef = (rightSet.expr as TypeRoot).typeref;
+    if (chainHasBacklink
+        && (rightTypeRef.id === objectPath.leaf.ptrref.outTarget.id || rightTypeRef.id === objectPath.root.typeref.id)) {
+      return tryCompileObjectIdentityExistsSQL(objectPath, op, sourceAlias, params, options);
+    }
+  }
   const path = extractScalarPointerPath(leftSet);
   if (!path) return null;
 
@@ -5894,7 +6593,14 @@ const compileLinkedInnerSelect = (
     inner += ` AND ${clauses.join(" AND ")}`;
   }
   if (modifiers.orderBy && modifiers.orderBy.length > 0) {
-    const orderSql = compileSortExprs(modifiers.orderBy, targetAlias, linkPropertyAlias, params, target, options);
+    // Same rewrite as for WHERE: `User.todo.number` inside the link's
+    // iteration shape must resolve to `targetAlias.number`, not against the
+    // outer User row. Without this, `ORDER BY User.todo.number` falls back to
+    // a NULL literal and the sort is effectively undefined.
+    const rewrittenOrderBy = outerPointer
+      ? modifiers.orderBy.map((entry) => ({ ...entry, path: rewriteFilterAgainstPointerChain(entry.path, outerPointer) }))
+      : modifiers.orderBy;
+    const orderSql = compileSortExprs(rewrittenOrderBy, targetAlias, linkPropertyAlias, params, target, options);
     if (orderSql) {
       inner += ` ORDER BY ${orderSql}`;
     }

@@ -480,9 +480,32 @@ const dynamicQualifiedNameParts = (rawName: string, defaultModule = "default"): 
   return { module: defaultModule, name, qualified: `${defaultModule}::${name}` };
 };
 
+// Strip a leading whitespace-delimited keyword (case-insensitive) from a type
+// expression. Returns the input unchanged when the keyword isn't present.
+const stripLeadingTypeKeyword = (input: string, keyword: string): string => {
+  const lowered = input.toLowerCase();
+  if (!lowered.startsWith(keyword.toLowerCase())) return input;
+  const after = input.slice(keyword.length);
+  // Require at least one whitespace character following the keyword so we
+  // don't accidentally strip a real prefix (e.g. `optionalX`).
+  if (after.length === 0 || (after[0] !== " " && after[0] !== "\t" && after[0] !== "\n" && after[0] !== "\r")) {
+    return input;
+  }
+  return after.trimStart();
+};
+
 const normalizeDynamicTypeName = (rawType: string, defaultModule = "default"): string => {
-  let typeName = rawType.trim().replace(/;$/, "");
-  typeName = typeName.replace(/^optional\s+/i, "").replace(/^set\s+of\s+/i, "").trim();
+  let typeName = rawType.trim();
+  if (typeName.endsWith(";")) typeName = typeName.slice(0, -1).trimEnd();
+  typeName = stripLeadingTypeKeyword(typeName, "optional");
+  // `set of` is two words; peel them in order so a stray `set` keyword by
+  // itself doesn't get treated as part of a type name.
+  const afterSet = stripLeadingTypeKeyword(typeName, "set");
+  if (afterSet !== typeName) {
+    const afterOf = stripLeadingTypeKeyword(afterSet, "of");
+    typeName = afterOf !== afterSet ? afterOf : typeName;
+  }
+  typeName = typeName.trim();
   const lower = typeName.toLowerCase();
   if (lower.startsWith("std::")) return typeName;
   if (["str", "bool", "json", "uuid", "bytes"].includes(lower)) return `std::${lower}`;
@@ -492,8 +515,11 @@ const normalizeDynamicTypeName = (rawType: string, defaultModule = "default"): s
   return typeName.includes("::") ? typeName : `${defaultModule}::${typeName}`;
 };
 
+const SCALAR_INT_NAMES = new globalThis.Set(["int", "int16", "int32", "int64", "bigint"]);
+const SCALAR_FLOAT_NAMES = new globalThis.Set(["float", "float32", "float64", "decimal"]);
+
 const dynamicScalarFromType = (rawType: string): { type: ScalarType; collection?: FieldDef["collection"] } => {
-  const typeName = rawType.trim().replace(/^optional\s+/i, "").trim();
+  const typeName = stripLeadingTypeKeyword(rawType.trim(), "optional").trim();
   const lower = typeName.toLowerCase();
   if (lower.startsWith("tuple<") || lower.startsWith("std::tuple<")) return { type: "json", collection: { kind: "tuple" } };
   if (lower.startsWith("array<") || lower.startsWith("std::array<")) return { type: "json", collection: { kind: "array" } };
@@ -501,8 +527,11 @@ const dynamicScalarFromType = (rawType: string): { type: ScalarType; collection?
   if (lower.endsWith("bool")) return { type: "bool" };
   if (lower.endsWith("json")) return { type: "json" };
   if (lower.endsWith("uuid")) return { type: "uuid" };
-  if (/int(?:16|32|64)?$|bigint$/.test(lower)) return { type: "int" };
-  if (/float(?:32|64)?$|decimal$/.test(lower)) return { type: "float" };
+  // Strip the `std::` prefix so an unqualified name like `int64` and the
+  // canonical `std::int64` both fall through to the same scalar-name set.
+  const bare = lower.startsWith("std::") ? lower.slice("std::".length) : lower;
+  if (SCALAR_INT_NAMES.has(bare)) return { type: "int" };
+  if (SCALAR_FLOAT_NAMES.has(bare)) return { type: "float" };
   return { type: "str" };
 };
 
@@ -555,6 +584,100 @@ const applyParsedFunctionDDL = (schema: SchemaSnapshot, ast: DDLStatement, defau
 // `parseCreateTypeHeader` and `stripTrailingBraceBlock` now live in
 // `src/runtime/ddl.ts`; this module imports them above.
 
+// Tokenize a `CREATE … property/link …` body entry and return its structured
+// header — kind, modifiers, member name, target type (for `->`/`:`) or raw
+// computed expression (for `:=`). Returns `undefined` for anything that
+// doesn't begin with a `create` keyword, leaving non-member entries (indexes,
+// constraints, etc.) for the caller's other branches to handle.
+type MemberHeader =
+  | {
+      kind: "property" | "link";
+      modifiers: { required: boolean; optional: boolean; multi: boolean; single: boolean };
+      name: string;
+      targetType: string;
+    }
+  | {
+      kind: "computed_link";
+      modifiers: { required: boolean; optional: boolean; multi: boolean; single: boolean };
+      name: string;
+      exprText: string;
+    };
+
+const MEMBER_MODIFIER_KINDS = new globalThis.Set([
+  "kw_required",
+  "kw_optional",
+  "kw_multi",
+  "kw_single",
+]);
+
+const stripBacktickName = (lexeme: string): string =>
+  lexeme.startsWith("`") && lexeme.endsWith("`") ? lexeme.slice(1, -1) : lexeme;
+
+const sliceTokenRange = (tokens: readonly Token[], startIdx: number, source: string): string => {
+  if (startIdx >= tokens.length) return "";
+  const startTok = tokens[startIdx]!;
+  let endOffset = source.length;
+  for (let j = tokens.length - 1; j >= startIdx; j -= 1) {
+    const t = tokens[j]!;
+    if (t.kind === "eof") continue;
+    endOffset = t.offset + t.lexeme.length;
+    break;
+  }
+  return source.slice(startTok.offset, endOffset).trim();
+};
+
+const parseMemberHeader = (entry: string): MemberHeader | undefined => {
+  let tokens: readonly Token[];
+  try {
+    tokens = tokenize(entry);
+  } catch {
+    return undefined;
+  }
+  let i = 0;
+  if (tokens[i]?.kind !== "kw_create") return undefined;
+  i += 1;
+  const modifiers = { required: false, optional: false, multi: false, single: false };
+  while (tokens[i] && MEMBER_MODIFIER_KINDS.has(tokens[i]!.kind)) {
+    const k = tokens[i]!.kind;
+    if (k === "kw_required") modifiers.required = true;
+    else if (k === "kw_optional") modifiers.optional = true;
+    else if (k === "kw_multi") modifiers.multi = true;
+    else if (k === "kw_single") modifiers.single = true;
+    i += 1;
+  }
+  const memberKindTok = tokens[i];
+  if (!memberKindTok) return undefined;
+  let memberKind: "property" | "link";
+  if (memberKindTok.kind === "kw_property") {
+    memberKind = "property";
+  } else if (memberKindTok.kind === "kw_link") {
+    memberKind = "link";
+  } else {
+    return undefined;
+  }
+  i += 1;
+  const nameTok = tokens[i];
+  if (!nameTok || (nameTok.kind !== "identifier" && nameTok.kind !== "backtick_name")) return undefined;
+  const memberName = nameTok.kind === "backtick_name" ? stripBacktickName(nameTok.lexeme) : nameTok.lexeme;
+  i += 1;
+  const sepTok = tokens[i];
+  if (!sepTok) return undefined;
+  // `->` for properties; both `->` and `:` are accepted for stored links;
+  // `:=` introduces a computed link alias.
+  if (sepTok.kind === "assign") {
+    if (memberKind !== "link") return undefined;
+    const exprText = sliceTokenRange(tokens, i + 1, entry);
+    if (exprText.length === 0) return undefined;
+    return { kind: "computed_link", modifiers, name: memberName, exprText };
+  }
+  if (sepTok.kind === "arrow" || (memberKind === "link" && sepTok.kind === "colon")) {
+    const targetType = sliceTokenRange(tokens, i + 1, entry);
+    if (targetType.length === 0) return undefined;
+    return { kind: memberKind, modifiers, name: memberName, targetType };
+  }
+  return undefined;
+};
+
 const registerDynamicTypeDDL = (schema: SchemaSnapshot, statement: string, defaultModule = "default"): boolean => {
   const header = parseCreateTypeHeader(statement.trim());
   if (!header) return false;
@@ -562,6 +685,7 @@ const registerDynamicTypeDDL = (schema: SchemaSnapshot, statement: string, defau
   const { module, name } = dynamicQualifiedNameParts(rawName, defaultModule);
   const fields: FieldDef[] = [];
   const links: NonNullable<TypeDef["links"]> = [];
+  const computeds: NonNullable<TypeDef["computeds"]> = [];
   const extendsList = extendsRaw
     ? extendsRaw.map((entry) => normalizeDynamicTypeName(entry, module)).filter((entry) => entry.length > 0)
     : undefined;
@@ -586,36 +710,42 @@ const registerDynamicTypeDDL = (schema: SchemaSnapshot, statement: string, defau
   for (const rawEntry of splitTopLevelScriptStatements(bodyText)) {
     // Strip any inline `{ … }` block on the entry (e.g. link-property
     // declarations inside a `create link x -> T { ... }`) using token offsets,
-    // not regex. The existing property/link header regexes still drive the
-    // field/link registration off the resulting header-only entry.
+    // then tokenize the header to recover the property/link declaration.
     const entry = stripTrailingBraceBlock(rawEntry);
-    const property = /^create\s+((?:(?:required|optional|multi|single)\s+)*)property\s+([A-Za-z_][\w]*)\s*->\s*([\s\S]+)$/i.exec(entry);
-    if (property) {
-      const [, modifiers, fieldName, rawType] = property;
-      const scalar = dynamicScalarFromType(rawType);
+    const member = parseMemberHeader(entry);
+    if (!member) continue;
+    if (member.kind === "property") {
+      const scalar = dynamicScalarFromType(member.targetType);
       fields.push({
-        name: fieldName,
+        name: member.name,
         type: scalar.type,
-        required: /\brequired\b/i.test(modifiers),
-        multi: /\bmulti\b/i.test(modifiers),
+        required: member.modifiers.required,
+        multi: member.modifiers.multi,
         collection: scalar.collection,
       });
       continue;
     }
-
-    const link = /^create\s+((?:(?:required|optional|multi|single)\s+)*)link\s+([A-Za-z_][\w]*)\s*(?:->|:)\s*([A-Za-z_][\w]*(?:::[A-Za-z_][\w]*)?)$/i.exec(entry);
-    if (link) {
-      const [, modifiers, linkName, rawTarget] = link;
-      const multi = /\bmulti\b/i.test(modifiers);
+    if (member.kind === "link") {
+      const multi = member.modifiers.multi;
       links.push({
-        name: linkName,
-        targetType: normalizeDynamicTypeName(rawTarget, module),
+        name: member.name,
+        targetType: normalizeDynamicTypeName(member.targetType, module),
         multi,
       });
       if (!multi) {
-        fields.push({ name: `${linkName}_id`, type: "uuid" });
+        fields.push({ name: `${member.name}_id`, type: "uuid" });
       }
+      continue;
     }
+    // `CREATE LINK foo := <expr>` is a computed link alias. The expression
+    // body isn't materialised as a column — record the declaration so backlink
+    // resolution can flag attempts to follow `<foo` without an `[IS T]` filter
+    // (the canonical EdgeQL error message names the computed-link's type).
+    computeds.push({
+      kind: "link",
+      name: member.name,
+      expr: { kind: "select_type", typeName: rawName, exprText: member.exprText },
+    });
   }
 
   schema.addType({
@@ -623,6 +753,7 @@ const registerDynamicTypeDDL = (schema: SchemaSnapshot, statement: string, defau
     name,
     fields,
     links: links.length ? links : undefined,
+    computeds: computeds.length ? computeds : undefined,
     extends: extendsList,
   });
   return true;
@@ -11736,9 +11867,10 @@ const resolveInsertTargets = (
 
 const defaultLinkPropertyValueIR = (property: InsertLinkPropertyIR): ScalarValue => {
   if (!property.hasDefault) return null;
-  if (property.type === "int" || property.type === "float") {
-    return Math.round(Math.random() * 10);
-  }
+  // Schema-supplied literal default (e.g. `rank: int64 { default := 42 }`).
+  // The IR carries the resolved scalar so we can stamp it here without
+  // re-evaluating the EdgeQL expression.
+  if (property.defaultValue !== undefined) return property.defaultValue;
   return null;
 };
 
@@ -11887,6 +12019,7 @@ const writeUpdateLinkTableRows = (
   if (targets.length === 0) return;
   const propertyColumns = spec.propertyColumns ?? [];
   const columns = ["source", "target", ...propertyColumns];
+  const propertyByName = new Map((spec.properties ?? []).map((p) => [p.name, p] as const));
   const rowPlaceholders = `(${columns.map(() => "?").join(", ")})`;
   const verb = spec.operation === "append" ? "INSERT OR IGNORE" : "INSERT";
   const sql = `${verb} INTO ${quoteIdent(spec.linkTable!)} (${columns.map(quoteIdent).join(", ")}) VALUES ${targets.map(() => rowPlaceholders).join(", ")}`;
@@ -11894,7 +12027,13 @@ const writeUpdateLinkTableRows = (
   for (const target of targets) {
     params.push(sourceId, target.id);
     for (const column of propertyColumns) {
-      params.push(target.properties[`@${column}`] ?? null);
+      const explicit = target.properties[`@${column}`];
+      if (explicit !== undefined) {
+        params.push(explicit);
+      } else {
+        const property = propertyByName.get(column);
+        params.push(property ? defaultLinkPropertyValueIR(property) : null);
+      }
     }
   }
   db.prepare(sql).run(...params);

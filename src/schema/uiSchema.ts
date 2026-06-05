@@ -441,6 +441,7 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
               type: property.scalar,
               required: property.required,
               hasDefault: property.hasDefault,
+              defaultExpr: property.defaultExpr,
               readonly: property.readonly,
               annotations: property.annotations.length ? [...property.annotations] : undefined,
             }))

@@ -105,11 +105,16 @@ const expectedTargetTablesForLink = (
 
 const linkPropertyIR = (
   property: NonNullable<NonNullable<TypeDef["links"]>[number]["properties"]>[number],
-): InsertLinkPropertyIR => ({
-  name: property.name,
-  type: property.type as ScalarType,
-  hasDefault: Boolean(property.hasDefault),
-});
+): InsertLinkPropertyIR => {
+  const defaultExpr = property.defaultExpr;
+  const defaultValue = defaultExpr?.kind === "literal" ? defaultExpr.value : undefined;
+  return {
+    name: property.name,
+    type: property.type as ScalarType,
+    hasDefault: Boolean(property.hasDefault),
+    defaultValue: defaultValue ?? undefined,
+  };
+};
 
 const buildInsertLinkAssignments = (
   schema: SchemaSnapshot,
