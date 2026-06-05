@@ -600,6 +600,23 @@ const resolvePointerRef = (ctx: IRCompileContext, source: TypeRef, field: string
     return undefined;
   }
 
+  // Universal `Object` / `BaseObject` source: probe the concrete subtype set
+  // for the field so `.name` on `Object` lowers as a polymorphic column
+  // reference. The SQL pipeline's polymorphic source projects NULL for
+  // branches missing the column.
+  if (isUniversalObjectRefName(source.id)) {
+    const children = source.children ?? [];
+    for (const child of children) {
+      if (child.isAbstract) continue;
+      const childDef = ctx.schema?.getType(child.id);
+      if (!childDef) continue;
+      const cField = childDef.fields.find((c) => c.name === field);
+      if (cField) {
+        return pointerRefFromField(source, cField);
+      }
+    }
+  }
+
   const sourceTypeDef = ctx.schema?.getType(source.id);
   if (!sourceTypeDef) {
     return undefined;
@@ -799,6 +816,26 @@ const tryLowerComputedPropertyOnTypePath = (
     } finally {
       ctx.computedExprResolutionStack.delete(key);
     }
+  }
+  if (expr.kind === "link_aggregate") {
+    // `count(.x)` / `sum(.x.y)` — synthesise the equivalent free expression
+    // and let `compileFreeObjectExpr` lower it through the normal pipeline.
+    // We use the EdgeQL text and re-parse so the resulting IR is identical
+    // to what an explicit user-written `count(.x)` would produce.
+    const innerCtx = childScope(ctx);
+    bindValue(innerCtx, "__current__", source);
+    bindValue(innerCtx, "__subject__", source);
+    const argText = expr.field ? `.${expr.link}.${expr.field}` : `.${expr.link}`;
+    let parsed;
+    try {
+      parsed = parseEdgeQL(`SELECT ${expr.functionName}(${argText})`);
+    } catch {
+      return undefined;
+    }
+    if (parsed.kind === "select_expr") {
+      return compileFreeObjectExpr(parsed.expr, innerCtx);
+    }
+    return undefined;
   }
   return undefined;
 };
@@ -4429,6 +4466,71 @@ const synthesizeTypeLinkShapeElement = (
   } as ShapeElement & { syntheticTypeFields: string[] };
 };
 
+// Walks a shape's splat entries and rejects combinations like
+// `Object { [is User].*, [is Issue].* }` where the splatted types are
+// unrelated (neither is a subtype of the other, and neither extends a
+// common subject type). Mirrors the EdgeQL diagnostic
+// `appears in splats for unrelated types`.
+const validateSplatTypeIntersections = (
+  subject: Set,
+  shape: EdgeQLShapeElement[],
+  ctx: IRCompileContext,
+): void => {
+  if (!ctx.schema) return;
+  const splatTypes: string[] = [];
+  for (const el of shape) {
+    if (el.kind !== "splat") continue;
+    if (!el.sourceType) continue;
+    const typeRef = resolveTypeRef(ctx, el.sourceType);
+    splatTypes.push(typeRef.id);
+  }
+  if (splatTypes.length < 2) return;
+  const subjectTypeId = subject.typeref.id;
+  const subjectIsUniversal = isUniversalObjectRefName(subjectTypeId);
+  // Subject branches (Union types): for `Issue.references: File | URL | …`
+  // the subject's typeref id is `default::File|default::URL|…` (or
+  // `unknown:default::File|…` when the union arrives unresolved). Treat
+  // each branch as a valid subject for the relatedness check — `[is File].*`
+  // and `[is Publication].*` are both legal even though File and
+  // Publication are unrelated concrete types. Strip the `unknown:` marker
+  // each branch may carry so the subsequent `isTypeSubtypeOf` lookups land
+  // on the canonical schema names.
+  const stripUnknown = (name: string): string => name.startsWith("unknown:") ? name.slice("unknown:".length) : name;
+  const subjectBranches = new globalThis.Set<string>();
+  if (subjectTypeId.includes("|")) {
+    for (const branch of subjectTypeId.split("|")) {
+      subjectBranches.add(stripUnknown(branch.trim()));
+    }
+  } else {
+    subjectBranches.add(stripUnknown(subjectTypeId));
+  }
+  for (let i = 0; i < splatTypes.length; i += 1) {
+    for (let j = i + 1; j < splatTypes.length; j += 1) {
+      const a = splatTypes[i]!;
+      const b = splatTypes[j]!;
+      if (a === b) continue;
+      const aSubB = ctx.schema.isTypeSubtypeOf(a, b);
+      const bSubA = ctx.schema.isTypeSubtypeOf(b, a);
+      if (aSubB || bSubA) continue;
+      // When the surrounding subject narrows both types under a single
+      // ancestor (e.g. `Named { [is Issue].*, [is User].* }` where Named is
+      // an ancestor of both), the splats are still considered related
+      // because each intersection refines the subject independently.
+      if (!subjectIsUniversal) {
+        const aRelatedToSubject = [...subjectBranches].some((branch) => ctx.schema!.isTypeSubtypeOf(a, branch));
+        const bRelatedToSubject = [...subjectBranches].some((branch) => ctx.schema!.isTypeSubtypeOf(b, branch));
+        if (aRelatedToSubject && bRelatedToSubject) continue;
+      }
+      throw new AppError(
+        "E_SEMANTIC",
+        `type '${a}' appears in splats for unrelated types ('${a}' and '${b}')`,
+        1,
+        1,
+      );
+    }
+  }
+};
+
 const compileShape = (
   subject: Set,
   shape: EdgeQLShapeElement[],
@@ -4486,23 +4588,71 @@ const compileShape = (
     const generatedType = getResolvedSchemaType(ctx, targetType.id);
     const resolvedFields = generatedType?.resolvedFields;
     const resolvedLinks = generatedType?.resolvedLinks;
+    // The generated schema model doesn't preserve `computeds`, so fall back to
+    // the live snapshot when the user has computed pointers (e.g.
+    // `num_watchers := count(.watchers)`) we need to splat.
+    const snapshotTypeDef = ctx.schema?.getType(targetType.id);
     const typeDef = generatedType
       ? {
           name: generatedType.name,
           module: generatedType.module,
           fields: generatedType.fields,
           links: generatedType.links,
+          computeds: snapshotTypeDef?.computeds,
         }
-      : ctx.schema?.getType(targetType.id);
+      : snapshotTypeDef;
     if (!typeDef) {
       return expanded;
     }
 
+    // Implicit `id`. Every object carries one, so splats must include it
+    // even though it doesn't appear in typeDef.fields. The runtime strips
+    // `id` from result rows unless a shape element with that name is
+    // present, so this is what surfaces it in the public JSON shape.
+    if (!skipNames.has("id")) {
+      const idPtrRef: PointerRef = {
+        kind: "pointer_ref",
+        id: `${targetType.id}.id`,
+        name: "id",
+        shortName: "id",
+        outSource: targetType,
+        outTarget: { kind: "type_ref", id: "std::uuid", nameHint: "std::uuid", module: "std", isView: false, isScalar: true, isAbstract: false, inSchema: true },
+        outCardinality: "one",
+        inCardinality: "many",
+        isComputed: false,
+        isIdPointer: true,
+        isLinkProperty: false,
+        hasProperties: false,
+      };
+      const expr = extendPathSet(baseSet, idPtrRef);
+      expanded.push({
+        kind: "shape_element",
+        source: baseSet,
+        expr,
+        shapeOp: "assign",
+        shapeOrigin: "splat_expansion",
+        required: true,
+        cardinality: "one",
+        name: "id",
+      });
+    }
     for (const field of resolvedFields ?? typeDef.fields) {
       if (field.name.startsWith("__") && field.name.endsWith("__")) {
         continue;
       }
       if (skipNames.has(field.name)) {
+        continue;
+      }
+      // `splat_strategy := 'Explicit'` opts a field out of `*` / `**`
+      // expansion. The user can still write the field by name; only the
+      // implicit splat skips it.
+      if (field.splatStrategy === "Explicit") {
+        continue;
+      }
+      // Synthetic `<link>_id` columns the runtime adds for inline single
+      // links — they're storage, not properties, and shouldn't surface in
+      // splat output.
+      if (field.isLinkColumn) {
         continue;
       }
       const ptrref = pointerRefFromField(targetType, field);
@@ -4515,14 +4665,25 @@ const compileShape = (
         shapeOrigin: "splat_expansion",
         required: field.required ?? false,
         cardinality: field.required ? "one" : "at_most_one",
+        name: field.name,
       });
     }
 
+    // Links are only included by deep splat (`**`). The single asterisk (`*`)
+    // restricts itself to scalar properties so a polymorphic root like
+    // `Named { *, [is Issue].* }` doesn't end up traversing Issue's link
+    // tables — Python/Gel's documented behaviour for splats.
+    if (depth <= 1) {
+      return expanded;
+    }
     for (const link of resolvedLinks ?? typeDef.links ?? []) {
       if (link.name.startsWith("__") && link.name.endsWith("__")) {
         continue;
       }
       if (skipNames.has(link.name)) {
+        continue;
+      }
+      if (link.splatStrategy === "Explicit") {
         continue;
       }
       const linkTarget = resolveTypeRef(ctx, link.targetType);
@@ -4536,10 +4697,16 @@ const compileShape = (
         const nested = canDescend
           ? expandSplatEntries(expr, linkTarget, 1, new globalThis.Set<string>(), undefined, nextAncestry)
           : [];
-        if (nested.length > 0) {
+        // Also surface this link's link properties (e.g. `@note` on
+        // `owner`) as part of the deep splat. Without this the projection
+        // omits link-table-only columns the deep ** result is expected to
+        // carry alongside the target's scalar fields.
+        const linkPropEntries = expandLinkPropertyEntries(expr, link, expr.typeref);
+        const combined = [...nested, ...linkPropEntries];
+        if (combined.length > 0) {
           expr = {
             ...expr,
-            shape: nested,
+            shape: combined,
           };
         }
       }
@@ -4552,10 +4719,86 @@ const compileShape = (
         shapeOrigin: "splat_expansion",
         required: false,
         cardinality: link.multi ? "many" : "at_most_one",
+        name: link.name,
       });
     }
 
+    // Computed pointers (e.g. `num_watchers := count(.watchers)`). Top-level
+    // splats project them unless the schema has the
+    // `no_linkful_computed_splats` future flag — in which case computeds that
+    // pull through a link (anything other than a plain literal) are dropped.
+    if (depth > 0) {
+      const innerCtx = childScope(ctx);
+      bindValue(innerCtx, "__subject__", baseSet);
+      bindValue(innerCtx, "__current__", baseSet);
+      for (const computed of typeDef.computeds ?? []) {
+        if (skipNames.has(computed.name)) continue;
+        if (computed.kind !== "property") continue;
+        if (computed.expr.kind === "link_aggregate" && futureFlagForbidsLinkfulComputedSplats(ctx)) continue;
+        const compiledExpr = tryLowerComputedPropertyOnTypePath(innerCtx, baseSet, computed.name);
+        if (!compiledExpr) continue;
+        expanded.push({
+          kind: "shape_element",
+          source: baseSet,
+          expr: compiledExpr,
+          shapeOp: "assign",
+          shapeOrigin: "splat_expansion",
+          required: false,
+          cardinality: "one",
+          name: computed.name,
+        });
+      }
+    }
+
     return expanded;
+  };
+
+  // Expand a link's stored link properties (`@note`, `@since`, …) as nested
+  // shape entries for deep splats. We synthesise the link-property pointer
+  // refs the same way `compileLinkPropertyExpr` does for explicit `@name`
+  // shape elements so SQL lowering reads the link-table column.
+  const expandLinkPropertyEntries = (
+    linkSet: Set,
+    link: { name: string; properties?: Array<{ name: string; type: string; required?: boolean }> },
+    targetTypeRef: TypeRef,
+  ): ShapeElement[] => {
+    const out: ShapeElement[] = [];
+    for (const prop of link.properties ?? []) {
+      if (prop.name.startsWith("__") && prop.name.endsWith("__")) continue;
+      const propName = `@${prop.name}`;
+      const propertyPtrRef: PointerRef = {
+        kind: "pointer_ref",
+        id: `${targetTypeRef.id}.link::${link.name}.${propName}`,
+        name: propName,
+        shortName: propName,
+        outSource: targetTypeRef,
+        outTarget: scalarTypeRef(prop.type as ScalarType),
+        outCardinality: prop.required ? "one" : "at_most_one",
+        inCardinality: "many",
+        isComputed: false,
+        isLinkProperty: true,
+        hasProperties: false,
+      };
+      out.push({
+        kind: "shape_element",
+        source: linkSet,
+        expr: extendPathSet(linkSet, propertyPtrRef),
+        shapeOp: "assign",
+        shapeOrigin: "splat_expansion",
+        required: prop.required ?? false,
+        cardinality: prop.required ? "one" : "at_most_one",
+        name: propName,
+      });
+    }
+    return out;
+  };
+
+  const futureFlagForbidsLinkfulComputedSplats = (_ctx: IRCompileContext): boolean => {
+    // The schema snapshot tracks active future flags (set via `CREATE FUTURE`
+    // DDL). When `no_linkful_computed_splats` is enabled, deep splats drop
+    // any computed whose body would emit linkful SQL (e.g. `count(.watchers)`).
+    const flags = _ctx.schema?.listFutureFlags?.() ?? [];
+    return flags.includes("no_linkful_computed_splats");
   };
 
   const expandSplat = (el: Extract<EdgeQLShapeElement, { kind: "splat" }>): ShapeElement[] => {
@@ -4954,6 +5197,12 @@ const compileShape = (
       }
     }
   }
+  // Validate that all `[is T].*` splats in this shape are mutually related
+  // (one is a subtype of another, or both share a subject-type ancestor).
+  // The catch-all `select Object { [is User].*, [is Issue].* }` test exercises
+  // this — User and Issue are unrelated, so EdgeQL surfaces an error rather
+  // than producing an ill-typed projection.
+  validateSplatTypeIntersections(subject, shape, ctx);
   return out;
 };
 

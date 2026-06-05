@@ -604,6 +604,10 @@ export interface PropertyBodyNode {
   readonly: boolean | null;
   annotations: AnnotationAssignmentNode[];
   constraints: ConstraintDeclarationNode[];
+  // Inline `name := value` directives that don't match a known keyword —
+  // captured so SDL adapters can pull schema-level options (e.g.
+  // `splat_strategy := 'Explicit'`) without re-parsing the body text.
+  options: AnnotationAssignmentNode[];
 }
 
 export interface LinkDeclarationNode {
@@ -1268,6 +1272,7 @@ export class Parser {
     let readonly: boolean | null = null;
     const annotations: AnnotationAssignmentNode[] = [];
     const constraints: ConstraintDeclarationNode[] = [];
+    const options: AnnotationAssignmentNode[] = [];
 
     while (!this.check("rbrace") && !this.check("eof")) {
       if (this.match("semicolon")) {
@@ -1315,7 +1320,8 @@ export class Parser {
       }
 
       if (this.isGenericOptionStart()) {
-        this.skipGenericOption();
+        const option = this.captureGenericOption();
+        if (option) options.push(option);
         continue;
       }
 
@@ -1330,6 +1336,7 @@ export class Parser {
       readonly,
       annotations,
       constraints,
+      options,
     };
   }
 
@@ -1991,6 +1998,21 @@ export class Parser {
     if (!this.match("semicolon") && !this.check("rbrace")) {
       this.expect("semicolon", "Expected ';' after option assignment");
     }
+  }
+
+  // Like skipGenericOption but returns the name/value pair so the caller can
+  // record it on the surrounding body (e.g. `splat_strategy := 'Explicit'`
+  // hanging off a property/link body needs to survive to influence shape
+  // expansion). Returns undefined when the value can't be sliced cleanly,
+  // matching the silent-skip behaviour of skipGenericOption.
+  private captureGenericOption(): AnnotationAssignmentNode | undefined {
+    const name = this.parseQualifiedName();
+    this.expect("assign", "Expected ':=' in option assignment");
+    const value = this.parseOpaqueUntilSemicolonOrBrace();
+    if (!this.match("semicolon") && !this.check("rbrace")) {
+      this.expect("semicolon", "Expected ';' after option assignment");
+    }
+    return { kind: "AnnotationAssignment", name, value };
   }
 
   private isPropertyStart(): boolean {

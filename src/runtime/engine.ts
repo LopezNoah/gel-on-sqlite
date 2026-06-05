@@ -12,13 +12,14 @@ import { executeStdlibFunction, resolveStdlibFunction, type RuntimeFunctionArg }
 import { assertTargetSqlCompatibility, type RuntimeTarget } from "./target.js";
 import type { ShapeElement as GelIRShapeElement, Set as GelIRSet, Statement as GelIRStatement, TypeRef as GelIRTypeRef } from "../ir/gel_ir.js";
 import type { GroupIR, InsertIR, InsertLinkDefaultIR, InsertLinkPropertyIR, IRStatement, OverlayIR, SelectIR, SelectShapeElementIR, UpdateIR, UpdateLinkAssignmentIR } from "../ir/model.js";
-import type { AccessPolicyCondition, AccessPolicyDef, ComputedLinkPropertyExpr, FieldDef, FunctionDef, FunctionExprDef, ScalarType, ScalarValue, TypeDef } from "../types.js";
+import type { AccessPolicyCondition, AccessPolicyDef, ComputedLinkPropertyExpr, FieldDef, FunctionDef, FunctionExprDef, LinkPropertyDef, ScalarType, ScalarValue, TypeDef } from "../types.js";
 import { qualifiedTypeName } from "../schema/schema.js";
 import { populateSchemaIntrospection } from "../schema/schema_introspection.js";
 import { materializeSchema, type SQLiteDatabase } from "../runtime/database.js";
 import {
   parseCreateTypeHeader,
   stripTrailingBraceBlock,
+  extractTrailingBraceBlock,
   validateScriptUserDDL,
   validateUserDDLStatement,
 } from "./ddl.js";
@@ -670,7 +671,7 @@ const parseMemberHeader = (entry: string): MemberHeader | undefined => {
     if (exprText.length === 0) return undefined;
     return { kind: "computed_link", modifiers, name: memberName, exprText };
   }
-  if (sepTok.kind === "arrow" || (memberKind === "link" && sepTok.kind === "colon")) {
+  if (sepTok.kind === "arrow" || sepTok.kind === "colon") {
     const targetType = sliceTokenRange(tokens, i + 1, entry);
     if (targetType.length === 0) return undefined;
     return { kind: memberKind, modifiers, name: memberName, targetType };
@@ -708,9 +709,12 @@ const registerDynamicTypeDDL = (schema: SchemaSnapshot, statement: string, defau
   }
 
   for (const rawEntry of splitTopLevelScriptStatements(bodyText)) {
-    // Strip any inline `{ … }` block on the entry (e.g. link-property
-    // declarations inside a `create link x -> T { ... }`) using token offsets,
-    // then tokenize the header to recover the property/link declaration.
+    // Capture (and then strip) any inline `{ … }` block on the entry. For
+    // `CREATE LINK x: X { CREATE PROPERTY a: int64 }` the inner block lists
+    // link properties — without parsing them we'd register the link with no
+    // properties, the storage wouldn't get a link table, and `@a := 2`
+    // assignments would have nowhere to write.
+    const innerBody = extractTrailingBraceBlock(rawEntry);
     const entry = stripTrailingBraceBlock(rawEntry);
     const member = parseMemberHeader(entry);
     if (!member) continue;
@@ -727,13 +731,31 @@ const registerDynamicTypeDDL = (schema: SchemaSnapshot, statement: string, defau
     }
     if (member.kind === "link") {
       const multi = member.modifiers.multi;
+      const linkProperties: LinkPropertyDef[] = [];
+      if (innerBody) {
+        for (const linkBodyEntry of splitTopLevelScriptStatements(innerBody)) {
+          const propHeader = parseMemberHeader(stripTrailingBraceBlock(linkBodyEntry));
+          if (!propHeader || propHeader.kind !== "property") continue;
+          const propScalar = dynamicScalarFromType(propHeader.targetType);
+          linkProperties.push({
+            name: propHeader.name,
+            type: propScalar.type,
+            required: propHeader.modifiers.required,
+            collection: propScalar.collection,
+          });
+        }
+      }
       links.push({
         name: member.name,
         targetType: normalizeDynamicTypeName(member.targetType, module),
         multi,
+        properties: linkProperties.length > 0 ? linkProperties : undefined,
       });
-      if (!multi) {
-        fields.push({ name: `${member.name}_id`, type: "uuid" });
+      // Without an inline FK column when the link uses a link table (i.e.
+      // when it has properties OR is multi). The runtime creates a
+      // `<owner>__<link>` table for these.
+      if (!multi && linkProperties.length === 0) {
+        fields.push({ name: `${member.name}_id`, type: "uuid", isLinkColumn: true });
       }
       continue;
     }
@@ -761,10 +783,41 @@ const registerDynamicTypeDDL = (schema: SchemaSnapshot, statement: string, defau
 
 // Pre-pass for CREATE TYPE only. CREATE FUNCTION goes through the proper
 // parser → AST → runtime path (see `applyParsedFunctionDDL`).
+// `create future <flag>` toggles a schema-wide future flag. Currently only
+// `no_linkful_computed_splats` is honoured (it drops `count(.x)`-style
+// computeds from deep splat expansion).
+const parseCreateFutureFlag = (statement: string): string | undefined => {
+  let tokens: readonly Token[];
+  try {
+    tokens = tokenize(statement.trim());
+  } catch {
+    return undefined;
+  }
+  let i = 0;
+  if (tokens[i]?.kind !== "kw_create") return undefined;
+  i += 1;
+  // `future` isn't a reserved keyword in our tokenizer; the lexeme arrives
+  // as a regular identifier.
+  if (!tokens[i] || tokens[i]!.lower !== "future") return undefined;
+  i += 1;
+  const nameTok = tokens[i];
+  if (!nameTok || (nameTok.kind !== "identifier" && nameTok.kind !== "backtick_name")) return undefined;
+  return nameTok.kind === "backtick_name"
+    ? (nameTok.lexeme.startsWith("`") && nameTok.lexeme.endsWith("`")
+        ? nameTok.lexeme.slice(1, -1)
+        : nameTok.lexeme)
+    : nameTok.lexeme;
+};
+
 const maybeRegisterDynamicDDLScript = (db: SQLiteDatabase, schema: SchemaSnapshot, script: string, defaultModule = "default"): boolean => {
   let registeredType = false;
   for (const statement of splitTopLevelScriptStatements(script)) {
     registeredType = registerDynamicTypeDDL(schema, statement, defaultModule) || registeredType;
+    const futureFlag = parseCreateFutureFlag(statement);
+    if (futureFlag) {
+      schema.setFutureFlag(futureFlag, true);
+      registeredType = true;
+    }
   }
   if (registeredType) {
     materializeSchema(db, schema);
@@ -8341,6 +8394,15 @@ const evaluateForIteratorValues = (
       if (arg.kind === "literal") return arg.value;
       if (arg.kind === "set_literal") return { kind: "array", values: arg.values };
       if (arg.kind === "array_literal") return { kind: "array", values: arg.values };
+      // Walk into nested `kind: "expr"` wrappers that the parser inserts
+      // around an argument expression — e.g. `enumerate({…})` wraps the set
+      // literal in `{kind: "expr", expr: set_literal(...)}` rather than
+      // surfacing `kind: "set_literal"` directly.
+      if (arg.kind === "expr" && (arg as { kind: "expr"; expr: FreeObjectExpr }).expr) {
+        const inner = (arg as { kind: "expr"; expr: FreeObjectExpr }).expr;
+        if (inner.kind === "set_literal") return { kind: "array", values: inner.values };
+        if (inner.kind === "literal") return inner.value;
+      }
       return null;
     });
     const qualifiedName = expr.call.name.includes("::")
@@ -8450,6 +8512,39 @@ const bindSelectAstVariable = (
   variable: string,
   value: unknown,
 ): SelectStatement => {
+  // Tuple iter values (e.g. each row of `enumerate({…})` arrives as
+  // `[index, item]`). Substitute `v.0` / `v.1` etc. with the corresponding
+  // tuple element BEFORE the scalar coercion below collapses the array to a
+  // JSON string. Without this, link-property shape entries like
+  // `@list_order := v.0` lose the tuple-index resolution.
+  if (Array.isArray(value)) {
+    const rewriteShape = (shape: SelectStatement["shape"]): SelectStatement["shape"] =>
+      shape.map((entry) => {
+        if (entry.kind === "computed") {
+          return { ...entry, expr: substituteTupleIndexAccess(entry.expr, variable, value) };
+        }
+        return entry;
+      });
+    const rewriteFilter = (f: FilterExpr | undefined): FilterExpr | undefined => {
+      if (!f) return f;
+      if (f.kind === "free_expr") {
+        return { ...f, expr: substituteTupleIndexAccess(f.expr, variable, value) };
+      }
+      if (f.kind === "and" || f.kind === "or") {
+        return { ...f, left: rewriteFilter(f.left)!, right: rewriteFilter(f.right)! };
+      }
+      if (f.kind === "not") {
+        return { ...f, expr: rewriteFilter(f.expr)! };
+      }
+      return f;
+    };
+    return {
+      ...body,
+      shape: rewriteShape(body.shape),
+      filter: rewriteFilter(body.filter),
+    };
+  }
+
   const scalar = coerceUnknownToScalar(value);
   if (!scalar) {
     return {
@@ -8464,6 +8559,68 @@ const bindSelectAstVariable = (
     with: [...existing, { name: variable, value: { kind: "literal", value: scalar } }],
     filter: body.filter ? substituteBindingInASTFilter(body.filter, variable, scalar) : undefined,
   };
+};
+
+// Walk a FreeObjectExpr replacing `index_access(binding_ref(variable), N)`
+// with the Nth element of `tuple`. Also replaces a bare `binding_ref(variable)`
+// reference with a literal JSON dump of the tuple so callers that bind a
+// non-tuple-index reference still get a usable scalar.
+const substituteTupleIndexAccess = (
+  expr: FreeObjectExpr,
+  variable: string,
+  tuple: unknown[],
+): FreeObjectExpr => {
+  const literalOf = (value: unknown): FreeObjectExpr => {
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      return { kind: "literal", value };
+    }
+    if (value === null || value === undefined) {
+      return { kind: "literal", value: null };
+    }
+    // Fall back to a JSON string for nested compound values — keeps the
+    // existing scalar-coercion semantics for things outside `v.0`/`v.1`.
+    return { kind: "literal", value: JSON.stringify(value) };
+  };
+  const rec = (e: FreeObjectExpr): FreeObjectExpr => substituteTupleIndexAccess(e, variable, tuple);
+  switch (expr.kind) {
+    case "index_access":
+      if (expr.expr.kind === "binding_ref" && expr.expr.name === variable && typeof expr.index === "number") {
+        return literalOf(tuple[expr.index]);
+      }
+      return { ...expr, expr: rec(expr.expr) };
+    case "field_access":
+      return { ...expr, expr: rec(expr.expr) };
+    case "binding_ref":
+      return expr.name === variable ? literalOf(tuple) : expr;
+    case "compare":
+      return { ...expr, left: rec(expr.left), right: rec(expr.right) };
+    case "math":
+      return { ...expr, left: rec(expr.left), right: rec(expr.right) };
+    case "logical":
+      return { ...expr, left: rec(expr.left), right: rec(expr.right) };
+    case "and":
+    case "or":
+      return { ...expr, left: rec(expr.left), right: rec(expr.right) };
+    case "not":
+    case "unary":
+    case "exists":
+    case "distinct":
+    case "cast":
+      return { ...expr, expr: rec(expr.expr) };
+    case "concat":
+      return { ...expr, parts: expr.parts.map(rec) };
+    case "tuple":
+      return { ...expr, values: expr.values.map(rec) };
+    case "if_else":
+      return { ...expr, thenExpr: rec(expr.thenExpr), condition: rec(expr.condition), elseExpr: rec(expr.elseExpr) };
+    case "coalesce":
+      return { ...expr, left: rec(expr.left), right: rec(expr.right) };
+    case "select_expr":
+    case "select_expr_subquery":
+      return { ...expr, expr: rec(expr.expr) };
+    default:
+      return expr;
+  }
 };
 
 const ensureSelectAstHasId = (ast: SelectStatement): SelectStatement => {
@@ -11803,6 +11960,47 @@ const resolveInsertTargets = (
 
   if (value.kind === "insert") {
     return executeNestedInsert(db, schema, value, context, ast).map((id) => ({ id, properties: {} }));
+  }
+
+  // `(insert T { … }){ @a := 2 }` and bare expression wrappers around an
+  // insert/select arrive as `{ kind: "expr", expr: shape_projection(...) }`.
+  // Pull the inner mutation/select target id and merge `@`-prefixed shape
+  // entries into the link's per-target properties so link-table writes pick
+  // them up.
+  if (value.kind === "expr") {
+    const inner = (value as { kind: "expr"; expr: FreeObjectExpr }).expr;
+    if (inner.kind === "shape_projection") {
+      const projection = inner as { kind: "shape_projection"; expr: FreeObjectExpr; shape: ShapeElement[] };
+      const innerExpr = projection.expr;
+      let targets: LinkTargetAssignment[] = [];
+      if (innerExpr.kind === "mutation_expr") {
+        const stmt = (innerExpr as { kind: "mutation_expr"; statement: Statement }).statement;
+        if (stmt.kind === "insert") {
+          targets = executeNestedInsert(db, schema, stmt as Extract<InsertValue, { kind: "insert" }>, context, ast)
+            .map((id) => ({ id, properties: {} }));
+        }
+      } else if (innerExpr.kind === "select") {
+        targets = resolveInsertTargets(db, schema, innerExpr as Extract<InsertValue, { kind: "select" }>, context, ast);
+      }
+      // Apply the shape's `@`-prefixed assignments as link-property values
+      // on every resolved target.
+      const properties: Record<string, ScalarValue> = {};
+      for (const el of projection.shape) {
+        if (el.kind !== "computed") continue;
+        if (!el.name.startsWith("@")) continue;
+        const exprBody = (el.expr as { kind: string }).kind === "select_expr"
+          ? (el.expr as { kind: "select_expr"; expr: FreeObjectExpr }).expr
+          : el.expr;
+        if ((exprBody as { kind: string }).kind === "literal") {
+          const litVal = (exprBody as { kind: "literal"; value: ScalarValue }).value;
+          properties[el.name] = litVal;
+        }
+      }
+      if (Object.keys(properties).length > 0) {
+        return targets.map((t) => ({ id: t.id, properties: { ...t.properties, ...properties } }));
+      }
+      return targets;
+    }
   }
 
   if (value.kind === "set") {

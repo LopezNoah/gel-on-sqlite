@@ -2317,7 +2317,19 @@ const pointerPathAliasColumns = (path: ScalarPointerPath): string[][] => {
 };
 
 const linkTableNameForPointer = (pointer: Pointer, options?: GelIRCompileOptions): string => {
-  const sourceType = pointer.direction === "inbound" ? pointer.ptrref.outSource : pointer.source.typeref;
+  // For an outbound link the storage source is the type that *defines* the
+  // link — which is `ptrref.outSource`. The pointer's `source.typeref` may
+  // have been widened by a union narrowing (`references: File | URL |
+  // Publication` then `[is Publication].**` walks `.authors`), in which case
+  // using `source.typeref` would build a pipe-joined nonsense table name.
+  // Falling back to `outSource` keeps the join targeted at the link's actual
+  // storage table.
+  const fallbackSource = pointer.direction === "inbound"
+    ? pointer.ptrref.outSource
+    : (pointer.source.typeref.id.includes("|")
+        ? pointer.ptrref.outSource
+        : pointer.source.typeref);
+  const sourceType = fallbackSource;
   const sourceTypeName = qualifyTypeName(sourceType);
   const linkName = pointer.ptrref.shortName;
   const storage = options?.resolveLinkStorageType?.(sourceTypeName, linkName) ?? sourceTypeName;
@@ -2980,7 +2992,16 @@ const compileSelectSource = (
   if (sourceSet.expr.kind === "operator_call" && (sourceSet.expr as OperatorCall).operator === "union") {
     const args = orderedCallArgs((sourceSet.expr as OperatorCall).args);
     const selects = args.map((arg) => {
-      const source = compileSelectSource(arg.expr, undefined, undefined, options, params, target);
+      // Inherit the outer set's shape so each branch's polymorphic source
+      // projects the same columns the splat expanded. Without this, a
+      // `{Issue, User} { …, * }` SELECT compiles each branch with only
+      // `id`/`__source_type`, then references `g0.name` and friends in the
+      // outer projection — which fails with "no such column".
+      const inheritedShape = (arg.expr.shape && arg.expr.shape.length > 0)
+        ? arg.expr.shape
+        : sourceSet.shape;
+      const branchSet: Set = inheritedShape === arg.expr.shape ? arg.expr : { ...arg.expr, shape: inheritedShape };
+      const source = compileSelectSource(branchSet, undefined, undefined, options, params, target);
       return source ? `SELECT ${source.alias}.* FROM ${source.sql}` : null;
     });
     if (selects.some((entry) => !entry)) return null;
@@ -4376,6 +4397,16 @@ const compileProjectedSourceColumnRef = (set: Set): string | null => {
     if (!sourcePointer.ptrref.outTarget.isScalar) {
       return columnForPointer(pointer);
     }
+  }
+  // `{Issue, User} { … }` lands here: the pointer's source is a union of
+  // type roots. The branch's polymorphic source needs the scalar columns of
+  // each splat-expanded entry — accept the column even when the source is a
+  // set-constructor union.
+  if (sourceExpr.kind === "operator_call"
+      && ((sourceExpr as OperatorCall).operator === "union"
+          || (sourceExpr as OperatorCall).operator === "intersect"
+          || (sourceExpr as OperatorCall).operator === "except")) {
+    return columnForPointer(pointer);
   }
   return null;
 };
