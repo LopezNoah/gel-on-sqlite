@@ -1,7 +1,7 @@
 import { AppError } from "../errors.js";
 import { parseEdgeQL } from "../edgeql/parser.js";
 import { simpleTypeName } from "../edgeql/ast.js";
-import type { ClauseChain, ComputedExpr, FilterExpr, FreeObjectExpr, FunctionCallExpr, GroupByAtom, InsertValue, OrderExpr, OrderExprChain, SelectStatement, ShapeElement, Statement, TypeExpr, WithBindingValue } from "../edgeql/ast.js";
+import type { ClauseChain, ComputedExpr, FilterExpr, FreeObjectExpr, FunctionCallExpr, GroupByAtom, GroupByElement, InsertValue, OrderExpr, OrderExprChain, SelectStatement, ShapeElement, Statement, TypeExpr, WithBindingValue } from "../edgeql/ast.js";
 import type { GeneratedSchema } from "../codegen/schema.js";
 import type {
   BacklinkSourceIR,
@@ -264,37 +264,145 @@ interface PeeledGroupForm {
   postOrderBy?: OrderExprChain;
   postLimit?: number;
   postOffset?: number;
+  // Contract C1: trailing `.field` chain that destructures the group output
+  // directly (`(GROUP …).elements`, `(GROUP …).key.element`).
+  postFieldPath?: string[];
 }
+
+// Resolve a WITH-bound name to a `group_expr` if its value (transitively)
+// wraps one. `WITH g := (GROUP …)` stores the binding value as
+// `{kind:"subquery_expr", expr:{group_expr}}`; a binding may also chain to
+// another binding (`WITH a := (GROUP …), b := a`).
+const resolveBindingToGroupExpr = (
+  name: string,
+  withBindings: Map<string, WithBindingValue>,
+  seen: Set<string> = new Set(),
+): Extract<FreeObjectExpr, { kind: "group_expr" }> | undefined => {
+  if (seen.has(name)) return undefined;
+  seen.add(name);
+  const value = withBindings.get(name);
+  if (!value) return undefined;
+  if (value.kind === "subquery_expr") {
+    let inner: FreeObjectExpr = value.expr;
+    // Unwrap select-subquery wrappers around the group.
+    while (inner.kind === "select_expr_subquery") {
+      inner = inner.expr;
+    }
+    if (inner.kind === "group_expr") return inner;
+    if (inner.kind === "binding_ref") {
+      return resolveBindingToGroupExpr(inner.name, withBindings, seen);
+    }
+    return undefined;
+  }
+  if (value.kind === "subquery_statement" && value.statement.kind === "group") {
+    // A `WITH g := (GROUP …)` that parsed as a statement binding — synthesize
+    // an equivalent group_expr from the group statement.
+    const stmt = value.statement;
+    return { kind: "group_expr", source: stmt.source, using: stmt.using, by: stmt.by };
+  }
+  if (value.kind === "binding_ref") {
+    return resolveBindingToGroupExpr(value.name, withBindings, seen);
+  }
+  return undefined;
+};
+
+// Contract C3: reject BY-clause name collisions. Walks every atom across all
+// BY elements (including those nested in sets / cube / rollup) and throws via
+// `fail` when a name is contributed by incompatible origins:
+//  - a direct field atom (`.x`) AND a USING alias (`x`)            → "used directly in the BY clause"
+//  - a link property (`@x`) AND an object property (`.x`)          → "BY clause cannot refer to link property and object property with the same name"
+// Shared by `compileGroupStatement` (legacy/runtime path) and the embedded
+// `group_expr` case in ast_to_ir.ts (modern path) so both fire the diagnostic.
+export const validateGroupByAtomCollisions = (
+  by: GroupByElement[],
+  fail: (message: string) => never,
+): void => {
+  const origins = new Map<string, Set<"field" | "using" | "link_property">>();
+  const record = (atom: GroupByAtom): void => {
+    const name = atom.kind === "field_ref" ? atom.field : atom.name;
+    const origin: "field" | "using" | "link_property" =
+      atom.kind === "field_ref" ? "field" : atom.kind === "link_property_ref" ? "link_property" : "using";
+    const set = origins.get(name) ?? new Set();
+    set.add(origin);
+    origins.set(name, set);
+    if (set.has("field") && set.has("using")) {
+      fail(`the name '${name}' cannot be used both as a USING alias and used directly in the BY clause`);
+    }
+    if (set.has("field") && set.has("link_property")) {
+      fail(`BY clause cannot refer to link property and object property with the same name '${name}'`);
+    }
+  };
+  for (const element of by) {
+    if (element.kind === "field_ref" || element.kind === "name_ref" || element.kind === "link_property_ref") {
+      record(element);
+    } else if (element.kind === "sets") {
+      for (const list of element.sets) for (const atom of list) record(atom);
+    } else if (element.kind === "cube" || element.kind === "rollup") {
+      for (const atom of element.atoms) record(atom);
+    }
+  }
+};
 
 // Peels common wrappers around a `(GROUP …)` expression inside a
 // `SELECT (GROUP …)` statement, collecting any filter / shape / order /
-// limit / offset to apply as post-processing on the group's output rows.
+// limit / offset / trailing field path to apply as post-processing on the
+// group's output rows. Also resolves a WITH-bound name that refers to a
+// group (`WITH g := (GROUP …) SELECT g {…}`).
 const peelGroupExprFromSelectExpr = (
   statement: Extract<Statement, { kind: "select_expr" }>,
 ): PeeledGroupForm | undefined => {
+  const withBindings = new Map<string, WithBindingValue>(
+    (statement.with ?? []).map((binding) => [binding.name, binding.value]),
+  );
+
   let cursor: FreeObjectExpr = statement.expr;
   const peeled: PeeledGroupForm = { group: undefined as never };
+  // Trailing field path is collected outermost-first; the chain reads
+  // left-to-right (`(GROUP …).key.element` => ["key", "element"]).
+  const fieldPath: string[] = [];
 
-  if (cursor.kind === "shape_projection") {
-    peeled.postShape = cursor.shape;
-    cursor = cursor.expr;
+  // Loop-peel any depth/order of shape_projection (first shape wins) and
+  // select_expr_subquery (filter/order/limit/offset), plus a trailing
+  // field-access chain, until we reach the group / binding leaf.
+  for (;;) {
+    if (cursor.kind === "shape_projection") {
+      if (!peeled.postShape) peeled.postShape = cursor.shape;
+      cursor = cursor.expr;
+      continue;
+    }
+    if (cursor.kind === "select_expr_subquery") {
+      // First subquery wrapper that carries clauses wins for each clause.
+      if (peeled.postFilter === undefined) peeled.postFilter = cursor.filter;
+      if (peeled.postOrderBy === undefined) peeled.postOrderBy = cursor.orderBy;
+      if (peeled.postLimit === undefined) peeled.postLimit = cursor.limit;
+      if (peeled.postOffset === undefined) peeled.postOffset = cursor.offset;
+      cursor = cursor.expr;
+      continue;
+    }
+    if (cursor.kind === "field_access") {
+      // Trailing destructuring (`.elements`, `.key.element`). Collect the
+      // field names; they apply after all other post-processing (C1). We
+      // prepend because we peel from the outside in.
+      fieldPath.unshift(cursor.field);
+      cursor = cursor.expr;
+      continue;
+    }
+    break;
   }
 
-  if (cursor.kind === "select_expr_subquery") {
-    peeled.postFilter = cursor.filter;
-    peeled.postOrderBy = cursor.orderBy;
-    peeled.postLimit = cursor.limit;
-    peeled.postOffset = cursor.offset;
-    cursor = cursor.expr;
-  }
-
-  if (cursor.kind === "shape_projection" && !peeled.postShape) {
-    peeled.postShape = cursor.shape;
-    cursor = cursor.expr;
+  // Resolve a binding leaf to its group (e.g. `WITH g := (GROUP …) SELECT g`).
+  if (cursor.kind === "binding_ref") {
+    const resolved = resolveBindingToGroupExpr(cursor.name, withBindings);
+    if (!resolved) return undefined;
+    cursor = resolved;
   }
 
   if (cursor.kind !== "group_expr") {
     return undefined;
+  }
+
+  if (fieldPath.length > 0) {
+    peeled.postFieldPath = fieldPath;
   }
 
   // A trailing `ORDER BY` on the SELECT (`statement.orderBy`) applies to
@@ -327,6 +435,20 @@ const compileGroupStatement = (
   const sourceTypeName: string | undefined = rawSource.kind === "select" ? rawSource.typeName : undefined;
   const sourceClauses: ClauseChain | undefined = rawSource.kind === "select" ? rawSource.clauses : undefined;
 
+  // Resolve source provenance up front: a `select` on a real (non-WITH-bound)
+  // type vs. a binding ref vs. an arbitrary expression. Needed by the BY/USING
+  // lowering below (Contract C4: real pointers / `id` must never be hidden).
+  const withBindingNames = new Set((statement.with ?? []).map((binding) => binding.name));
+  const sourceIsBinding = sourceTypeName !== undefined && withBindingNames.has(sourceTypeName);
+  const sourceIsRealType = sourceTypeName !== undefined && !sourceIsBinding;
+  // A real-type, free-object, tuple, or FOR source surfaces its own pointers
+  // directly on each row, so a `field_ref` BY atom over it is a real,
+  // user-visible field — never a synthetic scratch column to hide (C4).
+  const sourceFieldsAreVisible =
+    sourceIsRealType ||
+    rawSource.kind === "free_object_constructor" ||
+    rawSource.kind === "for_expr";
+
   const hiddenByFields: string[] = [];
   const shapeNames = new Set(
     sourceUserShape
@@ -355,12 +477,23 @@ const compileGroupStatement = (
     if (expr.kind === "function_call") {
       return { kind: "function_call", call: expr.call };
     }
+    // A direct field of the current row (`owner := .owner`) — emit a plain
+    // field_ref so it lowers like a normal shape field (3e). A deeper plain
+    // path (`.status.name`) isn't expressible as a single field_ref, so fall
+    // through to the per-row select_expr evaluator.
     if (expr.kind === "field_access" && expr.expr.kind === "current_item") {
       return { kind: "field_ref", field: expr.field };
     }
     if (expr.kind === "literal") {
       return { kind: "literal", value: expr.value };
     }
+    // A self-reference (`z := X` where the source is a binding/free object) or
+    // any other expression — the engine's per-row evaluator handles these by
+    // evaluating `expr` against each source row as `current_item`. The
+    // select_expr computed form routes through that evaluator. This covers
+    // index_access (`.0`), arithmetic / `math` ops (`.0 // 2`), tuple/path
+    // expressions, and binding_ref self-references; for tuple sources the
+    // alias value is the whole tuple.
     return { kind: "select_expr", expr, clauses: {} };
   };
 
@@ -381,6 +514,9 @@ const compileGroupStatement = (
     hiddenByFields.push(usingBinding.alias);
   }
 
+  // Contract C2: a `link_property_ref` (`@count`) is surfaced as a field on the
+  // source rows, so its atom name is the bare property name (same key the
+  // engine reads off each row).
   const atomName = (atom: GroupByAtom): string =>
     atom.kind === "field_ref" ? atom.field : atom.name;
 
@@ -392,6 +528,12 @@ const compileGroupStatement = (
       }
       return name;
     }
+    // `field_ref` / `link_property_ref` resolve to a field that must exist on
+    // the source rows. Add it to the source shape if missing so the value is
+    // materialised for partitioning. Contract C4: for a real-type (or
+    // free-object / FOR) source the field is a genuine, user-visible pointer
+    // and must NOT be hidden from `elements`; only synthetic non-pointer atoms
+    // over opaque sources (e.g. a raw path/tuple source) get hidden.
     if (!shapeNames.has(name)) {
       augmentedShape.push({
         kind: "field",
@@ -400,7 +542,9 @@ const compileGroupStatement = (
         origin: "default",
       });
       shapeNames.add(name);
-      hiddenByFields.push(name);
+      if (!sourceFieldsAreVisible) {
+        hiddenByFields.push(name);
+      }
     }
     return name;
   };
@@ -410,6 +554,8 @@ const compileGroupStatement = (
   // SQL-style `GROUPING SETS / CUBE / ROLLUP` composition.
   let groupingSets: string[][] = [[]];
   const atomOrder: string[] = [];
+  // Contract C3: reject BY-clause name collisions before lowering the atoms.
+  validateGroupByAtomCollisions(statement.by, fail);
   const addAtom = (atom: GroupByAtom): string => {
     const name = ensureAtomInShape(atom);
     if (!atomOrder.includes(name)) atomOrder.push(name);
@@ -446,7 +592,11 @@ const compileGroupStatement = (
   };
 
   for (const element of statement.by) {
-    if (element.kind === "field_ref" || element.kind === "name_ref") {
+    if (
+      element.kind === "field_ref" ||
+      element.kind === "name_ref" ||
+      element.kind === "link_property_ref"
+    ) {
       const name = addAtom(element);
       groupingSets = groupingSets.map((s) => [...s, name]);
       continue;
@@ -468,19 +618,30 @@ const compileGroupStatement = (
     groupingSets = [[]];
   }
 
-  const withBindingNames = new Set((statement.with ?? []).map((binding) => binding.name));
-  const sourceIsBinding = sourceTypeName !== undefined && withBindingNames.has(sourceTypeName);
-  const sourceIsRealType = sourceTypeName !== undefined && !sourceIsBinding;
-
+  // `sourceIsBinding` / `sourceIsRealType` are computed up front (see above).
   let source: GroupIR["source"];
   if (sourceIsRealType) {
     // Real-type source. Let it flow through the IR path; the parsed runtime
     // fallback in `runGroupIR` handles the cases the IR compile rejects
     // (e.g. link-typed USING aliases).
+    //
+    // Contract C4: materialise the FULL object so the group's `elements` carry
+    // complete data (`array_agg(.elements)` -> `[{id,...}]`,
+    // `array_agg(.elements{name})` -> `[{name}]`). We emit a `{ * }` splat
+    // (all properties) plus an explicit `id`, ahead of the USING-alias / BY
+    // computed/field entries that `augmentedShape` accumulated. The user's
+    // explicit source shape entries are preserved too.
+    const hasSplat = augmentedShape.some((element) => element.kind === "splat");
+    const hasId = shapeNames.has("id");
+    const completeShape: ShapeElement[] = [
+      ...(hasSplat ? [] : [{ kind: "splat" as const, depth: 1 as const, operation: "assign" as const, origin: "default" as const }]),
+      ...(hasId ? [] : [{ kind: "field" as const, name: "id", operation: "assign" as const, origin: "default" as const }]),
+      ...augmentedShape,
+    ];
     source = {
       kind: "select",
       typeName: sourceTypeName!,
-      shape: augmentedShape,
+      shape: completeShape,
       fields: [],
       filter: sourceClauses?.filter,
       orderBy: sourceClauses?.orderBy,
@@ -497,6 +658,12 @@ const compileGroupStatement = (
     // user's explicit shape; when the source is a raw expression like
     // `{a := 1, b := 2}` or `Card.element` we use it as-is (no
     // shape_projection) so the runtime keeps every field the source emits.
+    //
+    // Task 4 (nested group): when `rawSource` itself contains a `group_expr`
+    // (e.g. `GROUP (SELECT (GROUP …){…}) BY …`) or a `field_access` of one, we
+    // keep it verbatim here — the engine evaluates the inner group recursively
+    // through the parsed runtime select path. Do NOT flatten it to an empty
+    // select.
     const innerExpr: FreeObjectExpr = sourceIsBinding
       ? { kind: "binding_ref", name: sourceTypeName! }
       : rawSource;
@@ -7578,6 +7745,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           postOrderBy: groupForm.postOrderBy,
           postLimit: groupForm.postLimit,
           postOffset: groupForm.postOffset,
+          postFieldPath: groupForm.postFieldPath,
         };
       }
       return groupIR;

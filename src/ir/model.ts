@@ -945,6 +945,16 @@ export interface GroupIR {
   postOrderBy?: OrderExprChain;
   postLimit?: number;
   postOffset?: number;
+  // Contract C1: a trailing field-access chain applied to the group-output
+  // rows AFTER postShape/postFilter/postOrderBy/postLimit/postOffset, for
+  // queries that destructure a group directly, e.g.
+  //   (GROUP Card BY .element).elements    -> ["elements"]
+  //   (GROUP Card BY .element).key.element -> ["key", "element"]
+  //   (GROUP Card BY .element).grouping    -> ["grouping"]
+  // The engine walks the path over each group row: when a step value is an
+  // array it flattens one level (contributing each element); otherwise it
+  // contributes the scalar/object. The result is the flat array of values.
+  postFieldPath?: string[];
 }
 
 export type IRStatement =
