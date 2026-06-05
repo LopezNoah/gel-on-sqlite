@@ -140,12 +140,31 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
         return 0;
       }
     });
-    // `std::re_match(pattern, str)` — returns the first match's full text, or NULL.
+    // `std::re_match(pattern, str)` — returns the array<str> of the first
+    // match's groups, or NULL when no match. Mirrors PostgreSQL's
+    // `regexp_matches`: when the pattern has no capture groups, the return is
+    // `[full_match]`; when it has groups, returns the captures only (the
+    // full-match is dropped). Encoded as a JSON array string so callers can
+    // unwrap with json_each / pass through json_group_array.
     db.function("_gel_re_match_first", (pattern: string | null, value: string | null) => {
       if (pattern === null || value === null) return null;
       try {
-        const m = new RegExp(String(pattern)).exec(String(value));
-        return m ? m[0] : null;
+        const flagsMatch = /^\(\?([a-zA-Z]+)\)(.*)$/s.exec(String(pattern));
+        let source: string;
+        let flags = "";
+        if (flagsMatch) {
+          const flagChars = flagsMatch[1];
+          if (flagChars.includes("i")) flags += "i";
+          if (flagChars.includes("m")) flags += "m";
+          if (flagChars.includes("s")) flags += "s";
+          source = flagsMatch[2];
+        } else {
+          source = String(pattern);
+        }
+        const m = new RegExp(source, flags).exec(String(value));
+        if (!m) return null;
+        const groups = m.length === 1 ? [m[0]] : Array.from(m).slice(1);
+        return JSON.stringify(groups);
       } catch {
         return null;
       }
