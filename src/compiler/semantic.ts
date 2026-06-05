@@ -431,7 +431,7 @@ const compileGroupStatement = (
   // anything that isn't a clean typed select on a real type, we wrap as a
   // select_expr over a shape_projection so the runtime's expression evaluator
   // materialises the rows.
-  const sourceUserShape: ShapeElement[] = rawSource.kind === "select" ? rawSource.shape : [];
+  const parsedSourceShape: ShapeElement[] = rawSource.kind === "select" ? rawSource.shape : [];
   const sourceTypeName: string | undefined = rawSource.kind === "select" ? rawSource.typeName : undefined;
   const sourceClauses: ClauseChain | undefined = rawSource.kind === "select" ? rawSource.clauses : undefined;
 
@@ -441,13 +441,29 @@ const compileGroupStatement = (
   const withBindingNames = new Set((statement.with ?? []).map((binding) => binding.name));
   const sourceIsBinding = sourceTypeName !== undefined && withBindingNames.has(sourceTypeName);
   const sourceIsRealType = sourceTypeName !== undefined && !sourceIsBinding;
+  const sourceUserShape: ShapeElement[] = sourceIsBinding
+    ? parsedSourceShape.filter((element) => !(element.kind === "field" && element.name === "id" && element.origin === "default"))
+    : parsedSourceShape;
+  const collectProjectedShapeNames = (expr: FreeObjectExpr): string[] => {
+    if (expr.kind === "shape_projection") {
+      return expr.shape
+        .filter((element): element is Extract<ShapeElement, { name: string }> => "name" in element)
+        .map((element) => element.name);
+    }
+    if (expr.kind === "select_expr_subquery" || expr.kind === "distinct") {
+      return collectProjectedShapeNames(expr.expr);
+    }
+    return [];
+  };
+  const projectedShapeNames = collectProjectedShapeNames(rawSource);
   // A real-type, free-object, tuple, or FOR source surfaces its own pointers
   // directly on each row, so a `field_ref` BY atom over it is a real,
   // user-visible field — never a synthetic scratch column to hide (C4).
   const sourceFieldsAreVisible =
     sourceIsRealType ||
     rawSource.kind === "free_object_constructor" ||
-    rawSource.kind === "for_expr";
+    rawSource.kind === "for_expr" ||
+    projectedShapeNames.length > 0;
 
   const hiddenByFields: string[] = [];
   const shapeNames = new Set(
@@ -463,7 +479,11 @@ const compileGroupStatement = (
       shapeNames.add(entry.name);
     }
   }
+  for (const name of projectedShapeNames) {
+    shapeNames.add(name);
+  }
   const augmentedShape: ShapeElement[] = [...sourceUserShape];
+  const selfBindingAliases: string[] = [];
 
   // USING bindings become computed shape entries on the source. The engine's
   // existing per-row shape evaluator computes them once per source row, so the
@@ -498,6 +518,13 @@ const compileGroupStatement = (
   };
 
   for (const usingBinding of statement.using ?? []) {
+    if (sourceIsBinding
+      && usingBinding.expr.kind === "binding_ref"
+      && usingBinding.expr.name === sourceTypeName) {
+      shapeNames.add(usingBinding.alias);
+      selfBindingAliases.push(usingBinding.alias);
+      continue;
+    }
     if (shapeNames.has(usingBinding.alias)) {
       // Already in the source shape — `by name_ref` will find it; no need to
       // append, and don't hide a user-visible field.
@@ -686,6 +713,7 @@ const compileGroupStatement = (
     byAtoms: atomOrder,
     groupingSets,
     hiddenByFields,
+    selfBindingAliases,
   };
 };
 

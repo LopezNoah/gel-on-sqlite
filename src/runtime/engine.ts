@@ -1576,49 +1576,7 @@ const tryRuntimeSelectExprEvaluationAst = (
         return env.get("__current__") ?? null;
       }
       case "backlink_path": {
-        const row = env.get("__current__");
-        if (!row || typeof row !== "object" || Array.isArray(row)) return [];
-        const r = row as Record<string, unknown>;
-        const sourceTypeName = typeof r.__source_type === "string" ? r.__source_type : undefined;
-        if (!sourceTypeName || typeof r.id !== "string") return [];
-        const filterSource = expr.sourceType ? qualifyRuntimeTypeName(expr.sourceType) : undefined;
-        const out: Record<string, unknown>[] = [];
-        for (const candidate of schema.listTypes()) {
-          const candidateName = qualifiedTypeName(candidate);
-          if (filterSource && !schema.listConcreteTypesAssignableTo(filterSource).some((t) => qualifiedTypeName(t) === candidateName)) continue;
-          const linkDef = findRuntimeLinkDef(schema, candidateName, expr.link);
-          if (!linkDef) continue;
-          const usesTable = Boolean(linkDef.link.multi) || (linkDef.link.properties?.length ?? 0) > 0;
-          if (usesTable) {
-            const owner = resolveLinkStorageOwner(schema, candidate, linkDef.link);
-            const ownerTable = tableNameForType(qualifiedTypeName(owner));
-            const linkTable = `${ownerTable}__${linkDef.link.name.toLowerCase()}`;
-            for (const concrete of schema.listConcreteTypesAssignableTo(candidateName)) {
-              const concreteName = qualifiedTypeName(concrete);
-              const concreteTable = tableNameForType(concreteName);
-              const rows = db.prepare(
-                `SELECT s.*, j.* FROM ${quoteIdent(concreteTable)} s JOIN ${quoteIdent(linkTable)} j ON j.${quoteIdent("source")} = s.${quoteIdent("id")} WHERE j.${quoteIdent("target")} = ?`
-              ).all(r.id) as Record<string, unknown>[];
-              for (const linkRow of rows) {
-                const merged: Record<string, unknown> = { ...linkRow, __source_type: concreteName };
-                for (const property of linkDef.link.properties ?? []) {
-                  merged[`@${property.name}`] = linkRow[property.name] ?? null;
-                }
-                out.push(merged);
-              }
-            }
-          } else {
-            for (const concrete of schema.listConcreteTypesAssignableTo(candidateName)) {
-              const concreteName = qualifiedTypeName(concrete);
-              const concreteTable = tableNameForType(concreteName);
-              const rows = db.prepare(`SELECT * FROM ${quoteIdent(concreteTable)} WHERE ${quoteIdent(`${linkDef.link.name}_id`)} = ?`).all(r.id) as Record<string, unknown>[];
-              for (const linkRow of rows) {
-                out.push({ ...linkRow, __source_type: concreteName });
-              }
-            }
-          }
-        }
-        return out;
+        return resolveBacklinkRowsForSubject(db, schema, env.get("__current__"), expr.link, expr.sourceType);
       }
       case "tuple": {
         const bindingPath = (value: FreeObjectExpr): { name: string; path: number[] } | undefined => {
@@ -1681,12 +1639,20 @@ const tryRuntimeSelectExprEvaluationAst = (
         const sharesScope = Boolean(firstScope)
           && slotScopes.every((s) => s === null || s === firstScope);
         if (firstScope && sharesScope) {
-          const sourceRows = evalExpr({
-            kind: "select",
-            typeName: firstScope,
-            shape: [{ kind: "splat", depth: 1, operation: "assign", origin: "explicit" }],
-            clauses: {},
-          }, env);
+          const shortName = firstScope.split("::").at(-1) ?? firstScope;
+          const scopedSource = env.has(firstScope)
+            ? env.get(firstScope)
+            : env.has(shortName)
+              ? env.get(shortName)
+              : undefined;
+          const sourceRows = scopedSource === undefined
+            ? evalExpr({
+                kind: "select",
+                typeName: firstScope,
+                shape: [{ kind: "splat", depth: 1, operation: "assign", origin: "explicit" }],
+                clauses: {},
+              }, env)
+            : scopedSource;
           const rows = Array.isArray(sourceRows)
             ? sourceRows
             : sourceRows === null || sourceRows === undefined ? [] : [sourceRows];
@@ -1715,6 +1681,9 @@ const tryRuntimeSelectExprEvaluationAst = (
               );
               allRows.push(...expanded);
             }
+            if (scopedSource !== undefined) {
+              return allRows[0] ?? null;
+            }
             return allRows;
           }
         }
@@ -1723,9 +1692,15 @@ const tryRuntimeSelectExprEvaluationAst = (
           value: evalExpr(value, env),
           tupleLike: exprIsTupleValue(value) || value.kind === "array_literal_expr",
         }));
+        if (evaluated.some((entry) => (entry.value === null || entry.value === undefined) && !entry.tupleLike)) {
+          return null;
+        }
         const anyArray = evaluated.some((entry) => Array.isArray(entry.value) && !entry.tupleLike);
         if (!anyArray) return evaluated.map((entry) => entry.value);
-        const sets = evaluated.map((entry) => Array.isArray(entry.value) && !entry.tupleLike ? entry.value : [entry.value]);
+        const sets = evaluated.map((entry) => {
+          if ((entry.value === null || entry.value === undefined) && !entry.tupleLike) return [];
+          return Array.isArray(entry.value) && !entry.tupleLike ? entry.value : [entry.value];
+        });
         return sets.reduce<unknown[][]>(
           (rows, items) => rows.flatMap((row) => items.map((item) => [...row, item])),
           [[]],
@@ -5580,12 +5555,15 @@ const tryEvaluateParsedRuntimeSelect = (
     }
     if (expr.kind === "tuple") {
       const values = expr.values.map((value) => evalFreeExpr(value, env));
+      if (values.some((value) => value === null || value === undefined)) {
+        return null;
+      }
       if (!values.some((value) => Array.isArray(value))) {
         return values;
       }
       return values.reduce<unknown[][]>(
         (rows, value) => {
-          const items = Array.isArray(value) ? value : [value];
+          const items = (Array.isArray(value) ? value : [value]).filter((item) => item !== null && item !== undefined);
           return rows.flatMap((row) => items.map((item) => [...row, item]));
         },
         [[]],
@@ -7411,7 +7389,7 @@ export const executeQueryWithTrace = (
     const context = normalizeSecurityContext(securityContext);
     const runtimeTarget = resolvedRuntimeTarget(context, db);
     const compilerService = getCompilerService();
-    const ast = parseEdgeQL(query);
+    let ast = parseEdgeQL(query);
     if (ast.kind === "configure") {
       // CONFIGURE has no SQLite analogue — return an empty insert-like result
       // so callers that fire it from `.query()` don't have to pre-filter or
@@ -7439,6 +7417,10 @@ export const executeQueryWithTrace = (
       executeForLoop(db, schema, ast, context, runtimeTarget, compilerService, [], traces);
       if (traces.length > 0) return traces[0];
     }
+    // `WITH g := (GROUP …) SELECT g { … }` — a GROUP bound in WITH can't lower
+    // to SQL, so pre-evaluate it into literal rows; the outer statement then
+    // projects over those rows. A no-op for statements with no group binding.
+    ast = preEvaluateGroupBindings(db, schema, ast, context);
     const compiled = compilerService.compile(schema, ast, { globals: context.globals, target: runtimeTarget });
     const ir = compiled.ir;
     const subjectType = ir.kind === "insert" || ir.kind === "update" || ir.kind === "delete"
@@ -8026,7 +8008,10 @@ const preEvaluateGroupBindings = (
       source: groupExpr.source,
       using: groupExpr.using,
       by: groupExpr.by,
-      with: ast.with,
+      // Exclude the binding being evaluated — it refers to *this* group, so
+      // threading it into the group's own WITH makes its source resolve to the
+      // self-referential alias ('Unknown type g') instead of the real source.
+      with: ast.with?.filter((b) => b.name !== binding.name),
       withModule: ast.withModule,
       withModuleAliases: ast.withModuleAliases,
       pos: ast.pos,
@@ -8106,20 +8091,21 @@ const executeForLoop = (
     const groupRows = ir.kind === "group"
       ? runGroupIR(db, schema, ir, context, sqlTrail)
       : [];
-    const outputRows = groupRows.flatMap((groupRow): Record<string, unknown>[] => {
+    const outputRows = groupRows.flatMap((groupRow): unknown[] => {
       const bindings = new Map<string, unknown>([[ast.variable, groupRow]]);
       const result = evalGroupRowExpr(body.expr, groupRow, bindings, { db, schema });
       // A body that produces a SET (array) — e.g. `FOR g IN GROUP … UNION (…)`
-      // bodies or nested FOR — unwinds into multiple output rows, one per item.
+      // bodies or nested FOR — unwinds into one output row per item. A scalar
+      // body (`UNION count(…)`) yields that scalar directly: the result set is
+      // a set of scalars, matching how the SQL path materialises a bare `value`
+      // column rather than wrapping it in `{ value: … }`.
       if (Array.isArray(result)) {
-        return result.map((item) => (item && typeof item === "object" && !Array.isArray(item)
-          ? item as Record<string, unknown>
-          : { value: item }));
+        return result;
       }
-      if (result && typeof result === "object") {
-        return [result as Record<string, unknown>];
+      if (result === null || result === undefined) {
+        return [];
       }
-      return [{ value: result }];
+      return [result];
     });
     traces.push({
       ast,
@@ -8912,6 +8898,78 @@ const evaluateFreeExprForShape = (
 };
 
 // Load source rows that link to `targetId` via a backlink_path. Returns
+// Resolve a backlink (`subject.<link[is Source]`) for a single materialised
+// object row: scan the schema for every type that declares `link`, then read
+// the rows whose `link` points back at `subject.id` (via link table or inline
+// `<link>_id` FK). When `sourceType` is given, restrict to its concrete
+// closure. Shared by the main interpreter's `backlink_path` case and the GROUP
+// row interpreter so both resolve `.<owner` the same structured way (no string
+// path re-parsing).
+const resolveBacklinkRowsForSubject = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  subject: unknown,
+  link: string,
+  sourceType?: string,
+): Record<string, unknown>[] => {
+  if (!subject || typeof subject !== "object" || Array.isArray(subject)) return [];
+  const r = subject as Record<string, unknown>;
+  // Only `id` is required to walk a backlink — we scan every type that declares
+  // the link below, so the subject's own `__source_type` is not needed. (Rows
+  // materialised by the GROUP runtime's parsed-select path carry `id` but may
+  // omit `__source_type`.)
+  if (typeof r.id !== "string") return [];
+  const filterSource = sourceType ? qualifyRuntimeTypeName(sourceType) : undefined;
+  const out: Record<string, unknown>[] = [];
+  // A link declared on a base type and overloaded on a subtype (e.g. `owner`
+  // on `Owned`, overloaded on `Issue`) is reached once via the base candidate
+  // and again via the subtype candidate. Each source object is a single set
+  // element, so dedupe by concrete (type, id) to avoid double-counting.
+  const seen = new globalThis.Set<string>();
+  const pushUnique = (concreteName: string, row: Record<string, unknown>): void => {
+    const key = `${concreteName} ${String(row.id)}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(row);
+  };
+  for (const candidate of schema.listTypes()) {
+    const candidateName = qualifiedTypeName(candidate);
+    if (filterSource && !schema.listConcreteTypesAssignableTo(filterSource).some((t) => qualifiedTypeName(t) === candidateName)) continue;
+    const linkDef = findRuntimeLinkDef(schema, candidateName, link);
+    if (!linkDef) continue;
+    const usesTable = Boolean(linkDef.link.multi) || (linkDef.link.properties?.length ?? 0) > 0;
+    if (usesTable) {
+      const owner = resolveLinkStorageOwner(schema, candidate, linkDef.link);
+      const ownerTable = tableNameForType(qualifiedTypeName(owner));
+      const linkTable = `${ownerTable}__${linkDef.link.name.toLowerCase()}`;
+      for (const concrete of schema.listConcreteTypesAssignableTo(candidateName)) {
+        const concreteName = qualifiedTypeName(concrete);
+        const concreteTable = tableNameForType(concreteName);
+        const rows = db.prepare(
+          `SELECT s.*, j.* FROM ${quoteIdent(concreteTable)} s JOIN ${quoteIdent(linkTable)} j ON j.${quoteIdent("source")} = s.${quoteIdent("id")} WHERE j.${quoteIdent("target")} = ?`
+        ).all(r.id) as Record<string, unknown>[];
+        for (const linkRow of rows) {
+          const merged: Record<string, unknown> = { ...linkRow, __source_type: concreteName };
+          for (const property of linkDef.link.properties ?? []) {
+            merged[`@${property.name}`] = linkRow[property.name] ?? null;
+          }
+          pushUnique(concreteName, merged);
+        }
+      }
+    } else {
+      for (const concrete of schema.listConcreteTypesAssignableTo(candidateName)) {
+        const concreteName = qualifiedTypeName(concrete);
+        const concreteTable = tableNameForType(concreteName);
+        const rows = db.prepare(`SELECT * FROM ${quoteIdent(concreteTable)} WHERE ${quoteIdent(`${linkDef.link.name}_id`)} = ?`).all(r.id) as Record<string, unknown>[];
+        for (const linkRow of rows) {
+          pushUnique(concreteName, { ...linkRow, __source_type: concreteName });
+        }
+      }
+    }
+  }
+  return out;
+};
+
 // the polymorphic concrete rows plus their owning type name, mirroring how
 // EdgeQL's `<linkName[IS Source]` walks the schema closure.
 const collectBacklinkSourceRows = (
@@ -9704,6 +9762,7 @@ const partitionAndPostProcessGroup = (
   rows: unknown[],
 ): Record<string, unknown>[] => {
   const hidden = new Set(ir.hiddenByFields);
+  const selfBindingAliases = new Set(ir.selfBindingAliases ?? []);
   const ctx: GroupRowCtx = { db, schema };
 
   // C4: scalar / array (tuple) source values pass through unchanged. Only
@@ -9738,7 +9797,9 @@ const partitionAndPostProcessGroup = (
         // For scalar/array (tuple) source rows, a BY atom that names a
         // self-binding alias keys on the whole value. JSON.stringify gives a
         // stable key that distinguishes array tuples from scalars.
-        key[atom] = isObjectRow ? ((row as Record<string, unknown>)[atom] ?? null) : (row ?? null);
+        key[atom] = selfBindingAliases.has(atom)
+          ? (row ?? null)
+          : isObjectRow ? ((row as Record<string, unknown>)[atom] ?? null) : (row ?? null);
       }
       const keyStr = JSON.stringify(key);
       let bucket = partitions.get(keyStr);
@@ -9761,7 +9822,10 @@ const partitionAndPostProcessGroup = (
   // reference the projected field names, not the raw `{key, elements}` row.
   // Delegate to projectShape so link/backlink sub-shapes (e.g.
   // `elements: { name }`, `key: { cost }`) are projected recursively.
-  if (ir.postShape) {
+  // An empty shape (`(GROUP …) { }`) is identity: it keeps the group row's
+  // intrinsic `key`/`elements`/`grouping` rather than projecting them away —
+  // otherwise a trailing `{ }.elements` would have nothing left to destructure.
+  if (ir.postShape && ir.postShape.length > 0) {
     const postShape = ir.postShape;
     groupRows = groupRows.map((row) => projectShape(row, postShape, undefined, ctx) as Record<string, unknown>);
   }
@@ -9965,14 +10029,22 @@ const evalGroupRowExpr = (
       return null;
     }
     case "path": {
-      // `head.tail` where head is a binding (e.g. `g.elements`). Set-flatten
-      // the tail step so `g.elements` (an array) yields the flat field set.
-      const head = bindings?.get(expr.head);
-      let current = stepGroupRowField(head, expr.tail, ctx);
-      for (const step of expr.steps ?? []) {
-        const name = pathStepToFieldName(step);
-        if (name === undefined) continue;
-        current = stepGroupRowField(current, name, ctx);
+      // `head.tail…` where head is a binding (e.g. `g.elements`). The parser
+      // populates `steps` with the full path *including* the head object_ref
+      // (`[object_ref g, ptr elements, …]`); when present, walk those (skipping
+      // the head ref, already resolved via the binding) rather than also
+      // consuming `tail`, which would double-step and walk off into null.
+      let current: unknown = bindings?.get(expr.head);
+      const steps = expr.steps ?? [];
+      if (steps.length > 0) {
+        for (const step of steps) {
+          if (step.kind === "object_ref") continue;
+          const name = pathStepToFieldName(step);
+          if (name === undefined) continue;
+          current = stepGroupRowField(current, name, ctx);
+        }
+      } else {
+        current = stepGroupRowField(current, expr.tail, ctx);
       }
       return current;
     }
@@ -10064,6 +10136,10 @@ const evalGroupRowExpr = (
       for (const item of items) {
         const innerBindings = new Map<string, unknown>(bindings ?? []);
         innerBindings.set(expr.variable, item);
+        // A backlink body (`g.elements.<owner` desugars to
+        // `for x in g.elements union x.<owner`) reads its subject from
+        // `__current__`; bind it to the per-iteration item.
+        innerBindings.set("__current__", item);
         const bodyValue = evalGroupRowExpr(expr.body, row, innerBindings, ctx);
         if (bodyValue == null) continue;
         if (Array.isArray(bodyValue)) out.push(...bodyValue);
@@ -10073,6 +10149,13 @@ const evalGroupRowExpr = (
     }
     case "function_call":
       return evalGroupRowFunctionCall(expr.call, row, bindings, ctx);
+    case "backlink_path": {
+      // `subject.<link[is Source]` — resolve against the DB for the current
+      // subject (the innermost FOR item, else this group row).
+      if (!ctx) return [];
+      const subject = bindings?.get("__current__") ?? row;
+      return resolveBacklinkRowsForSubject(ctx.db, ctx.schema, subject, expr.link, expr.sourceType);
+    }
     case "cast": {
       const value = evalGroupRowExpr(expr.expr, row, bindings, ctx);
       return value;
