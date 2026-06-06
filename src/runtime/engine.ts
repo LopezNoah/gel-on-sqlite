@@ -12976,12 +12976,28 @@ const resolveInsertTargets = (
   return [];
 };
 
-const defaultLinkPropertyValueIR = (property: InsertLinkPropertyIR): ScalarValue => {
+const defaultLinkPropertyValueIR = (
+  property: InsertLinkPropertyIR,
+  db?: SQLiteDatabase,
+  schema?: SchemaSnapshot,
+  context?: SecurityContext,
+): ScalarValue => {
   if (!property.hasDefault) return null;
   // Schema-supplied literal default (e.g. `rank: int64 { default := 42 }`).
   // The IR carries the resolved scalar so we can stamp it here without
   // re-evaluating the EdgeQL expression.
   if (property.defaultValue !== undefined) return property.defaultValue;
+  // Computed default (e.g. `default := <int64>round(10 * random())`): evaluate
+  // the expression text through the engine at insert time.
+  if (property.defaultExprText && db && schema) {
+    try {
+      const result = executeQuery(db, schema, `SELECT ${property.defaultExprText}`, context);
+      const value = result.rows?.[0];
+      if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+        return value as ScalarValue;
+      }
+    } catch { /* fall through to null */ }
+  }
   return null;
 };
 
@@ -13026,6 +13042,8 @@ const writeLinkTableRows = (
   properties: ReadonlyArray<InsertLinkPropertyIR>,
   sourceId: string,
   assignments: ReadonlyArray<{ id: string; properties: Record<string, ScalarValue> }>,
+  schema?: SchemaSnapshot,
+  context?: SecurityContext,
 ): void => {
   if (assignments.length === 0) return;
   const columns = ["source", "target", ...propertyColumns];
@@ -13041,7 +13059,7 @@ const writeLinkTableRows = (
         params.push(explicit);
       } else {
         const property = propertyByName.get(column);
-        params.push(property ? defaultLinkPropertyValueIR(property) : null);
+        params.push(property ? defaultLinkPropertyValueIR(property, db, schema, context) : null);
       }
     }
   }
@@ -13091,6 +13109,8 @@ const applyInsertLinkAssignments = (
         assignment.properties ?? [],
         sourceId,
         targetAssignments,
+        schema,
+        context,
       );
       continue;
     }
@@ -13112,6 +13132,8 @@ const applyInsertLinkAssignments = (
         spec.properties ?? [],
         sourceId,
         targets,
+        schema,
+        context,
       );
       continue;
     }

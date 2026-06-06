@@ -1677,6 +1677,15 @@ const compileScalarSelectSQLInner = (
     }
     const innerScalarSql = compileScalarSelectSQL(castExpr.expr, params, target, options, outerWheres);
     if (innerScalarSql) {
+      // `<json>X` JSON-encodes a scalar source via json_quote (`'RED'` →
+      // `"RED"`, `42` → `42`); collections / already-JSON values pass through
+      // (json_quote would double-encode them).
+      if (qualifyTypeName(castExpr.toType) === "std::json") {
+        const srcType = castExpr.expr.typeref;
+        const srcIsJsonAlready = srcType.collection !== undefined || qualifyTypeName(srcType) === "std::json";
+        const jsonExpr = srcIsJsonAlready ? quoteIdent("value") : `json_quote(${quoteIdent("value")})`;
+        return `SELECT ${jsonExpr} AS ${quoteIdent("value")} FROM (${innerScalarSql})`;
+      }
       const castTarget = sqlCastTarget(castExpr.toType);
       const valueExpr = castTarget ? `CAST(${quoteIdent("value")} AS ${castTarget})` : quoteIdent("value");
       return `SELECT ${valueExpr} AS ${quoteIdent("value")} FROM (${innerScalarSql})`;
@@ -5566,6 +5575,10 @@ const compileShapeProjection = (
       value = `json(COALESCE(${rawValue}, '[]'))`;
     } else if (shapeExpr.result.typeref.collection) {
       value = `json(${rawValue})`;
+    } else if (qualifyTypeName(shapeExpr.result.typeref) === "std::bool") {
+      // SQLite has no boolean type — bool columns store 0/1. Surface a real
+      // JSON boolean so the decoded scalar is `true`/`false`, not `1`/`0`.
+      value = `(CASE WHEN ${rawValue} IS NULL THEN NULL WHEN ${rawValue} THEN json('true') ELSE json('false') END)`;
     } else {
       value = rawValue;
     }
@@ -6555,6 +6568,12 @@ const compileValueSetSQL = (
   linkPropertyAlias?: string,
 ): string | null => {
   const checkpoint = params.length;
+  // `.__type__.name` over a union/polymorphic source resolves to the row's
+  // dynamic concrete type — emit the `__source_type` column the polymorphic
+  // source already projects, not the static union name.
+  if ((set as { dynamicTypeName?: boolean }).dynamicTypeName) {
+    return `${sourceAlias}.${quoteIdent("__source_type")}`;
+  }
   const unwrapped = unwrapSelectExprSet(set);
   // Multi-scalar pointer binding: if the caller has registered a SQL
   // expression for this set's pathId (json_each iteration), use it.
@@ -6679,6 +6698,16 @@ const compileValueSetSQL = (
     if (!inner) {
       params.length = checkpoint;
       return null;
+    }
+    // `<json>X` JSON-encodes its source rather than just stringifying it. For a
+    // scalar (str/enum/int/float/bool/uuid) that means `json_quote`, which
+    // quotes strings (`'RED'` → `"RED"`) but leaves numbers/bools bare
+    // (`42` → `42`). Collections / values already in JSON text are passed
+    // through unchanged (json_quote would double-encode them as a string).
+    if (qualifyTypeName(castExpr.toType) === "std::json") {
+      const srcType = castExpr.expr.typeref;
+      const srcIsJsonAlready = srcType.collection !== undefined || qualifyTypeName(srcType) === "std::json";
+      return srcIsJsonAlready ? inner : `json_quote(${inner})`;
     }
     const castTarget = sqlCastTarget(castExpr.toType);
     return castTarget ? `CAST(${inner} AS ${castTarget})` : inner;
@@ -7971,7 +8000,9 @@ const compileSortExprs = (
       if (column) {
         const isLinkPropertyPointer = entry.path.expr.kind === "pointer" && (entry.path.expr as Pointer).ptrref.isLinkProperty;
         const orderAlias = isLinkPropertyPointer && linkPropertyAlias ? linkPropertyAlias : sourceAlias;
-        return `${orderAlias}.${quoteIdent(column)} ${entry.direction.toUpperCase()}`;
+        // Link-property columns are stored without the leading `@`.
+        const orderColumn = isLinkPropertyPointer && column.startsWith("@") ? column.slice(1) : column;
+        return `${orderAlias}.${quoteIdent(orderColumn)} ${entry.direction.toUpperCase()}`;
       }
       // Expression sort keys (`ORDER BY len(.body)`) need the full value
       // compiler — bare column references only cover the trivial pointer
@@ -8060,6 +8091,17 @@ const compileSelectExprShapeProjection = (
   return compilePublicShapeObjectExpr(sourceAlias, set.shape, params, options, target, 0, linkPropertyAlias);
 };
 
+// Render a scalar shape column for embedding in a json_object: collections
+// pass through `json()`, booleans (stored as 0/1 in SQLite) surface as real
+// JSON booleans, everything else is the raw column value.
+const shapeScalarColumnValue = (rawValue: string, typeref: TypeRef): string => {
+  if (typeref.collection !== undefined) return `json(${rawValue})`;
+  if (qualifyTypeName(typeref) === "std::bool") {
+    return `(CASE WHEN ${rawValue} IS NULL THEN NULL WHEN ${rawValue} THEN json('true') ELSE json('false') END)`;
+  }
+  return rawValue;
+};
+
 const shapeAliasForElement = (shape: ShapeElement, exprSet: Set, depth: number): string => {
   if (shape.name) {
     return shape.name;
@@ -8127,12 +8169,12 @@ const compilePublicShapeObjectExpr = (
     if (column) {
       if (column.startsWith("@") && linkPropertyAlias) {
         const rawValue = `${linkPropertyAlias}.${quoteIdent(column.slice(1))}`;
-        const value = element.expr.typeref.collection ? `json(${rawValue})` : rawValue;
+        const value = shapeScalarColumnValue(rawValue, element.expr.typeref);
         pairs.push(`${quoteLiteral(column)}, ${value}`);
         continue;
       }
       const rawValue = `${sourceAlias}.${quoteIdent(column)}`;
-      const value = element.expr.typeref.collection ? `json(${rawValue})` : rawValue;
+      const value = shapeScalarColumnValue(rawValue, element.expr.typeref);
       pairs.push(`${quoteLiteral(column)}, ${value}`);
       continue;
     }
@@ -8193,12 +8235,12 @@ const compileShapeObjectExpr = (
     if (column) {
       if (column.startsWith("@") && linkPropertyAlias) {
         const rawValue = `${linkPropertyAlias}.${quoteIdent(column.slice(1))}`;
-        const value = element.expr.typeref.collection ? `json(${rawValue})` : rawValue;
+        const value = shapeScalarColumnValue(rawValue, element.expr.typeref);
         pairs.push(`${quoteLiteral(column)}, ${value}`);
         continue;
       }
       const rawValue = `${sourceAlias}.${quoteIdent(column)}`;
-      const value = element.expr.typeref.collection ? `json(${rawValue})` : rawValue;
+      const value = shapeScalarColumnValue(rawValue, element.expr.typeref);
       pairs.push(`${quoteLiteral(column)}, ${value}`);
       continue;
     }

@@ -541,6 +541,7 @@ export interface InsertLinkPropertyIR {
   type: ScalarType;
   hasDefault: boolean;
   defaultValue?: ScalarValue;
+  defaultExprText?: string;
 }
 
 export interface InsertLinkAssignmentIR {

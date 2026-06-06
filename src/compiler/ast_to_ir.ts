@@ -735,6 +735,25 @@ const resolvePointerRef = (ctx: IRCompileContext, source: TypeRef, field: string
     return undefined;
   }
 
+  // Named union source (`link stw -> S | T | W`): the union type itself has no
+  // members, so probe each component for the field. The SQL polymorphic source
+  // projects the column from each concrete branch (NULL where absent).
+  if (source.id.includes("|")) {
+    const componentIds = source.id.replace(/^unknown:/, "").split("|").map((part) => part.trim());
+    for (const componentId of componentIds) {
+      const componentDef = getResolvedSchemaType(ctx, componentId) ?? ctx.schema?.getType(componentId);
+      if (!componentDef) continue;
+      const cField = (componentDef.resolvedFields ?? componentDef.fields ?? []).find((c) => c.name === field);
+      if (cField) {
+        return pointerRefFromField(source, cField);
+      }
+      const cLink = (componentDef.resolvedLinks ?? componentDef.links ?? []).find((c) => c.name === field);
+      if (cLink) {
+        return pointerRefFromLink(source, resolveTypeRef(ctx, cLink.targetType), cLink);
+      }
+    }
+  }
+
   // Universal `Object` / `BaseObject` source: probe the concrete subtype set
   // for the field so `.name` on `Object` lowers as a polymorphic column
   // reference. The SQL pipeline's polymorphic source projects NULL for
@@ -1029,6 +1048,11 @@ const compilePathSteps = (steps: EdgeQLPathStep[], ctx: IRCompileContext): Set =
   let out = resolveBinding(ctx, first.name) ?? setFromTypeRoot(resolveTypeRef(ctx, first.name));
   for (const step of steps.slice(1)) {
     if (step.kind === "ptr") {
+      // `.foo` on a primitive value — e.g. a WITH-bound enum member
+      // (`WITH x := color_enum_t.RED SELECT x.GREEN`) — is invalid.
+      if (out.typeref.isScalar && step.name !== "id" && step.name !== "__type__" && !step.name.startsWith("@")) {
+        failSemantic(`invalid property reference on an expression of primitive type`);
+      }
       const ptrref = resolvePointerRef(ctx, out.typeref, step.name);
       if (!ptrref) {
         // No backing column / link / backlink — but the source type may
@@ -1253,9 +1277,15 @@ const resolvePathToEnumLiteral = (ctx: IRCompileContext, head: string, tail: str
     failSemantic(`enum path expression lacks an enum member name, as in '${head}.${enumType.members[0]}'`);
   }
   if (!enumType.members.includes(tail!)) {
-    failSemantic(`enum '${enumType.qualifiedName}' has no member called '${tail}'`);
+    // Matches upstream Gel's phrasing ("enum has no member called 'X'");
+    // the type name lives in the path, not the message.
+    failSemantic(`enum has no member called '${tail}'`);
   }
-  return enumLiteralSet(tail!);
+  // Tag the member literal with its (scalar) enum type so downstream
+  // primitive-reference checks fire on `color_enum_t.RED.GREEN` etc. without
+  // having to special-case bare string constants everywhere.
+  const literal = enumLiteralSet(tail!);
+  return { ...literal, typeref: { ...unknownTypeRef(enumType.qualifiedName), isScalar: true } };
 };
 
 const jsonEncodeString = (value: string): string => JSON.stringify(JSON.stringify(value));
@@ -2307,6 +2337,22 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
 
     case "type_name": {
       const subject = resolveBinding(ctx, "__current__") ?? resolveBinding(ctx, "__subject__");
+      // `.__type__.name` is per-row whenever the source spans more than one
+      // concrete type: a union link target (`ck -> C | K`) or a type with
+      // concrete subtypes (`D` whose rows may be D/E/F). In those cases mark
+      // the set so the SQL layer reads the dynamic `__source_type` column
+      // rather than the static parent/union name — otherwise
+      // `FILTER .__type__.name = 'default::D'` would match every subtype row.
+      const isUnion = !!subject && subject.typeref.id.includes("|");
+      const hasSubtypes = !!subject
+        && !subject.typeref.id.startsWith("unknown:")
+        && (ctx.schema?.listConcreteTypesAssignableTo(subject.typeref.id).length ?? 0) > 1;
+      if (subject && (isUnion || hasSubtypes)) {
+        return {
+          ...literalToSet(subject.typeref.id),
+          dynamicTypeName: true,
+        } as Set;
+      }
       return literalToSet(subject?.typeref.id ?? null);
     }
 
@@ -3661,6 +3707,39 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
     }
 
     case "field_suffix_math": {
+      // Desugar the parser's `<const> <op> <int64>.field[-fromEnd]` shorthand
+      // (e.g. `100 - <int64>.val[-1]`) into the equivalent arithmetic over the
+      // field, so it computes instead of collapsing to the bare field / NULL.
+      const opSymbol = expr.op === "const_minus" ? "-"
+        : expr.op === "const_plus" ? "+"
+        : expr.op === "const_mul" ? "*"
+        : expr.op === "const_div" ? "/"
+        : undefined;
+      const current = resolveBinding(ctx, "__current__") ?? resolveBinding(ctx, "__subject__");
+      if ((opSymbol !== undefined || expr.op === "negate") && current) {
+        const indexed: FreeObjectExpr = {
+          kind: "index_access",
+          expr: { kind: "field_access", expr: { kind: "current_item" }, field: expr.field, optional: false },
+          index: -expr.fromEnd,
+        } as FreeObjectExpr;
+        const casted: FreeObjectExpr = { kind: "cast", castType: "int64", expr: indexed } as FreeObjectExpr;
+        if (expr.op === "negate") {
+          // `-<int64>.field[-fromEnd]` — negation, expressed as `0 - digit`
+          // since the SQL layer lowers binary `-` but not a unary neg operator.
+          return compileFreeObjectExpr({
+            kind: "math",
+            op: "-",
+            left: { kind: "literal", value: 0 },
+            right: casted,
+          } as FreeObjectExpr, ctx);
+        }
+        return compileFreeObjectExpr({
+          kind: "math",
+          op: opSymbol,
+          left: { kind: "literal", value: expr.constant },
+          right: casted,
+        } as FreeObjectExpr, ctx);
+      }
       const resolved = resolveBinding(ctx, expr.field);
       if (resolved) {
         return resolved;
@@ -3958,6 +4037,20 @@ const compileFilterValue = (value: FilterValue, ctx: IRCompileContext): Set => {
 
 const compileFilterTarget = (target: FilterTarget, subject: Set, ctx: IRCompileContext): Set => {
   if (target.kind === "field") {
+    // `FILTER .__type__.name = '…'` — compares the row's concrete type. For a
+    // source spanning multiple concrete types (subtypes or a union) this must
+    // read the dynamic `__source_type` column, not a static parent-type
+    // literal (which would match every subtype row). Mark the set so SQL emits
+    // `<alias>.__source_type`.
+    if (target.field === "__type__.name") {
+      const isUnion = subject.typeref.id.includes("|");
+      const hasSubtypes = !subject.typeref.id.startsWith("unknown:")
+        && (ctx.schema?.listConcreteTypesAssignableTo(subject.typeref.id).length ?? 0) > 1;
+      if (isUnion || hasSubtypes) {
+        return { ...literalToSet(subject.typeref.id), dynamicTypeName: true } as Set;
+      }
+      return literalToSet(subject.typeref.id);
+    }
     // A bare leading identifier (no leading dot) that names a WITH binding is a
     // free reference to that binding's value — `WITH x := '010' … FILTER x IN
     // {…}` compares the literal `x`, not an implicit `.x` on the subject.
@@ -5108,8 +5201,54 @@ const compileShape = (
     if (!hasFilter && !hasOrder && !hasLimit && !hasOffset) {
       return expr;
     }
-    const where = el.where ? compileFreeObjectExpr(el.where, ctx) : undefined;
+    // A per-link FILTER (`properties: {…} FILTER EXISTS .annotations`) is
+    // evaluated against the link's *target* rows, so `.annotations` must
+    // resolve on the target type (schema::Property), not the enclosing subject
+    // (schema::ObjectType). Without this the dotted path resolves against the
+    // outer subject and picks the wrong link-storage table.
+    const filterCtx = (() => {
+      // A per-link FILTER (`properties: {…} FILTER EXISTS .annotations` /
+      // `… FILTER .name IN {…}`) is evaluated against the link's target rows.
+      // Bind `.`-paths to the link path itself so `.field` lowers as a
+      // chain off the link (source resolves on the target type, e.g.
+      // schema::Property) — the SQL layer then anchors that chain to the
+      // iterated target alias via rewriteFilterAgainstPointerChain. Only for
+      // object-typed links; scalar/multi-scalar property filters
+      // (`tag_set1 FILTER Item.tag_set1 > 'p'`) keep the outer scope.
+      // Also used to resolve a computed-sibling ORDER BY key against the link
+      // target (`stw: { typename := … } ORDER BY .typename`).
+      if ((!el.where && !el.orderBy?.length) || expr.typeref.isScalar || expr.expr.kind !== "pointer") return ctx;
+      const scoped = childScope(ctx);
+      bindValue(scoped, "__current__", expr);
+      bindValue(scoped, "__subject__", expr);
+      return scoped;
+    })();
+    const where = el.where ? compileFreeObjectExpr(el.where, filterCtx) : undefined;
     const orderBy = el.orderBy?.map((entry) => {
+      // `ORDER BY @prop` — a link-property sort key on the link being shaped
+      // (`ancestors: {…} ORDER BY @index`). Build a link-property pointer so
+      // SQL sorts by the link table's property column.
+      if (entry.field.startsWith("@")) {
+        const propPtr: PointerRef = {
+          kind: "pointer_ref",
+          id: `${expr.typeref.id}.linkprop::${entry.field}`,
+          name: entry.field,
+          shortName: entry.field,
+          outSource: expr.typeref,
+          outTarget: { ...unknownTypeRef("std::anyscalar"), isScalar: true },
+          outCardinality: "at_most_one",
+          inCardinality: "many",
+          isComputed: false,
+          isLinkProperty: true,
+          hasProperties: false,
+        };
+        return {
+          kind: "sort_expr",
+          path: extendPathSetDirectional(expr, propPtr, "outbound"),
+          direction: entry.direction,
+          nonesOrder: "last",
+        } as SortExpr;
+      }
       // `entry.field` is the dotted path written after `ORDER BY` (the parser
       // has already stripped the leading subject — `User.todo.number` arrives
       // here as `todo.number`). Walk each segment so multi-step paths into the
@@ -5118,6 +5257,24 @@ const compileShape = (
       // first against the shape's iteration target (`.number`) and fall back
       // to walking from the enclosing subject (`User.todo.number` style).
       const segments = entry.field.split(".");
+      // `ORDER BY .typename` may reference a *computed* field declared in this
+      // same shape (`stw: { typename := .__type__.name } ORDER BY .typename`).
+      // Resolve it by compiling that sibling computed's expression against the
+      // link target, since it has no backing pointer.
+      if (segments.length === 1) {
+        const computedSibling = el.shape?.find(
+          (sub): sub is Extract<EdgeQLShapeElement, { kind: "computed" }> =>
+            sub.kind === "computed" && sub.name === segments[0] && !!sub.expr,
+        );
+        if (computedSibling) {
+          return {
+            kind: "sort_expr",
+            path: compileFreeObjectExpr(computedSibling.expr, filterCtx),
+            direction: entry.direction,
+            nonesOrder: "last",
+          } as SortExpr;
+        }
+      }
       const walkFrom = (start: Set): Set | undefined => {
         let cursor: Set | undefined = start;
         for (const segment of segments) {
@@ -5186,7 +5343,9 @@ const compileShape = (
                 name: propertyName,
                 shortName: propertyName,
                 outSource: subject.typeref,
-                outTarget: scalarTypeRef(propDef.type),
+                outTarget: propDef.collection
+                  ? { ...scalarTypeRef(propDef.type), collection: propDef.collection.kind }
+                  : scalarTypeRef(propDef.type),
                 outCardinality: propDef.required ? "one" : "at_most_one",
                 inCardinality: "many",
                 isComputed: false,
@@ -5341,6 +5500,11 @@ const compileShape = (
       if (el.name.startsWith("@")) {
         if (subject.expr.kind !== "pointer") {
           const fieldCtx = childScope(ctx);
+          // Bind the link-target row as the current item so `.`-paths inside
+          // the link-property value (`@rolp10 := 100 - <int64>.val[-1]`)
+          // resolve against the target (C), not the outer mutation subject.
+          bindValue(fieldCtx, "__current__", subject);
+          bindValue(fieldCtx, "__subject__", subject);
           const subjectType = getResolvedSchemaType(ctx, subject.typeref.id);
           if (subjectType) {
             for (const field of subjectType.fields) {

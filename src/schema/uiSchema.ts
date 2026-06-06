@@ -444,6 +444,8 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
               hasDefault: property.hasDefault,
               defaultExpr: property.defaultExpr,
               readonly: property.readonly,
+              collection: property.collection,
+              defaultExprText: property.defaultExprText,
               annotations: property.annotations.length ? [...property.annotations] : undefined,
             }))
           : undefined,

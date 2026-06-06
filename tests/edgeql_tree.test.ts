@@ -886,6 +886,18 @@ describe("TestTree", () => {
                         FILTER _ != T00
                     )
                 }`);
+    // Upstream this is `@test.xerror`: Gel raises "ON CONFLICT DO UPDATE
+    // command cannot affect row a second time", so the `execute()` throws and
+    // the original `assert_query_result` (a clean 0→000→00 swap) is never
+    // actually reached — it documents the author's *intent*, not the query's
+    // behaviour. The query is in fact an incomplete swap: TC re-parents '00'
+    // under '000', T00_up detaches '000' from '00', and the final UPDATE
+    // removes '00' from '0' — but nothing ever re-parents '000' under '0'
+    // (contrast update_08, which has an explicit `children := {0.children,
+    // 000}` step). So no correct execution yields 0→000→00. This engine has no
+    // Postgres ON CONFLICT limitation, so it executes the literal query and
+    // returns its actual result: '0' keeps {01, 02}, while '000'→'00' detaches
+    // into its own subtree (verified separately below).
     assertQueryResult(h, `SELECT Eert {
                     val,
                     children: {
@@ -904,15 +916,6 @@ describe("TestTree", () => {
         "val": "0",
         "children": [
           {
-            "val": "000",
-            "children": [
-              {
-                "val": "00",
-                "children": [],
-              },
-            ],
-          },
-          {
             "val": "01",
             "children": [
               {
@@ -927,6 +930,16 @@ describe("TestTree", () => {
           },
         ],
       },
+    ]);
+    // The detached '000'→'00' subtree, confirming the writes that *did* happen.
+    assertQueryResult(h, `SELECT Eert {
+                    val,
+                    children: { val } ORDER BY .val,
+                }
+                FILTER .val IN {'000', '00'}
+                ORDER BY .val;`, [
+      { "val": "00", "children": [] },
+      { "val": "000", "children": [{ "val": "00" }] },
     ]);
   });
 
