@@ -31,6 +31,47 @@ export interface QueryResult {
   changes?: number;
 }
 
+// ── SQL execution tracing ────────────────────────────────────────────────
+// Many queries (writes, select-over-mutation, WITH-bound DML chains) fan out
+// into several SQL statements, but the trace previously surfaced only the
+// final/primary artifact. We record *every* statement actually run against the
+// backend — in order, params included — so `QueryExecutionTrace.sqlTrail`
+// reflects the complete sequence (BEGIN/COMMIT, reads, writes). The recorder
+// is installed once per db by wrapping `prepare`; it only collects while a
+// sink is active (set for the duration of one `executeQueryWithTrace` call).
+// NOTE: this hooks the synchronous better-sqlite3 `run`/`all`/`get`. An async
+// backend (e.g. Cloudflare D1) would need the same capture at its await
+// boundary instead.
+const SQL_TRACE_INSTALLED = Symbol.for("gel.sqlTraceInstalled");
+let activeSqlSink: SQLArtifact[] | null = null;
+
+const installSqlTrace = (db: SQLiteDatabase): void => {
+  const marked = db as unknown as Record<symbol, unknown>;
+  if (marked[SQL_TRACE_INSTALLED]) {
+    return;
+  }
+  marked[SQL_TRACE_INSTALLED] = true;
+  const origPrepare = db.prepare.bind(db);
+  db.prepare = (sql: string) => {
+    const stmt = origPrepare(sql);
+    const record = (params: ScalarValue[]): void => {
+      if (activeSqlSink) {
+        activeSqlSink.push({ sql, params: [...params], loweringMode: "single_statement" });
+      }
+    };
+    const origRun = stmt.run.bind(stmt);
+    const origAll = stmt.all.bind(stmt);
+    stmt.run = (...params: ScalarValue[]) => { record(params); return origRun(...params); };
+    stmt.all = (...params: ScalarValue[]) => { record(params); return origAll(...params); };
+    const maybeGet = (stmt as { get?: (...p: ScalarValue[]) => unknown }).get;
+    if (maybeGet) {
+      const origGet = maybeGet.bind(stmt);
+      (stmt as { get?: (...p: ScalarValue[]) => unknown }).get = (...params: ScalarValue[]) => { record(params); return origGet(...params); };
+    }
+    return stmt;
+  };
+};
+
 export interface QueryExecutionTrace {
   ast: Statement;
   ir: IRStatement;
@@ -7378,7 +7419,499 @@ export const executeScript = (
   return executeQueryUnitWithTrace(db, schema, script, securityContext, parserOptions).result;
 };
 
+// ── WITH-bound DML subquery chains ───────────────────────────────────────
+// `WITH T := (SELECT …), TC := (UPDATE … SET {…}) UPDATE T SET {link := TC}`
+// — a statement whose WITH bindings include object sets and DML subqueries
+// that reference each other and feed the final mutation's link targets. The
+// model-IR write path can't resolve those, so evaluate the bindings in order
+// (executing DML bindings, materializing each result as an id-set), then run
+// the final mutation with binding references resolved to those ids. Object-set
+// values are resolved to concrete id-sets here; the actual writes still go
+// through the normal write path (one `.id = <uuid>` mutation per affected row,
+// with link targets rewritten to a by-id SELECT).
+
+type ObjectSet = { typeName: string; ids: string[] };
+type DmlChainEnv = Map<string, ObjectSet>;
+
+const qualifyChainType = (name: string, defaultModule: string): string =>
+  name.includes("::") ? name : `${defaultModule}::${name}`;
+
+// One link hop over a set of source ids → the target id-set and its type.
+// Handles inline single links (`parent` → `parent_id` column), multi links
+// (link table), and computed backlinks (`children := .<parent`, `parent :=
+// .<children`) in either storage form.
+const traverseLinkIds = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  typeName: string,
+  ids: string[],
+  linkName: string,
+): ObjectSet => {
+  const td = schema.getType(typeName);
+  const placeholders = ids.map(() => "?").join(", ");
+  const realLink = (td?.links ?? []).find((link) => link.name === linkName);
+  if (realLink) {
+    const targetType = qualifyChainType(realLink.targetType, typeName.split("::")[0] ?? "default");
+    if (realLink.multi) {
+      const lt = `${tableNameForType(typeName)}__${linkName.toLowerCase()}`;
+      const rows = ids.length
+        ? db.prepare(`SELECT DISTINCT ${quoteIdent("target")} AS t FROM ${quoteIdent(lt)} WHERE ${quoteIdent("source")} IN (${placeholders})`).all(...ids) as { t?: unknown }[]
+        : [];
+      return { typeName: targetType, ids: rows.map((r) => String(r.t)) };
+    }
+    const col = `${linkName}_id`;
+    const rows = ids.length
+      ? db.prepare(`SELECT DISTINCT ${quoteIdent(col)} AS t FROM ${quoteIdent(tableNameForType(typeName))} WHERE ${quoteIdent("id")} IN (${placeholders})`).all(...ids) as { t?: unknown }[]
+      : [];
+    return { typeName: targetType, ids: rows.map((r) => r.t).filter((t): t is string => typeof t === "string") };
+  }
+  const computed = (td?.computeds ?? []).find(
+    (c) => c.kind === "link" && c.name === linkName && (c as { expr?: { kind?: string } }).expr?.kind === "backlink",
+  ) as { expr?: { link?: string; sourceType?: string } } | undefined;
+  if (computed?.expr?.link) {
+    const backLink = computed.expr.link;
+    const srcType = qualifyChainType(computed.expr.sourceType ?? typeName, typeName.split("::")[0] ?? "default");
+    const srcTd = schema.getType(srcType);
+    const backReal = (srcTd?.links ?? []).find((link) => link.name === backLink);
+    if (backReal?.multi) {
+      const lt = `${tableNameForType(srcType)}__${backLink.toLowerCase()}`;
+      const rows = ids.length
+        ? db.prepare(`SELECT DISTINCT ${quoteIdent("source")} AS s FROM ${quoteIdent(lt)} WHERE ${quoteIdent("target")} IN (${placeholders})`).all(...ids) as { s?: unknown }[]
+        : [];
+      return { typeName: srcType, ids: rows.map((r) => String(r.s)) };
+    }
+    const col = `${backLink}_id`;
+    const rows = ids.length
+      ? db.prepare(`SELECT DISTINCT ${quoteIdent("id")} AS s FROM ${quoteIdent(tableNameForType(srcType))} WHERE ${quoteIdent(col)} IN (${placeholders})`).all(...ids) as { s?: unknown }[]
+      : [];
+    return { typeName: srcType, ids: rows.map((r) => String(r.s)) };
+  }
+  return { typeName, ids: [] };
+};
+
+// Apply a select_expr_subquery wrapper's ORDER BY / LIMIT / OFFSET to a base
+// id-set (`(SELECT T.children ORDER BY .val LIMIT 1)`). FILTER on the wrapper
+// is not handled here (callers fall back).
+const applyChainSubqueryClauses = (
+  db: SQLiteDatabase,
+  base: ObjectSet,
+  node: { orderBy?: unknown; limit?: number; offset?: number },
+): ObjectSet => {
+  let ids = base.ids;
+  const orderBy = node.orderBy as { field?: string; expr?: { field?: string }; direction?: "asc" | "desc" } | undefined;
+  const orderField = orderBy?.field ?? orderBy?.expr?.field;
+  if (orderField && ids.length > 0) {
+    const placeholders = ids.map(() => "?").join(", ");
+    const rows = db.prepare(
+      `SELECT ${quoteIdent("id")} AS id, ${quoteIdent(orderField)} AS k FROM ${quoteIdent(tableNameForType(base.typeName))} WHERE ${quoteIdent("id")} IN (${placeholders})`,
+    ).all(...ids) as { id?: unknown; k?: unknown }[];
+    rows.sort((a, b) => {
+      const ka = a.k as string | number, kb = b.k as string | number;
+      return ka < kb ? -1 : ka > kb ? 1 : 0;
+    });
+    if (orderBy?.direction === "desc") rows.reverse();
+    ids = rows.map((r) => String(r.id));
+  }
+  const offset = node.offset ?? 0;
+  if (node.limit !== undefined) {
+    ids = ids.slice(offset, offset + node.limit);
+  } else if (offset > 0) {
+    ids = ids.slice(offset);
+  }
+  return { typeName: base.typeName, ids };
+};
+
+// Resolve an object-set value/expression (a SET link value, a binding, a path,
+// or a subquery) to a concrete id-set, given the current binding environment
+// and the row being updated (for `.`-relative paths like `.parent.parent`).
+const resolveObjectSet = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  node: unknown,
+  env: DmlChainEnv,
+  current: ObjectSet | undefined,
+  context: SecurityContext,
+  defaultModule: string,
+): ObjectSet => {
+  if (node === null || typeof node !== "object") {
+    return { typeName: current?.typeName ?? "", ids: [] };
+  }
+  const n = node as { kind?: string; [k: string]: unknown };
+  switch (n.kind) {
+    case "set_expr":
+    case "set": {
+      const values = (n.values as unknown[]) ?? [];
+      let typeName = current?.typeName ?? "";
+      const acc: string[] = [];
+      for (const el of values) {
+        const r = resolveObjectSet(db, schema, el, env, current, context, defaultModule);
+        if (r.typeName) typeName = r.typeName;
+        acc.push(...r.ids);
+      }
+      return { typeName, ids: [...new Set(acc)] };
+    }
+    case "expr":
+    case "subquery_expr":
+    case "distinct":
+      return resolveObjectSet(db, schema, n.expr, env, current, context, defaultModule);
+    case "function_call": {
+      // Set-identity guards (`assert_distinct`, `assert_single`,
+      // `assert_exists`, `distinct`) don't change membership — resolve their
+      // argument set directly.
+      const call = n.call as { name?: string; args?: unknown[] } | undefined;
+      const fnName = (call?.name ?? "").split("::").pop();
+      if (call?.args?.length && ["assert_distinct", "assert_single", "assert_exists", "distinct"].includes(fnName ?? "")) {
+        return resolveObjectSet(db, schema, call.args[0], env, current, context, defaultModule);
+      }
+      return { typeName: current?.typeName ?? "", ids: [] };
+    }
+    case "subquery_statement":
+      return executeDmlChainStatement(db, schema, n.statement as Statement, env, current, context, defaultModule);
+    case "binding_ref": {
+      const bound = env.get(n.name as string);
+      if (bound) return bound;
+      const qn = qualifyChainType(n.name as string, defaultModule);
+      if (schema.getType(qn)) {
+        const rows = db.prepare(`SELECT ${quoteIdent("id")} AS id FROM ${quoteIdent(tableNameForType(qn))}`).all() as { id?: unknown }[];
+        return { typeName: qn, ids: rows.map((r) => String(r.id)) };
+      }
+      return { typeName: "", ids: [] };
+    }
+    case "current_item":
+      return current ?? { typeName: "", ids: [] };
+    case "field_access": {
+      const base = resolveObjectSet(db, schema, n.expr, env, current, context, defaultModule);
+      return traverseLinkIds(db, schema, base.typeName, base.ids, n.field as string);
+    }
+    case "path": {
+      const base = resolveObjectSet(db, schema, { kind: "binding_ref", name: n.head }, env, current, context, defaultModule);
+      return n.tail ? traverseLinkIds(db, schema, base.typeName, base.ids, n.tail as string) : base;
+    }
+    case "path_chain": {
+      const parts = n.parts as string[];
+      let cur = resolveObjectSet(db, schema, { kind: "binding_ref", name: parts[0] }, env, current, context, defaultModule);
+      for (let i = 1; i < parts.length; i += 1) {
+        cur = traverseLinkIds(db, schema, cur.typeName, cur.ids, parts[i]!);
+      }
+      return cur;
+    }
+    case "select_expr_subquery": {
+      let result = resolveObjectSet(db, schema, n.expr, env, current, context, defaultModule);
+      // `SELECT _ := X FILTER _ != Y` / `_ = Y` — element-wise set difference /
+      // intersection against another object set. The alias (`_`) on one side
+      // marks the iterated element; the other side resolves to the id-set to
+      // exclude/keep.
+      const filter = n.filter as { kind?: string; op?: string; left?: { kind?: string; name?: string }; right?: { kind?: string; name?: string } } | undefined;
+      if (filter?.kind === "compare" && (filter.op === "!=" || filter.op === "=")) {
+        const alias = (n.alias as string | undefined) ?? "_";
+        const isAliasRef = (x: { kind?: string; name?: string } | undefined): boolean =>
+          !!x && x.kind === "binding_ref" && (x.name === alias || x.name === "_");
+        const otherSide = isAliasRef(filter.left) ? filter.right : isAliasRef(filter.right) ? filter.left : undefined;
+        if (otherSide) {
+          const other = resolveObjectSet(db, schema, otherSide, env, current, context, defaultModule);
+          const otherSet = new globalThis.Set(other.ids);
+          result = {
+            typeName: result.typeName,
+            ids: filter.op === "!=" ? result.ids.filter((id) => !otherSet.has(id)) : result.ids.filter((id) => otherSet.has(id)),
+          };
+        }
+      }
+      return applyChainSubqueryClauses(db, result, n as { orderBy?: unknown; limit?: number; offset?: number });
+    }
+    case "select": {
+      const rows = executeSelectExprRows(
+        db,
+        schema,
+        { kind: "select", typeName: n.typeName as string, shape: (n.shape as ShapeElement[]) ?? [], clauses: (n.clauses as Record<string, unknown>) ?? {} } as unknown as Extract<InsertValue, { kind: "select" }>,
+        context,
+      );
+      return {
+        typeName: qualifyChainType(n.typeName as string, defaultModule),
+        ids: rows.map((r) => r.id).filter((id): id is string => typeof id === "string"),
+      };
+    }
+    default:
+      return { typeName: current?.typeName ?? "", ids: [] };
+  }
+};
+
+// Execute one DML statement within a chain, resolving its target set and link
+// values against `env`, and return the affected rows as an id-set. Writes go
+// through the normal write path, one `.id = <uuid>` mutation per row, with
+// each SET link value rewritten to a by-id SELECT (or empty set).
+const executeDmlChainStatement = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  stmt: Statement,
+  env: DmlChainEnv,
+  outerCurrent: ObjectSet | undefined,
+  context: SecurityContext,
+  defaultModule: string,
+): ObjectSet => {
+  if (stmt.kind !== "update" && stmt.kind !== "delete" && stmt.kind !== "insert") {
+    return { typeName: "", ids: [] };
+  }
+  const compilerService = getCompilerService();
+  const runtimeTarget = resolvedRuntimeTarget(context, db);
+
+  if (stmt.kind === "insert") {
+    const compiled = compilerService.compile(schema, stmt, { globals: context.globals, target: runtimeTarget });
+    const subjectType = typeDefForTable(schema, (compiled.ir as { table?: string }).table ?? "");
+    if (!subjectType) return { typeName: "", ids: [] };
+    const writeResult = runWriteWithAccessPolicies(db, schema, stmt, compiled.ir, compiled.sql, subjectType, context);
+    return {
+      typeName: qualifiedTypeName(subjectType),
+      ids: (writeResult.rows ?? []).map((r) => (r as { id?: unknown }).id).filter((id): id is string => typeof id === "string"),
+    };
+  }
+
+  // Resolve the target id-set: an explicit sub-select target, a binding-named
+  // subject, or a bare type + FILTER.
+  const stmtAny = stmt as unknown as { target?: unknown; typeName: string; filter?: FilterExpr; values?: Record<string, unknown>; operations?: Record<string, string> };
+  let target: ObjectSet;
+  if (stmtAny.target) {
+    target = resolveObjectSet(db, schema, stmtAny.target, env, outerCurrent, context, defaultModule);
+  } else if (env.has(stmtAny.typeName)) {
+    target = env.get(stmtAny.typeName)!;
+  } else {
+    const rows = executeSelectExprRows(
+      db,
+      schema,
+      { kind: "select", typeName: stmtAny.typeName, shape: [{ kind: "field", name: "id" }], clauses: { filter: stmtAny.filter } } as unknown as Extract<InsertValue, { kind: "select" }>,
+      context,
+    );
+    target = { typeName: qualifyChainType(stmtAny.typeName, defaultModule), ids: rows.map((r) => r.id).filter((id): id is string => typeof id === "string") };
+  }
+
+  if (stmt.kind === "delete") {
+    for (const id of target.ids) {
+      const perId = { kind: "delete", typeName: target.typeName, filter: { kind: "predicate", target: { kind: "field", field: "id" }, op: "=", value: id }, pos: { line: 1, column: 1 } } as unknown as DeleteStatement;
+      const c = compilerService.compile(schema, perId, { globals: context.globals, target: runtimeTarget });
+      const st = typeDefForTable(schema, (c.ir as { table?: string }).table ?? "");
+      if (st) runWriteWithAccessPolicies(db, schema, perId, c.ir, c.sql, st, context);
+    }
+    return target;
+  }
+
+  // UPDATE: per affected row, rewrite each SET link value to a by-id SELECT
+  // (or empty set) resolved against env + the current row.
+  for (const id of target.ids) {
+    const current: ObjectSet = { typeName: target.typeName, ids: [id] };
+    const values: Record<string, unknown> = {};
+    const operations: Record<string, string> = {};
+    for (const [link, raw] of Object.entries(stmtAny.values ?? {})) {
+      const resolved = resolveObjectSet(db, schema, raw, env, current, context, defaultModule);
+      operations[link] = stmtAny.operations?.[link] ?? "assign";
+      values[link] = resolved.ids.length === 0
+        ? { kind: "set", values: [] }
+        : {
+            kind: "select",
+            typeName: resolved.typeName,
+            shape: [{ kind: "field", name: "id" }],
+            clauses: { filter: { kind: "in_predicate", target: { kind: "field", field: "id" }, op: "in", values: { kind: "set_literal", values: resolved.ids } } },
+          };
+    }
+    const perId = {
+      kind: "update",
+      typeName: target.typeName,
+      filter: { kind: "predicate", target: { kind: "field", field: "id" }, op: "=", value: id },
+      values,
+      operations,
+      pos: { line: 1, column: 1 },
+    } as unknown as UpdateStatement;
+    const c = compilerService.compile(schema, perId, { globals: context.globals, target: runtimeTarget });
+    const st = typeDefForTable(schema, (c.ir as { table?: string }).table ?? "");
+    if (st) runWriteWithAccessPolicies(db, schema, perId, c.ir, c.sql, st, context);
+  }
+  return target;
+};
+
+// Detect a top-level UPDATE/DELETE/INSERT whose WITH bindings form a DML chain
+// (a binding is a DML subquery, or the subject/a SET value references a
+// binding). Returns the statement when it should run through the chain
+// executor, else null.
+const isWithDmlChain = (ast: Statement): ast is UpdateStatement | DeleteStatement | InsertStatement => {
+  if (ast.kind !== "update" && ast.kind !== "delete" && ast.kind !== "insert") return false;
+  const withBindings = (ast as { with?: WithBinding[] }).with ?? [];
+  if (withBindings.length === 0) return false;
+  // Only engage when a binding is a DML subquery or the subject names a
+  // binding — plain scalar/SELECT WITH bindings keep their existing path.
+  const hasDmlBinding = withBindings.some((b) => b.value.kind === "subquery_statement");
+  const subjectIsBinding = withBindings.some((b) => b.name === (ast as { typeName?: string }).typeName);
+  return hasDmlBinding || subjectIsBinding;
+};
+
+const executeWithDmlChain = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  ast: UpdateStatement | DeleteStatement | InsertStatement,
+  context: SecurityContext,
+): QueryExecutionTrace => {
+  const defaultModule = (ast as { withModule?: string }).withModule ?? "default";
+  const env: DmlChainEnv = new Map();
+  // Evaluate WITH bindings in declaration order; DML bindings execute (and
+  // mutate) as they're evaluated.
+  for (const binding of (ast as { with?: WithBinding[] }).with ?? []) {
+    env.set(binding.name, resolveObjectSet(db, schema, binding.value, env, undefined, context, defaultModule));
+  }
+  const result = executeDmlChainStatement(db, schema, ast, env, undefined, context, defaultModule);
+  const emptyArtifact: SQLArtifact = { sql: "", params: [], loweringMode: "single_statement" };
+  return {
+    ast,
+    ir: { kind: ast.kind, rows: [] } as unknown as IRStatement,
+    sql: emptyArtifact,
+    compiler: { key: "with-dml-chain", status: "miss", stats: { hits: 0, misses: 0, size: 0 } },
+    sqlTrail: [],
+    overlays: [],
+    result: { kind: ast.kind as QueryResult["kind"], changes: result.ids.length },
+  };
+};
+
+// `SELECT (UPDATE/INSERT/DELETE …) { shape }` — a DML statement used as the
+// source of a SELECT. The parser nests it as
+// `select_expr → shape_projection → mutation_expr`. There's no single SQL
+// statement that mutates and re-projects, so detect the pattern here and run
+// it as: capture the affected rows' ids, run the mutation, then run a plain
+// shaped SELECT restricted to those ids. Returns null for any other shape.
+interface SelectOverMutation {
+  mutation: InsertStatement | UpdateStatement | DeleteStatement;
+  shape: ShapeElement[];
+  orderBy?: OrderExprChain;
+}
+
+const detectSelectOverMutation = (ast: Statement): SelectOverMutation | null => {
+  if (ast.kind !== "select_expr") return null;
+  const expr = ast.expr;
+  if (!expr || expr.kind !== "shape_projection") return null;
+  const inner = expr.expr;
+  if (!inner || inner.kind !== "mutation_expr") return null;
+  return { mutation: inner.statement, shape: expr.shape, orderBy: ast.orderBy };
+};
+
+const executeSelectOverMutation = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  query: string,
+  ast: Statement,
+  parts: SelectOverMutation,
+  context: SecurityContext,
+  runtimeTarget: RuntimeTarget,
+  compilerService: ReturnType<typeof getCompilerService>,
+): QueryExecutionTrace => {
+  const { mutation, shape, orderBy } = parts;
+  const typeName = mutation.typeName;
+  const idShapeElement: ShapeElement = {
+    kind: "field",
+    name: "id",
+    operation: "assign",
+    origin: "explicit",
+  } as unknown as ShapeElement;
+
+  const runShapedSelect = (filter: FilterExpr | undefined, selectShape: ShapeElement[], order?: OrderExprChain): { rows: unknown[]; sql: SQLArtifact } => {
+    const selectAst: SelectStatement = {
+      kind: "select",
+      typeName,
+      shape: selectShape,
+      fields: [],
+      filter,
+      orderBy: order as SelectStatement["orderBy"],
+      pos: ast.pos,
+    };
+    const compiled = compilerService.compile(schema, selectAst, { globals: context.globals, target: runtimeTarget });
+    const rows = runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
+    return { rows, sql: compiled.sql };
+  };
+
+  // 1. Capture the ids the mutation will touch. For UPDATE/DELETE the rows are
+  //    identified by the statement's own filter (ids are stable across the
+  //    write); INSERT is captured after the write instead.
+  let affectedIds: string[] = [];
+  if (mutation.kind === "update" || mutation.kind === "delete") {
+    const idRows = runShapedSelect(mutation.filter, [idShapeElement]);
+    affectedIds = idRows.rows
+      .map((row) => (row && typeof row === "object" ? (row as { id?: unknown }).id : undefined))
+      .filter((id): id is string => typeof id === "string");
+  }
+
+  // 2. Run the mutation. For UPDATE/DELETE we re-issue it once per captured id
+  //    with a `.id = <uuid>` filter: this pins the write to exactly the rows
+  //    we re-project and sidesteps the runtime write path's single-`=`-
+  //    predicate restriction (so `UPDATE … FILTER .val IN {…}` works here).
+  //    Compiling the original (possibly multi-predicate) mutation just to read
+  //    its subject type would hit that restriction, so resolve the type from
+  //    its name instead.
+  const qualifiedSubject = typeName.includes("::") ? typeName : `default::${typeName}`;
+  const subjectType = schema.getType(qualifiedSubject) ?? schema.getType(typeName);
+  if (!subjectType) {
+    throw new AppError("E_SEMANTIC", `Unknown type '${typeName}'`, ast.pos.line, ast.pos.column);
+  }
+  let lastCompiled: ReturnType<typeof compilerService.compile> | undefined;
+  if (mutation.kind === "insert") {
+    lastCompiled = compilerService.compile(schema, mutation, { globals: context.globals, target: runtimeTarget });
+    const writeResult = runWriteWithAccessPolicies(db, schema, mutation, lastCompiled.ir, lastCompiled.sql, subjectType, context);
+    affectedIds = (writeResult.rows ?? [])
+      .map((row) => (row && typeof row === "object" ? (row as { id?: unknown }).id : undefined))
+      .filter((id): id is string => typeof id === "string");
+  } else {
+    for (const id of affectedIds) {
+      const perId = {
+        ...mutation,
+        filter: { kind: "predicate", target: { kind: "field", field: "id" }, op: "=", value: id },
+      } as InsertStatement | UpdateStatement | DeleteStatement;
+      lastCompiled = compilerService.compile(schema, perId, { globals: context.globals, target: runtimeTarget });
+      runWriteWithAccessPolicies(db, schema, perId, lastCompiled.ir, lastCompiled.sql, subjectType, context);
+    }
+  }
+
+  // 3. Re-project the affected rows through the requested shape. DELETE leaves
+  //    no surviving rows, so the projection is empty.
+  const idFilter: FilterExpr = {
+    kind: "in_predicate",
+    target: { kind: "field", field: "id" },
+    op: "in",
+    values: { kind: "set_literal", values: affectedIds },
+  } as unknown as FilterExpr;
+  const emptyArtifact: SQLArtifact = { sql: "", params: [], loweringMode: "single_statement" };
+  const projected = (affectedIds.length > 0 && mutation.kind !== "delete")
+    ? runShapedSelect(idFilter, shape, orderBy)
+    : { rows: [], sql: lastCompiled?.sql ?? emptyArtifact };
+
+  return {
+    ast,
+    ir: lastCompiled?.ir ?? ({ kind: "select", rows: [] } as unknown as IRStatement),
+    sql: projected.sql,
+    compiler: lastCompiled?.cache ?? { key: "select-over-mutation", status: "miss", stats: { hits: 0, misses: 0, size: 0 } },
+    sqlTrail: lastCompiled ? [lastCompiled.sql, projected.sql] : [projected.sql],
+    overlays: lastCompiled ? extractOverlays(lastCompiled.ir) : [],
+    result: { kind: "select", rows: projected.rows },
+  };
+};
+
 export const executeQueryWithTrace = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  query: string,
+  securityContext: SecurityContext = DEFAULT_SECURITY_CONTEXT,
+): QueryExecutionTrace => {
+  // Record the full ordered sequence of SQL statements executed for this
+  // query and surface it as `sqlTrail`. Nested executeQueryWithTrace calls
+  // get their own sink (restored on exit), so each reports its own sequence.
+  installSqlTrace(db);
+  const previousSink = activeSqlSink;
+  const sink: SQLArtifact[] = [];
+  activeSqlSink = sink;
+  try {
+    const trace = executeQueryWithTraceImpl(db, schema, query, securityContext);
+    if (sink.length > 0) {
+      trace.sqlTrail = [...sink];
+    }
+    return trace;
+  } finally {
+    activeSqlSink = previousSink;
+  }
+};
+
+const executeQueryWithTraceImpl = (
   db: SQLiteDatabase,
   schema: SchemaSnapshot,
   query: string,
@@ -7421,6 +7954,13 @@ export const executeQueryWithTrace = (
     // to SQL, so pre-evaluate it into literal rows; the outer statement then
     // projects over those rows. A no-op for statements with no group binding.
     ast = preEvaluateGroupBindings(db, schema, ast, context);
+    const selectOverMutation = detectSelectOverMutation(ast);
+    if (selectOverMutation) {
+      return executeSelectOverMutation(db, schema, query, ast, selectOverMutation, context, runtimeTarget, compilerService);
+    }
+    if (isWithDmlChain(ast)) {
+      return executeWithDmlChain(db, schema, ast, context);
+    }
     const compiled = compilerService.compile(schema, ast, { globals: context.globals, target: runtimeTarget });
     const ir = compiled.ir;
     const subjectType = ir.kind === "insert" || ir.kind === "update" || ir.kind === "delete"
@@ -7459,12 +7999,21 @@ export const executeQueryWithTrace = (
         rows: runGelSelectSQL(db, schema, compiled.gelIr, context, sqlArtifact),
       };
     } else if (ir.kind === "group") {
-      // Top-level `GROUP T BY …` — route through the existing runtime GROUP
-      // implementation (`runGroupIR`) used by `WITH G := GROUP …` and
-      // `FOR g IN GROUP …`. The function already compiles + runs the inner
-      // source SELECT and assembles the {key, elements, grouping} rows in JS.
-      const rows = runGroupIR(db, schema, ir, context, sqlTrail);
-      result = { kind: "select", rows };
+      // Top-level `GROUP <subject> BY …`. When the GelIR→SQL stage produced a
+      // real statement (compileGroupStmtToSQL supports the single-grouping-set
+      // case), run it: each row's `value` column is the group object
+      // `{ key, grouping, elements }`, decoded by runGelSelectSQL. Otherwise
+      // (grouping sets, CUBE/ROLLUP, USING aggregates, …) the artifact is
+      // empty and we fall back to the runtime grouper.
+      if (sqlArtifact.loweringMode === "single_statement" && sqlArtifact.sql.length > 0) {
+        result = {
+          kind: "select",
+          rows: runGelSelectSQL(db, schema, compiled.gelIr, context, sqlArtifact),
+        };
+      } else {
+        const rows = runGroupIR(db, schema, ir, context, sqlTrail);
+        result = { kind: "select", rows };
+      }
     } else {
       const writeResult = runWriteWithAccessPolicies(db, schema, ast, ir, sqlArtifact, subjectType!, context);
 
@@ -10442,7 +10991,20 @@ const runGelSelectSQL = (
   const visibleRows = rows.filter((row) => evaluateGelSelectPolicies(schema, db, statement, row, context));
   return materializeGelSQLRows(visibleRows, {
     keepInternalId: options.keepInternalId ?? gelStatementProjectsId(statement),
+    scalarResultIsStr: gelStatementScalarResultIsStr(statement),
   });
+};
+
+// A top-level `std::str` scalar select projects its `value` column through
+// `json_quote(...)` (see scalarResultValueSQL in the SQL compiler) so that a
+// str whose contents look like JSON (e.g. "[1,2]" or "true") round-trips
+// safely. Detect that case so the decoder can JSON.parse the quoted form back
+// to the plain string. `std::json` scalars are *not* quoted — their value
+// column already holds raw JSON text and must be preserved verbatim.
+const gelStatementScalarResultIsStr = (statement: GelIRStatement): boolean => {
+  const typeref = unwrapGelSelectResultSet(statement.expr).typeref;
+  if (!typeref || !typeref.isScalar) return false;
+  return qualifiedGelTypeName(typeref) === "std::str";
 };
 
 const evaluateGelSelectPolicies = (
@@ -10462,12 +11024,19 @@ const evaluateGelSelectPolicies = (
 
 const materializeGelSQLRows = (
   rows: Record<string, unknown>[],
-  options: { keepInternalId: boolean },
+  options: { keepInternalId: boolean; scalarResultIsStr?: boolean },
 ): unknown[] => rows.map((row) => {
   const keys = Object.keys(row);
   // Scalar select: Gel SQL projects a single `value` column. Parse JSON-shaped
   // strings while preserving plain numeric strings produced by text casts.
   if (keys.length === 1 && Object.prototype.hasOwnProperty.call(row, "value")) {
+    if (options.scalarResultIsStr && typeof row.value === "string" && row.value.startsWith("\"")) {
+      try {
+        return JSON.parse(row.value);
+      } catch {
+        return row.value;
+      }
+    }
     return normalizeGelSQLValue(row.value);
   }
 
@@ -12040,7 +12609,14 @@ const runWriteWithAccessPolicies = (
         ? readTargetRowsForAssignableTypes(db, schema, subjectType, ir.filter)
         : readTargetRowsForFilter(db, ir.table, ir.filter);
       enforceUpdateReadPolicies(subjectType, preRows, context, ast.pos.line, ast.pos.column);
-      const writeResult = db.prepare(sqlArtifact.sql).run(...sqlArtifact.params);
+      // When an UPDATE assigns only links (or `SET {}`), the column-level base
+      // statement degrades to a no-op self-assignment (`SET "id" = g0_w."id"`).
+      // Skip running it — the real work happens in applyUpdateLinkAssignments,
+      // and the matched-row count is just the pre-read row count.
+      const baseIsNoop = /SET "id" = g0_w\."id" (?:FROM|WHERE)/.test(sqlArtifact.sql);
+      const writeResult = baseIsNoop
+        ? { changes: preRows.length }
+        : db.prepare(sqlArtifact.sql).run(...sqlArtifact.params);
       if (ast.kind === "update") {
         applyUpdateLinkAssignments(
           db,

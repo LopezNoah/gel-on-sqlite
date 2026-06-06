@@ -9087,7 +9087,7 @@ describe("TestEdgeQLSelect", () => {
     );
   });
 
-  it.skip("test_edgeql_select_is_13 [xerror: IS is broken for runtime type checks of object collections]", () => {
+  it("test_edgeql_select_is_13 [xerror: IS is broken for runtime type checks of object collections]", () => {
     assertQueryResult(
       h,
       `
@@ -10384,7 +10384,7 @@ describe("TestEdgeQLSelect", () => {
     }).toThrow(new RegExp("array index 1000 is out of bounds"));
   });
 
-  it.skip("test_edgeql_assert_fail_object_computed_02 [xfail: Publication is empty, and so even if we join in User to the result of the array dereference, that all gets optimized out on the pg side. I'm not really sure what we can reasonably do about this.]", () => {
+  it("test_edgeql_assert_fail_object_computed_02 [xfail: Publication is empty, and so even if we join in User to the result of the array dereference, that all gets optimized out on the pg side. I'm not really sure what we can reasonably do about this.]", () => {
     expect(() => {
       h.query(
         `
@@ -10810,7 +10810,7 @@ describe("TestEdgeQLSelect", () => {
     );
   });
 
-  it.skip("test_edgeql_select_free_object_distinct_03 [xerror: Can't compile ref to visible binding ns~1@@(__derived__::x@w~2)]", () => {
+  it("test_edgeql_select_free_object_distinct_03 [xerror: Can't compile ref to visible binding ns~1@@(__derived__::x@w~2)]", () => {
     assertQueryResult(
       h,
       `
@@ -10907,14 +10907,14 @@ describe("TestEdgeQLSelect", () => {
     expect(ptrs[0]).toEqual("__tid__");
   });
 
-  it.skip("test_edgeql_select_tid_position_02", () => {
+  it("test_edgeql_select_tid_position_02", () => {
     let res = queryRows<Record<string, any>>(h, "\n            FOR issue IN Issue SELECT issue {\n              *, lol := 1, sigh := 2,\n            };\n        ");
     let val = res[0];
     let ptrs = Object.keys(val.__dataclass_fields__);
     expect(ptrs[0]).toEqual("__tid__");
   });
 
-  it.skip("test_edgeql_select_tid_position_03", () => {
+  it("test_edgeql_select_tid_position_03", () => {
     let res = queryRows<Record<string, any>>(h, "\n            FOR issue IN Issue SELECT issue {\n              *, lol := 1, sigh := 2,\n            };\n        ");
     let val = res[0];
     let ptrs = Object.keys(val.__dataclass_fields__);
@@ -10922,7 +10922,7 @@ describe("TestEdgeQLSelect", () => {
     expect(ptrs[1]).toEqual("__tid__");
   });
 
-  it.skip("test_edgeql_select_tid_position_04", () => {
+  it("test_edgeql_select_tid_position_04", () => {
     let res = queryRows<Record<string, any>>(h, "\n            FOR issue IN Issue SELECT issue {\n              *,\n              owner := issue.owner { *, test := 3 },\n              lol := 1, sigh := 2,\n            };\n        ");
     let val = res[0];
     let owner = val.owner;
@@ -10932,7 +10932,7 @@ describe("TestEdgeQLSelect", () => {
     expect(ptrs[0]).toEqual("__tid__");
   });
 
-  it.skip("test_edgeql_select_tid_position_05", () => {
+  it("test_edgeql_select_tid_position_05", () => {
     let res = queryRows<Record<string, any>>(h, "\n            FOR issue IN Issue SELECT issue {\n              **,\n              lol := 1, sigh := 2,\n            };\n        ");
     let val = res[0];
     let owner = val.owner;
@@ -10953,7 +10953,7 @@ describe("TestEdgeQLSelect", () => {
     3. It only passes the frontend for bad reasons, though! If we name the
        field `owner2` we get a \"has no property\" error!!
   */
-  it.skip("test_edgeql_select_tid_position_06", () => {
+  it("test_edgeql_select_tid_position_06", () => {
     let res = queryRows<Record<string, any>>(h, 
       `FOR issue IN Issue SELECT issue {
         *,
