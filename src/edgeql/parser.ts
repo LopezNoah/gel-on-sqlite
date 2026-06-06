@@ -481,6 +481,22 @@ class Parser {
     throw new AppError("E_SYNTAX", message, ...this.posPair(token));
   }
 
+  // Link-property names keep their literal spelling. Unlike type names
+  // (`schema::Index`), a property written `@index` is the property `index`,
+  // so we must NOT run the `nameTokenLexeme` title-casing that `expectName`
+  // applies to keyword-spelled identifiers — we return the raw token lexeme
+  // (already lowercased by the tokenizer for keywords, original case for
+  // identifiers).
+  private expectLinkPropertyName(message: string): string {
+    const token = this.peek();
+    if (!this.isNameToken(token) && !this.isKeywordLikeToken(token)) {
+      throw new AppError("E_SYNTAX", message, ...this.posPair(token));
+    }
+    this.rejectReservedDunderName(token);
+    this.consume();
+    return token.lexeme;
+  }
+
   // Names surrounded by double-underscores (`__Foo__`, `__std__`, etc.) and
   // certain magic names (`__type__`, `__source__`, `__subject__`) are reserved
   // by EdgeQL — the upstream parser rejects them as identifiers in user code.
@@ -4274,7 +4290,7 @@ class Parser {
 
       if (this.match("at")) {
         const propertyTok = this.peek();
-        const property = this.expectPermissiveName("Expected link property name after '@'").lexeme;
+        const property = this.expectLinkPropertyName("Expected link property name after '@'");
         if (/^__(?:source|subject|new|old|default|specified|type)__$/.test(property)) {
           this.notSupported(
             propertyTok,
@@ -4846,7 +4862,7 @@ class Parser {
 
     if (this.peek().kind === "at") {
       this.consume();
-      const property = this.expectPermissiveName("Expected link property name after '@'").lexeme;
+      const property = this.expectLinkPropertyName("Expected link property name after '@'");
       let expr: ComputedExpr = {
         kind: "field_ref",
         field: `@${property}`,
@@ -5234,7 +5250,7 @@ class Parser {
       this.consume();
       return {
         kind: "field_ref",
-        field: `@${this.expectPermissiveName("Expected link property name after '@'").lexeme}`,
+        field: `@${this.expectLinkPropertyName("Expected link property name after '@'")}`,
       };
     }
 
@@ -7321,7 +7337,7 @@ class Parser {
         return {
           kind: "backlink_property",
           ...backlink,
-          property: this.expectPermissiveName("Expected backlink link property name after '@'").lexeme,
+          property: this.expectLinkPropertyName("Expected backlink link property name after '@'"),
         };
       }
       return {
@@ -7337,7 +7353,7 @@ class Parser {
         return {
           kind: "backlink_property",
           ...backlink,
-          property: this.expectPermissiveName("Expected backlink link property name after '@'").lexeme,
+          property: this.expectLinkPropertyName("Expected backlink link property name after '@'"),
         };
       }
       return {
@@ -7386,14 +7402,18 @@ class Parser {
     return {
       kind: "backlink_property_ref",
       ...backlink,
-      property: this.expectPermissiveName("Expected backlink link property name after '@'").lexeme,
+      property: this.expectLinkPropertyName("Expected backlink link property name after '@'"),
     };
   }
 
   private parseFieldReference(context: string): string {
     if (this.peek().kind === "at") {
       this.consume();
-      return `@${this.expectName(`Expected link property name in ${context}`).lexeme}`;
+      // Link-property names keep their literal (lowercase) spelling — unlike
+      // type names, `@index` is the property `index`, not `schema::Index`. Use
+      // the permissive name so keyword-spelled properties (`@index`) aren't
+      // title-cased by nameTokenLexeme the way `expectName` would.
+      return `@${this.expectLinkPropertyName(`Expected link property name in ${context}`)}`;
     }
 
     if (this.peek().kind === "dot") {
@@ -7408,7 +7428,7 @@ class Parser {
 
     if (this.peek().kind === "at") {
       this.consume();
-      parts.push(`@${this.expectName(`Expected link property name in ${context}`).lexeme}`);
+      parts.push(`@${this.expectLinkPropertyName(`Expected link property name in ${context}`)}`);
     }
 
     if (parts.length === 2 && parts[0] === "__type__" && parts[1] === "name") {
@@ -8213,6 +8233,29 @@ class Parser {
           left: path,
           right: { kind: "literal", value: clauses.filter.value },
         };
+      } else if (
+        clauses.filter.kind === "in_predicate"
+        && clauses.filter.target.kind === "field"
+      ) {
+        // `FILTER .name IN {…}` on a shape link — rebuild as an `in_expr` so
+        // compileFreeObjectExpr lowers the membership test per target row.
+        const fieldPath = clauses.filter.target.field;
+        const dotIndex = fieldPath.indexOf(".");
+        const headName = dotIndex >= 0 ? fieldPath.slice(0, dotIndex) : "__current__";
+        const tail = dotIndex >= 0 ? fieldPath.slice(dotIndex + 1) : fieldPath;
+        const path: FreeObjectExpr = dotIndex >= 0
+          ? { kind: "path", head: headName, tail, steps: undefined }
+          : { kind: "field_access", expr: { kind: "current_item" }, field: tail, optional: false };
+        const values = clauses.filter.values;
+        const right: FreeObjectExpr | undefined =
+          values.kind === "set_literal"
+            ? { kind: "set_literal", values: values.values }
+            : values.kind === "expr_set"
+              ? { kind: "set_expr", values: values.values }
+              : undefined;
+        if (right) {
+          whereExpr = { kind: "in_expr", op: clauses.filter.op, left: path, right };
+        }
       }
     }
     return {

@@ -360,6 +360,7 @@ export interface LinkPropertyDef {
   required?: boolean;
   hasDefault?: boolean;
   defaultExpr?: FieldDefaultExpr;
+  defaultExprText?: string;
   readonly?: boolean;
   collection?: CollectionTypeDef;
   annotations?: AnnotationDef[];

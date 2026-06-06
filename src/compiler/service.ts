@@ -178,23 +178,52 @@ export const buildCompileCacheKey = (schema: SchemaSnapshot, statement: Statemen
 
 const makeTypeColumnsResolver = (schema: SchemaSnapshot): (typeName: string) => Set<string> | undefined => {
   const cache = new Map<string, Set<string>>();
-  const collect = (qualifiedName: string, accumulator: Set<string>, seen: Set<string>): void => {
+  // An inline single link (no link properties) stores a `<link>_id` FK column,
+  // which the schema also lists as a field on the declaring type. A subtype can
+  // override the link's storage (e.g. overloading it with properties → link
+  // table), so that subtype's table has NO such column even though it inherits
+  // the base's field list. Walking subtype→base with first-seen-wins on link
+  // names lets the most-derived definition decide: when a link resolves to
+  // non-inline storage, its `<link>_id` FK is excluded from the inherited
+  // fields, so the polymorphic source projects NULL there instead of
+  // referencing a missing column.
+  const collect = (
+    qualifiedName: string,
+    accumulator: Set<string>,
+    seen: Set<string>,
+    seenLinks: Set<string>,
+    excludeFKs: Set<string>,
+  ): void => {
     if (seen.has(qualifiedName)) return;
     seen.add(qualifiedName);
     const typeDef = schema.getType(qualifiedName);
     if (!typeDef) return;
+    // Resolve link storage first so FK-field exclusions are known before we
+    // add (possibly inherited) fields.
+    for (const link of typeDef.links ?? []) {
+      if (seenLinks.has(link.name)) continue;
+      seenLinks.add(link.name);
+      const fkColumn = `${link.name}_id`;
+      if (!link.multi && (link.properties?.length ?? 0) === 0) {
+        accumulator.add(fkColumn);
+      } else {
+        excludeFKs.add(fkColumn);
+      }
+    }
     for (const field of typeDef.fields ?? []) {
-      accumulator.add(field.name);
+      if (!excludeFKs.has(field.name)) {
+        accumulator.add(field.name);
+      }
     }
     for (const baseName of typeDef.extends ?? []) {
-      collect(baseName, accumulator, seen);
+      collect(baseName, accumulator, seen, seenLinks, excludeFKs);
     }
   };
   return (typeName: string): Set<string> | undefined => {
     const existing = cache.get(typeName);
     if (existing) return existing;
     const columns = new Set<string>(["id"]);
-    collect(typeName, columns, new Set<string>());
+    collect(typeName, columns, new Set<string>(), new Set<string>(), new Set<string>());
     if (columns.size === 1 && !schema.getType(typeName)) {
       return undefined;
     }

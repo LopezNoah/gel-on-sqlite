@@ -58,6 +58,7 @@ export interface LinkProperty {
   computed?: false;
   hasDefault?: boolean;
   defaultExpr?: FieldDefaultExpr;
+  defaultExprText?: string;
   readonly?: boolean;
   collection?: CollectionTypeDef;
   annotations: AnnotationDef[];

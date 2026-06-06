@@ -113,6 +113,7 @@ const linkPropertyIR = (
     type: property.type as ScalarType,
     hasDefault: Boolean(property.hasDefault),
     defaultValue: defaultValue ?? undefined,
+    defaultExprText: defaultValue === undefined ? property.defaultExprText : undefined,
   };
 };
 
@@ -1654,6 +1655,42 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       default:
         return fail(`Expected scalar value in insert assignment, got ${value.kind}`);
     }
+  };
+
+  // A multi `json` property stores its elements as a JSON array of the actual
+  // JSON values. resolveInsertSetValues yields each element as json *text*
+  // (e.g. `"bar"`, `[1,2]`), so for json fields we parse each back to its
+  // value before the array is JSON.stringified — otherwise the elements get
+  // double-encoded as quoted strings.
+  const encodeMultiSetForStorage = (values: ScalarValue[], fieldType: string): unknown[] => {
+    if (fieldType !== "json") return values;
+    return values.map((v) => {
+      if (typeof v !== "string") return v;
+      try { return JSON.parse(v); } catch { return v; }
+    });
+  };
+
+  // A named-tuple field (`q3 -> tuple<x: str, y: decimal>`) accepts a
+  // positional tuple literal (`('p11', 3.33n)`); coerce the stored positional
+  // JSON array into the named object form using the field's declared slot
+  // names so introspection / shape access see `{x, y}`.
+  const encodeNamedTupleForStorage = (
+    scalar: ScalarValue,
+    fieldDef: { collection?: { kind: string; elementNames?: string[] } },
+  ): ScalarValue => {
+    const coll = fieldDef.collection;
+    if (!coll || coll.kind !== "tuple" || !coll.elementNames || typeof scalar !== "string") {
+      return scalar;
+    }
+    try {
+      const parsed: unknown = JSON.parse(scalar);
+      if (Array.isArray(parsed)) {
+        const obj: Record<string, unknown> = {};
+        coll.elementNames.forEach((name, idx) => { obj[name] = parsed[idx]; });
+        return JSON.stringify(obj);
+      }
+    } catch { /* leave as-is */ }
+    return scalar;
   };
 
   const resolveInsertSetValues = (value: InsertValue): ScalarValue[] => {
@@ -9885,7 +9922,11 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
             : fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
 
           for (const entry of parsedArray) {
-            if (!isValidScalarValue(field.type, entry)) {
+            // Each element of a multi `json` property is itself an arbitrary
+            // JSON value (object/array/string/number/bool) — all are valid, so
+            // don't run the scalar check that would (incorrectly) try to parse
+            // a json *string* element like "bar" as json text.
+            if (field.type !== "json" && !isValidScalarValue(field.type, entry)) {
               fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
             }
             if (field.enumValues && typeof entry === "string" && !field.enumValues.includes(entry)) {
@@ -10062,8 +10103,8 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       if (knownFields.has(field)) {
         const fieldDef = requireValue(fieldByName.get(field), `Unknown field '${field}' on '${statement.typeName}'`);
         const scalar = fieldDef.multi
-          ? JSON.stringify(resolveInsertSetValues(value))
-          : resolveInsertScalarValue(value);
+          ? JSON.stringify(encodeMultiSetForStorage(resolveInsertSetValues(value), fieldDef.type))
+          : encodeNamedTupleForStorage(resolveInsertScalarValue(value), fieldDef);
         validateFieldValue(field, scalar);
         scalarValues[field] = scalar;
         continue;
@@ -10261,8 +10302,8 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         }
         const fieldDef = requireValue(fieldByName.get(field), `Unknown field '${field}' on '${statement.typeName}'`);
         const scalar = fieldDef.multi
-          ? JSON.stringify(resolveInsertSetValues(value))
-          : resolveInsertScalarValue(value);
+          ? JSON.stringify(encodeMultiSetForStorage(resolveInsertSetValues(value), fieldDef.type))
+          : encodeNamedTupleForStorage(resolveInsertScalarValue(value), fieldDef);
         validateFieldValue(field, scalar);
         scalarValues[field] = scalar;
         continue;
