@@ -250,6 +250,16 @@ export interface GroupStmt extends Statement {
   by: Set[];
   using: Record<string, Set>;
   subject: Set;
+  // Resolved BY-atom field names for the single-grouping-set case the SQL
+  // stage can lower (`BY .name` → `["name"]`). Left undefined for the
+  // features that stay on the runtime grouper (grouping sets, CUBE/ROLLUP,
+  // USING aggregates, link-property keys); compileGroupStmtToSQL then bails
+  // and the engine falls back to runGroupIR.
+  byFieldNames?: string[];
+  // BY fields that were added to the subject's projection just to make them
+  // available as group keys (`group X { name } by .b`). Stripped from the
+  // displayed `elements` so the output shape stays as written.
+  hiddenByFields?: string[];
 }
 
 export interface ConfigStmt extends Statement {

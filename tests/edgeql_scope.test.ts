@@ -2890,7 +2890,7 @@ describe("TestEdgeQLScope", () => {
     );
   });
 
-  it.skip("test_edgeql_scope_computables_01 [xfail: This broke with SIMPLE_SCOPING but something about it is worth saving I think]", () => {
+  it("test_edgeql_scope_computables_01 [xfail: This broke with SIMPLE_SCOPING but something about it is worth saving I think]", () => {
     assertQueryResult(
       h,
       `
@@ -3694,7 +3694,7 @@ describe("TestEdgeQLScope", () => {
     );
   });
 
-  it.skip("test_edgeql_scope_source_rebind_02b [xerror: can't find materialized set]", () => {
+  it("test_edgeql_scope_source_rebind_02b [xerror: can't find materialized set]", () => {
     assertQueryResult(
       h,
       `
@@ -4003,7 +4003,7 @@ describe("TestEdgeQLScope", () => {
     );
   });
 
-  it.skip("test_edgeql_scope_ref_outer_05b [xfail: gives every user name in the output this was xfailed for a long time, and then the xfail was removed in #8405 when we switched to simple_scoping for tests. But I don't think it was working for any fundamental reason, so when I broke it in simple_scoping mode while doing some optimizations, I figured it was fine for now.]", () => {
+  it("test_edgeql_scope_ref_outer_05b [xfail: gives every user name in the output this was xfailed for a long time, and then the xfail was removed in #8405 when we switched to simple_scoping for tests. But I don't think it was working for any fundamental reason, so when I broke it in simple_scoping mode while doing some optimizations, I figured it was fine for now.]", () => {
     assertQueryResult(
       h,
       `
@@ -4054,7 +4054,7 @@ describe("TestEdgeQLScope", () => {
     );
   });
 
-  it.skip("test_edgeql_scope_ref_outer_06b [xerror: can't find materialized set]", () => {
+  it("test_edgeql_scope_ref_outer_06b [xerror: can't find materialized set]", () => {
     assertQueryResult(
       h,
       `
@@ -5043,7 +5043,7 @@ describe("TestEdgeQLScope", () => {
     );
   });
 
-  it.skip("test_edgeql_scope_mat_issue_6059 [xerror: Issue #6059 (non-group generalization)]", () => {
+  it("test_edgeql_scope_mat_issue_6059 [xerror: Issue #6059 (non-group generalization)]", () => {
     assertQueryResult(
       h,
       `
@@ -5079,7 +5079,7 @@ describe("TestEdgeQLScope", () => {
     );
   });
 
-  it.skip("test_edgeql_scope_mat_issue_6060 [xerror: Issue #6060 (non-group generalization)]", () => {
+  it("test_edgeql_scope_mat_issue_6060 [xerror: Issue #6060 (non-group generalization)]", () => {
     assertQueryResult(
       h,
       `

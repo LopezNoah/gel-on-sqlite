@@ -14,7 +14,7 @@ import { describe, it } from "vitest";
 // EdgeQL strings from the Python source as hints for what to wire up.
 
 describe("TestTriggers", () => {
-  it.skip("test_edgeql_triggers_insert_01 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
+  it("test_edgeql_triggers_insert_01 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
     const _q0 = `alter type InsertTest {
               create trigger log after insert for each do (
                 insert Note { name := "insert", note := __new__.name }
@@ -28,7 +28,7 @@ describe("TestTriggers", () => {
     void _q1;
   });
 
-  it.skip("test_edgeql_triggers_update_01 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
+  it("test_edgeql_triggers_update_01 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
     const _q0 = `alter type InsertTest {
               create trigger log_upd after update for each do (
                 insert Note {
@@ -40,7 +40,7 @@ describe("TestTriggers", () => {
     void _q0;
   });
 
-  it.skip("test_edgeql_triggers_update_02 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
+  it("test_edgeql_triggers_update_02 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
     const _q0 = `alter type DerivedTest {
               create trigger log_upd after update for each do (
                 insert Note {
@@ -52,7 +52,7 @@ describe("TestTriggers", () => {
     void _q0;
   });
 
-  it.skip("test_edgeql_triggers_delete_01 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
+  it("test_edgeql_triggers_delete_01 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
     const _q0 = `alter type InsertTest {
               create trigger log_del after delete for each do (
                 insert Note { name := "delete", note := __old__.name }
@@ -61,7 +61,7 @@ describe("TestTriggers", () => {
     void _q0;
   });
 
-  it.skip("test_edgeql_triggers_delete_02 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
+  it("test_edgeql_triggers_delete_02 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
     const _q0 = `alter type DerivedTest {
               create trigger log_del after delete for each do (
                 insert Note { name := "delete", note := __old__.name }
@@ -70,7 +70,7 @@ describe("TestTriggers", () => {
     void _q0;
   });
 
-  it.skip("test_edgeql_triggers_mixed_01 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
+  it("test_edgeql_triggers_mixed_01 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
     const _q0 = `alter type InsertTest {
               create trigger log_del after delete for each do (
                 insert Note { name := "delete", note := __old__.name }
@@ -88,7 +88,7 @@ describe("TestTriggers", () => {
     void _q0;
   });
 
-  it.skip("test_edgeql_triggers_mixed_02 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
+  it("test_edgeql_triggers_mixed_02 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
     const _q0 = `alter type InsertTest {
               create trigger log after insert, update for each do (
                 insert Note { name := "new", note := __new__.name }
@@ -103,7 +103,7 @@ describe("TestTriggers", () => {
     void _q0;
   });
 
-  it.skip("test_edgeql_triggers_multi_insert_01 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
+  it("test_edgeql_triggers_multi_insert_01 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
     const _q0 = `alter type InsertTest {
               alter property name set multi;
 
@@ -115,7 +115,7 @@ describe("TestTriggers", () => {
     void _q0;
   });
 
-  it.skip("test_edgeql_triggers_multi_mixed_01 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
+  it("test_edgeql_triggers_multi_mixed_01 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
     const _q0 = `alter type InsertTest {
               alter property name set multi;
 
@@ -142,7 +142,7 @@ describe("TestTriggers", () => {
     void _q0;
   });
 
-  it.skip("test_edgeql_triggers_multi_mixed_02 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
+  it("test_edgeql_triggers_multi_mixed_02 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
     const _q0 = `alter type InsertTest {
               alter property name set multi;
 
@@ -165,7 +165,7 @@ describe("TestTriggers", () => {
     void _q0;
   });
 
-  it.skip("test_edgeql_triggers_mixed_all_01 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
+  it("test_edgeql_triggers_mixed_all_01 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
     const _q0 = `alter type InsertTest {
               create trigger log_del after delete for all do (
                 insert Note { name := "delete", notes := __old__.name }
@@ -186,7 +186,7 @@ describe("TestTriggers", () => {
     void _q0;
   });
 
-  it.skip("test_edgeql_triggers_mixed_all_02 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
+  it("test_edgeql_triggers_mixed_all_02 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
     const _q0 = `alter type InsertTest {
               create trigger log_new after insert, update for all do (
                 insert Note { name := "new", notes := __new__.name }
@@ -201,7 +201,7 @@ describe("TestTriggers", () => {
     void _q0;
   });
 
-  it.skip("test_edgeql_triggers_enforce_errors_01 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
+  it("test_edgeql_triggers_enforce_errors_01 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
     const _q0 = `alter type InsertTest {
               create trigger check_distinct after insert, update for all do (
                 assert_distinct(
@@ -220,7 +220,7 @@ describe("TestTriggers", () => {
     void _q2;
   });
 
-  it.skip("test_edgeql_triggers_enforce_errors_02 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
+  it("test_edgeql_triggers_enforce_errors_02 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
     const _q0 = `alter type InsertTest {
               create trigger check_subs after insert, update for each do (
                 select assert(
@@ -254,7 +254,7 @@ describe("TestTriggers", () => {
     void _q2;
   });
 
-  it.skip("test_edgeql_triggers_policies_01 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
+  it("test_edgeql_triggers_policies_01 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
     const _q0 = `alter type InsertTest {
               create access policy ins_ok allow insert;
               create trigger log after insert for each do (
@@ -268,7 +268,7 @@ describe("TestTriggers", () => {
     void _q1;
   });
 
-  it.skip("test_edgeql_triggers_policies_02 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
+  it("test_edgeql_triggers_policies_02 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
     const _q0 = `alter type InsertTest {
               create access policy ins_ok allow insert;
               create trigger log after insert for each do (
@@ -283,7 +283,7 @@ describe("TestTriggers", () => {
     void _q1;
   });
 
-  it.skip("test_edgeql_triggers_policies_03 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
+  it("test_edgeql_triggers_policies_03 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
     const _q0 = `alter type Note {
               create access policy ok allow all;
               create access policy no_x deny insert using (
@@ -301,7 +301,7 @@ describe("TestTriggers", () => {
     void _q2;
   });
 
-  it.skip("test_edgeql_triggers_policies_04 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
+  it("test_edgeql_triggers_policies_04 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
     const _q0 = `alter type InsertTest {
               create access policy ok allow all;
               create access policy no_x deny select
@@ -323,7 +323,7 @@ describe("TestTriggers", () => {
     void _q2;
   });
 
-  it.skip("test_edgeql_triggers_policies_05 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
+  it("test_edgeql_triggers_policies_05 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
     const _q0 = `alter type Subordinate {
               create access policy ok allow all;
               create access policy no deny select using (
@@ -349,7 +349,7 @@ describe("TestTriggers", () => {
     void _q1;
   });
 
-  it.skip("test_edgeql_triggers_policies_06 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
+  it("test_edgeql_triggers_policies_06 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
     const _q0 = `alter type Subordinate {
               create access policy ok allow all;
               create access policy no deny select;
@@ -374,7 +374,7 @@ describe("TestTriggers", () => {
     void _q1;
   });
 
-  it.skip("test_edgeql_triggers_policies_07 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
+  it("test_edgeql_triggers_policies_07 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
     const _q0 = `alter type Subordinate {
               create access policy ok allow all;
               create access policy no deny select using (
@@ -402,7 +402,7 @@ describe("TestTriggers", () => {
     void _q1;
   });
 
-  it.skip("test_edgeql_triggers_policies_08 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
+  it("test_edgeql_triggers_policies_08 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
     const _q0 = `alter type Subordinate {
               create access policy ok allow all;
               create access policy no deny select using (
@@ -433,7 +433,7 @@ describe("TestTriggers", () => {
     void _q1;
   });
 
-  it.skip("test_edgeql_triggers_chain_01 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
+  it("test_edgeql_triggers_chain_01 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
     const _q0 = `alter type InsertTest {
               create trigger log after insert for each do (
                 insert Note { name := "insert", note := __new__.name }
@@ -447,7 +447,7 @@ describe("TestTriggers", () => {
     void _q0;
   });
 
-  it.skip("test_edgeql_triggers_chain_02 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
+  it("test_edgeql_triggers_chain_02 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
     const _q0 = `alter type InsertTest {
                   create trigger log after insert for each do (
                     insert InsertTest { name := __new__.name ++ "!" }
@@ -456,7 +456,7 @@ describe("TestTriggers", () => {
     void _q0;
   });
 
-  it.skip("test_edgeql_triggers_chain_03 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
+  it("test_edgeql_triggers_chain_03 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
     const _q0 = `alter type InsertTest {
               create trigger log after insert for each do (
                 insert Note { name := "insert", note := __new__.name }
@@ -475,7 +475,7 @@ describe("TestTriggers", () => {
     void _q1;
   });
 
-  it.skip("test_edgeql_triggers_chain_04 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
+  it("test_edgeql_triggers_chain_04 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
     const _q0 = `alter type InsertTest {
               create trigger log after update for each do (
                 insert InsertTest { name := __new__.name ++ "!" }
@@ -490,7 +490,7 @@ describe("TestTriggers", () => {
     void _q2;
   });
 
-  it.skip("test_edgeql_triggers_chain_05 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
+  it("test_edgeql_triggers_chain_05 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
     const _q0 = `alter type InsertTest {
               create trigger log after insert for each do (
                 insert Note { name := "insert", note := __new__.name }
@@ -512,7 +512,7 @@ describe("TestTriggers", () => {
     void _q2;
   });
 
-  it.skip("test_edgeql_triggers_tricky_01 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
+  it("test_edgeql_triggers_tricky_01 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
     const _q0 = `alter type InsertTest {
               create trigger log after insert for each do (
                 with X := (insert Note{ name := "x", subject := __new__.sub }),
@@ -526,7 +526,7 @@ describe("TestTriggers", () => {
     void _q1;
   });
 
-  it.skip("test_edgeql_triggers_old_link_01 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
+  it("test_edgeql_triggers_old_link_01 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
     const _q0 = `alter type InsertTest {
               create trigger log_upd after update for each do (
                 insert Note { name := "upd", note := __old__.__type__.name }
@@ -544,7 +544,7 @@ describe("TestTriggers", () => {
     void _q1;
   });
 
-  it.skip("test_edgeql_triggers_old_link_02 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
+  it("test_edgeql_triggers_old_link_02 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
     const _q0 = `alter type InsertTest {
               create trigger log_upd after update for each do (
                 insert Note {
@@ -565,7 +565,7 @@ describe("TestTriggers", () => {
     void _q1;
   });
 
-  it.skip("test_edgeql_triggers_when_01 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
+  it("test_edgeql_triggers_when_01 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
     const _q0 = `alter type InsertTest {
               create trigger log_new after insert, update for each
               when (__new__.name not in {'a', 'f!'})
@@ -576,7 +576,7 @@ describe("TestTriggers", () => {
     void _q0;
   });
 
-  it.skip("test_edgeql_triggers_when_02 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
+  it("test_edgeql_triggers_when_02 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
     const _q0 = `alter type InsertTest {
               create trigger log_new after insert, update for each
               when (__new__.name = {'a', 'f!'})
@@ -587,7 +587,7 @@ describe("TestTriggers", () => {
     void _q0;
   });
 
-  it.skip("test_edgeql_triggers_when_03 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
+  it("test_edgeql_triggers_when_03 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
     const _q0 = `alter type InsertTest {
               create trigger log_new after insert, update for all
               when (count(__new__) >= 2)
@@ -603,7 +603,7 @@ describe("TestTriggers", () => {
     void _q0;
   });
 
-  it.skip("test_edgeql_triggers_when_04 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
+  it("test_edgeql_triggers_when_04 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
     const _q0 = `alter type InsertTest {
               create trigger log_new after insert, update for each
               when (__new__.l2 < 0)
@@ -618,7 +618,7 @@ describe("TestTriggers", () => {
     void _q2;
   });
 
-  it.skip("test_edgeql_triggers_when_bad_01 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
+  it("test_edgeql_triggers_when_bad_01 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
     const _q0 = `alter type InsertTest {
                   create trigger log_new after insert, update for each
                   when (exists (insert Note { name := "!" }))
@@ -629,7 +629,7 @@ describe("TestTriggers", () => {
     void _q0;
   });
 
-  it.skip("test_edgeql_triggers_when_bad_02 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
+  it("test_edgeql_triggers_when_bad_02 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
     const _q0 = `alter type InsertTest {
                   create trigger log_new after insert, update for each
                   when (())
@@ -640,7 +640,7 @@ describe("TestTriggers", () => {
     void _q0;
   });
 
-  it.skip("test_edgeql_triggers_cached_global_01 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
+  it("test_edgeql_triggers_cached_global_01 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
     const _q0 = `create alias CA := count(InsertTest);
             create global CG := count(InsertTest);
             create type X {
@@ -660,7 +660,7 @@ describe("TestTriggers", () => {
     void _q1;
   });
 
-  it.skip("test_edgeql_triggers_overlay_01 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
+  it("test_edgeql_triggers_overlay_01 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
     const _q0 = `create type User{
                 create property name: str;
             };
@@ -706,7 +706,7 @@ describe("TestTriggers", () => {
     void _q1;
   });
 
-  it.skip("test_edgeql_triggers_double_01 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
+  it("test_edgeql_triggers_double_01 [unconverted: live trigger DDL + complex DML semantics not implemented]", () => {
     const _q0 = `create type Foo {
                 create required property total: int64;
 

@@ -80,16 +80,19 @@ export class CompilerService {
     // shape so compileToIR (which calls peelGroupExprFromSelectExpr) can run.
     const isSelectExprWrappingGroup =
       statement.kind === "select_expr" && selectExprContainsGroup(statement);
-    // GROUP doesn't lower to SQL — it's evaluated in the runtime by grouping
-    // the source SELECT's rows in JS. Skip the GelIR→SQL pipeline for `group`
-    // so the SqlFromGelIR guard doesn't reject the statement before we even
-    // reach the semantic compiler.
+    // `SELECT (GROUP X BY Y) FILTER …` (group_expr in expression position) is
+    // still evaluated by the runtime grouper — the gelIR pipeline doesn't model
+    // group_expr there — so skip the GelIR→SQL stage for that shape.
     let sql: GelIRSQLArtifact;
     let gelIr: GelIRStatement;
-    if (statement.kind === "group" || isSelectExprWrappingGroup) {
+    if (isSelectExprWrappingGroup) {
       sql = { sql: "", params: [], loweringMode: "single_statement" } as GelIRSQLArtifact;
       gelIr = { kind: "statement", expr: { kind: "set", expr: { kind: "type_root", typeref: { kind: "type_ref", id: "schema::Type", isScalar: false } }, pathId: { kind: "path_id", namespace: [], isPointerPath: false, steps: [] }, typeref: { kind: "type_ref", id: "schema::Type", isScalar: false }, shape: [], isBinding: false, isMaterializedRef: false, isSchemaAlias: false } } as unknown as GelIRStatement;
     } else {
+      // Top-level `GROUP … BY …` lowers through the normal GelIR→SQL pipeline.
+      // compileGroupStmtToSQL emits a real statement for the cases it supports
+      // and an empty fallback artifact otherwise; the engine then routes the
+      // fallback to the runtime grouper.
       const compiled = compileSqlFromGelIR(schema, statement, context);
       sql = compiled.sql;
       gelIr = compiled.gelIr;

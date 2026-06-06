@@ -13,7 +13,7 @@ import { assertQueryResult, unorderedSet } from "./python_query_test_helpers.js"
 // std/ext module read-only protection, USING SQL bodies, SET OF parameters,
 // CREATE INFIX OPERATOR, CREATE CAST, CREATE PSEUDO TYPE, fallback /
 // force_return_cast field rejection, system-type extension, etc.).  Those
-// tests are kept as `.skip` parity placeholders so the file mirrors the
+// tests are kept as `` parity placeholders so the file mirrors the
 // Python suite 1:1; un-skip them as the enforcement lands.
 
 describe("TestEdgeQLUserDDL", () => {
@@ -178,7 +178,7 @@ describe("TestEdgeQLUserDDL", () => {
     `)).toThrow(/cannot create.*func_19.*SET OF parameters in user-defined EdgeQL functions are not supported/i);
   });
 
-  it.skip("test_edgeql_userddl_20 [xerror: engine does not apply user-defined functions per-element on multi-set arguments — first SELECT returns {'q','a'} correctly, second yields count 1 instead of 4]", () => {
+  it("test_edgeql_userddl_20 [xerror: engine does not apply user-defined functions per-element on multi-set arguments — first SELECT returns {'q','a'} correctly, second yields count 1 instead of 4]", () => {
     h.script(`
       CREATE FUNCTION func_20(
           a: str
@@ -334,7 +334,7 @@ describe("TestEdgeQLUserDDL", () => {
       .toThrow(/module ext is read-only/i);
   });
 
-  it.skip("test_edgeql_userddl_all_extensions_01 [xerror: sqlite-ts does not support START MIGRATION / POPULATE MIGRATION / COMMIT MIGRATION]", () => {
+  it("test_edgeql_userddl_all_extensions_01 [xerror: sqlite-ts does not support START MIGRATION / POPULATE MIGRATION / COMMIT MIGRATION]", () => {
     // Install all extensions and then delete them all. Upstream toggles
     // `using future warn_old_scoping;` between migrations to verify the
     // scoping-future flag round-trips with extensions enabled. sqlite-ts

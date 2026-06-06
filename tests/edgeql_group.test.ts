@@ -1449,7 +1449,7 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
-  it.skip("test_edgeql_group_iterator_ptr_sets_05 [xerror: Group by doesn't materialize computed pointers properly]", () => {
+  it("test_edgeql_group_iterator_ptr_sets_05 [xerror: Group by doesn't materialize computed pointers properly]", () => {
     assertQueryResult(
       h,
       `
@@ -1523,7 +1523,7 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
-  it.skip("test_edgeql_group_iterator_ptr_sets_06 [xerror: Group by doesn't materialize computed pointers properly]", () => {
+  it("test_edgeql_group_iterator_ptr_sets_06 [xerror: Group by doesn't materialize computed pointers properly]", () => {
     assertQueryResult(
       h,
       `
@@ -1667,7 +1667,7 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
-  it.skip("test_edgeql_group_iterator_ptr_free_object_04 [xerror: Group by doesn't materialize computed pointers properly]", () => {
+  it("test_edgeql_group_iterator_ptr_free_object_04 [xerror: Group by doesn't materialize computed pointers properly]", () => {
     assertQueryResult(
       h,
       `
@@ -1696,7 +1696,7 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
-  it.skip("test_edgeql_group_iterator_ptr_free_object_05 [xerror: Group by doesn't materialize computed pointers properly]", () => {
+  it("test_edgeql_group_iterator_ptr_free_object_05 [xerror: Group by doesn't materialize computed pointers properly]", () => {
     assertQueryResult(
       h,
       `
@@ -1727,7 +1727,7 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
-  it.skip("test_edgeql_group_volatile_ptr_set_01 [xerror: Group by doesn't materialize volatile properly]", () => {
+  it("test_edgeql_group_volatile_ptr_set_01 [xerror: Group by doesn't materialize volatile properly]", () => {
     assertQueryResult(
       h,
       `
@@ -1792,7 +1792,7 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
-  it.skip("test_edgeql_group_volatile_ptr_set_02 [xerror: Group by doesn't materialize volatile properly]", () => {
+  it("test_edgeql_group_volatile_ptr_set_02 [xerror: Group by doesn't materialize volatile properly]", () => {
     assertQueryResult(
       h,
       `
@@ -1849,7 +1849,7 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
-  it.skip("test_edgeql_group_volatile_ptr_set_03 [xfail: Issue #8095 Select group produces incorrect keys]", () => {
+  it("test_edgeql_group_volatile_ptr_set_03 [xfail: Issue #8095 Select group produces incorrect keys]", () => {
     assertQueryResult(
       h,
       `
@@ -1914,7 +1914,7 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
-  it.skip("test_edgeql_group_volatile_ptr_set_04 [xerror: Group by doesn't materialize volatile properly]", () => {
+  it("test_edgeql_group_volatile_ptr_set_04 [xerror: Group by doesn't materialize volatile properly]", () => {
     assertQueryResult(
       h,
       `
@@ -2001,7 +2001,7 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
-  it.skip("test_edgeql_group_volatile_ptr_set_05 [xerror: Group by doesn't materialize volatile properly]", () => {
+  it("test_edgeql_group_volatile_ptr_set_05 [xerror: Group by doesn't materialize volatile properly]", () => {
     assertQueryResult(
       h,
       `
@@ -2081,7 +2081,7 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
-  it.skip("test_edgeql_group_volatile_ptr_set_06 [xfail: Issue #8095 Select group produces incorrect keys]", () => {
+  it("test_edgeql_group_volatile_ptr_set_06 [xfail: Issue #8095 Select group produces incorrect keys]", () => {
     assertQueryResult(
       h,
       `
@@ -2170,7 +2170,7 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
-  it.skip("test_edgeql_group_volatile_ptr_free_object_01 [xerror: Group by doesn't materialize volatile properly]", () => {
+  it("test_edgeql_group_volatile_ptr_free_object_01 [xerror: Group by doesn't materialize volatile properly]", () => {
     assertQueryResult(
       h,
       `
@@ -2199,7 +2199,7 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
-  it.skip("test_edgeql_group_volatile_ptr_free_object_02 [xerror: Group by doesn't materialize volatile properly]", () => {
+  it("test_edgeql_group_volatile_ptr_free_object_02 [xerror: Group by doesn't materialize volatile properly]", () => {
     assertQueryResult(
       h,
       `
@@ -2225,7 +2225,7 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
-  it.skip("test_edgeql_group_volatile_ptr_free_object_03 [xfail: Issue #8095 Select group produces incorrect keys]", () => {
+  it("test_edgeql_group_volatile_ptr_free_object_03 [xfail: Issue #8095 Select group produces incorrect keys]", () => {
     assertQueryResult(
       h,
       `
@@ -2254,7 +2254,7 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
-  it.skip("test_edgeql_group_volatile_ptr_free_object_04 [xerror: Group by doesn't materialize volatile properly]", () => {
+  it("test_edgeql_group_volatile_ptr_free_object_04 [xerror: Group by doesn't materialize volatile properly]", () => {
     assertQueryResult(
       h,
       `
@@ -2296,7 +2296,7 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
-  it.skip("test_edgeql_group_volatile_ptr_free_object_05 [xerror: Group by doesn't materialize volatile properly]", () => {
+  it("test_edgeql_group_volatile_ptr_free_object_05 [xerror: Group by doesn't materialize volatile properly]", () => {
     assertQueryResult(
       h,
       `
@@ -3548,7 +3548,7 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
-  it.skip("test_edgeql_group_binding_volatile_03 [xerror: Group by doesn't materialize volatile properly]", () => {
+  it("test_edgeql_group_binding_volatile_03 [xerror: Group by doesn't materialize volatile properly]", () => {
     assertQueryResult(
       h,
       `
@@ -3582,7 +3582,7 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
-  it.skip("test_edgeql_group_binding_volatile_04 [xerror: Group by doesn't materialize volatile properly]", () => {
+  it("test_edgeql_group_binding_volatile_04 [xerror: Group by doesn't materialize volatile properly]", () => {
     assertQueryResult(
       h,
       `
@@ -3607,7 +3607,7 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
-  it.skip("test_edgeql_group_binding_volatile_05 [xerror: Group by doesn't materialize volatile properly]", () => {
+  it("test_edgeql_group_binding_volatile_05 [xerror: Group by doesn't materialize volatile properly]", () => {
     assertQueryResult(
       h,
       `
@@ -3674,7 +3674,7 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
-  it.skip("test_edgeql_group_binding_volatile_06 [xerror: Group by doesn't materialize volatile properly]", () => {
+  it("test_edgeql_group_binding_volatile_06 [xerror: Group by doesn't materialize volatile properly]", () => {
     assertQueryResult(
       h,
       `
@@ -3705,7 +3705,7 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
-  it.skip("test_edgeql_group_binding_iterator_ptr_set_01 [xerror: Group by doesn't materialize computed pointers properly]", () => {
+  it("test_edgeql_group_binding_iterator_ptr_set_01 [xerror: Group by doesn't materialize computed pointers properly]", () => {
     assertQueryResult(
       h,
       `
@@ -4195,7 +4195,7 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
-  it.skip("test_edgeql_group_binding_iterator_ptr_set_09 [xerror: Group by doesn't materialize computed pointers properly]", () => {
+  it("test_edgeql_group_binding_iterator_ptr_set_09 [xerror: Group by doesn't materialize computed pointers properly]", () => {
     assertQueryResult(
       h,
       `
@@ -4341,7 +4341,7 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
-  it.skip("test_edgeql_group_binding_iterator_ptr_set_11 [xerror: Group by doesn't materialize computed pointers properly]", () => {
+  it("test_edgeql_group_binding_iterator_ptr_set_11 [xerror: Group by doesn't materialize computed pointers properly]", () => {
     assertQueryResult(
       h,
       `
@@ -4416,7 +4416,7 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
-  it.skip("test_edgeql_group_binding_iterator_ptr_set_12 [xerror: Group by doesn't materialize computed pointers properly]", () => {
+  it("test_edgeql_group_binding_iterator_ptr_set_12 [xerror: Group by doesn't materialize computed pointers properly]", () => {
     assertQueryResult(
       h,
       `
@@ -4469,7 +4469,7 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
-  it.skip("test_edgeql_group_binding_iterator_ptr_free_object_01 [xerror: Group by doesn't materialize computed pointers properly]", () => {
+  it("test_edgeql_group_binding_iterator_ptr_free_object_01 [xerror: Group by doesn't materialize computed pointers properly]", () => {
     assertQueryResult(
       h,
       `
@@ -4707,7 +4707,7 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
-  it.skip("test_edgeql_group_binding_iterator_ptr_free_object_09 [xerror: Group by doesn't materialize computed pointers properly]", () => {
+  it("test_edgeql_group_binding_iterator_ptr_free_object_09 [xerror: Group by doesn't materialize computed pointers properly]", () => {
     assertQueryResult(
       h,
       `
@@ -4766,7 +4766,7 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
-  it.skip("test_edgeql_group_binding_iterator_ptr_free_object_11 [xerror: Group by doesn't materialize computed pointers properly]", () => {
+  it("test_edgeql_group_binding_iterator_ptr_free_object_11 [xerror: Group by doesn't materialize computed pointers properly]", () => {
     assertQueryResult(
       h,
       `
@@ -4796,7 +4796,7 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
-  it.skip("test_edgeql_group_binding_iterator_ptr_free_object_12 [xerror: Group by doesn't materialize computed pointers properly]", () => {
+  it("test_edgeql_group_binding_iterator_ptr_free_object_12 [xerror: Group by doesn't materialize computed pointers properly]", () => {
     assertQueryResult(
       h,
       `
@@ -4827,7 +4827,7 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
-  it.skip("test_edgeql_group_binding_volatile_ptr_set_01 [xerror: Group by doesn't materialize volatile properly]", () => {
+  it("test_edgeql_group_binding_volatile_ptr_set_01 [xerror: Group by doesn't materialize volatile properly]", () => {
     assertQueryResult(
       h,
       `
@@ -4893,7 +4893,7 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
-  it.skip("test_edgeql_group_binding_volatile_ptr_set_02 [xerror: Group by doesn't materialize volatile properly]", () => {
+  it("test_edgeql_group_binding_volatile_ptr_set_02 [xerror: Group by doesn't materialize volatile properly]", () => {
     assertQueryResult(
       h,
       `
@@ -4955,7 +4955,7 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
-  it.skip("test_edgeql_group_binding_volatile_ptr_set_03 [xerror: Group by doesn't materialize volatile properly]", () => {
+  it("test_edgeql_group_binding_volatile_ptr_set_03 [xerror: Group by doesn't materialize volatile properly]", () => {
     assertQueryResult(
       h,
       `
@@ -5021,7 +5021,7 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
-  it.skip("test_edgeql_group_binding_volatile_ptr_set_04 [xerror: Group by doesn't materialize volatile properly]", () => {
+  it("test_edgeql_group_binding_volatile_ptr_set_04 [xerror: Group by doesn't materialize volatile properly]", () => {
     assertQueryResult(
       h,
       `
@@ -5059,7 +5059,7 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
-  it.skip("test_edgeql_group_binding_volatile_ptr_set_05 [xerror: Group by doesn't materialize volatile properly]", () => {
+  it("test_edgeql_group_binding_volatile_ptr_set_05 [xerror: Group by doesn't materialize volatile properly]", () => {
     assertQueryResult(
       h,
       `
@@ -5146,7 +5146,7 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
-  it.skip("test_edgeql_group_binding_volatile_ptr_set_06 [xerror: Group by doesn't materialize volatile properly]", () => {
+  it("test_edgeql_group_binding_volatile_ptr_set_06 [xerror: Group by doesn't materialize volatile properly]", () => {
     assertQueryResult(
       h,
       `
@@ -5226,7 +5226,7 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
-  it.skip("test_edgeql_group_binding_volatile_ptr_set_07 [xerror: Group by doesn't materialize volatile properly]", () => {
+  it("test_edgeql_group_binding_volatile_ptr_set_07 [xerror: Group by doesn't materialize volatile properly]", () => {
     assertQueryResult(
       h,
       `
@@ -5313,7 +5313,7 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
-  it.skip("test_edgeql_group_binding_volatile_ptr_set_08 [xerror: Group by doesn't materialize volatile properly]", () => {
+  it("test_edgeql_group_binding_volatile_ptr_set_08 [xerror: Group by doesn't materialize volatile properly]", () => {
     assertQueryResult(
       h,
       `
@@ -5391,7 +5391,7 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
-  it.skip("test_edgeql_group_binding_volatile_ptr_free_object_01 [xerror: Group by doesn't materialize volatile properly]", () => {
+  it("test_edgeql_group_binding_volatile_ptr_free_object_01 [xerror: Group by doesn't materialize volatile properly]", () => {
     assertQueryResult(
       h,
       `
@@ -5421,7 +5421,7 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
-  it.skip("test_edgeql_group_binding_volatile_ptr_free_object_02 [xerror: Group by doesn't materialize volatile properly]", () => {
+  it("test_edgeql_group_binding_volatile_ptr_free_object_02 [xerror: Group by doesn't materialize volatile properly]", () => {
     assertQueryResult(
       h,
       `
@@ -5450,7 +5450,7 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
-  it.skip("test_edgeql_group_binding_volatile_ptr_free_object_03 [xerror: Group by doesn't materialize volatile properly]", () => {
+  it("test_edgeql_group_binding_volatile_ptr_free_object_03 [xerror: Group by doesn't materialize volatile properly]", () => {
     assertQueryResult(
       h,
       `
@@ -5480,7 +5480,7 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
-  it.skip("test_edgeql_group_binding_volatile_ptr_free_object_04 [xerror: Group by doesn't materialize volatile properly]", () => {
+  it("test_edgeql_group_binding_volatile_ptr_free_object_04 [xerror: Group by doesn't materialize volatile properly]", () => {
     assertQueryResult(
       h,
       `
@@ -5507,7 +5507,7 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
-  it.skip("test_edgeql_group_binding_volatile_ptr_free_object_05 [xerror: Group by doesn't materialize volatile properly]", () => {
+  it("test_edgeql_group_binding_volatile_ptr_free_object_05 [xerror: Group by doesn't materialize volatile properly]", () => {
     assertQueryResult(
       h,
       `
@@ -5549,7 +5549,7 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
-  it.skip("test_edgeql_group_binding_volatile_ptr_free_object_06 [xerror: Group by doesn't materialize volatile properly]", () => {
+  it("test_edgeql_group_binding_volatile_ptr_free_object_06 [xerror: Group by doesn't materialize volatile properly]", () => {
     assertQueryResult(
       h,
       `
@@ -5587,7 +5587,7 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
-  it.skip("test_edgeql_group_binding_volatile_ptr_free_object_07 [xerror: Group by doesn't materialize volatile properly]", () => {
+  it("test_edgeql_group_binding_volatile_ptr_free_object_07 [xerror: Group by doesn't materialize volatile properly]", () => {
     assertQueryResult(
       h,
       `
@@ -5629,7 +5629,7 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
-  it.skip("test_edgeql_group_binding_volatile_ptr_free_object_08 [xerror: Group by doesn't materialize volatile properly]", () => {
+  it("test_edgeql_group_binding_volatile_ptr_free_object_08 [xerror: Group by doesn't materialize volatile properly]", () => {
     assertQueryResult(
       h,
       `
@@ -6613,7 +6613,7 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
-  it.skip("test_edgeql_group_issue_6019_a [xerror: Issue #6019 Grouping on key should probably be rejected. (And if not, it should not ISE!)]", () => {
+  it("test_edgeql_group_issue_6019_a [xerror: Issue #6019 Grouping on key should probably be rejected. (And if not, it should not ISE!)]", () => {
     expect(() => {
       h.script(
         `
@@ -6646,7 +6646,7 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
-  it.skip("test_edgeql_group_issue_5828 [xerror: Issue #5828 Only fails with implicit_limit and typename injection. \"there is no range var...\"]", () => {
+  it("test_edgeql_group_issue_5828 [xerror: Issue #5828 Only fails with implicit_limit and typename injection. \"there is no range var...\"]", () => {
     assertQueryResult(
       h,
       `
@@ -6681,7 +6681,7 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
-  it.skip("test_edgeql_group_issue_5757 [xerror: Issue #5757 Only fails with typename injection. Materialized set not finalized]", () => {
+  it("test_edgeql_group_issue_5757 [xerror: Issue #5757 Only fails with typename injection. Materialized set not finalized]", () => {
     assertQueryResult(
       h,
       `

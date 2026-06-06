@@ -693,22 +693,62 @@ const unwrapSelectResultSet = (set: Set): Set | null => {
   return set;
 };
 
+// Lower a top-level `GROUP <subject> BY <fields>` to a single SQL statement
+// producing one row per group, each row's `value` column holding the group
+// object `{ key: {...}, grouping: [...], elements: [...] }`. The subject
+// compiles to a value-per-row subquery (`SELECT <json element> AS "value"
+// FROM …`); we read the key fields out of that JSON with `json_extract` and
+// re-aggregate the elements with `json_group_array`. Only the resolved
+// single-grouping-set case (statement.byFieldNames set) is handled here;
+// anything else returns an empty fallback artifact so the engine routes the
+// statement to the runtime grouper.
 const compileGroupStmtToSQL = (statement: GroupStmt, options: GelIRCompileOptions): GelIRSQLArtifact => {
   const target = options.target ?? "sqlite";
   const params: ScalarValue[] = [];
-  const subjectSql = compileValueSetSQL(statement.subject, "g0", params, target, options);
-  if (!subjectSql) {
-    return {
-      sql: `SELECT NULL AS ${quoteIdent("group_subject")}`,
-      params,
-      loweringMode: "single_statement",
-    };
+
+  const byFieldNames = statement.byFieldNames;
+  if (!byFieldNames || byFieldNames.length === 0) {
+    return { sql: "", params, loweringMode: "fallback_multi_query" };
   }
-  return {
-    sql: `SELECT ${subjectSql} AS ${quoteIdent("group_subject")}`,
-    params,
-    loweringMode: "single_statement",
-  };
+
+  // The subject yields one `value`-column row per element (json_object). Its
+  // FOR/shape lowering correlates iterator vars correctly (see
+  // compileShapeObjectWithAliases).
+  const subjectSql = compileScalarSelectSQL(statement.subject, params, target, options, []);
+  if (!subjectSql) {
+    return { sql: "", params, loweringMode: "fallback_multi_query" };
+  }
+
+  const subjectAlias = "grp_src";
+  const valueCol = `${subjectAlias}.${quoteIdent("value")}`;
+  // SQLite JSON path for a (quoted) object field — `$."name"`.
+  const fieldPath = (name: string): string => `'$."${name.replaceAll('"', '""')}"'`;
+  const keyExtract = (name: string): string => `json_extract(${valueCol}, ${fieldPath(name)})`;
+
+  const distinctNames = [...new Set<string>(byFieldNames)];
+  const keyPairs = distinctNames.map((name) => `${quoteLiteral(name)}, ${keyExtract(name)}`);
+  const groupingArr = `json_array(${distinctNames.map((n) => quoteLiteral(n)).join(", ")})`;
+
+  // Strip the key-only (hidden) BY fields from the displayed elements so the
+  // output shape stays as written. `json()` re-asserts the JSON subtype so
+  // json_group_array embeds the object rather than quoting it as text.
+  const hidden = statement.hiddenByFields ?? [];
+  const elementExpr = hidden.length > 0
+    ? `json(json_remove(${valueCol}, ${hidden.map((n) => fieldPath(n)).join(", ")}))`
+    : `json(${valueCol})`;
+
+  const groupObj = `json_object(`
+    + `${quoteLiteral("key")}, json_object(${keyPairs.join(", ")}), `
+    + `${quoteLiteral("grouping")}, ${groupingArr}, `
+    + `${quoteLiteral("elements")}, COALESCE(json_group_array(${elementExpr}), json('[]'))`
+    + `)`;
+
+  const groupByCols = distinctNames.map(keyExtract).join(", ");
+  const sql = `SELECT ${groupObj} AS ${quoteIdent("value")}`
+    + ` FROM (${subjectSql}) ${subjectAlias}`
+    + ` GROUP BY ${groupByCols}`;
+
+  return { sql, params, loweringMode: "single_statement" };
 };
 
 const compileConfigStmtToSQL = (statement: ConfigStmt, options: GelIRCompileOptions): GelIRSQLArtifact => {
@@ -3600,6 +3640,39 @@ const tryCompileCorrelatedScalarPointerPathScalarSelect = (
   return `SELECT ${leafSql} AS ${quoteIdent("value")} FROM ${built.fromSql} WHERE ${built.anchorWhere}`;
 };
 
+// `x IN {.val, .children.val, .children.children.val, …}` inside a FILTER:
+// each element of the RHS set is a scalar path that must be correlated to the
+// outer row alias (`g0`), not compiled as a free table scan. Lower the set
+// (an `union` operator_call, or a single element) into a `UNION ALL` of
+// correlated scalar SELECTs whose `value` column references `sourceAlias`.
+// Returns null if any element isn't a (possibly chained) scalar pointer path.
+const tryCompileCorrelatedUnionScalarSelect = (
+  set: Set,
+  sourceAlias: string,
+  options: GelIRCompileOptions,
+): string | null => {
+  const expr = set.expr;
+  const elements: Set[] = expr.kind === "operator_call" && (expr as OperatorCall).operator === "union"
+    ? orderedCallArgs((expr as OperatorCall).args).map((arg) => arg.expr)
+    : [set];
+  const selects: string[] = [];
+  for (const element of elements) {
+    const chained = tryCompileCorrelatedScalarPointerPathScalarSelect(element, sourceAlias, options);
+    if (chained) {
+      selects.push(chained);
+      continue;
+    }
+    // A bare leaf path (`.val`) is a single column on the outer row.
+    const column = compileSetColumnRef(element);
+    if (column) {
+      selects.push(`SELECT ${sourceAlias}.${quoteIdent(column)} AS ${quoteIdent("value")}`);
+      continue;
+    }
+    return null;
+  }
+  return selects.length > 0 ? selects.join(" UNION ALL ") : null;
+};
+
 // Walks the set's expression tree; returns true if every `pointer` reference
 // occurs strictly inside an `operator_call` whose operator is a set-level
 // optional (??, ?=, ?!=). Used to decide whether the SQL FROM clause can be
@@ -4791,6 +4864,15 @@ const compileValueSortPath = (
   enumMembersByName?: (name: string) => string[] | undefined,
   fieldEnumMembers?: (typeName: string, fieldName: string) => string[] | undefined,
 ): string | null => {
+  // `ORDER BY _` where `_` is the SELECT's result alias (`SELECT _ := EXPR
+  // ORDER BY _`): the IR binds `_` to the whole (select_expr-wrapped) result
+  // set, so the per-row sort key is the already-projected `value` column.
+  // Unwrap and recurse so an inner enum-union still maps to declared order;
+  // otherwise fall back to the raw value column.
+  if (set.expr.kind === "select_expr") {
+    const inner = unwrapSelectExprSet(set).result;
+    return compileValueSortPath(inner, valueSql, target, enumMembersByName, fieldEnumMembers) ?? valueSql;
+  }
   if (set.expr.kind === "index_expr") {
     const index = extractNumericLiteral((set.expr as IndexExpr).index);
     return index === undefined ? null : `json_extract(${valueSql}, '$[${index}]')`;
@@ -6252,6 +6334,15 @@ const compilePredicateSetSQL = (
       params.push(...rightValues);
       return `(${left} ${call.operator === "in" ? "IN" : "NOT IN"} (${placeholders}))`;
     }
+    // Correlated path RHS: `x IN {.val, .children.val, …}` — each element is a
+    // path rooted at the outer row, so it must correlate to `sourceAlias`
+    // rather than scan the whole table (which a free compileScalarSelectSQL
+    // would do).
+    const rightCorrelated = tryCompileCorrelatedUnionScalarSelect(args[1].expr, sourceAlias, options);
+    if (rightCorrelated) {
+      const op = call.operator === "in" ? "IN" : "NOT IN";
+      return `(${left} ${op} (${rightCorrelated}))`;
+    }
     // Non-literal RHS: compile as a set-producing SELECT (handles
     // `.tag_set IN {…}` and other multi-row right-hand sides).
     const rightSelect = compileScalarSelectSQL(args[1].expr, params, target, options);
@@ -6495,6 +6586,13 @@ const compileValueSetSQL = (
     if (pointer.ptrref.isLinkProperty) {
       const alias = linkPropertyAlias ?? sourceAlias;
       return `${alias}.${quoteIdent(col)}`;
+    }
+    // The implicit `id` pointer arrives with a non-scalar `anytype` outTarget
+    // (the IR builder doesn't type it), but in value/predicate position it is
+    // the row's `id` column — `FILTER .id = <uuid>` / `.id IN {…}` must lower
+    // to a column comparison rather than being dropped as an object link.
+    if (pointer.ptrref.isIdPointer || (pointer.ptrref.shortName === "id" && pointer.source.expr.kind === "type_root")) {
+      return `${sourceAlias}.${quoteIdent("id")}`;
     }
     if (!pointer.ptrref.outTarget.isScalar) {
       // Non-scalar outbound link from a *truly polymorphic* source: the
@@ -7609,6 +7707,27 @@ const compileEmbeddedGroupSQL = (
   return `COALESCE((SELECT json_group_array(json(${quoteIdent("item")})) FROM (${innerSelect}) g), json('[]'))`;
 };
 
+// When recursing into a nested link inside an already-materialized object
+// (`children: { children: {…} }`), the pointer's `.source` still carries the
+// full path chain from the outer query. But the parent row is already bound to
+// `sourceAlias`, so the link must anchor directly on it rather than re-walking
+// the chain (which `compileChainSourceIdSetSQL` would otherwise do, producing a
+// grandchildren lookup). Reset the source to a bare type-root so the direct
+// `sourceAlias.id` anchor is used.
+const resetPointerSourceToRoot = (pointer: Pointer): Pointer => {
+  if (pointer.source.expr.kind === "type_root") {
+    return pointer;
+  }
+  const srcType = pointer.source.typeref;
+  return {
+    ...pointer,
+    source: {
+      ...pointer.source,
+      expr: { kind: "type_root", typeref: srcType, skipSubtypes: false, isCachedGlobal: false },
+    },
+  };
+};
+
 const compilePointerArrayExpr = (
   pointer: Pointer,
   sourceAlias: string,
@@ -7619,7 +7738,11 @@ const compilePointerArrayExpr = (
   depth: number,
   modifiers?: SelectExpr,
 ): string => {
-  const maxDepth = options.maxShapeDepth ?? 2;
+  // Nested-shape recursion is driven by the (finite) IR shape, so it terminates
+  // on its own when a level has no further link elements. This cap is only a
+  // safety bound against pathological cyclic shapes, not a feature limit, so it
+  // is set well above any realistic hand-written nesting depth.
+  const maxDepth = options.maxShapeDepth ?? 32;
   if (depth > maxDepth) {
     return "'[]'";
   }
@@ -7972,9 +8095,26 @@ const compilePublicShapeObjectExpr = (
   const pairs: string[] = [];
 
   for (const element of shape) {
-    if (element.expr.expr.kind === "pointer" && !element.expr.typeref.isScalar) {
-      const nested = compilePointerArrayExpr(element.expr.expr, sourceAlias, element.expr.shape, params, options, target, depth + 1);
-      const key = quoteLiteral(element.expr.expr.ptrref.shortName);
+    // A nested link shape can carry per-link modifiers (`children: {…} ORDER
+    // BY .val`), which wrap the pointer in a `select_expr`. Unwrap it so the
+    // pointer (and its own nested shape) is found and the ORDER BY/LIMIT reach
+    // the inner aggregate. Use the element's declared name for the key — a
+    // computed link alias (`children := .<parent`) resolves to a pointer whose
+    // `shortName` is the underlying link (`parent`).
+    const elemUnwrapped = unwrapSelectExprSet(element.expr);
+    const elemResult = elemUnwrapped.result;
+    if (elemResult.expr.kind === "pointer" && !elemResult.typeref.isScalar) {
+      const nested = compilePointerArrayExpr(
+        resetPointerSourceToRoot(elemResult.expr as Pointer),
+        sourceAlias,
+        elemResult.shape ?? [],
+        params,
+        options,
+        target,
+        depth + 1,
+        elemUnwrapped.selectExpr,
+      );
+      const key = quoteLiteral(shapeAliasForElement(element, elemResult, depth));
       if (element.cardinality === "many" || element.cardinality === "at_least_one") {
         pairs.push(`${key}, json(${nested})`);
       } else {
@@ -8021,9 +8161,26 @@ const compileShapeObjectExpr = (
   ];
 
   for (const element of shape) {
-    if (element.expr.expr.kind === "pointer" && !element.expr.typeref.isScalar) {
-      const nested = compilePointerArrayExpr(element.expr.expr, sourceAlias, element.expr.shape, params, options, target, depth + 1);
-      const key = quoteLiteral(element.expr.expr.ptrref.shortName);
+    // A nested link shape can carry per-link modifiers (`children: {…} ORDER
+    // BY .val`), which wrap the pointer in a `select_expr`. Unwrap it so the
+    // pointer (and its own nested shape) is found and the ORDER BY/LIMIT reach
+    // the inner aggregate. Use the element's declared name for the key — a
+    // computed link alias (`children := .<parent`) resolves to a pointer whose
+    // `shortName` is the underlying link (`parent`).
+    const elemUnwrapped = unwrapSelectExprSet(element.expr);
+    const elemResult = elemUnwrapped.result;
+    if (elemResult.expr.kind === "pointer" && !elemResult.typeref.isScalar) {
+      const nested = compilePointerArrayExpr(
+        resetPointerSourceToRoot(elemResult.expr as Pointer),
+        sourceAlias,
+        elemResult.shape ?? [],
+        params,
+        options,
+        target,
+        depth + 1,
+        elemUnwrapped.selectExpr,
+      );
+      const key = quoteLiteral(shapeAliasForElement(element, elemResult, depth));
       if (element.cardinality === "many" || element.cardinality === "at_least_one") {
         pairs.push(`${key}, json(${nested})`);
       } else {

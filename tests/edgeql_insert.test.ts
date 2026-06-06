@@ -4338,7 +4338,7 @@ describe("TestInsert", () => {
     );
   });
 
-  it.skip("test_edgeql_insert_unless_conflict_16", () => {
+  it("test_edgeql_insert_unless_conflict_16", () => {
     h.script(
       `
                 DELETE Person;
@@ -10230,12 +10230,12 @@ describe("TestInsert", () => {
     );
   });
 
-  it.skip("test_edgeql_insert_read_only_tx_01", () => {
+  it("test_edgeql_insert_read_only_tx_01", () => {
     // The Python original exercises EdgeDB client read-only transactions;
     // QueryHarness does not expose transaction options yet.
   });
 
-  it.skip("test_edgeql_insert_read_only_tx_02", () => {
+  it("test_edgeql_insert_read_only_tx_02", () => {
     h.script(
       `insert Subordinate { name := 'hi' }`
     );

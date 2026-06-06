@@ -45,6 +45,7 @@ import type {
   UpdateStmt,
   DeleteStmt,
   ConfigStmt,
+  GroupStmt,
   InsertExpr,
   UpdateExpr,
   DeleteExpr,
@@ -327,6 +328,17 @@ const resolveTypeRef = (ctx: IRCompileContext, name: string): TypeRef => {
     return unknownTypeRef(BUILTIN_SCALAR_NAMES[name]);
   }
   return unknownTypeRef(qualifyTypeName(name, ctx.module));
+};
+
+// INSERT/UPDATE subjects may name a WITH binding that aliases a type
+// (`WITH T1 := Tree, INSERT T1 {…}`). Prefer the binding's object type so the
+// DML targets the real storage table instead of a phantom `default__t1`.
+const resolveSubjectTypeRef = (ctx: IRCompileContext, name: string): TypeRef => {
+  const bound = resolveBinding(ctx, name);
+  if (bound && !bound.typeref.isScalar && !bound.typeref.id.startsWith("unknown:")) {
+    return bound.typeref;
+  }
+  return resolveTypeRef(ctx, name);
 };
 
 // Parse a parametric tuple type *name* (`tuple<a: str, b: int64>`,
@@ -697,6 +709,13 @@ const validateShapeProjectionLinkPropContext = (expr: Extract<FreeObjectExpr, { 
 };
 
 const resolvePointerRef = (ctx: IRCompileContext, source: TypeRef, field: string): PointerRef | undefined => {
+  // Every object type carries an implicit `id` pointer that isn't part of its
+  // declared fields/links, so it never appears in `resolvedFields`. Surface it
+  // explicitly so `FILTER .id = …` / `.id IN {…}` resolve to a real scalar
+  // pointer (the `id` column) instead of collapsing to the bare subject set.
+  if (field === "id" && !source.isScalar) {
+    return idPointerRef(source);
+  }
   const sourceType = getResolvedSchemaType(ctx, source.id);
   if (sourceType) {
     const schemaField = sourceType.resolvedFields.find((candidate) => candidate.name === field);
@@ -2941,12 +2960,49 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
 
     case "concat": {
       const partTypes = expr.parts.map((part) => inferAstExprTypeName(part, ctx));
-      const nonStrIndex = partTypes.findIndex((typeName) => typeName !== undefined && typeName !== "std::str");
-      if (nonStrIndex >= 0) {
-        const offenderType = partTypes[nonStrIndex]!;
-        const otherType = partTypes.find((typeName, index) => index !== nonStrIndex && typeName !== undefined) ?? "std::str";
-        const [leftType, rightType] = nonStrIndex === 0 ? [offenderType, otherType] : [otherType, offenderType];
-        failSemantic(`operator '++' cannot be applied to operands of type '${leftType}' and '${rightType}'`);
+      const isArrayType = (typeName?: string): boolean => !!typeName && typeName.startsWith("array<");
+      const definedTypes = partTypes.filter((typeName): typeName is string => typeName !== undefined);
+      if (definedTypes.some(isArrayType)) {
+        // `++` over arrays is array concatenation, not string concat. Every
+        // defined operand must be an array; mixing an array with a scalar is
+        // the genuine type error.
+        const nonArrayIndex = partTypes.findIndex((typeName) => typeName !== undefined && !isArrayType(typeName));
+        if (nonArrayIndex >= 0) {
+          const offenderType = partTypes[nonArrayIndex]!;
+          const otherType = definedTypes.find(isArrayType)!;
+          const [leftType, rightType] = nonArrayIndex === 0 ? [offenderType, otherType] : [otherType, offenderType];
+          failSemantic(`operator '++' cannot be applied to operands of type '${leftType}' and '${rightType}'`);
+        }
+        // Array concatenation requires compatible element types — `[1,2] ++
+        // ['a']` (array<int64> ++ array<str>) is an error reported in terms of
+        // the element types. `anytype` (an empty/untyped array_agg) unifies
+        // with anything; numeric scalars promote to each other; tuple/array
+        // element types are left to downstream structural checks.
+        const numericTypes = new globalThis.Set<string>([
+          "std::int16", "std::int32", "std::int64", "std::float32",
+          "std::float64", "std::decimal", "std::bigint",
+        ]);
+        const elementType = (typeName: string): string => typeName.slice("array<".length, -1);
+        const elementsIncompatible = (left: string, right: string): boolean => {
+          if (left === right) return false;
+          if (left === "anytype" || right === "anytype" || left === "std::anytype" || right === "std::anytype") return false;
+          if (left.includes("<") || right.includes("<")) return false;
+          if (numericTypes.has(left) && numericTypes.has(right)) return false;
+          return true;
+        };
+        const concreteElements = definedTypes.map(elementType);
+        const mismatch = concreteElements.find((elem) => elementsIncompatible(concreteElements[0]!, elem));
+        if (mismatch !== undefined) {
+          failSemantic(`operator '++' cannot be applied to operands of type '${concreteElements[0]}' and '${mismatch}'`);
+        }
+      } else {
+        const nonStrIndex = partTypes.findIndex((typeName) => typeName !== undefined && typeName !== "std::str");
+        if (nonStrIndex >= 0) {
+          const offenderType = partTypes[nonStrIndex]!;
+          const otherType = partTypes.find((typeName, index) => index !== nonStrIndex && typeName !== undefined) ?? "std::str";
+          const [leftType, rightType] = nonStrIndex === 0 ? [offenderType, otherType] : [otherType, offenderType];
+          failSemantic(`operator '++' cannot be applied to operands of type '${leftType}' and '${rightType}'`);
+        }
       }
       const parts = expr.parts.map((part) => compileFreeObjectExpr(part, ctx));
       return {
@@ -3675,7 +3731,7 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
         };
       }
       if (stmt.kind === "insert") {
-        const typeref = resolveTypeRef(scoped, stmt.typeName);
+        const typeref = resolveSubjectTypeRef(scoped, stmt.typeName);
         const subjectSet = setFromTypeRoot(typeref);
         bindValue(scoped, "__subject__", subjectSet);
         bindValue(scoped, "__current__", subjectSet);
@@ -3705,7 +3761,7 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
         };
       }
       if (stmt.kind === "update") {
-        const typeref = resolveTypeRef(scoped, stmt.typeName);
+        const typeref = resolveSubjectTypeRef(scoped, stmt.typeName);
         const subjectSet = setFromTypeRoot(typeref);
         bindValue(scoped, "__subject__", subjectSet);
         bindValue(scoped, "__current__", subjectSet);
@@ -3902,6 +3958,29 @@ const compileFilterValue = (value: FilterValue, ctx: IRCompileContext): Set => {
 
 const compileFilterTarget = (target: FilterTarget, subject: Set, ctx: IRCompileContext): Set => {
   if (target.kind === "field") {
+    // A bare leading identifier (no leading dot) that names a WITH binding is a
+    // free reference to that binding's value — `WITH x := '010' … FILTER x IN
+    // {…}` compares the literal `x`, not an implicit `.x` on the subject.
+    // Without this, the binding lookup below only suppresses the "no such
+    // property" error and the target silently collapses to the subject set.
+    if ("bareName" in target && target.bareName) {
+      const segments = target.field.split(".");
+      const first = segments[0]!;
+      const bound = first === "__current__" || first === "__subject__"
+        ? undefined
+        : resolveBinding(ctx, first);
+      if (bound) {
+        let result = bound;
+        for (let i = 1; i < segments.length; i++) {
+          const ptrref = resolvePointerRef(ctx, result.typeref, segments[i]!);
+          if (!ptrref) {
+            break;
+          }
+          result = extendPathSet(result, ptrref);
+        }
+        return result;
+      }
+    }
     // `FILTER number = …` (no leading dot) — EdgeQL treats this as a free
     // reference to a type/alias named "number", not as an implicit field on
     // the subject. If the parser tagged it bareName and we can confirm no
@@ -5366,24 +5445,34 @@ const compileShape = (
       }
       let expr = extendPathSet(subject, ptrref);
       if (el.shape && el.shape.length > 0) {
+        // An explicit nested shape is bounded by the written query, so it's
+        // safe to descend even into self-referential links (`Tree { children:
+        // { children: {…} } }`); the `seenTypeIds` cycle guard only needs to
+        // constrain implicit splat expansion, not user-written nesting.
         const nextSeen = new globalThis.Set(seenTypeIds);
-        const canDescend = !nextSeen.has(expr.typeref.id);
         nextSeen.add(expr.typeref.id);
-        if (canDescend) {
-          expr = {
-            ...expr,
-            shape: compileShape(expr, el.shape, ctx, nextSeen),
-          };
-        }
+        expr = {
+          ...expr,
+          shape: compileShape(expr, el.shape, ctx, nextSeen),
+        };
       }
+      // A computed link alias that expands to a bare backlink (`multi link
+      // children := .<parent[IS Tree]`) resolves to the *forward* link's
+      // ptrref (here `parent`), so its `outCardinality` describes the forward
+      // direction (single). Traversed backward, the effective cardinality is
+      // the forward link's `inCardinality` (many unless the forward link is
+      // exclusive).
+      const linkCardinality = ptrref.computedLinkAliasIsBackward
+        ? ptrref.inCardinality
+        : ptrref.outCardinality;
       out.push({
         kind: "shape_element",
         source: subject,
         expr: withShapeModifiers(expr, el),
         shapeOp: el.operation,
         shapeOrigin: resolveShapeOrigin(el),
-        required: el.required ?? (ptrref.outCardinality === "one"),
-        cardinality: el.cardinality ?? ptrref.outCardinality,
+        required: el.required ?? (linkCardinality === "one"),
+        cardinality: el.cardinality ?? linkCardinality,
         name: el.name,
       });
       continue;
@@ -5397,7 +5486,7 @@ const compileShape = (
       let expr = extendPathSetDirectional(subject, ptrref, "inbound");
       if (el.shape && el.shape.length > 0) {
         const nextSeen = new globalThis.Set(seenTypeIds);
-        const canDescend = !nextSeen.has(expr.typeref.id);
+        const canDescend = true;
         nextSeen.add(expr.typeref.id);
         if (canDescend) {
           expr = {
@@ -5535,11 +5624,21 @@ const compileInsertValue = (value: InsertValue, ctx: IRCompileContext, seenInser
 const compileSelectExprStatement = (statement: Extract<EdgeQLStatement, { kind: "select_expr" }>, ctx: IRCompileContext): SelectStmt => {
   const scoped = withBindings(ctx, statement.with);
   const result = compileFreeObjectExpr(statement.expr, scoped);
+  // `SELECT _ := EXPR ORDER BY _` — the result alias (`_`) is only bound while
+  // compiling the subquery's own clauses, so the outer ORDER BY can't see it
+  // and `_` collapses to a bare type-root (dropping the sort). Bind the alias
+  // to the compiled result for the ORDER BY scope so it sorts by the value.
+  const orderCtx = childScope(scoped);
+  if (statement.expr.kind === "select_expr_subquery" && statement.expr.alias) {
+    bindValue(orderCtx, statement.expr.alias, result);
+    bindValue(orderCtx, "__current__", result);
+    bindValue(orderCtx, "__subject__", result);
+  }
   return {
     kind: "select_stmt",
     expr: result,
     ...statementBase(scoped),
-    orderBy: compileOrderBy(statement, scoped),
+    orderBy: compileOrderBy(statement, orderCtx),
     implicitWrapper: false,
     span: statement.pos,
   };
@@ -6133,7 +6232,7 @@ const compileSelectFreeStatement = (statement: SelectFreeStatement, ctx: IRCompi
 
 const compileInsertStatement = (statement: InsertStatement, ctx: IRCompileContext): InsertStmt => {
   const scoped = withBindings(ctx, statement.with);
-  const subject = resolveTypeRef(scoped, statement.typeName);
+  const subject = resolveSubjectTypeRef(scoped, statement.typeName);
   const subjectSet = setFromTypeRoot(subject);
   bindValue(scoped, "__subject__", subjectSet);
   bindValue(scoped, "__current__", subjectSet);
@@ -6163,7 +6262,7 @@ const compileInsertStatement = (statement: InsertStatement, ctx: IRCompileContex
 
 const compileUpdateStatement = (statement: UpdateStatement, ctx: IRCompileContext): UpdateStmt => {
   const scoped = withBindings(ctx, statement.with);
-  const subject = resolveTypeRef(scoped, statement.typeName);
+  const subject = resolveSubjectTypeRef(scoped, statement.typeName);
   const subjectSet = setFromTypeRoot(subject);
   bindValue(scoped, "__subject__", subjectSet);
   bindValue(scoped, "__current__", subjectSet);
@@ -6242,6 +6341,94 @@ const compileForStatement = (statement: ForStatement, ctx: IRCompileContext): Se
   };
 };
 
+// Top-level `GROUP <subject> BY <atoms>`. Builds the GelIR GroupStmt the SQL
+// stage lowers to `{ key, grouping, elements }` rows. Only the
+// single-grouping-set, plain-field BY case (no USING / CUBE / ROLLUP /
+// grouping-sets / link-property keys) sets `byFieldNames`; everything else
+// leaves it undefined so the SQL stage bails and the runtime grouper runs.
+const compileGroupStatement = (statement: Extract<EdgeQLStatement, { kind: "group" }>, ctx: IRCompileContext): GroupStmt => {
+  const scoped = withBindings(ctx, statement.with);
+
+  const atomsOf = (el: GroupByElement): GroupByAtom[] => {
+    if (el.kind === "field_ref" || el.kind === "name_ref" || el.kind === "link_property_ref") return [el];
+    if (el.kind === "sets") return el.sets.flat();
+    return el.atoms; // cube / rollup
+  };
+  const atomName = (atom: GroupByAtom): string =>
+    atom.kind === "field_ref" ? atom.field : atom.name;
+
+  const isSimple = !statement.using?.length
+    && statement.by.every((el) => el.kind === "field_ref" || el.kind === "name_ref");
+  const byFieldNames = isSimple
+    ? statement.by.flatMap(atomsOf).map(atomName)
+    : undefined;
+
+  // Augment a shape-projected subject (`X { name }`) with any BY field it
+  // doesn't already project (`… BY .b`) so the key is readable, recording the
+  // added fields so the SQL stage strips them from the displayed elements.
+  let sourceAst = statement.source;
+  const hiddenByFields: string[] = [];
+  if (byFieldNames && sourceAst.kind === "shape_projection") {
+    const present = new globalThis.Set<string>(
+      sourceAst.shape
+        .filter((s): s is Extract<EdgeQLShapeElement, { name: string }> => "name" in s && typeof s.name === "string")
+        .map((s) => s.name),
+    );
+    const additions: EdgeQLShapeElement[] = [];
+    for (const name of byFieldNames) {
+      if (present.has(name)) continue;
+      additions.push({ kind: "field", name });
+      hiddenByFields.push(name);
+      present.add(name);
+    }
+    if (additions.length > 0) {
+      sourceAst = { ...sourceAst, shape: [...sourceAst.shape, ...additions] };
+    }
+  }
+
+  // The subject may not be lowerable to GelIR (e.g. `select X { name, b }`
+  // re-projects a computed field `b` off the binding `X`, which the shape
+  // compiler validates against the base type and rejects). In that case emit a
+  // non-lowerable GroupStmt (byFieldNames cleared) so the SQL stage bails and
+  // the engine falls back to the runtime grouper, which handles it.
+  let subject: Set;
+  let lowerable = byFieldNames !== undefined;
+  try {
+    subject = compileFreeObjectExpr(sourceAst, scoped);
+  } catch {
+    subject = literalToSet(null);
+    lowerable = false;
+  }
+
+  // Only the FOR-iteration family (`group (for … select …) by …`) lowers to
+  // SQL here — its subject produces one element row per iteration, which the
+  // json_group_array re-aggregation models exactly. Non-iteration subjects
+  // (a bare type root like `Card`, or a free object `{ a := 1, b := N }`
+  // whose multi field is a set, not an iteration) keep different cardinality
+  // semantics and stay on the runtime grouper.
+  if (lowerable) {
+    let cursor: Set = subject;
+    while (cursor.expr.kind === "select_expr") {
+      cursor = (cursor.expr as SelectExpr).result;
+    }
+    if (cursor.expr.kind !== "for_expr") {
+      lowerable = false;
+    }
+  }
+
+  return {
+    kind: "group_stmt",
+    expr: subject,
+    subject,
+    by: [],
+    using: {},
+    byFieldNames: lowerable ? byFieldNames : undefined,
+    hiddenByFields: lowerable && hiddenByFields.length > 0 ? hiddenByFields : undefined,
+    ...statementBase(scoped),
+    span: statement.pos,
+  } as GroupStmt;
+};
+
 const compileConfigureStatement = (statement: ConfigureStatement, ctx: IRCompileContext): ConfigStmt => {
   const scoped = withBindings(ctx, statement.with);
   return {
@@ -6302,6 +6489,10 @@ export const compileASTToGelIR = (statement: EdgeQLStatement, options: IRCompile
     return compileConfigureStatement(statement, ctx);
   }
 
+  if (statement.kind === "group") {
+    return compileGroupStatement(statement, ctx);
+  }
+
   throw new AppError(
     "E_RUNTIME",
     `AST->IR entrypoint is scaffolded, but statement '${statement.kind}' is not wired yet`,
@@ -6318,7 +6509,8 @@ export const isGelIRCompatibleStatement = (statement: EdgeQLStatement): boolean 
     || statement.kind === "update"
     || statement.kind === "delete"
     || statement.kind === "for"
-    || statement.kind === "configure";
+    || statement.kind === "configure"
+    || statement.kind === "group";
 };
 
 export type GelIRCompileResult = Statement;

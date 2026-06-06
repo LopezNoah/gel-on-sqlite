@@ -1259,7 +1259,7 @@ describe("TestEdgeQLLinkproperties", () => {
     );
   });
 
-  it.skip("test_edgeql_props_link_union_01", () => {
+  it("test_edgeql_props_link_union_01", () => {
     h.script(
       `
             CREATE TYPE Tgt;
@@ -1308,7 +1308,7 @@ describe("TestEdgeQLLinkproperties", () => {
     );
   });
 
-  it.skip("test_edgeql_props_link_union_02", () => {
+  it("test_edgeql_props_link_union_02", () => {
     h.script(
       `
             CREATE TYPE Tgt;
@@ -1357,7 +1357,7 @@ describe("TestEdgeQLLinkproperties", () => {
     );
   });
 
-  it.skip("test_edgeql_props_link_union_03", () => {
+  it("test_edgeql_props_link_union_03", () => {
     h.script(
       `
             CREATE TYPE Tgt;
@@ -1551,7 +1551,7 @@ describe("TestEdgeQLLinkproperties", () => {
     }).toThrow(new RegExp("has no property 'count'"));
   });
 
-  it.skip("test_edgeql_props_back_07 [xfail: We are too permissive with intersections on supertypes]", () => {
+  it("test_edgeql_props_back_07 [xfail: We are too permissive with intersections on supertypes]", () => {
     expect(() => {
       h.query(
         `
@@ -1583,7 +1583,7 @@ describe("TestEdgeQLLinkproperties", () => {
     );
   });
 
-  it.skip("test_edgeql_props_back_09 [xerror: Stack overflow!]", () => {
+  it("test_edgeql_props_back_09 [xerror: Stack overflow!]", () => {
     assertQueryResult(
       h,
       `
@@ -1905,7 +1905,7 @@ describe("TestEdgeQLLinkproperties", () => {
     }).toThrow(new RegExp("implicit reference to an object changes the interpretation of it elsewhere in the query"));
   });
 
-  it.skip("test_edgeql_props_modification_01", () => {
+  it("test_edgeql_props_modification_01", () => {
     h.script(
       `
             CREATE TYPE Tgt;
@@ -1925,7 +1925,7 @@ describe("TestEdgeQLLinkproperties", () => {
     }).toThrow(new RegExp("link 'l' of object type 'default::Src' has no property 'y'"));
   });
 
-  it.skip("test_edgeql_props_tuples_01", () => {
+  it("test_edgeql_props_tuples_01", () => {
     h.script(
       `
             create type Org;
@@ -1948,7 +1948,7 @@ describe("TestEdgeQLLinkproperties", () => {
     );
   });
 
-  it.skip("test_edgeql_pure_computed_linkprops_01", () => {
+  it("test_edgeql_pure_computed_linkprops_01", () => {
     h.script(
       `
             CREATE TYPE default::Test3 {
@@ -2003,7 +2003,7 @@ describe("TestEdgeQLLinkproperties", () => {
     }).toThrow(new RegExp("@target may only be used in index and constraint definitions"));
   });
 
-  it.skip("test_edgeql_props_dunder_default_01", () => {
+  it("test_edgeql_props_dunder_default_01", () => {
     h.script(
       `
             CREATE TYPE Tgt {
@@ -2100,7 +2100,7 @@ describe("TestEdgeQLLinkproperties", () => {
     );
   });
 
-  it.skip("test_edgeql_props_dunder_default_02", () => {
+  it("test_edgeql_props_dunder_default_02", () => {
     h.script(
       `
             CREATE TYPE Tgt {
@@ -2159,7 +2159,7 @@ describe("TestEdgeQLLinkproperties", () => {
     );
   });
 
-  it.skip("test_edgeql_props_dunder_default_03", () => {
+  it("test_edgeql_props_dunder_default_03", () => {
     h.script(
       `
             CREATE TYPE Tgt {
@@ -2244,7 +2244,7 @@ describe("TestEdgeQLLinkproperties", () => {
     );
   });
 
-  it.skip("test_edgeql_props_dunder_default_04", () => {
+  it("test_edgeql_props_dunder_default_04", () => {
     h.script(
       `
             CREATE TYPE Tgt {

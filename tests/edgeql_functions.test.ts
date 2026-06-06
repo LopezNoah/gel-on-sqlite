@@ -865,7 +865,7 @@ describe("TestEdgeQLFunctions", () => {
     );
   });
 
-  it.skip("test_edgeql_functions_array_fill_02 [xerror: edb.errors.InternalServerError: return type record[] is not supported for SQL functions]", () => {
+  it("test_edgeql_functions_array_fill_02 [xerror: edb.errors.InternalServerError: return type record[] is not supported for SQL functions]", () => {
     assertQueryResult(
       h,
       `select array_fill((1, 'hello'), 5);`,
@@ -881,7 +881,7 @@ describe("TestEdgeQLFunctions", () => {
     );
   });
 
-  it.skip("test_edgeql_functions_array_fill_03 [xerror: edb.errors.InternalServerError: return type record[] is not supported for SQL functions]", () => {
+  it("test_edgeql_functions_array_fill_03 [xerror: edb.errors.InternalServerError: return type record[] is not supported for SQL functions]", () => {
     assertQueryResult(
       h,
       `select array_fill((a := 1, b := 'hello'), 5);`,
@@ -930,7 +930,7 @@ describe("TestEdgeQLFunctions", () => {
     }).toThrow(new RegExp("array size exceeds the maximum allowed"));
   });
 
-  it.skip("test_edgeql_functions_array_fill_05 [xerror: edb.errors.InternalServerError: return type record[] is not supported for SQL functions]", () => {
+  it("test_edgeql_functions_array_fill_05 [xerror: edb.errors.InternalServerError: return type record[] is not supported for SQL functions]", () => {
     assertQueryResult(
       h,
       `SELECT array_fill([1], 5);`,
@@ -1680,7 +1680,7 @@ describe("TestEdgeQLFunctions", () => {
     );
   });
 
-  it.skip("test_edgeql_functions_array_set_01b [xerror: edb.errors.InternalServerError: return type record[] is not supported for SQL functions]", () => {
+  it("test_edgeql_functions_array_set_01b [xerror: edb.errors.InternalServerError: return type record[] is not supported for SQL functions]", () => {
     assertQueryResult(
       h,
       `SELECT array_set([[1], [2], [3], [4]], 0, [9]);`,
@@ -1939,7 +1939,7 @@ describe("TestEdgeQLFunctions", () => {
     );
   });
 
-  it.skip("test_edgeql_functions_array_insert_01b [xerror: edb.errors.InternalServerError: return type record[] is not supported for SQL functions]", () => {
+  it("test_edgeql_functions_array_insert_01b [xerror: edb.errors.InternalServerError: return type record[] is not supported for SQL functions]", () => {
     assertQueryResult(
       h,
       `SELECT array_insert([[1], [2], [3], [4]], 0, [9]);`,
@@ -2146,7 +2146,7 @@ describe("TestEdgeQLFunctions", () => {
     }).toThrow(new RegExp("array index -1 is out of bounds"));
   });
 
-  it.skip("test_edgeql_functions_re_match_01 [xerror: Known collation issue on Heroku Postgres]", () => {
+  it("test_edgeql_functions_re_match_01 [xerror: Known collation issue on Heroku Postgres]", () => {
     assertQueryResult(
       h,
       `SELECT re_match('ab', 'AbabaB');`,
@@ -2250,7 +2250,7 @@ describe("TestEdgeQLFunctions", () => {
     }).toThrow(new RegExp("invalid regular expression"));
   });
 
-  it.skip("test_edgeql_functions_re_match_all_01 [xerror: Known collation issue on Heroku Postgres]", () => {
+  it("test_edgeql_functions_re_match_all_01 [xerror: Known collation issue on Heroku Postgres]", () => {
     assertQueryResult(
       h,
       `SELECT re_match_all('ab', 'AbabaB');`,
@@ -18884,7 +18884,7 @@ describe("TestEdgeQLFunctions", () => {
     );
   });
 
-  it.skip("test_edgeql_functions_min_01 [xerror: Known collation issue on Heroku Postgres]", () => {
+  it("test_edgeql_functions_min_01 [xerror: Known collation issue on Heroku Postgres]", () => {
     assertQueryResult(
       h,
       `SELECT min(<int64>{});`,
