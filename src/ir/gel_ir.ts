@@ -604,6 +604,10 @@ export interface GroupRowsExpr extends Base {
   group: GroupStmt;
   projection?: GroupRowProjection[];
   unlowerable?: boolean;
+  // The trailing-shape AST this projection was parsed from (same loose
+  // typing rationale as astParts) — needed when a later clause forces a
+  // rebuild with extra subject fields.
+  astShape?: unknown;
   // The group's AST parts (source/using/by — typed loosely to keep AST types
   // out of this module). A projection applied later (`select GR {elements:
   // {name}}` over a WITH binding) may need subject fields the original
@@ -634,9 +638,14 @@ export type GroupRowProjection =
   // `name: (select .elements.name limit 1)` — a field of the group's first
   // element (steps are the path AFTER `.elements`)
   | { name: string; kind: "element_first_path"; steps: string[] }
+  // `keyCard := (select .elements {id} limit 1)` — the group's first element
+  // re-projected to a field subset
+  | { name: string; kind: "element_first_shape"; fields: string[] }
   // `agrouping := array_agg((SELECT _ := .grouping ORDER BY _))` — the
   // grouping-set names as a sorted array (a stable per-set identifier)
-  | { name: string; kind: "sorted_grouping" };
+  | { name: string; kind: "sorted_grouping" }
+  // `minCost := min(.elements.cost)` — an aggregate over an element field
+  | { name: string; kind: "element_agg"; fn: "min" | "max" | "sum" | "avg"; steps: string[] };
 
 export type GroupElementsField =
   // plain field passthrough (`name`)
