@@ -170,6 +170,8 @@ export const compileGelIRToSQL = (
       sourceSet.expr as GroupRowsExpr,
       selectWhere,
       selectOrderBy,
+      statement.limit ?? topSelect.selectExpr?.limit,
+      statement.offset ?? topSelect.selectExpr?.offset,
       params,
       target,
       options,
@@ -840,6 +842,7 @@ const compileGroupRowsSQL = (
       return compileScalarSelectSQL(statement.subject, params, target, { ...options, strictShape: true }, []);
     } catch (err) {
       if (!(err instanceof ShapeLoweringMiss)) throw err;
+      if (process.env.DBG_GROUP_SQL) console.error("[group-sql] subject miss:", err.message);
       return null;
     }
   };
@@ -939,6 +942,16 @@ const compileGroupRowsValueSQL = (
       const tail = proj.steps.map((s) => `."${s.replaceAll('"', '""')}"`).join("");
       return `json_extract(${rawValue}, '$."elements"[0]${tail}')`;
     }
+    if (proj.kind === "element_first_shape") {
+      const pairs = proj.fields.map((field) =>
+        `${quoteLiteral(field)}, json_extract(${rawValue}, '$."elements"[0]."${field.replaceAll('"', '""')}"')`);
+      return `json_object(${pairs.join(", ")})`;
+    }
+    if (proj.kind === "element_agg") {
+      const tail = proj.steps.map((s) => `."${s.replaceAll('"', '""')}"`).join("");
+      return `(SELECT ${proj.fn === "avg" ? "avg" : proj.fn}(json_extract(je.${quoteIdent("value")}, '$${tail}'))`
+        + ` FROM json_each(COALESCE(json_extract(${rawValue}, '$."elements"'), '[]')) je)`;
+    }
     if (proj.kind === "sorted_grouping") {
       return `json((SELECT json_group_array(je.${quoteIdent("value")})`
         + ` FROM (SELECT ${quoteIdent("value")} FROM json_each(COALESCE(json_extract(${rawValue}, '$."grouping"'), '[]')) ORDER BY ${quoteIdent("value")}) je))`;
@@ -976,6 +989,8 @@ const compileGroupRowsStatementSQL = (
   groupRows: GroupRowsExpr,
   where: Set | undefined,
   orderBy: SortExpr[] | undefined,
+  limit: Set | undefined,
+  offset: Set | undefined,
   params: ScalarValue[],
   target: RuntimeTarget,
   options: GelIRCompileOptions,
@@ -1003,11 +1018,31 @@ const compileGroupRowsStatementSQL = (
   if (orderBy && orderBy.length > 0) {
     const parts: string[] = [];
     for (const sort of orderBy) {
-      const sortSql = compileGroupRowSortSQL(sort.path, alias, params, target, clauseOptions);
-      if (!sortSql) return fallback;
-      parts.push(`${sortSql} ${sort.direction === "desc" ? "DESC" : "ASC"}`);
+      // A tuple sort key (`ORDER BY (count(.grouping), array_agg(…))`)
+      // expands into one ORDER BY term per element.
+      const sortKeys: Set[] = [];
+      const peeled = unwrapSelectExprSet(sort.path).result;
+      if (peeled.expr.kind === "tuple") {
+        for (const el of (peeled.expr as Tuple).elements) sortKeys.push(el.val);
+      } else {
+        sortKeys.push(sort.path);
+      }
+      for (const key of sortKeys) {
+        const sortSql = compileGroupRowSortSQL(key, alias, params, target, clauseOptions);
+        if (!sortSql) return fallback;
+        parts.push(`${sortSql} ${sort.direction === "desc" ? "DESC" : "ASC"}`);
+      }
     }
     sql += ` ORDER BY ${parts.join(", ")}`;
+  }
+  const limitValue = limit ? extractNumericLiteral(limit) : undefined;
+  const offsetValue = offset ? extractNumericLiteral(offset) : undefined;
+  if (limit && limitValue === undefined) return fallback;
+  if (offset && offsetValue === undefined) return fallback;
+  if (limitValue !== undefined) sql += ` LIMIT ${limitValue}`;
+  if (offsetValue !== undefined) {
+    if (limitValue === undefined) sql += ` LIMIT -1`;
+    sql += ` OFFSET ${offsetValue}`;
   }
   return { sql, params, loweringMode: "single_statement" };
 };
@@ -1027,6 +1062,21 @@ const compileGroupRowSortSQL = (
     const call = unwrapped.expr as FunctionCall;
     const shortName = (call.functionName ?? "").split("::").pop();
     const args = orderedCallArgs(call.args);
+    // `count(.grouping)` / `count(.elements)` over a group row — array
+    // lengths, not SQL aggregates.
+    if (shortName === "count" && args.length === 1) {
+      let inner: Set = args[0]!.expr;
+      while (inner.expr.kind === "select_expr") {
+        inner = (inner.expr as SelectExpr).result;
+      }
+      if (inner.expr.kind === "group_row_field"
+        && (inner.expr as GroupRowFieldExpr).steps.length === 1
+        && ((inner.expr as GroupRowFieldExpr).steps[0] === "grouping" || (inner.expr as GroupRowFieldExpr).steps[0] === "elements")) {
+        const raw = `${alias}.${quoteIdent("value")}`;
+        const field = (inner.expr as GroupRowFieldExpr).steps[0];
+        return `json_array_length(COALESCE(json_extract(${raw}, '$."${field}"'), '[]'))`;
+      }
+    }
     if (shortName === "array_agg" && args.length === 1) {
       let inner: Set = args[0]!.expr;
       while (inner.expr.kind === "select_expr") {
@@ -1035,9 +1085,12 @@ const compileGroupRowSortSQL = (
       if (inner.expr.kind === "group_row_field"
         && (inner.expr as GroupRowFieldExpr).steps.length === 1
         && (inner.expr as GroupRowFieldExpr).steps[0] === "grouping") {
+        // Array ordering, not JSON-text ordering: join the sorted names with
+        // a separator below any name character so `[]` sorts before
+        // `["element"]` and prefixes sort before their extensions.
         const raw = `${alias}.${quoteIdent("value")}`;
-        return `(SELECT json_group_array(je.${quoteIdent("value")})`
-          + ` FROM (SELECT ${quoteIdent("value")} FROM json_each(COALESCE(json_extract(${raw}, '$."grouping"'), '[]')) ORDER BY ${quoteIdent("value")}) je)`;
+        return `COALESCE((SELECT group_concat(je.${quoteIdent("value")}, char(1))`
+          + ` FROM (SELECT ${quoteIdent("value")} FROM json_each(COALESCE(json_extract(${raw}, '$."grouping"'), '[]')) ORDER BY ${quoteIdent("value")}) je), '')`;
       }
     }
   }
@@ -7799,6 +7852,20 @@ const compileValueSetSQL = (
     if (head && head.kind === "path") {
       return `json_extract(${raw}, ${path([...head.steps, ...field.steps.slice(1)])})`;
     }
+    // `.minCost` re-emitted from an element aggregate projection.
+    if (head && head.kind === "element_agg" && field.steps.length === 1) {
+      const tail = head.steps.map((s) => `."${s.replaceAll('"', '""')}"`).join("");
+      return `(SELECT ${head.fn}(json_extract(je.${quoteIdent("value")}, '$${tail}'))`
+        + ` FROM json_each(COALESCE(json_extract(${raw}, '$."elements"'), '[]')) je)`;
+    }
+    // `.keyCard.cost` where keyCard projects the first element — read the
+    // field off `elements[0]` of the raw row.
+    if (head && (head.kind === "element_first_shape" || head.kind === "element_first_path")) {
+      const baseSteps = head.kind === "element_first_path" ? head.steps : [];
+      const rest = [...baseSteps, ...field.steps.slice(1)];
+      const tail = rest.map((s) => `."${s.replaceAll('"', '""')}"`).join("");
+      return `json_extract(${raw}, '$."elements"[0]${tail}')`;
+    }
     // key_shape / elements_shape project the same underlying object, and
     // unprojected names read the raw row directly — both are the raw path.
     return `json_extract(${raw}, ${path(field.steps)})`;
@@ -8733,12 +8800,17 @@ const compileFunctionCallSQL = (
       const countArg = unwrapSelectExprSet(argList[0].expr);
       const hasClauses = countArg.selectExpr
         && (countArg.selectExpr.where || countArg.selectExpr.limit || countArg.selectExpr.offset);
-      if (!hasClauses
-        && countArg.result.expr.kind === "pointer"
-        && !countArg.result.typeref.isScalar
-        && (countArg.result.expr as Pointer).source.expr.kind === "type_root") {
+      const countPtrAnchorsRow = (): boolean => {
+        if (countArg.result.expr.kind !== "pointer" || countArg.result.typeref.isScalar) return false;
+        let ptrSource: Set = (countArg.result.expr as Pointer).source;
+        while (ptrSource.expr.kind === "select_expr") {
+          ptrSource = (ptrSource.expr as SelectExpr).result;
+        }
+        return ptrSource.expr.kind === "type_root";
+      };
+      if (!hasClauses && countPtrAnchorsRow()) {
         const arr = compilePointerArrayExpr(
-          countArg.result.expr as Pointer,
+          resetPointerSourceToRoot(countArg.result.expr as Pointer),
           sourceAlias,
           [],
           params,
@@ -9452,6 +9524,17 @@ const compilePublicShapeObjectExpr = (
     const elemUnwrapped = unwrapSelectExprSet(element.expr);
     const elemResult = elemUnwrapped.result;
     if (elemResult.expr.kind === "pointer" && !elemResult.typeref.isScalar) {
+      // An `anytype`-targeted pointer is a failed resolution upstream (e.g.
+      // a path into a computed the IR couldn't type) — scanning its "table"
+      // would hit a nonexistent relation. Bail under strictShape so GROUP
+      // lowerings fall back instead of executing garbage SQL.
+      const linkTarget = (elemResult.expr as Pointer).ptrref.outTarget;
+      if (linkTarget && (linkTarget.id === "std::anytype" || linkTarget.id === "unknown:std::anytype")) {
+        if (options.strictShape) {
+          throw new ShapeLoweringMiss(shapeAliasForElement(element, elemResult, depth));
+        }
+        continue;
+      }
       const nested = compilePointerArrayExpr(
         resetPointerSourceToRoot(elemResult.expr as Pointer),
         sourceAlias,
@@ -9545,6 +9628,17 @@ const compileShapeObjectExpr = (
     const elemUnwrapped = unwrapSelectExprSet(element.expr);
     const elemResult = elemUnwrapped.result;
     if (elemResult.expr.kind === "pointer" && !elemResult.typeref.isScalar) {
+      // An `anytype`-targeted pointer is a failed resolution upstream (e.g.
+      // a path into a computed the IR couldn't type) — scanning its "table"
+      // would hit a nonexistent relation. Bail under strictShape so GROUP
+      // lowerings fall back instead of executing garbage SQL.
+      const linkTarget = (elemResult.expr as Pointer).ptrref.outTarget;
+      if (linkTarget && (linkTarget.id === "std::anytype" || linkTarget.id === "unknown:std::anytype")) {
+        if (options.strictShape) {
+          throw new ShapeLoweringMiss(shapeAliasForElement(element, elemResult, depth));
+        }
+        continue;
+      }
       const nested = compilePointerArrayExpr(
         resetPointerSourceToRoot(elemResult.expr as Pointer),
         sourceAlias,

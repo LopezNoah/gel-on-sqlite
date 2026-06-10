@@ -94,14 +94,30 @@ export class CompilerService {
       sql = { sql: "", params: [], loweringMode: "fallback_multi_query" } as GelIRSQLArtifact;
       gelIr = { kind: "statement", expr: { kind: "set", expr: { kind: "type_root", typeref: { kind: "type_ref", id: "schema::Type", isScalar: false } }, pathId: { kind: "path_id", namespace: [], isPointerPath: false, steps: [] }, typeref: { kind: "type_ref", id: "schema::Type", isScalar: false }, shape: [], isBinding: false, isMaterializedRef: false, isSchemaAlias: false } } as unknown as GelIRStatement;
     }
-    const ir = needsLegacyRuntimeIR(statement)
-      ? compileToIR(schema, statement, {
-          overlays: context.overlays,
-          globals: context.globals,
-          schemaModel: context.schemaModel,
-          schemaModelName: context.schemaModelName,
-        })
-      : traceIRFromGelIR(statement, gelIr);
+    let ir: ReturnType<typeof traceIRFromGelIR>;
+    try {
+      ir = needsLegacyRuntimeIR(statement)
+        ? compileToIR(schema, statement, {
+            overlays: context.overlays,
+            globals: context.globals,
+            schemaModel: context.schemaModel,
+            schemaModelName: context.schemaModelName,
+          })
+        : traceIRFromGelIR(statement, gelIr);
+    } catch (err) {
+      // The legacy pipeline can't model some group statements the gelIR
+      // pipeline lowers fully (e.g. chained group-rows bindings). When the
+      // SQL artifact is complete, the engine executes it directly and only
+      // reads the IR's kind — synthesize it from the gelIR instead of
+      // failing the whole compile. Scoped to group-wrapping selects: for
+      // everything else (DML validation in particular) the legacy error is
+      // the intended behavior.
+      if (isSelectExprWrappingGroup && sql.loweringMode === "single_statement" && sql.sql.length > 0) {
+        ir = traceIRFromGelIR(statement, gelIr);
+      } else {
+        throw err;
+      }
+    }
     this.cache.set(key, {
       ir: cloneValue(ir),
       gelIr: cloneValue(gelIr),

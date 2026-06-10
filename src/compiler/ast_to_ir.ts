@@ -2511,7 +2511,7 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
         ? { ...ctx, module: subqueryModule }
         : ctx;
       const scoped = withBindings(moduleCtx, expr.clauses?._withBindings);
-      const inner = compileFreeObjectExpr(expr.expr, scoped);
+      let inner = compileFreeObjectExpr(expr.expr, scoped);
       // `SELECT alias := X ORDER BY alias` binds `alias` to `X` for the
       // duration of the SELECT's modifiers; the FILTER / ORDER BY clauses
       // need to resolve that name back to the inner expression. Also
@@ -2524,6 +2524,42 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
       }
       bindValue(clauseCtx, "__current__", inner);
       bindValue(clauseCtx, "__subject__", inner);
+      // ORDER BY into a first-element projection (`order by .keyCard.cost`)
+      // reads raw element fields the subject may not carry — rebuild the
+      // group with them when possible.
+      {
+        const grouped = peelToGroupRows(inner);
+        const astParts = grouped?.groupRows.astParts as GroupAstParts | undefined;
+        if (grouped && astParts && expr.orderBy) {
+          const needed = new globalThis.Set<string>();
+          const scanOrder = (node: unknown): void => {
+            if (!node || typeof node !== "object") return;
+            const maybe = node as { kind?: string; field?: string; expr?: unknown; tail?: unknown };
+            if (maybe.kind === "field_access") {
+              // Collect `.head.field` pairs: head matching an element_first
+              // projection needs `field` on the subject rows.
+              const innerFa = maybe.expr as { kind?: string; field?: string } | undefined;
+              if (innerFa?.kind === "field_access" && typeof innerFa.field === "string" && typeof maybe.field === "string") {
+                const headProj = (grouped.groupRows.projection ?? []).find((proj) => proj.name === innerFa.field);
+                if (headProj && (headProj.kind === "element_first_shape" || headProj.kind === "element_first_path")) {
+                  needed.add(maybe.field);
+                }
+              }
+            }
+            for (const value of Object.values(maybe)) {
+              if (value && typeof value === "object") scanOrder(value);
+            }
+          };
+          scanOrder(expr.orderBy);
+          if (needed.size > 0) {
+            const astShape = grouped.groupRows.astShape as EdgeQLShapeElement[] | undefined;
+            inner = buildGroupRowsSet(astParts, astShape, scoped, [...needed]);
+            bindValue(clauseCtx, "__current__", inner);
+            bindValue(clauseCtx, "__subject__", inner);
+            if (expr.alias) bindValue(clauseCtx, expr.alias, inner);
+          }
+        }
+      }
       // Surface the deepest shape on the outer set so
       // `(SELECT X { c := … }).c` and `(SELECT X { c := … } FILTER …).c` both
       // find the computed entry via field_access's shape lookup. The inner
@@ -2729,6 +2765,30 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
       }
 
       const source = compileFreeObjectExpr(expr.expr, ctx);
+
+      // Field access into a tuple-valued computed (`.b.d` where
+      // b := { c := 3, d := … } possibly produced per-iteration by a FOR):
+      // resolve to the tuple element's value Set. Without this the generic
+      // pointer resolution fabricates an `anytype`-targeted link and the SQL
+      // stage scans a nonexistent table.
+      if (!expr.field.startsWith("@")) {
+        let tupleCursor: Set = source;
+        for (;;) {
+          if (tupleCursor.expr.kind === "select_expr") {
+            tupleCursor = (tupleCursor.expr as SelectExpr).result;
+          } else if (tupleCursor.expr.kind === "for_expr") {
+            tupleCursor = (tupleCursor.expr as { body: Set }).body;
+          } else {
+            break;
+          }
+        }
+        if (tupleCursor.expr.kind === "tuple" && (tupleCursor.expr as Tuple).named) {
+          const tupleEl = (tupleCursor.expr as Tuple).elements.find((e) => e.name === expr.field);
+          if (tupleEl) {
+            return tupleEl.val;
+          }
+        }
+      }
 
       // Paths off a group-rows set (`.key.cost`, `.elements`, a projected
       // `.count`) aren't schema pointers — model them as group_row_field
@@ -3235,7 +3295,7 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
       // compiler against the virtual key/grouping/elements members.
       const grouped = peelToGroupRows(base);
       if (grouped) {
-        const parsed = parseGroupRowProjection(expr.shape);
+        const parsed = parseGroupRowProjection(expr.shape, grouped.groupRows.projection);
         // An `elements: {…}` re-projection reads fields off the materialized
         // element rows — when the already-compiled subject doesn't project
         // one of them, rebuild the group from its AST parts with the subject
@@ -3247,6 +3307,12 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
               return p.fields.map(elementFieldSubjectName);
             }
             if (p.kind === "element_first_path") {
+              return [p.steps[0] ?? ""];
+            }
+            if (p.kind === "element_first_shape") {
+              return p.fields;
+            }
+            if (p.kind === "element_agg") {
               return [p.steps[0] ?? ""];
             }
             return [];
@@ -3298,6 +3364,7 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
             ...grouped.groupRows,
             group,
             projection: parsed.projection,
+            astShape: expr.shape,
             unlowerable: grouped.groupRows.unlowerable || parsed.unlowerable || undefined,
           } as GroupRowsExpr,
         };
@@ -6983,16 +7050,35 @@ const buildGroupStmtParts = (
         .filter((s): s is Extract<EdgeQLShapeElement, { name: string }> => "name" in s && typeof s.name === "string")
         .map((s) => s.name),
     );
+    const usingComputeds = new Map<string, Extract<EdgeQLShapeElement, { kind: "computed" }>["expr"]>();
+    const containsVolatileCall = (node: unknown): boolean =>
+      JSON.stringify(node ?? null).includes('"random"');
     for (const usingBinding of statement.using ?? []) {
-      if (containsBindingRef(usingBinding.expr)) {
-        lowerable = false;
-        continue;
+      // Chained alias (`USING x := count(.owners), nowners := x`):
+      // substitute the prior alias's computed expression. Re-evaluating is
+      // only safe for non-volatile expressions — a chained volatile alias
+      // would diverge between the two fields, so it stays on the runtime
+      // grouper.
+      let computed: Extract<EdgeQLShapeElement, { kind: "computed" }>["expr"] | undefined;
+      if (usingBinding.expr.kind === "binding_ref" && usingComputeds.has(usingBinding.expr.name)) {
+        const prior = usingComputeds.get(usingBinding.expr.name)!;
+        if (!containsVolatileCall(prior)) {
+          computed = prior;
+        }
       }
+      if (!computed) {
+        if (containsBindingRef(usingBinding.expr)) {
+          lowerable = false;
+          continue;
+        }
+        computed = usingExprToComputed(usingBinding.expr);
+      }
+      usingComputeds.set(usingBinding.alias, computed);
       if (present.has(usingBinding.alias)) continue;
       shape.push({
         kind: "computed",
         name: usingBinding.alias,
-        expr: usingExprToComputed(usingBinding.expr),
+        expr: computed,
         operation: "assign",
         origin: "explicit",
       } as EdgeQLShapeElement);
@@ -7193,6 +7279,7 @@ const compileGroupStatement = (statement: GroupStatementAst, ctx: IRCompileConte
 // the runtime grouper.
 const parseGroupRowProjection = (
   shape: EdgeQLShapeElement[] | undefined,
+  priorProjection?: GroupRowProjection[],
 ): { projection?: GroupRowProjection[]; unlowerable?: boolean } => {
   if (!shape || shape.length === 0) return {};
   // `.key.element` / `.elements` — a field_access chain rooted at the
@@ -7207,32 +7294,43 @@ const parseGroupRowProjection = (
     return cursor && cursor.kind === "current_item" && steps.length > 0 ? steps : null;
   };
   const out: GroupRowProjection[] = [];
+  const dbg = (reason: string, el?: unknown): { unlowerable: true } => {
+    if (process.env.DBG_GROUP_PROJ) console.error("[group-proj] unlowerable:", reason, JSON.stringify(el ?? null)?.slice(0, 220));
+    return dbg("site1", el);
+  };
   for (const el of shape) {
-    if (!("name" in el) || typeof el.name !== "string") return { unlowerable: true };
+    if (!("name" in el) || typeof el.name !== "string") return dbg("unnamed", el);
     const name = el.name;
     if (el.kind === "link" && el.shape && el.shape.length > 0) {
       if (name === "elements") {
         const fields = parseElementsFields(el.shape, pathSteps);
-        if (!fields) return { unlowerable: true };
+        if (!fields) return dbg("site2", el);
         out.push({ name, kind: "elements_shape", fields });
         continue;
       }
       const fields = el.shape
         .filter((s): s is Extract<EdgeQLShapeElement, { name: string }> => "name" in s && typeof s.name === "string" && s.kind === "field")
         .map((s) => s.name);
-      if (fields.length !== el.shape.length) return { unlowerable: true };
+      if (fields.length !== el.shape.length) return dbg("site3", el);
       if (name === "key") {
         out.push({ name, kind: "key_shape", fields });
         continue;
       }
-      return { unlowerable: true };
+      return dbg("site4", el);
     }
     if (el.kind === "field") {
       if (name === "key" || name === "grouping" || name === "elements" || name === "id") {
         out.push({ name, kind: "path", steps: [name] });
         continue;
       }
-      return { unlowerable: true };
+      // Re-projecting an already-projected name (`select submissions
+      // { minCost }` over a shaped group binding): keep the prior entry.
+      const prior = priorProjection?.find((proj) => proj.name === name);
+      if (prior) {
+        out.push(prior);
+        continue;
+      }
+      return dbg("site5", el);
     }
     if (el.kind === "computed") {
       const computed = el.expr;
@@ -7251,6 +7349,15 @@ const parseGroupRowProjection = (
           out.push({ name, kind: "count_elements" });
           continue;
         }
+        // `minCost := min(.elements.cost)` — aggregate over an element field.
+        const AGG_FNS: Record<string, "min" | "max" | "sum" | "avg"> = { min: "min", max: "max", sum: "sum", avg: "avg", mean: "avg" };
+        if (fname && AGG_FNS[fname] && args.length === 1 && arg0?.kind === "expr") {
+          const aggSteps = pathSteps(arg0.expr);
+          if (aggSteps && aggSteps.length >= 2 && aggSteps[0] === "elements") {
+            out.push({ name, kind: "element_agg", fn: AGG_FNS[fname], steps: aggSteps.slice(1) });
+            continue;
+          }
+        }
         // `array_agg((SELECT _ := .grouping ORDER BY _))` — the grouping
         // names as a sorted array.
         if (fname === "array_agg" && args.length === 1 && arg0?.kind === "expr") {
@@ -7264,19 +7371,31 @@ const parseGroupRowProjection = (
             continue;
           }
         }
-        return { unlowerable: true };
+        return dbg("site6", el);
       }
       if (computed.kind === "select_expr") {
-        if (Object.keys(computed.clauses ?? {}).length > 0) return { unlowerable: true };
+        const computedClauses = (computed.clauses ?? {}) as Record<string, unknown> & { limit?: unknown };
+        const computedClauseKeys = Object.keys(computed.clauses ?? {})
+          .filter((key) => computedClauses[key] !== undefined);
+        // The parser stores `limit 1` as both `limit` and `limitExpr`.
+        const onlyLimitOne = computedClauseKeys.length > 0
+          && computedClauseKeys.every((key) => key === "limit" || key === "limitExpr")
+          && computedClauses.limit === 1;
+        if (computedClauseKeys.length > 0 && !onlyLimitOne) return dbg("site7", el);
         const steps = pathSteps(computed.expr);
-        if (steps) {
+        if (steps && !onlyLimitOne) {
           out.push({ name, kind: "path", steps });
+          continue;
+        }
+        if (steps && onlyLimitOne && steps.length >= 2 && steps[0] === "elements") {
+          out.push({ name, kind: "element_first_path", steps: steps.slice(1) });
           continue;
         }
         // `name: (select .elements.name limit 1)` — first-element field.
         const sub = computed.expr as {
           kind?: string;
           expr?: unknown;
+          shape?: EdgeQLShapeElement[];
           limit?: unknown;
           filter?: unknown;
           orderBy?: unknown;
@@ -7290,11 +7409,27 @@ const parseGroupRowProjection = (
             continue;
           }
         }
-        return { unlowerable: true };
+        // `keyCard := (select .elements {id} limit 1)` — first element
+        // re-projected to a field subset (the parser puts the limit on the
+        // computed's clauses in this form).
+        if (sub.kind === "shape_projection") {
+          if (onlyLimitOne && sub.shape) {
+            const baseSteps = pathSteps(sub.expr);
+            const fields = sub.shape
+              .filter((s): s is Extract<EdgeQLShapeElement, { name: string }> => "name" in s && typeof s.name === "string" && s.kind === "field")
+              .map((s) => s.name);
+            if (baseSteps && baseSteps.length === 1 && baseSteps[0] === "elements"
+              && fields.length === sub.shape.length) {
+              out.push({ name, kind: "element_first_shape", fields });
+              continue;
+            }
+          }
+        }
+        return dbg("site8", el);
       }
-      return { unlowerable: true };
+      return dbg("site9", el);
     }
-    return { unlowerable: true };
+    return dbg("site10", el);
   }
   return { projection: out };
 };
@@ -7370,9 +7505,10 @@ const buildGroupRowsSet = (
   parts: GroupAstParts,
   trailingShape: EdgeQLShapeElement[] | undefined,
   ctx: IRCompileContext,
+  extraElementFields: string[] = [],
 ): Set => {
   const parsed = parseGroupRowProjection(trailingShape);
-  const elementFields = (parsed.projection ?? [])
+  const elementFields = extraElementFields.concat((parsed.projection ?? [])
     .flatMap((p) => {
       if (p.kind === "elements_shape") {
         return p.fields.map(elementFieldSubjectName);
@@ -7380,9 +7516,15 @@ const buildGroupRowsSet = (
       if (p.kind === "element_first_path") {
         return [p.steps[0] ?? ""];
       }
+      if (p.kind === "element_first_shape") {
+        return p.fields;
+      }
+      if (p.kind === "element_agg") {
+        return [p.steps[0] ?? ""];
+      }
       return [];
     })
-    .filter((name) => name.length > 0);
+    .filter((name) => name.length > 0));
   let source = parts.source;
   if (
     elementFields.length > 0
@@ -7414,6 +7556,7 @@ const buildGroupRowsSet = (
       projection: parsed.projection,
       unlowerable: parsed.unlowerable,
       astParts: parts,
+      astShape: trailingShape,
     } as GroupRowsExpr,
     pathId: defaultPathId("group_rows"),
     typeref: unknownTypeRef("std::FreeObject"),
