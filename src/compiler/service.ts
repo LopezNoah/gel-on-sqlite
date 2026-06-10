@@ -73,29 +73,26 @@ export class CompilerService {
     }
 
     this.misses += 1;
-    // `SELECT (GROUP X BY Y) FILTER …` parses as a select_expr wrapping a
-    // bare group_expr. The new gelIR pipeline doesn't model group_expr in
-    // expression position, but the legacy semantic.ts pipeline already peels
-    // the wrapper. Route the SQL stage past compileSqlFromGelIR for that
-    // shape so compileToIR (which calls peelGroupExprFromSelectExpr) can run.
+    // `SELECT (GROUP X BY Y) [{…}] [FILTER …]` (group_expr in expression
+    // position) lowers through the gelIR pipeline like everything else — the
+    // group compiles to a `group_rows` set (see compileGroupExprSet) and the
+    // statement compiler emits a real artifact for the projections/clauses
+    // it supports, or an empty fallback artifact otherwise. These statements
+    // were never exercised in this pipeline before, so any compile error
+    // degrades to the fallback artifact and the runtime grouper (via the
+    // legacy IR below) keeps handling the statement.
     const isSelectExprWrappingGroup =
       statement.kind === "select_expr" && selectExprContainsGroup(statement);
-    // `SELECT (GROUP X BY Y) FILTER …` (group_expr in expression position) is
-    // still evaluated by the runtime grouper — the gelIR pipeline doesn't model
-    // group_expr there — so skip the GelIR→SQL stage for that shape.
     let sql: GelIRSQLArtifact;
     let gelIr: GelIRStatement;
-    if (isSelectExprWrappingGroup) {
-      sql = { sql: "", params: [], loweringMode: "single_statement" } as GelIRSQLArtifact;
-      gelIr = { kind: "statement", expr: { kind: "set", expr: { kind: "type_root", typeref: { kind: "type_ref", id: "schema::Type", isScalar: false } }, pathId: { kind: "path_id", namespace: [], isPointerPath: false, steps: [] }, typeref: { kind: "type_ref", id: "schema::Type", isScalar: false }, shape: [], isBinding: false, isMaterializedRef: false, isSchemaAlias: false } } as unknown as GelIRStatement;
-    } else {
-      // Top-level `GROUP … BY …` lowers through the normal GelIR→SQL pipeline.
-      // compileGroupStmtToSQL emits a real statement for the cases it supports
-      // and an empty fallback artifact otherwise; the engine then routes the
-      // fallback to the runtime grouper.
+    try {
       const compiled = compileSqlFromGelIR(schema, statement, context);
       sql = compiled.sql;
       gelIr = compiled.gelIr;
+    } catch (err) {
+      if (!isSelectExprWrappingGroup) throw err;
+      sql = { sql: "", params: [], loweringMode: "fallback_multi_query" } as GelIRSQLArtifact;
+      gelIr = { kind: "statement", expr: { kind: "set", expr: { kind: "type_root", typeref: { kind: "type_ref", id: "schema::Type", isScalar: false } }, pathId: { kind: "path_id", namespace: [], isPointerPath: false, steps: [] }, typeref: { kind: "type_ref", id: "schema::Type", isScalar: false }, shape: [], isBinding: false, isMaterializedRef: false, isSchemaAlias: false } } as unknown as GelIRStatement;
     }
     const ir = needsLegacyRuntimeIR(statement)
       ? compileToIR(schema, statement, {

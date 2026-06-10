@@ -260,6 +260,12 @@ class Parser {
   private readonly sourceText?: string;
   private index = 0;
   private readonly localBindings: string[] = [];
+  // Result aliases (`SELECT _ := <expr>`) currently being parsed. The alias
+  // is not in scope inside its own definition; references to it from within
+  // `<expr>` must fail. Violations are recorded on a side channel because
+  // speculative `attempt()` parsing swallows thrown errors.
+  private readonly pendingResultAliases: string[] = [];
+  private pendingResultAliasViolation?: AppError;
   private readonly defaultModule?: string;
   private readonly options: ParseEdgeQLOptions;
 
@@ -3095,7 +3101,20 @@ class Parser {
     if (this.isNameToken(this.peek()) && this.peekNext().kind === "assign") {
       const alias = this.consume().lexeme;
       this.expect("assign", "Expected ':=' after select expression alias");
-      const expr = this.parseFreeObjectExpr();
+      this.pendingResultAliases.push(alias);
+      let expr: FreeObjectExpr;
+      try {
+        expr = this.parseFreeObjectExpr();
+      } finally {
+        this.pendingResultAliases.pop();
+      }
+      // A reference to the alias from inside its own definition (e.g.
+      // `SELECT _ := (User { tag := _.name })`) — the alias is not yet bound.
+      if (this.pendingResultAliasViolation) {
+        const violation = this.pendingResultAliasViolation;
+        this.pendingResultAliasViolation = undefined;
+        throw violation;
+      }
       return this.parseSelectExprTail(start, ctx, {
         kind: "select_expr_subquery",
         alias,
@@ -3402,6 +3421,28 @@ class Parser {
     while (this.peek().kind === "semi") {
       this.consume();
     }
+    // `select { x := 1 } filter (INSERT …)` — DML is never allowed inside a
+    // FILTER / ORDER BY clause. The clause isn't otherwise representable for
+    // a free-object select, so diagnose the DML misuse before the generic
+    // "Unexpected tokens" error hides it.
+    if (this.peek().kind === "kw_filter" || this.peek().kind === "kw_order") {
+      const clauseLabel = this.peek().kind === "kw_filter" ? "a FILTER clause" : "an ORDER BY clause";
+      const dmlByKind: Partial<Record<Token["kind"], string>> = {
+        kw_insert: "INSERT",
+        kw_update: "UPDATE",
+        kw_delete: "DELETE",
+      };
+      for (let i = this.index + 1; i < this.tokens.length; i += 1) {
+        const dml = dmlByKind[this.tokens[i]!.kind];
+        if (dml) {
+          throw new AppError(
+            "E_SEMANTIC",
+            `${dml} statements cannot be used in ${clauseLabel}`,
+            ...this.posPair(this.tokens[i]!),
+          );
+        }
+      }
+    }
     this.expect("eof", "Unexpected tokens after statement");
 
     return {
@@ -3680,6 +3721,11 @@ class Parser {
           inner = this.parseFreeObjectExpr();
         }
         const tail = this.parseSelectExprTailParts();
+        // `select ( with … group … by .name; )` — a trailing semicolon
+        // before the closing paren is allowed (statement-style subqueries).
+        while (this.peek().kind === "semi") {
+          this.consume();
+        }
         const wrapped: FreeObjectExpr = {
           kind: "select_expr_subquery",
           expr: inner,
@@ -5152,6 +5198,22 @@ class Parser {
     }
 
     if (hasLinkShapeColon) {
+      // `name: (select …)` — colon-computed pointer: upstream EdgeQL allows
+      // an expression after the colon, equivalent to `name := (…)`.
+      if (this.peek().kind === "lparen") {
+        const expr = this.parseFreeObjectExpr();
+        const modifiers = this.clauseChainToShapeModifiers(this.parseClauseChain());
+        return {
+          kind: "computed",
+          name,
+          expr: { kind: "select_expr", expr, clauses: {} },
+          operation: "assign",
+          origin: "explicit",
+          required,
+          cardinality,
+          ...modifiers,
+        };
+      }
       const token = this.peek();
       throw new AppError("E_SYNTAX", "Expected '{' after ':' in link shape", ...this.posPair(token));
     }
@@ -5256,6 +5318,18 @@ class Parser {
 
     if (this.isNameToken(this.peek()) && this.peekNext().kind === "dot") {
       const headLexeme = this.nameTokenLexeme(this.peek());
+      // The select-result alias is not in scope inside its own definition.
+      // Record on the side channel (speculative parses swallow throws) and
+      // throw — parseSelectFreeOrExpr re-raises after the expression parse.
+      if (this.pendingResultAliases.includes(headLexeme) && !this.localBindings.includes(headLexeme)) {
+        const violation = new AppError(
+          "E_SEMANTIC",
+          `object type or alias '${this.defaultModule ?? "default"}::${headLexeme}' does not exist`,
+          ...this.posPair(this.peek()),
+        );
+        this.pendingResultAliasViolation ??= violation;
+        throw violation;
+      }
       // The shortcut emits `field_ref(field)` / `current_item.field` only when
       // the head names the *same* binding the shape body iterates over (i.e.
       // it's a local binding for shape iteration). For absolute references
