@@ -8368,8 +8368,26 @@ export const executeQueryUnitWithTrace = (
       }
 
       validateParsedStatement(ast, { schema, module: ast.withModule });
+      preValidateStatementAst(schema, ast);
       const statementType = statementTypeOf(ast);
       enforceBuiltinPermissions(context, statementType, ast.pos.line, ast.pos.column);
+      // Fully-constant subscripts (`select "abc"[1]`, `select [1,2,3][0:9]`)
+      // are evaluated directly — see tryEvalConstantSubscriptStatement.
+      {
+        const constRows = tryEvalConstantSubscriptStatement(ast);
+        if (constRows !== undefined) {
+          traces.push({
+            ast,
+            ir: { kind: "select", rows: [] } as unknown as IRStatement,
+            sql: { sql: "", params: [], loweringMode: "single_statement" } as SQLArtifact,
+            compiler: { key: "const-subscript", status: "miss", stats: { hits: 0, misses: 0, size: 0 } },
+            sqlTrail: [],
+            overlays: [],
+            result: { kind: "select", rows: constRows },
+          });
+          continue;
+        }
+      }
       const astSubjectType = ast.kind === "insert" || ast.kind === "update" || ast.kind === "delete"
         ? schema.getType(ast.typeName)
         : undefined;
@@ -8550,6 +8568,29 @@ const jsValueToFreeObjectExpr = (
   return { kind: "literal", value: null };
 };
 
+// Run a compiled GROUP statement: prefer the lowered single-statement SQL
+// (compileGroupStmtToSQL), falling back to the runtime grouper for the
+// features the SQL stage doesn't lower. Group rows from both paths share the
+// `{ key, grouping, elements }` row contract.
+const runCompiledGroup = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  compiled: { ir: IRStatement; sql: SQLArtifact; gelIr?: unknown },
+  context: SecurityContext,
+  sqlTrail: SQLArtifact[],
+): Record<string, unknown>[] => {
+  if (compiled.sql.loweringMode === "single_statement" && compiled.sql.sql.length > 0) {
+    return runGelSelectSQL(
+      db,
+      schema,
+      compiled.gelIr as Parameters<typeof runGelSelectSQL>[2],
+      context,
+      compiled.sql,
+    ) as Record<string, unknown>[];
+  }
+  return runGroupIR(db, schema, compiled.ir as GroupIR, context, sqlTrail);
+};
+
 // Walk an AST and pre-evaluate any WITH binding whose value is a GROUP.
 // Returns the rewritten AST (with the GROUP results inlined) or the original
 // when nothing needed pre-evaluation.
@@ -8560,6 +8601,26 @@ const preEvaluateGroupBindings = (
   context: SecurityContext,
 ): Statement => {
   if (!ast.with || ast.with.length === 0) return ast;
+  const isGroupBindingValue = (value: WithBinding["value"]): boolean =>
+    value.kind === "subquery_expr"
+    && (value.expr.kind === "group_expr"
+      || (value.expr.kind === "select_expr_subquery" && value.expr.expr.kind === "group_expr"));
+  if (!ast.with.some((binding) => isGroupBindingValue(binding.value))) return ast;
+  // The gelIR pipeline lowers WITH-bound groups directly (group_rows in
+  // compileGroupExprSet); pre-evaluating into literal AST rows is only the
+  // fallback for statements it can't lower. The compile is cached, so the
+  // engine's own compile of the unchanged AST reuses it.
+  try {
+    const compiled = getCompilerService().compile(schema, ast, {
+      globals: context.globals,
+      target: resolvedRuntimeTarget(context, db),
+    });
+    if (compiled.sql.loweringMode === "single_statement" && compiled.sql.sql.length > 0) {
+      return ast;
+    }
+  } catch {
+    // Fall through to pre-evaluation.
+  }
   let rewrote = false;
   const newWith = ast.with.map((binding) => {
     const value = binding.value;
@@ -8591,7 +8652,7 @@ const preEvaluateGroupBindings = (
         target: resolvedRuntimeTarget(context, db),
       });
       if (compiled.ir.kind !== "group") return binding;
-      const rows = runGroupIR(db, schema, compiled.ir, context, []);
+      const rows = runCompiledGroup(db, schema, compiled, context, []);
       rewrote = true;
       return {
         name: binding.name,
@@ -8658,7 +8719,7 @@ const executeForLoop = (
     const sqlArtifact = compiled.sql;
     const sqlTrail: SQLArtifact[] = [sqlArtifact];
     const groupRows = ir.kind === "group"
-      ? runGroupIR(db, schema, ir, context, sqlTrail)
+      ? runCompiledGroup(db, schema, compiled, context, sqlTrail)
       : [];
     const outputRows = groupRows.flatMap((groupRow): unknown[] => {
       const bindings = new Map<string, unknown>([[ast.variable, groupRow]]);

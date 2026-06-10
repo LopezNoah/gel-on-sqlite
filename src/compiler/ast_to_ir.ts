@@ -52,8 +52,13 @@ import type {
   DeleteExpr,
   ForExpr,
   EmbeddedGroupExpr,
+  GroupRowsExpr,
+  GroupRowProjection,
+  GroupRowFieldExpr,
+  GroupElementsField,
   Pointer,
   PointerRef,
+  Tuple,
   SelectExpr,
   ShapeElement,
   TypeRef,
@@ -2499,7 +2504,13 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
     }
 
     case "select_expr_subquery": {
-      const scoped = withBindings(ctx, expr.clauses?._withBindings);
+      // `( WITH MODULE cards … )` — the module switch applies to the whole
+      // subquery, including its WITH binding values.
+      const subqueryModule = expr.clauses?._withModule;
+      const moduleCtx = subqueryModule && subqueryModule !== ctx.module
+        ? { ...ctx, module: subqueryModule }
+        : ctx;
+      const scoped = withBindings(moduleCtx, expr.clauses?._withBindings);
       const inner = compileFreeObjectExpr(expr.expr, scoped);
       // `SELECT alias := X ORDER BY alias` binds `alias` to `X` for the
       // duration of the SELECT's modifiers; the FILTER / ORDER BY clauses
@@ -2718,6 +2729,31 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
       }
 
       const source = compileFreeObjectExpr(expr.expr, ctx);
+
+      // Paths off a group-rows set (`.key.cost`, `.elements`, a projected
+      // `.count`) aren't schema pointers — model them as group_row_field
+      // steps the SQL stage resolves against the group row's JSON (or its
+      // projection). Chained accesses extend the inner field's steps.
+      if (!expr.field.startsWith("@")) {
+        const groupedSource = peelToGroupRows(source);
+        if (groupedSource) {
+          return {
+            ...source,
+            expr: { kind: "group_row_field", steps: [expr.field] } as GroupRowFieldExpr,
+            shape: [],
+            pathId: defaultPathId(`group_row_field:${expr.field}`),
+            typeref: unknownTypeRef("std::anytype"),
+          };
+        }
+        if (source.expr.kind === "group_row_field") {
+          const inner = source.expr as GroupRowFieldExpr;
+          return {
+            ...source,
+            expr: { ...inner, steps: [...inner.steps, expr.field] } as GroupRowFieldExpr,
+            pathId: defaultPathId(`group_row_field:${[...inner.steps, expr.field].join(".")}`),
+          };
+        }
+      }
 
       if (expr.field.startsWith("@") && source.expr.kind === "pointer") {
         const linkPointer = source.expr as Pointer;
@@ -3189,9 +3225,83 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
       // real pointers, so compile the group with the shape rather than running
       // the generic shape compiler against the (non-existent) members.
       if (expr.expr.kind === "group_expr") {
-        return compileEmbeddedGroup(expr.expr, expr.shape, ctx);
+        return compileGroupExprSet(expr.expr, expr.shape, ctx);
       }
       const base = compileFreeObjectExpr(expr.expr, ctx);
+      // `GR { … }` over a WITH-bound group (possibly through no-op select
+      // wrappers, `select (select GR) {…}`): rebuild the group-rows set with
+      // this projection (the subject may need extra fields for an
+      // `elements: {…}` re-projection) rather than running the generic shape
+      // compiler against the virtual key/grouping/elements members.
+      const grouped = peelToGroupRows(base);
+      if (grouped) {
+        const parsed = parseGroupRowProjection(expr.shape);
+        // An `elements: {…}` re-projection reads fields off the materialized
+        // element rows — when the already-compiled subject doesn't project
+        // one of them, rebuild the group from its AST parts with the subject
+        // augmented. Only then: a rebuild recompiles in THIS scope, which
+        // loses bindings when the group's WITH lives on an inner subquery.
+        const neededElementFields = (parsed.projection ?? [])
+          .flatMap((p) => {
+            if (p.kind === "elements_shape") {
+              return p.fields.map(elementFieldSubjectName);
+            }
+            if (p.kind === "element_first_path") {
+              return [p.steps[0] ?? ""];
+            }
+            return [];
+          })
+          .filter((fieldName) => fieldName.length > 0);
+        const have = new globalThis.Set<string>();
+        {
+          let cursor: Set = grouped.groupRows.group.subject;
+          for (;;) {
+            for (const shapeEl of cursor.shape ?? []) {
+              const elName = shapeEl.name
+                ?? (shapeEl.expr.expr.kind === "pointer" ? (shapeEl.expr.expr as Pointer).ptrref.shortName : undefined);
+              if (elName) have.add(elName);
+            }
+            if (cursor.expr.kind === "tuple") {
+              for (const tupleEl of (cursor.expr as Tuple).elements) {
+                if (tupleEl.name) have.add(tupleEl.name);
+              }
+            }
+            if (cursor.expr.kind === "select_expr") {
+              cursor = (cursor.expr as SelectExpr).result;
+            } else if (cursor.expr.kind === "for_expr") {
+              cursor = (cursor.expr as { body: Set }).body;
+            } else {
+              break;
+            }
+          }
+        }
+        const astParts = grouped.groupRows.astParts as GroupAstParts | undefined;
+        if (astParts && neededElementFields.some((fieldName) => fieldName !== "id" && !have.has(fieldName))) {
+          return buildGroupRowsSet(astParts, expr.shape, ctx);
+        }
+        // A projection that re-reads element fields (`elements: {…, z := .b
+        // <= 1}`) must see them on the materialized rows — un-hide any it
+        // needs that BY-augmentation marked hidden (the re-projection emits
+        // only the requested subset anyway).
+        let group = grouped.groupRows.group;
+        const hidden = group.hiddenByFields;
+        if (hidden && neededElementFields.length > 0) {
+          const needed = new globalThis.Set(neededElementFields);
+          const kept = hidden.filter((h) => !needed.has(h));
+          if (kept.length !== hidden.length) {
+            group = { ...group, hiddenByFields: kept.length > 0 ? kept : undefined };
+          }
+        }
+        return {
+          ...grouped.rows,
+          expr: {
+            ...grouped.groupRows,
+            group,
+            projection: parsed.projection,
+            unlowerable: grouped.groupRows.unlowerable || parsed.unlowerable || undefined,
+          } as GroupRowsExpr,
+        };
+      }
       const projectedShape = compileShape(base, expr.shape, ctx);
       return {
         ...base,
@@ -4052,11 +4162,11 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
     }
 
     case "group_expr": {
-      // `(GROUP <link> BY <key>)` in expression position with no trailing
+      // `(GROUP <subject> BY <key>)` in expression position with no trailing
       // shape — emits the full default group row (`key` + `grouping` +
       // `elements`). A trailing `{ … }` shape is handled by the
       // `shape_projection` case, which routes here with the shape.
-      return compileEmbeddedGroup(expr, undefined, ctx);
+      return compileGroupExprSet(expr, undefined, ctx);
     }
 
     default:
@@ -5648,6 +5758,24 @@ const compileShape = (
           });
           continue;
         }
+        // Re-projecting a WITH binding's computed pointer (`select X {name, b}`
+        // where X := User { …, b := … }): the field isn't on the schema type,
+        // but the binding's compiled shape carries the element — adopt it so
+        // the projection keeps the computed value.
+        const carried = (subject.shape ?? []).find((s) => {
+          const carriedName = s.name
+            ?? (s.expr.expr.kind === "pointer" ? (s.expr.expr as Pointer).ptrref.shortName : undefined);
+          return carriedName === el.name;
+        });
+        if (carried) {
+          out.push({
+            ...carried,
+            shapeOp: el.operation,
+            shapeOrigin: resolveShapeOrigin(el),
+            name: el.name,
+          });
+          continue;
+        }
         // `SELECT User { missing }` — user spelled a field name that doesn't
         // exist on the source type. Silently skipping turned every typo into
         // an empty-but-passing shape; surface it so query authors learn at
@@ -5789,6 +5917,23 @@ const compileShape = (
         );
       }
       if (!ptrref) {
+        // Re-projecting a WITH binding's computed pointer with a sub-shape
+        // (`select X { b: {c, d} }` where X := User { b := {…} }): adopt the
+        // binding's carried element, as in the field branch above.
+        const carried = (subject.shape ?? []).find((s) => {
+          const carriedName = s.name
+            ?? (s.expr.expr.kind === "pointer" ? (s.expr.expr as Pointer).ptrref.shortName : undefined);
+          return carriedName === el.name;
+        });
+        if (carried) {
+          out.push({
+            ...carried,
+            shapeOp: el.operation,
+            shapeOrigin: resolveShapeOrigin(el),
+            name: el.name,
+          });
+          continue;
+        }
         // Links with nested shapes can resolve dynamically (subtype-only
         // pointers reached through `[IS T]`, computed link aliases, etc.) —
         // skip the strict check here. The field-level check above is enough
@@ -5796,6 +5941,16 @@ const compileShape = (
         continue;
       }
       let expr = extendPathSet(subject, ptrref);
+      // `owners[IS Bot]: {…}` — narrow the link set's typeref to the
+      // intersection type before the nested shape resolves, so subtype-only
+      // pointers are visible and the SQL stage scans only the narrowed
+      // type's tables (see narrowedLinkTarget in the SQL compiler).
+      if (el.typeFilter) {
+        const narrowed = resolveTypeRef(ctx, el.typeFilter);
+        if (narrowed && !narrowed.id.startsWith("unknown:") && narrowed.id !== expr.typeref.id) {
+          expr = { ...expr, typeref: narrowed };
+        }
+      }
       if (el.shape && el.shape.length > 0) {
         // An explicit nested shape is bounded by the written query, so it's
         // safe to descend even into self-referential links (`Tree { children:
@@ -5986,10 +6141,24 @@ const compileSelectExprStatement = (statement: Extract<EdgeQLStatement, { kind: 
     bindValue(orderCtx, "__current__", result);
     bindValue(orderCtx, "__subject__", result);
   }
+  // Statement clauses over group rows (`SELECT (GROUP …){…} FILTER .count > 1
+  // ORDER BY .key.cost`) compile with the group row as __current__ so paths
+  // resolve to group_row_field steps the SQL stage can read off the row JSON.
+  // Scoped to group rows: other select_expr statements keep their existing
+  // clause handling (inside the subquery wrapper).
+  let groupWhere: Set | undefined;
+  if (peelToGroupRows(result)) {
+    bindValue(orderCtx, "__current__", result);
+    bindValue(orderCtx, "__subject__", result);
+    if (statement.filter) {
+      groupWhere = compileFilterToSet(statement.filter, result, orderCtx);
+    }
+  }
   return {
     kind: "select_stmt",
     expr: result,
     ...statementBase(scoped),
+    where: groupWhere,
     orderBy: compileOrderBy(statement, orderCtx),
     implicitWrapper: false,
     span: statement.pos,
@@ -6702,92 +6871,590 @@ const compileForStatement = (statement: ForStatement, ctx: IRCompileContext): Se
   };
 };
 
-// Top-level `GROUP <subject> BY <atoms>`. Builds the GelIR GroupStmt the SQL
-// stage lowers to `{ key, grouping, elements }` rows. Only the
-// single-grouping-set, plain-field BY case (no USING / CUBE / ROLLUP /
-// grouping-sets / link-property keys) sets `byFieldNames`; everything else
-// leaves it undefined so the SQL stage bails and the runtime grouper runs.
-const compileGroupStatement = (statement: Extract<EdgeQLStatement, { kind: "group" }>, ctx: IRCompileContext): GroupStmt => {
-  const scoped = withBindings(ctx, statement.with);
+// `GROUP <subject> [USING …] BY <elements>` — the shared core for top-level
+// statements and expression-position `(GROUP …)`. Builds the subject Set and
+// the lowering metadata the SQL stage turns into `{ key, grouping, elements }`
+// rows — one GROUP BY branch per expanded grouping set. USING bindings are
+// folded into the subject's projection as hidden computed fields so each
+// alias is evaluated once per element (the runtime grouper does the same on
+// the legacy IR — see compileGroupIR in compiler/semantic.ts; the BY
+// expansion below mirrors its grouping-set algebra so both paths agree).
+// Features the SQL stage can't express (link-property keys, USING whole-set
+// references, free-object subjects, lossy projections) leave `byAtoms`
+// undefined so the engine falls back to the runtime grouper.
+type GroupStatementAst = Extract<EdgeQLStatement, { kind: "group" }>;
+type GroupAstParts = Pick<GroupStatementAst, "source" | "using" | "by"> & { pos?: GroupStatementAst["pos"] };
 
-  const atomsOf = (el: GroupByElement): GroupByAtom[] => {
-    if (el.kind === "field_ref" || el.kind === "name_ref" || el.kind === "link_property_ref") return [el];
-    if (el.kind === "sets") return el.sets.flat();
-    return el.atoms; // cube / rollup
-  };
+const buildGroupStmtParts = (
+  statement: GroupAstParts,
+  scoped: IRCompileContext,
+): Pick<GroupStmt, "byAtoms" | "groupingSets" | "hiddenByFields"> & { subject: Set } => {
+  let lowerable = true;
+
+  // --- Expand BY into the atom-name union + grouping sets. ---
   const atomName = (atom: GroupByAtom): string =>
     atom.kind === "field_ref" ? atom.field : atom.name;
+  const atomOrder: string[] = [];
+  // field_ref atoms must exist as fields on the subject rows; name_ref atoms
+  // resolve to USING aliases (folded into the projection below).
+  const fieldAtoms: string[] = [];
+  const addAtom = (atom: GroupByAtom): string => {
+    // `@prop` keys live on the link table, which the per-element projection
+    // doesn't carry; those stay on the runtime grouper.
+    if (atom.kind === "link_property_ref") lowerable = false;
+    const name = atomName(atom);
+    if (!atomOrder.includes(name)) atomOrder.push(name);
+    if (atom.kind === "field_ref" && !fieldAtoms.includes(name)) fieldAtoms.push(name);
+    return name;
+  };
+  const subsetsOfList = (items: string[], mode: "cube" | "rollup"): string[][] => {
+    if (mode === "rollup") {
+      const out: string[][] = [];
+      for (let i = 0; i <= items.length; i += 1) out.push(items.slice(0, i));
+      return out;
+    }
+    // cube: power set
+    const out: string[][] = [[]];
+    for (const item of items) {
+      const len = out.length;
+      for (let i = 0; i < len; i += 1) out.push([...out[i]!, item]);
+    }
+    return out;
+  };
+  const crossProduct = (left: string[][], right: string[][]): string[][] => {
+    const out: string[][] = [];
+    for (const l of left) for (const r of right) out.push([...l, ...r]);
+    return out;
+  };
+  let groupingSets: string[][] = [[]];
+  for (const element of statement.by) {
+    if (element.kind === "field_ref" || element.kind === "name_ref" || element.kind === "link_property_ref") {
+      const name = addAtom(element);
+      groupingSets = groupingSets.map((s) => [...s, name]);
+    } else if (element.kind === "sets") {
+      groupingSets = crossProduct(groupingSets, element.sets.map((atoms) => atoms.map(addAtom)));
+    } else {
+      groupingSets = crossProduct(groupingSets, subsetsOfList(element.atoms.map(addAtom), element.kind));
+    }
+  }
+  if (groupingSets.length === 0) {
+    groupingSets = [[]];
+  }
 
-  const isSimple = !statement.using?.length
-    && statement.by.every((el) => el.kind === "field_ref" || el.kind === "name_ref");
-  const byFieldNames = isSimple
-    ? statement.by.flatMap(atomsOf).map(atomName)
-    : undefined;
+  // --- Fold USING aliases and BY fields into the subject projection. ---
+  // A USING expression becomes a computed shape entry compiled along the same
+  // path as a hand-written `alias := <expr>` inside the shape, so the alias
+  // is a regular (hidden) field on each element row.
+  const usingExprToComputed = (expr: NonNullable<typeof statement.using>[number]["expr"]): Extract<EdgeQLShapeElement, { kind: "computed" }>["expr"] => {
+    if (expr.kind === "function_call") {
+      return { kind: "function_call", call: expr.call };
+    }
+    // A direct field of the current row (`owner := .owner`) lowers like a
+    // plain shape field; anything else routes through the per-row
+    // select_expr computed path.
+    if (expr.kind === "field_access" && expr.expr.kind === "current_item") {
+      return { kind: "field_ref", field: expr.field };
+    }
+    if (expr.kind === "literal") {
+      return { kind: "literal", value: expr.value };
+    }
+    return { kind: "select_expr", expr, clauses: {} };
+  };
 
-  // Augment a shape-projected subject (`X { name }`) with any BY field it
-  // doesn't already project (`… BY .b`) so the key is readable, recording the
-  // added fields so the SQL stage strips them from the displayed elements.
+  // A USING expression that references a WITH binding or the subject itself
+  // (`using z := N <= 1` where N is volatile-once, `using l := C.len` where C
+  // is the grouped set) needs whole-set / materialize-once semantics the
+  // per-row computed projection can't express; those stay on the runtime
+  // grouper's per-row evaluator.
+  const containsBindingRef = (node: unknown, seen = new globalThis.Set<unknown>()): boolean => {
+    if (!node || typeof node !== "object" || seen.has(node)) return false;
+    seen.add(node);
+    if ((node as { kind?: unknown }).kind === "binding_ref") return true;
+    if (Array.isArray(node)) return node.some((item) => containsBindingRef(item, seen));
+    return Object.values(node).some((value) => containsBindingRef(value, seen));
+  };
+
   let sourceAst = statement.source;
   const hiddenByFields: string[] = [];
-  if (byFieldNames && sourceAst.kind === "shape_projection") {
+  if (sourceAst.kind === "shape_projection" || sourceAst.kind === "select") {
+    const shape = [...(sourceAst.shape ?? [])];
     const present = new globalThis.Set<string>(
-      sourceAst.shape
+      shape
         .filter((s): s is Extract<EdgeQLShapeElement, { name: string }> => "name" in s && typeof s.name === "string")
         .map((s) => s.name),
     );
-    const additions: EdgeQLShapeElement[] = [];
-    for (const name of byFieldNames) {
+    for (const usingBinding of statement.using ?? []) {
+      if (containsBindingRef(usingBinding.expr)) {
+        lowerable = false;
+        continue;
+      }
+      if (present.has(usingBinding.alias)) continue;
+      shape.push({
+        kind: "computed",
+        name: usingBinding.alias,
+        expr: usingExprToComputed(usingBinding.expr),
+        operation: "assign",
+        origin: "explicit",
+      } as EdgeQLShapeElement);
+      hiddenByFields.push(usingBinding.alias);
+      present.add(usingBinding.alias);
+    }
+    // Any BY field the subject doesn't already project is added (and hidden)
+    // so the key is readable off each element row.
+    for (const name of fieldAtoms) {
       if (present.has(name)) continue;
-      additions.push({ kind: "field", name });
+      shape.push({ kind: "field", name });
       hiddenByFields.push(name);
       present.add(name);
     }
-    if (additions.length > 0) {
-      sourceAst = { ...sourceAst, shape: [...sourceAst.shape, ...additions] };
+    if (shape.length !== (sourceAst.shape ?? []).length) {
+      sourceAst = { ...sourceAst, shape };
+    }
+  } else if ((statement.using ?? []).length > 0) {
+    // USING over an unshaped / wrapped source has nowhere to attach its
+    // computed fields; the presence check below would pass vacuously.
+    lowerable = false;
+  }
+
+  // A typed-select over a free-object binding (`group X { a, b }` where
+  // X := { a := 1, … }) compiles the BINDING itself as the subject — tuple
+  // fields aren't schema pointers, so the generic shape compile would reject
+  // them. The written shape only selects which fields stay visible in
+  // `elements` (see the subjectTuple strip below).
+  let tupleBindingSubject: Set | undefined;
+  {
+    let probeAst: typeof sourceAst | undefined = sourceAst;
+    while (probeAst && probeAst.kind === "select_expr_subquery") {
+      probeAst = (probeAst as { expr?: typeof sourceAst }).expr;
+    }
+    const bindingName = probeAst && probeAst.kind === "select"
+      ? probeAst.typeName
+      : probeAst && probeAst.kind === "shape_projection" && probeAst.expr.kind === "binding_ref"
+        ? probeAst.expr.name
+        : undefined;
+    const bound = bindingName ? resolveBinding(scoped, bindingName) : undefined;
+    if (bound) {
+      let cursor: Set = bound;
+      while (cursor.expr.kind === "select_expr") {
+        cursor = (cursor.expr as SelectExpr).result;
+      }
+      if (cursor.expr.kind === "tuple") {
+        tupleBindingSubject = bound;
+      }
     }
   }
 
   // The subject may not be lowerable to GelIR (e.g. `select X { name, b }`
   // re-projects a computed field `b` off the binding `X`, which the shape
   // compiler validates against the base type and rejects). In that case emit a
-  // non-lowerable GroupStmt (byFieldNames cleared) so the SQL stage bails and
-  // the engine falls back to the runtime grouper, which handles it.
+  // non-lowerable GroupStmt (byAtoms cleared) so the SQL stage bails and the
+  // engine falls back to the runtime grouper, which handles it.
   let subject: Set;
-  let lowerable = byFieldNames !== undefined;
   try {
-    subject = compileFreeObjectExpr(sourceAst, scoped);
+    subject = tupleBindingSubject ?? compileFreeObjectExpr(sourceAst, scoped);
   } catch {
     subject = literalToSet(null);
     lowerable = false;
   }
 
-  // Only the FOR-iteration family (`group (for … select …) by …`) lowers to
-  // SQL here — its subject produces one element row per iteration, which the
-  // json_group_array re-aggregation models exactly. Non-iteration subjects
-  // (a bare type root like `Card`, or a free object `{ a := 1, b := N }`
-  // whose multi field is a set, not an iteration) keep different cardinality
-  // semantics and stay on the runtime grouper.
+  // Subjects that produce one element row per set member lower to SQL: the
+  // FOR-iteration family (`group (for … select …) by …`), shaped / bare type
+  // roots (`group Card {…} by …`), and single-row free objects
+  // (`group {a := 1, b := random()} …`, compiled as a named IR tuple whose
+  // select_free lowering emits exactly one json_object row). A free object
+  // with a multi field (`b := {1, 2}`) cross-joins into several rows — that
+  // breaks the one-row-per-element contract, so it stays on the runtime
+  // grouper.
+  const SET_RETURNING_FUNCTIONS = new globalThis.Set([
+    "array_unpack", "enumerate", "range_unpack", "json_array_unpack", "json_object_unpack", "sequence",
+  ]);
+  const isSingleTupleElement = (val: Set): boolean => {
+    const kind = val.expr.kind;
+    if (kind.endsWith("_constant")) return true;
+    if (kind === "type_cast" || kind === "tuple" || kind === "array") return true;
+    if (kind === "function_call") {
+      const shortName = ((val.expr as IRFunctionCall).functionName ?? "").split("::").pop() ?? "";
+      return !SET_RETURNING_FUNCTIONS.has(shortName);
+    }
+    if (kind === "operator_call") {
+      return (val.expr as OperatorCall).operator !== "union";
+    }
+    return false;
+  };
+  let subjectTuple: Tuple | undefined;
   if (lowerable) {
     let cursor: Set = subject;
     while (cursor.expr.kind === "select_expr") {
       cursor = (cursor.expr as SelectExpr).result;
     }
-    if (cursor.expr.kind !== "for_expr") {
+    if (cursor.expr.kind === "tuple"
+      && (cursor.expr as Tuple).named
+      && (cursor.expr as Tuple).elements.every((el) => el.name && isSingleTupleElement(el.val))) {
+      subjectTuple = cursor.expr as Tuple;
+    }
+    if (cursor.expr.kind !== "for_expr" && cursor.expr.kind !== "type_root"
+      && cursor.expr.kind !== "group_rows" && !subjectTuple) {
       lowerable = false;
+    }
+    // The shape compiler silently skips elements it can't resolve (e.g. a
+    // nested shape over a binding's computed pointer). The SQL lowering
+    // re-aggregates the projected JSON wholesale, so a lossy projection must
+    // fall back to the runtime grouper, which materializes such pointers.
+    // The same check guards the group keys: a BY atom that didn't land in
+    // the projection would group everything under a NULL key.
+    if (lowerable) {
+      let shapedAst: typeof sourceAst | undefined = sourceAst;
+      while (shapedAst && shapedAst.kind === "select_expr_subquery") {
+        shapedAst = (shapedAst as { expr?: typeof sourceAst }).expr;
+      }
+      const wanted = shapedAst && (shapedAst.kind === "shape_projection" || shapedAst.kind === "select")
+        ? (shapedAst.shape ?? [])
+            .filter((s): s is Extract<EdgeQLShapeElement, { name: string }> => "name" in s && typeof s.name === "string")
+            .map((s) => s.name)
+        : [];
+      const have = new globalThis.Set<string>();
+      const collect = (set: Set): void => {
+        for (const el of set.shape ?? []) {
+          const name = el.name
+            ?? (el.expr.expr.kind === "pointer" ? (el.expr.expr as Pointer).ptrref.shortName : undefined);
+          if (name) have.add(name);
+        }
+        if (set.expr.kind === "tuple") {
+          for (const el of (set.expr as Tuple).elements) {
+            if (el.name) have.add(el.name);
+          }
+        }
+        if (set.expr.kind === "group_rows") {
+          const projection = (set.expr as GroupRowsExpr).projection;
+          if (projection) {
+            for (const proj of projection) have.add(proj.name);
+          } else {
+            have.add("key");
+            have.add("grouping");
+            have.add("elements");
+          }
+        }
+        if (set.expr.kind === "select_expr") collect((set.expr as SelectExpr).result);
+        if (set.expr.kind === "for_expr") {
+          const body = (set.expr as { body?: Set }).body;
+          if (body) collect(body);
+        }
+      };
+      collect(subject);
+      const missing = (name: string): boolean =>
+        name !== "id" && name !== "__type__" && !have.has(name);
+      if (wanted.some(missing) || atomOrder.some(missing)) {
+        lowerable = false;
+      }
+      // A free-object subject materializes every field in its value row;
+      // strip the ones the written shape doesn't project from the displayed
+      // elements.
+      if (lowerable && subjectTuple && wanted.length > 0) {
+        for (const el of subjectTuple.elements) {
+          if (el.name && !wanted.includes(el.name) && !hiddenByFields.includes(el.name)) {
+            hiddenByFields.push(el.name);
+          }
+        }
+      }
     }
   }
 
   return {
-    kind: "group_stmt",
-    expr: subject,
     subject,
+    byAtoms: lowerable ? atomOrder : undefined,
+    groupingSets: lowerable ? groupingSets : undefined,
+    hiddenByFields: lowerable && hiddenByFields.length > 0 ? hiddenByFields : undefined,
+  };
+};
+
+const makeGroupStmt = (parts: GroupAstParts, scoped: IRCompileContext): GroupStmt => {
+  const core = buildGroupStmtParts(parts, scoped);
+  return {
+    kind: "group_stmt",
+    expr: core.subject,
+    subject: core.subject,
     by: [],
     using: {},
-    byFieldNames: lowerable ? byFieldNames : undefined,
-    hiddenByFields: lowerable && hiddenByFields.length > 0 ? hiddenByFields : undefined,
+    byAtoms: core.byAtoms,
+    groupingSets: core.groupingSets,
+    hiddenByFields: core.hiddenByFields,
     ...statementBase(scoped),
-    span: statement.pos,
+    span: parts.pos ?? { line: 1, column: 1 },
   } as GroupStmt;
+};
+
+const compileGroupStatement = (statement: GroupStatementAst, ctx: IRCompileContext): GroupStmt =>
+  makeGroupStmt(statement, withBindings(ctx, statement.with));
+
+// Parse a trailing shape over group rows (`(GROUP …) { element := .key.element,
+// cnt := count(.elements), key: {cost}, elements: {name} }`) into the
+// GroupRowProjection model the SQL stage can emit. A shape element outside
+// the model marks the whole set unlowerable, and the engine falls back to
+// the runtime grouper.
+const parseGroupRowProjection = (
+  shape: EdgeQLShapeElement[] | undefined,
+): { projection?: GroupRowProjection[]; unlowerable?: boolean } => {
+  if (!shape || shape.length === 0) return {};
+  // `.key.element` / `.elements` — a field_access chain rooted at the
+  // current group row.
+  const pathSteps = (e: unknown): string[] | null => {
+    const steps: string[] = [];
+    let cursor = e as { kind?: string; field?: string; expr?: unknown } | undefined;
+    while (cursor && cursor.kind === "field_access" && typeof cursor.field === "string") {
+      steps.unshift(cursor.field);
+      cursor = cursor.expr as typeof cursor;
+    }
+    return cursor && cursor.kind === "current_item" && steps.length > 0 ? steps : null;
+  };
+  const out: GroupRowProjection[] = [];
+  for (const el of shape) {
+    if (!("name" in el) || typeof el.name !== "string") return { unlowerable: true };
+    const name = el.name;
+    if (el.kind === "link" && el.shape && el.shape.length > 0) {
+      if (name === "elements") {
+        const fields = parseElementsFields(el.shape, pathSteps);
+        if (!fields) return { unlowerable: true };
+        out.push({ name, kind: "elements_shape", fields });
+        continue;
+      }
+      const fields = el.shape
+        .filter((s): s is Extract<EdgeQLShapeElement, { name: string }> => "name" in s && typeof s.name === "string" && s.kind === "field")
+        .map((s) => s.name);
+      if (fields.length !== el.shape.length) return { unlowerable: true };
+      if (name === "key") {
+        out.push({ name, kind: "key_shape", fields });
+        continue;
+      }
+      return { unlowerable: true };
+    }
+    if (el.kind === "field") {
+      if (name === "key" || name === "grouping" || name === "elements" || name === "id") {
+        out.push({ name, kind: "path", steps: [name] });
+        continue;
+      }
+      return { unlowerable: true };
+    }
+    if (el.kind === "computed") {
+      const computed = el.expr;
+      if (computed.kind === "field_ref") {
+        out.push({ name, kind: "path", steps: [computed.field] });
+        continue;
+      }
+      if (computed.kind === "function_call") {
+        const fname = (computed.call?.name ?? "").split("::").pop();
+        const args = computed.call?.args ?? [];
+        const arg0 = args[0] as { kind?: string; expr?: unknown } | undefined;
+        const steps = fname === "count" && args.length === 1 && arg0?.kind === "expr"
+          ? pathSteps(arg0.expr)
+          : null;
+        if (steps && steps.length === 1 && steps[0] === "elements") {
+          out.push({ name, kind: "count_elements" });
+          continue;
+        }
+        // `array_agg((SELECT _ := .grouping ORDER BY _))` — the grouping
+        // names as a sorted array.
+        if (fname === "array_agg" && args.length === 1 && arg0?.kind === "expr") {
+          let inner = arg0.expr as { kind?: string; expr?: unknown } | undefined;
+          while (inner && inner.kind === "select_expr_subquery") {
+            inner = inner.expr as typeof inner;
+          }
+          const innerSteps = pathSteps(inner);
+          if (innerSteps && innerSteps.length === 1 && innerSteps[0] === "grouping") {
+            out.push({ name, kind: "sorted_grouping" });
+            continue;
+          }
+        }
+        return { unlowerable: true };
+      }
+      if (computed.kind === "select_expr") {
+        if (Object.keys(computed.clauses ?? {}).length > 0) return { unlowerable: true };
+        const steps = pathSteps(computed.expr);
+        if (steps) {
+          out.push({ name, kind: "path", steps });
+          continue;
+        }
+        // `name: (select .elements.name limit 1)` — first-element field.
+        const sub = computed.expr as {
+          kind?: string;
+          expr?: unknown;
+          limit?: unknown;
+          filter?: unknown;
+          orderBy?: unknown;
+          offset?: unknown;
+        };
+        if (sub.kind === "select_expr_subquery" && sub.limit === 1
+          && !sub.filter && !sub.orderBy && !sub.offset) {
+          const subSteps = pathSteps(sub.expr);
+          if (subSteps && subSteps.length >= 2 && subSteps[0] === "elements") {
+            out.push({ name, kind: "element_first_path", steps: subSteps.slice(1) });
+            continue;
+          }
+        }
+        return { unlowerable: true };
+      }
+      return { unlowerable: true };
+    }
+    return { unlowerable: true };
+  }
+  return { projection: out };
+};
+
+// The subject field an elements-projection entry reads (`z := .b <= 1`
+// reads `b`; everything else reads its own name).
+const elementFieldSubjectName = (field: GroupElementsField): string =>
+  field.kind === "compare" ? (field.steps[0] ?? "") : field.name;
+
+// Parse an `elements: {…}` (or nested object) sub-shape into
+// GroupElementsField entries: plain fields, literal comparisons
+// (`z := .d <= 1`), and nested object sub-shapes (recursive). Returns null
+// when an entry is outside the model.
+const parseElementsFields = (
+  shape: EdgeQLShapeElement[],
+  pathSteps: (e: unknown) => string[] | null,
+): GroupElementsField[] | null => {
+  const fields: GroupElementsField[] = [];
+  for (const sub of shape) {
+    if (!("name" in sub) || typeof sub.name !== "string") return null;
+    if (sub.kind === "field") {
+      fields.push({ name: sub.name, kind: "field" });
+      continue;
+    }
+    if (sub.kind === "link" && sub.shape && sub.shape.length > 0) {
+      const nested = parseElementsFields(sub.shape, pathSteps);
+      if (!nested) return null;
+      fields.push({ name: sub.name, kind: "object_shape", fields: nested });
+      continue;
+    }
+    if (sub.kind === "computed" && sub.expr.kind === "select_expr") {
+      const inner = sub.expr.expr as { kind?: string; op?: string; left?: unknown; right?: unknown };
+      const ops = new globalThis.Set(["=", "!=", "<", "<=", ">", ">="]);
+      const rhs = inner.right as { kind?: string; value?: unknown } | undefined;
+      const steps = inner.kind === "compare" && typeof inner.op === "string" && ops.has(inner.op)
+        ? pathSteps(inner.left)
+        : null;
+      if (steps && rhs?.kind === "literal"
+        && (typeof rhs.value === "string" || typeof rhs.value === "number" || typeof rhs.value === "boolean")) {
+        fields.push({
+          name: sub.name,
+          kind: "compare",
+          steps,
+          op: inner.op as Extract<GroupElementsField, { kind: "compare" }>["op"],
+          rhs: rhs.value,
+        });
+        continue;
+      }
+    }
+    return null;
+  }
+  return fields;
+};
+
+// Peel no-op select_expr wrappers (`select (select GR)`) down to a
+// group-rows set, when that's what they wrap.
+const peelToGroupRows = (set: Set): { rows: Set; groupRows: GroupRowsExpr } | undefined => {
+  let cursor: Set = set;
+  while (cursor.expr.kind === "select_expr") {
+    const wrapper = cursor.expr as SelectExpr;
+    if (wrapper.where || wrapper.limit || wrapper.offset || (wrapper.orderBy && wrapper.orderBy.length > 0)) break;
+    cursor = wrapper.result;
+  }
+  if (cursor.expr.kind !== "group_rows") return undefined;
+  return { rows: cursor, groupRows: cursor.expr as GroupRowsExpr };
+};
+
+// Build a `group_rows` set from group AST parts plus an optional trailing
+// shape. An `elements: {…}` projection re-reads fields off the materialized
+// element rows, so any field it names is added to the subject's projection
+// (visible, not hidden — the re-projection selects the exact subset anyway).
+const buildGroupRowsSet = (
+  parts: GroupAstParts,
+  trailingShape: EdgeQLShapeElement[] | undefined,
+  ctx: IRCompileContext,
+): Set => {
+  const parsed = parseGroupRowProjection(trailingShape);
+  const elementFields = (parsed.projection ?? [])
+    .flatMap((p) => {
+      if (p.kind === "elements_shape") {
+        return p.fields.map(elementFieldSubjectName);
+      }
+      if (p.kind === "element_first_path") {
+        return [p.steps[0] ?? ""];
+      }
+      return [];
+    })
+    .filter((name) => name.length > 0);
+  let source = parts.source;
+  if (
+    elementFields.length > 0
+    && (source.kind === "select" || source.kind === "shape_projection")
+  ) {
+    const shape = [...(source.shape ?? [])];
+    const present = new globalThis.Set<string>(
+      shape
+        .filter((s): s is Extract<EdgeQLShapeElement, { name: string }> => "name" in s && typeof s.name === "string")
+        .map((s) => s.name),
+    );
+    const additions: EdgeQLShapeElement[] = [];
+    for (const name of elementFields) {
+      if (present.has(name)) continue;
+      additions.push({ kind: "field", name });
+      present.add(name);
+    }
+    if (additions.length > 0) {
+      source = { ...source, shape: [...shape, ...additions] };
+    }
+  }
+  const scoped = childScope(ctx);
+  const group = makeGroupStmt({ ...parts, source }, scoped);
+  return {
+    kind: "set",
+    expr: {
+      kind: "group_rows",
+      group,
+      projection: parsed.projection,
+      unlowerable: parsed.unlowerable,
+      astParts: parts,
+    } as GroupRowsExpr,
+    pathId: defaultPathId("group_rows"),
+    typeref: unknownTypeRef("std::FreeObject"),
+    shape: [],
+    isBinding: false,
+    isMaterializedRef: false,
+    isSchemaAlias: false,
+  };
+};
+
+// `(GROUP <subject> BY <atoms>)` in expression position. Link subjects keep
+// the correlated embedded_group lowering (one JSON array per outer row, the
+// shape-position semantics); general subjects compile to a `group_rows` set
+// — one row per group — that the statement compiler lowers like a top-level
+// GROUP (see compileGelIRToSQL's group_rows branch).
+const compileGroupExprSet = (
+  groupExpr: Extract<FreeObjectExpr, { kind: "group_expr" }>,
+  trailingShape: EdgeQLShapeElement[] | undefined,
+  ctx: IRCompileContext,
+): Set => {
+  // BY-clause name collisions (`BY @text, .text`) are rejected for every
+  // expression-position group, regardless of which lowering handles it.
+  validateGroupByAtomCollisions(groupExpr.by, (message) => {
+    throw new AppError("E_SEMANTIC", message, 1, 1);
+  });
+  let probeAst: FreeObjectExpr = groupExpr.source;
+  if (probeAst.kind === "shape_projection") probeAst = probeAst.expr;
+  let probe: Set | undefined;
+  try {
+    probe = compileFreeObjectExpr(probeAst, ctx);
+  } catch {
+    probe = undefined;
+  }
+  if (probe && probe.expr.kind === "pointer" && !probe.typeref.isScalar) {
+    return compileEmbeddedGroup(groupExpr, trailingShape, ctx);
+  }
+  return buildGroupRowsSet(
+    { source: groupExpr.source, using: groupExpr.using, by: groupExpr.by },
+    trailingShape,
+    ctx,
+  );
 };
 
 const compileConfigureStatement = (statement: ConfigureStatement, ctx: IRCompileContext): ConfigStmt => {

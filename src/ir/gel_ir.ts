@@ -250,15 +250,21 @@ export interface GroupStmt extends Statement {
   by: Set[];
   using: Record<string, Set>;
   subject: Set;
-  // Resolved BY-atom field names for the single-grouping-set case the SQL
-  // stage can lower (`BY .name` → `["name"]`). Left undefined for the
-  // features that stay on the runtime grouper (grouping sets, CUBE/ROLLUP,
-  // USING aggregates, link-property keys); compileGroupStmtToSQL then bails
-  // and the engine falls back to runGroupIR.
-  byFieldNames?: string[];
-  // BY fields that were added to the subject's projection just to make them
-  // available as group keys (`group X { name } by .b`). Stripped from the
-  // displayed `elements` so the output shape stays as written.
+  // Union of all BY-atom names, in BY order. Every group row's `key` object
+  // carries all of them (NULL when the row's grouping set doesn't include
+  // the atom). Left undefined for the features that stay on the runtime
+  // grouper (link-property keys, USING whole-set references, non-lowerable
+  // subjects); compileGroupStmtToSQL then bails and the engine falls back
+  // to runGroupIR.
+  byAtoms?: string[];
+  // Expanded grouping sets, each a list of atom names: `BY a, b` → [[a,b]];
+  // `BY {a, b}` → [[a],[b]]; CUBE/ROLLUP enumerate subsets; comma-mixing
+  // takes the Cartesian product. The SQL stage emits one GROUP BY branch per
+  // entry, UNION ALL'd.
+  groupingSets?: string[][];
+  // Fields added to the subject's projection just to make them available as
+  // group keys (BY fields not in the written shape, USING aliases). Stripped
+  // from the displayed `elements` so the output shape stays as written.
   hiddenByFields?: string[];
 }
 
@@ -312,6 +318,8 @@ export type Expr =
   | FTSDocumentExpr
   | StaticIntrospectionExpr
   | EmbeddedGroupExpr
+  | GroupRowsExpr
+  | GroupRowFieldExpr
   | TriggerAnchor;
 
 export interface EmptySet extends Base {
@@ -581,6 +589,62 @@ export interface TriggerAnchor extends Base {
   anchor: "__old__" | "__new__";
   set: Set;
 }
+
+// `(GROUP <subject> BY <atoms>)` in expression position over a general
+// (non-link) subject — `WITH g := (GROUP Card BY .element) SELECT g {…}`,
+// `SELECT (GROUP …) {…} FILTER …`. Compiles to the same one-row-per-group
+// UNION ALL subquery as a top-level GroupStmt (see compileGroupRowsSQL),
+// optionally re-projected by `projection` when the wrapping select applies a
+// shape over the group rows' virtual `key`/`grouping`/`elements` fields.
+// A shape element the projection model can't express marks the whole set
+// non-lowerable (`unlowerable`), and the engine falls back to the runtime
+// grouper via the legacy pipeline.
+export interface GroupRowsExpr extends Base {
+  kind: "group_rows";
+  group: GroupStmt;
+  projection?: GroupRowProjection[];
+  unlowerable?: boolean;
+  // The group's AST parts (source/using/by — typed loosely to keep AST types
+  // out of this module). A projection applied later (`select GR {elements:
+  // {name}}` over a WITH binding) may need subject fields the original
+  // compile didn't project; the shape_projection compiler rebuilds the
+  // GroupStmt from these parts with the subject augmented.
+  astParts?: unknown;
+}
+
+// A path step chain off a group-rows set (`.key.cost`, `.elements`, or a
+// projected name like `.count`) — these aren't schema pointers, so the SQL
+// stage resolves them against the group row's JSON value: projected names
+// re-emit their projection expression, anything else reads the raw
+// `$."step1"."step2"` path.
+export interface GroupRowFieldExpr extends Base {
+  kind: "group_row_field";
+  steps: string[];
+}
+
+export type GroupRowProjection =
+  // `element := .key.element`, bare `key` / `grouping` / `elements`
+  | { name: string; kind: "path"; steps: string[] }
+  // `cnt := count(.elements)`
+  | { name: string; kind: "count_elements" }
+  // `elements: {name, cost, z := .b <= 1}` — re-project each element object
+  | { name: string; kind: "elements_shape"; fields: GroupElementsField[] }
+  // `key: {cost}` — re-project the key object to a field subset
+  | { name: string; kind: "key_shape"; fields: string[] }
+  // `name: (select .elements.name limit 1)` — a field of the group's first
+  // element (steps are the path AFTER `.elements`)
+  | { name: string; kind: "element_first_path"; steps: string[] }
+  // `agrouping := array_agg((SELECT _ := .grouping ORDER BY _))` — the
+  // grouping-set names as a sorted array (a stable per-set identifier)
+  | { name: string; kind: "sorted_grouping" };
+
+export type GroupElementsField =
+  // plain field passthrough (`name`)
+  | { name: string; kind: "field" }
+  // `z := .b <= 1` — an element field path compared against a literal
+  | { name: string; kind: "compare"; steps: string[]; op: "=" | "!=" | "<" | "<=" | ">" | ">="; rhs: string | number | boolean }
+  // `b: {c, z := .d <= 1}` — re-project a nested object field (recursive)
+  | { name: string; kind: "object_shape"; fields: GroupElementsField[] };
 
 // `(GROUP <link> BY <key>)` in expression / shape position. Unlike a top-level
 // GROUP (which runs in the runtime grouper), this lowers directly to a

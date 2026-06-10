@@ -11,6 +11,10 @@ import type {
   DeleteExpr,
   DeleteStmt,
   EmbeddedGroupExpr,
+  GroupRowsExpr,
+  GroupRowProjection,
+  GroupRowFieldExpr,
+  GroupElementsField,
   Expr,
   ForExpr,
   FunctionCall,
@@ -77,6 +81,23 @@ export interface GelIRCompileOptions {
   // to the bound set resolve to the unpacked element instead of the raw
   // JSON-encoded column text.
   multiScalarBindings?: ReadonlyMap<string, string>;
+  // Shape elements that fail to lower are normally skipped (the runtime
+  // decoder fills them in for plain SELECTs). Lowerings that re-aggregate the
+  // shape JSON wholesale (GROUP) can't tolerate a lossy projection — with
+  // this flag a failed element throws ShapeLoweringMiss so the caller can
+  // fall back instead of emitting rows with missing fields.
+  strictShape?: boolean;
+  // Active group-rows statement context for clause compilation: resolves
+  // group_row_field paths against this alias's JSON `value`, re-emitting
+  // projected names' expressions (see compileGroupRowsStatementSQL).
+  groupRowProjection?: { alias: string; projections: ReadonlyMap<string, GroupRowProjection> };
+}
+
+// See GelIRCompileOptions.strictShape.
+export class ShapeLoweringMiss extends Error {
+  constructor(elementName: string) {
+    super(`shape element '${elementName}' does not lower to SQL`);
+  }
 }
 
 export const compileGelIRToSQL = (
@@ -139,6 +160,20 @@ export const compileGelIRToSQL = (
   const offsetForValidation = extractNumericLiteral(stmtOffsetForValidation);
   if (offsetForValidation !== undefined && offsetForValidation < 0) {
     throw new Error("OFFSET must not be negative");
+  }
+
+  // `SELECT (GROUP …) [{…}] [FILTER/ORDER BY]` — group rows in statement
+  // position (incl. via WITH bindings). Lowered as a group-rows subquery
+  // plus projection; statement clauses apply against the row JSON.
+  if (sourceSet && sourceSet.expr.kind === "group_rows") {
+    return compileGroupRowsStatementSQL(
+      sourceSet.expr as GroupRowsExpr,
+      selectWhere,
+      selectOrderBy,
+      params,
+      target,
+      options,
+    );
   }
 
   // `SELECT <T>{}` (and bare `SELECT {}`) must yield zero rows, not one
@@ -762,36 +797,58 @@ const unwrapSelectResultSet = (set: Set): Set | null => {
 // object `{ key: {...}, grouping: [...], elements: [...] }`. The subject
 // compiles to a value-per-row subquery (`SELECT <json element> AS "value"
 // FROM …`); we read the key fields out of that JSON with `json_extract` and
-// re-aggregate the elements with `json_group_array`. Only the resolved
-// single-grouping-set case (statement.byFieldNames set) is handled here;
-// anything else returns an empty fallback artifact so the engine routes the
-// statement to the runtime grouper.
+// re-aggregate the elements with `json_group_array` — one GROUP BY branch
+// per expanded grouping set, UNION ALL'd. `key` carries every BY atom (NULL
+// when the branch's set doesn't include it) and `grouping` lists the
+// branch's atoms, matching the runtime grouper's row contract. Statements
+// the IR builder marked non-lowerable (no `byAtoms`) return an empty
+// fallback artifact so the engine routes them to the runtime grouper.
 const compileGroupStmtToSQL = (statement: GroupStmt, options: GelIRCompileOptions): GelIRSQLArtifact => {
   const target = options.target ?? "sqlite";
   const params: ScalarValue[] = [];
-
-  const byFieldNames = statement.byFieldNames;
-  if (!byFieldNames || byFieldNames.length === 0) {
+  const sql = compileGroupRowsSQL(statement, params, target, options);
+  if (!sql) {
     return { sql: "", params, loweringMode: "fallback_multi_query" };
+  }
+  return { sql, params, loweringMode: "single_statement" };
+};
+
+// One-row-per-group SQL for a GroupStmt — shared by the top-level statement
+// artifact above and expression-position `group_rows` sets (see
+// compileGroupRowsStatementSQL). Returns null when the statement is
+// non-lowerable (no byAtoms) or the subject doesn't lower.
+const compileGroupRowsSQL = (
+  statement: GroupStmt,
+  params: ScalarValue[],
+  target: RuntimeTarget,
+  options: GelIRCompileOptions,
+): string | null => {
+  const byAtoms = statement.byAtoms;
+  const groupingSets = statement.groupingSets ?? (byAtoms ? [byAtoms] : undefined);
+  if (!byAtoms || byAtoms.length === 0 || !groupingSets || groupingSets.length === 0) {
+    return null;
   }
 
   // The subject yields one `value`-column row per element (json_object). Its
   // FOR/shape lowering correlates iterator vars correctly (see
-  // compileShapeObjectWithAliases).
-  const subjectSql = compileScalarSelectSQL(statement.subject, params, target, options, []);
-  if (!subjectSql) {
-    return { sql: "", params, loweringMode: "fallback_multi_query" };
-  }
+  // compileShapeObjectWithAliases). strictShape: a subject field that doesn't
+  // lower must bail to the runtime grouper — a lossy projection would emit
+  // group elements with silently-missing fields. Compiled once per branch so
+  // the positional params repeat with the duplicated SQL text.
+  const compileSubject = (): string | null => {
+    try {
+      return compileScalarSelectSQL(statement.subject, params, target, { ...options, strictShape: true }, []);
+    } catch (err) {
+      if (!(err instanceof ShapeLoweringMiss)) throw err;
+      return null;
+    }
+  };
 
   const subjectAlias = "grp_src";
   const valueCol = `${subjectAlias}.${quoteIdent("value")}`;
   // SQLite JSON path for a (quoted) object field — `$."name"`.
   const fieldPath = (name: string): string => `'$."${name.replaceAll('"', '""')}"'`;
   const keyExtract = (name: string): string => `json_extract(${valueCol}, ${fieldPath(name)})`;
-
-  const distinctNames = [...new Set<string>(byFieldNames)];
-  const keyPairs = distinctNames.map((name) => `${quoteLiteral(name)}, ${keyExtract(name)}`);
-  const groupingArr = `json_array(${distinctNames.map((n) => quoteLiteral(n)).join(", ")})`;
 
   // Strip the key-only (hidden) BY fields from the displayed elements so the
   // output shape stays as written. `json()` re-asserts the JSON subtype so
@@ -801,18 +858,190 @@ const compileGroupStmtToSQL = (statement: GroupStmt, options: GelIRCompileOption
     ? `json(json_remove(${valueCol}, ${hidden.map((n) => fieldPath(n)).join(", ")}))`
     : `json(${valueCol})`;
 
-  const groupObj = `json_object(`
-    + `${quoteLiteral("key")}, json_object(${keyPairs.join(", ")}), `
-    + `${quoteLiteral("grouping")}, ${groupingArr}, `
-    + `${quoteLiteral("elements")}, COALESCE(json_group_array(${elementExpr}), json('[]'))`
-    + `)`;
+  const distinctAtoms = [...new Set<string>(byAtoms)];
+  const branches: string[] = [];
+  for (const set of groupingSets) {
+    const subjectSql = compileSubject();
+    if (!subjectSql) {
+      return null;
+    }
+    const inSet = new globalThis.Set<string>(set);
+    const keyPairs = distinctAtoms.map((name) =>
+      `${quoteLiteral(name)}, ${inSet.has(name) ? keyExtract(name) : "NULL"}`);
+    const groupingArr = `json_array(${set.map((n) => quoteLiteral(n)).join(", ")})`;
+    const groupObj = `json_object(`
+      + `${quoteLiteral("key")}, json_object(${keyPairs.join(", ")}), `
+      + `${quoteLiteral("grouping")}, ${groupingArr}, `
+      + `${quoteLiteral("elements")}, COALESCE(json_group_array(${elementExpr}), json('[]'))`
+      + `)`;
+    const groupByCols = [...new Set<string>(set.map(keyExtract))];
+    let branch = `SELECT ${groupObj} AS ${quoteIdent("value")}`
+      + ` FROM (${subjectSql}) ${subjectAlias}`;
+    // A zero-atom grouping set (the CUBE/ROLLUP base set) aggregates the
+    // whole subject into one group — but must emit no group at all when the
+    // subject is empty, where a bare aggregate would still return one row.
+    branch += groupByCols.length > 0
+      ? ` GROUP BY ${groupByCols.join(", ")}`
+      : ` HAVING COUNT(*) > 0`;
+    branches.push(branch);
+  }
 
-  const groupByCols = distinctNames.map(keyExtract).join(", ");
-  const sql = `SELECT ${groupObj} AS ${quoteIdent("value")}`
-    + ` FROM (${subjectSql}) ${subjectAlias}`
-    + ` GROUP BY ${groupByCols}`;
+  return branches.join(" UNION ALL ");
+};
 
+const projectionsHead = (
+  ctx: NonNullable<GelIRCompileOptions["groupRowProjection"]>,
+  steps: string[],
+): GroupRowProjection | undefined => ctx.projections.get(steps[0] ?? "");
+
+// `SELECT (GROUP …) [{…}] [FILTER … ORDER BY …]` — group rows in statement
+// position (including via WITH bindings). Lowers the group, applies the
+// projection (each pair re-reads the row's JSON `value`), then compiles the
+// statement clauses against the rows: group_row_field paths resolve through
+// options.groupRowProjection so projected names re-emit their projection
+// expression and unprojected names read the raw row path.
+// The projected group-rows SQL (`SELECT <projection json> AS "value" FROM
+// (<group rows>) grw`) without statement clauses — shared by the statement
+// compiler below and by group-rows-as-subject lowering (an outer GROUP over
+// the projected rows of an inner one). Returns null when non-lowerable.
+const compileGroupRowsValueSQL = (
+  groupRows: GroupRowsExpr,
+  params: ScalarValue[],
+  target: RuntimeTarget,
+  options: GelIRCompileOptions,
+  alias: string,
+): string | null => {
+  if (groupRows.unlowerable) return null;
+  const rowsSql = compileGroupRowsSQL(groupRows.group, params, target, options);
+  if (!rowsSql) return null;
+  const rawValue = `${alias}.${quoteIdent("value")}`;
+  const jsonPath = (steps: string[]): string =>
+    `'$${steps.map((s) => `."${s.replaceAll('"', '""')}"`).join("")}'`;
+
+  const projectionExprSQL = (proj: GroupRowProjection): string => {
+    if (proj.kind === "path") {
+      const extract = `json_extract(${rawValue}, ${jsonPath(proj.steps)})`;
+      // Container roots keep their JSON subtype; deeper paths are scalar
+      // leaves read as plain values.
+      const container = proj.steps.length === 1
+        && (proj.steps[0] === "key" || proj.steps[0] === "grouping" || proj.steps[0] === "elements");
+      return container ? `json(${extract})` : extract;
+    }
+    if (proj.kind === "count_elements") {
+      return `json_array_length(COALESCE(json_extract(${rawValue}, '$."elements"'), '[]'))`;
+    }
+    if (proj.kind === "key_shape") {
+      const pairs = proj.fields.map((field) =>
+        `${quoteLiteral(field)}, json_extract(${rawValue}, ${jsonPath(["key", field])})`);
+      return `json_object(${pairs.join(", ")})`;
+    }
+    if (proj.kind === "element_first_path") {
+      const tail = proj.steps.map((s) => `."${s.replaceAll('"', '""')}"`).join("");
+      return `json_extract(${rawValue}, '$."elements"[0]${tail}')`;
+    }
+    if (proj.kind === "sorted_grouping") {
+      return `json((SELECT json_group_array(je.${quoteIdent("value")})`
+        + ` FROM (SELECT ${quoteIdent("value")} FROM json_each(COALESCE(json_extract(${rawValue}, '$."grouping"'), '[]')) ORDER BY ${quoteIdent("value")}) je))`;
+    }
+    // elements_shape: re-project each element object — plain fields pass
+    // through, compare computeds emit a JSON boolean, nested object
+    // sub-shapes recurse with their path prefix.
+    const elementFieldPair = (field: GroupElementsField, basePath: string[]): string => {
+      if (field.kind === "field") {
+        return `${quoteLiteral(field.name)}, json_extract(je.${quoteIdent("value")}, ${jsonPath([...basePath, field.name])})`;
+      }
+      if (field.kind === "object_shape") {
+        const subPairs = field.fields.map((sub) => elementFieldPair(sub, [...basePath, field.name]));
+        return `${quoteLiteral(field.name)}, json_object(${subPairs.join(", ")})`;
+      }
+      params.push(field.rhs as ScalarValue);
+      const lhs = `json_extract(je.${quoteIdent("value")}, ${jsonPath([...basePath, ...field.steps])})`;
+      return `${quoteLiteral(field.name)}, (CASE WHEN ${lhs} ${field.op} ? THEN json('true') ELSE json('false') END)`;
+    };
+    const pairs = proj.fields.map((field) => elementFieldPair(field, []));
+    return `json(COALESCE((SELECT json_group_array(json_object(${pairs.join(", ")}))`
+      + ` FROM json_each(COALESCE(json_extract(${rawValue}, '$."elements"'), '[]')) je), '[]'))`;
+  };
+
+  let valueSQL = `json(${rawValue})`;
+  if (groupRows.projection && groupRows.projection.length > 0) {
+    const pairs = groupRows.projection.map((proj) => `${quoteLiteral(proj.name)}, ${projectionExprSQL(proj)}`);
+    valueSQL = `json_object(${pairs.join(", ")})`;
+  }
+
+  return `SELECT ${valueSQL} AS ${quoteIdent("value")} FROM (${rowsSql}) ${alias}`;
+};
+
+const compileGroupRowsStatementSQL = (
+  groupRows: GroupRowsExpr,
+  where: Set | undefined,
+  orderBy: SortExpr[] | undefined,
+  params: ScalarValue[],
+  target: RuntimeTarget,
+  options: GelIRCompileOptions,
+): GelIRSQLArtifact => {
+  const fallback: GelIRSQLArtifact = { sql: "", params, loweringMode: "fallback_multi_query" };
+  const alias = "grw";
+  const projectedSql = compileGroupRowsValueSQL(groupRows, params, target, options, alias);
+  if (!projectedSql) return fallback;
+
+  // Clause refs resolve against the RAW row alias: projected names re-emit
+  // their projection expression (options.groupRowProjection), anything else
+  // reads the raw row's JSON path. projectedSql is a single bare SELECT, so
+  // WHERE/ORDER BY append directly.
+  const projections = new Map<string, GroupRowProjection>();
+  for (const proj of groupRows.projection ?? []) projections.set(proj.name, proj);
+  const clauseOptions: GelIRCompileOptions = { ...options, groupRowProjection: { alias, projections } };
+
+  let sql = projectedSql;
+  if (where) {
+    const whereSql = compilePredicateSetSQL(where, alias, params, target, clauseOptions)
+      ?? compileValueSetSQL(where, alias, params, target, clauseOptions);
+    if (!whereSql) return fallback;
+    sql += ` WHERE ${whereSql}`;
+  }
+  if (orderBy && orderBy.length > 0) {
+    const parts: string[] = [];
+    for (const sort of orderBy) {
+      const sortSql = compileGroupRowSortSQL(sort.path, alias, params, target, clauseOptions);
+      if (!sortSql) return fallback;
+      parts.push(`${sortSql} ${sort.direction === "desc" ? "DESC" : "ASC"}`);
+    }
+    sql += ` ORDER BY ${parts.join(", ")}`;
+  }
   return { sql, params, loweringMode: "single_statement" };
+};
+
+// ORDER BY over group rows: the standard value compile, plus the
+// sorted-grouping idiom `array_agg((SELECT _ := .grouping ORDER BY _))` —
+// emitted as the grouping names re-aggregated in sorted order.
+const compileGroupRowSortSQL = (
+  path: Set,
+  alias: string,
+  params: ScalarValue[],
+  target: RuntimeTarget,
+  options: GelIRCompileOptions,
+): string | null => {
+  const unwrapped = unwrapSelectExprSet(path).result;
+  if (unwrapped.expr.kind === "function_call") {
+    const call = unwrapped.expr as FunctionCall;
+    const shortName = (call.functionName ?? "").split("::").pop();
+    const args = orderedCallArgs(call.args);
+    if (shortName === "array_agg" && args.length === 1) {
+      let inner: Set = args[0]!.expr;
+      while (inner.expr.kind === "select_expr") {
+        inner = (inner.expr as SelectExpr).result;
+      }
+      if (inner.expr.kind === "group_row_field"
+        && (inner.expr as GroupRowFieldExpr).steps.length === 1
+        && (inner.expr as GroupRowFieldExpr).steps[0] === "grouping") {
+        const raw = `${alias}.${quoteIdent("value")}`;
+        return `(SELECT json_group_array(je.${quoteIdent("value")})`
+          + ` FROM (SELECT ${quoteIdent("value")} FROM json_each(COALESCE(json_extract(${raw}, '$."grouping"'), '[]')) ORDER BY ${quoteIdent("value")}) je)`;
+      }
+    }
+  }
+  return compileValueSetSQL(path, alias, params, target, options);
 };
 
 const compileConfigStmtToSQL = (statement: ConfigStmt, options: GelIRCompileOptions): GelIRSQLArtifact => {
@@ -1662,6 +1891,21 @@ const compileScalarSelectSQLInner = (
   options: GelIRCompileOptions,
   outerWheres: Set[],
 ): string | null => {
+  // Expression-position group rows (`group_rows`) as a value source — one
+  // `value` row per group, with any attached projection applied. Lets an
+  // outer GROUP use an inner (projected) group as its subject. Peel no-op
+  // select wrappers (`SELECT ( WITH MODULE … GROUP … )`) to find it.
+  {
+    let groupCursor: Set = sourceSet;
+    while (groupCursor.expr.kind === "select_expr") {
+      const wrapper = groupCursor.expr as SelectExpr;
+      if (wrapper.where || wrapper.limit || wrapper.offset || (wrapper.orderBy && wrapper.orderBy.length > 0)) break;
+      groupCursor = wrapper.result;
+    }
+    if (groupCursor.expr.kind === "group_rows") {
+      return compileGroupRowsValueSQL(groupCursor.expr as GroupRowsExpr, params, target, options, "grw_src");
+    }
+  }
   // `FOR X IN iter UNION X` is the upstream sugar the engine wraps every plain
   // FOR with — the body substitutes back to the iterator. After the AST→IR
   // pass the for_expr's body equals (or contains) the iterator expression, so
@@ -6162,6 +6406,7 @@ const compileShapeProjection = (
       target,
       depth + 1,
       shapeExpr.selectExpr,
+      narrowedLinkTarget(shapeExpr.result),
     );
     const alias = shapeAliasForElement(shape, shape.expr, depth);
     // Single-cardinality links surface as `owner: {…}`, not `owner: [{…}]`.
@@ -6992,60 +7237,72 @@ const tryCompileExistsObjectPointerSQL = (
       return `EXISTS (SELECT 1 FROM ${quoteIdent(linkTable)} _ex WHERE _ex.${quoteIdent(sideAnchor)} = ${sourceAlias}.${quoteIdent("id")})`;
     }
     if (pointer.direction === "inbound") {
+      // The referencing type may have concrete subtypes living in their own
+      // tables — scan the polymorphic union, not just the base table.
       const targetType = pointer.ptrref.outSource;
-      const targetTable = resolveTypeTableName(targetType, options);
       const inlineColumn = `${pointer.ptrref.shortName}_id`;
-      return `EXISTS (SELECT 1 FROM ${quoteIdent(targetTable)} _ex WHERE _ex.${quoteIdent(inlineColumn)} = ${sourceAlias}.${quoteIdent("id")})`;
+      const targetSource = compilePolymorphicSource(targetType, false, "_ex", ["id", inlineColumn], options);
+      return `EXISTS (SELECT 1 FROM ${targetSource} WHERE _ex.${quoteIdent(inlineColumn)} = ${sourceAlias}.${quoteIdent("id")})`;
     }
     const inlineColumn = `${pointer.ptrref.shortName}_id`;
     return `${sourceAlias}.${quoteIdent(inlineColumn)} IS NOT NULL`;
   }
 
   // Multi-step: build a chain of joins inside a single EXISTS, anchored
-  // against the outer row's id via the first link.
+  // against the outer row's id via the first link. Every level scans the
+  // polymorphic union of its type (`Card` must include `SpecialCard` rows)
+  // — a single-table scan silently drops subtype rows from the chain.
   let fromSql = "";
   const whereSqls: string[] = [];
   let prevAlias = sourceAlias;
   for (let i = 0; i < links.length; i++) {
     const link = links[i]!;
-    const isLeaf = i === links.length - 1;
     const targetType = link.direction === "inbound" ? link.ptrref.outSource : link.ptrref.outTarget;
     const targetAlias = `_ex${i}`;
-    const targetTable = resolveTypeTableName(targetType, options);
+    const cols = new globalThis.Set<string>(["id"]);
+    // Inline inbound link reads its FK column off this level's row; an
+    // inline outbound NEXT link reads its FK off this level too.
+    if (!shouldUseLinkTable(link) && link.direction === "inbound") {
+      cols.add(`${link.ptrref.shortName}_id`);
+    }
+    const nextLink = links[i + 1];
+    if (nextLink && !shouldUseLinkTable(nextLink) && nextLink.direction === "outbound") {
+      cols.add(`${nextLink.ptrref.shortName}_id`);
+    }
+    const targetSource = compilePolymorphicSource(targetType, false, targetAlias, [...cols], options);
     if (shouldUseLinkTable(link)) {
       const linkTable = linkTableNameForPointer(link, options);
       const linkAlias = `_lj${i}`;
       if (link.direction === "inbound") {
         if (i === 0) {
-          fromSql += `${quoteIdent(linkTable)} ${linkAlias} JOIN ${quoteIdent(targetTable)} ${targetAlias} ON ${targetAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("source")}`;
+          fromSql += `${quoteIdent(linkTable)} ${linkAlias} JOIN ${targetSource} ON ${targetAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("source")}`;
           whereSqls.push(`${linkAlias}.${quoteIdent("target")} = ${prevAlias}.${quoteIdent("id")}`);
         } else {
           fromSql += ` JOIN ${quoteIdent(linkTable)} ${linkAlias} ON ${linkAlias}.${quoteIdent("target")} = ${prevAlias}.${quoteIdent("id")}`
-            + ` JOIN ${quoteIdent(targetTable)} ${targetAlias} ON ${targetAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("source")}`;
+            + ` JOIN ${targetSource} ON ${targetAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("source")}`;
         }
       } else {
         if (i === 0) {
-          fromSql += `${quoteIdent(linkTable)} ${linkAlias} JOIN ${quoteIdent(targetTable)} ${targetAlias} ON ${targetAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("target")}`;
+          fromSql += `${quoteIdent(linkTable)} ${linkAlias} JOIN ${targetSource} ON ${targetAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("target")}`;
           whereSqls.push(`${linkAlias}.${quoteIdent("source")} = ${prevAlias}.${quoteIdent("id")}`);
         } else {
           fromSql += ` JOIN ${quoteIdent(linkTable)} ${linkAlias} ON ${linkAlias}.${quoteIdent("source")} = ${prevAlias}.${quoteIdent("id")}`
-            + ` JOIN ${quoteIdent(targetTable)} ${targetAlias} ON ${targetAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("target")}`;
+            + ` JOIN ${targetSource} ON ${targetAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("target")}`;
         }
       }
     } else {
       const inlineColumn = `${link.ptrref.shortName}_id`;
       if (i === 0) {
-        fromSql += `${quoteIdent(targetTable)} ${targetAlias}`;
+        fromSql += targetSource;
         whereSqls.push(link.direction === "inbound"
           ? `${targetAlias}.${quoteIdent(inlineColumn)} = ${prevAlias}.${quoteIdent("id")}`
           : `${targetAlias}.${quoteIdent("id")} = ${prevAlias}.${quoteIdent(inlineColumn)}`);
       } else {
-        fromSql += ` JOIN ${quoteIdent(targetTable)} ${targetAlias} ON ${link.direction === "inbound"
+        fromSql += ` JOIN ${targetSource} ON ${link.direction === "inbound"
           ? `${targetAlias}.${quoteIdent(inlineColumn)} = ${prevAlias}.${quoteIdent("id")}`
           : `${targetAlias}.${quoteIdent("id")} = ${prevAlias}.${quoteIdent(inlineColumn)}`}`;
       }
     }
-    void isLeaf;
     prevAlias = targetAlias;
   }
   if (!fromSql) return null;
@@ -7341,17 +7598,21 @@ const compilePredicateSetSQL = (
     }
     const rhsLiteral = extractInPredicateLiteralValues(args[otherIdx].expr);
     if (rhsLiteral && rhsLiteral.length > 0) {
+      // EdgeQL comparisons are element-wise over the cross product: the
+      // FILTER keeps the row when ANY (lhs, rhs) pair satisfies the operator
+      // (`!=` is ∃-semantics, not the ∀-semantics of `NOT (x = y)`).
+      if (op === "!=") {
+        const rhsRows = rhsLiteral.map(() => `SELECT ? AS ${quoteIdent("r")}`).join(" UNION ALL ");
+        params.push(...rhsLiteral);
+        return `(EXISTS (SELECT 1 FROM (${multiCorrelated}), (${rhsRows}) WHERE "value" != ${quoteIdent("r")}))`;
+      }
       const placeholders = rhsLiteral.map(() => "?").join(", ");
       params.push(...rhsLiteral);
-      const existsKW = op === "!=" ? "NOT EXISTS" : "EXISTS";
-      const cmp = op === "!=" ? "=" : op;
-      return `(${existsKW} (SELECT 1 FROM (${multiCorrelated}) WHERE "value" ${cmp === "=" ? "IN" : cmp} ${cmp === "=" ? `(${placeholders})` : `(${placeholders})`}))`;
+      return `(EXISTS (SELECT 1 FROM (${multiCorrelated}) WHERE "value" ${op === "=" ? "IN" : op} (${placeholders})))`;
     }
     const otherValue = compileValueSetSQL(args[otherIdx].expr, sourceAlias, params, target, options, linkPropertyAlias);
     if (!otherValue) continue;
-    const existsKW = op === "!=" ? "NOT EXISTS" : "EXISTS";
-    const cmp = op === "!=" ? "=" : op;
-    return `(${existsKW} (SELECT 1 FROM (${multiCorrelated}) WHERE "value" ${cmp} ${otherValue}))`;
+    return `(EXISTS (SELECT 1 FROM (${multiCorrelated}) WHERE "value" ${op} ${otherValue}))`;
   }
 
   // `X = {a, b, ...}` or `{a, b} = X` over scalar X — EdgeQL semantics
@@ -7396,8 +7657,11 @@ const compilePredicateSetSQL = (
         // Roll back any params pushed by the failed setSelect compile.
         continue;
       }
-      const existsKW = op === "!=" ? "NOT EXISTS" : "EXISTS";
-      return `(${existsKW} (SELECT 1 FROM (${setSelect}) WHERE "value" ${op} ${otherSql}))`;
+      // Element-wise ∃-semantics for both `=` and `!=`: keep the row when
+      // ANY element of the set satisfies the comparison. (`NOT EXISTS` here
+      // would lower `!=` as `NOT (X = Y)`, inverting the filter for
+      // singleton sets.)
+      return `(EXISTS (SELECT 1 FROM (${setSelect}) WHERE "value" ${op} ${otherSql}))`;
     }
   }
 
@@ -7517,6 +7781,27 @@ const compileValueSetSQL = (
     const bound = options.multiScalarBindings.get(pathIdKey(set))
       ?? options.multiScalarBindings.get(pathIdKey(unwrapped.result));
     if (bound) return bound;
+  }
+  // Path off a group-rows statement's row (`.count`, `.key.cost` in its
+  // FILTER/ORDER BY). Projected names re-emit their projection expression;
+  // anything else reads the raw row's JSON path.
+  if (unwrapped.result.expr.kind === "group_row_field") {
+    const groupCtx = options.groupRowProjection;
+    if (!groupCtx) return null;
+    const field = unwrapped.result.expr as GroupRowFieldExpr;
+    const raw = `${groupCtx.alias}.${quoteIdent("value")}`;
+    const path = (steps: string[]): string =>
+      `'$${steps.map((s) => `."${s.replaceAll('"', '""')}"`).join("")}'`;
+    const head = projectionsHead(groupCtx, field.steps);
+    if (head && head.kind === "count_elements" && field.steps.length === 1) {
+      return `json_array_length(COALESCE(json_extract(${raw}, '$."elements"'), '[]'))`;
+    }
+    if (head && head.kind === "path") {
+      return `json_extract(${raw}, ${path([...head.steps, ...field.steps.slice(1)])})`;
+    }
+    // key_shape / elements_shape project the same underlying object, and
+    // unprojected names read the raw row directly — both are the raw path.
+    return `json_extract(${raw}, ${path(field.steps)})`;
   }
   // EdgeQL path sharing: a bare reference to an outer iterator's type
   // (e.g. `User` inside `SELECT User { x := (SELECT … FILTER … = User) }`)
@@ -8440,6 +8725,31 @@ const compileFunctionCallSQL = (
       if (shortName === "min" || shortName === "max" || shortName === "avg" || shortName === "mean") return "NULL";
     }
     if (shortName === "count" && argList.length === 1) {
+      // Correlated count over a link/backlink anchored at the current row
+      // (`count(.owners)` in a shape): count the same correlated row set the
+      // link shape projection uses. compileCountOfSetSQL below compiles the
+      // pointer as a free-standing set, which would count every link in the
+      // table for every row.
+      const countArg = unwrapSelectExprSet(argList[0].expr);
+      const hasClauses = countArg.selectExpr
+        && (countArg.selectExpr.where || countArg.selectExpr.limit || countArg.selectExpr.offset);
+      if (!hasClauses
+        && countArg.result.expr.kind === "pointer"
+        && !countArg.result.typeref.isScalar
+        && (countArg.result.expr as Pointer).source.expr.kind === "type_root") {
+        const arr = compilePointerArrayExpr(
+          countArg.result.expr as Pointer,
+          sourceAlias,
+          [],
+          params,
+          options,
+          target,
+          1,
+          undefined,
+          narrowedLinkTarget(countArg.result),
+        );
+        return `json_array_length(${arr})`;
+      }
       const countSql = compileCountOfSetSQL(argList[0].expr, params, target, options);
       if (countSql) {
         return countSql;
@@ -8727,6 +9037,20 @@ const resetPointerSourceToRoot = (pointer: Pointer): Pointer => {
   };
 };
 
+// `owners[IS Bot]: {…}` — the IR narrows the link Set's typeref to the
+// intersection type while the underlying ptrref still describes the full
+// link. When they disagree, the lowering must scan the narrowed type's
+// tables instead of the link's declared target/source.
+const narrowedLinkTarget = (set: Set): TypeRef | undefined => {
+  if (set.expr.kind !== "pointer") return undefined;
+  const ptr = set.expr as Pointer;
+  const base = ptr.direction === "inbound" ? ptr.ptrref.outSource : ptr.ptrref.outTarget;
+  const typeref = set.typeref;
+  return typeref && !typeref.isScalar && !typeref.collection && base && typeref.id !== base.id
+    ? typeref
+    : undefined;
+};
+
 const compilePointerArrayExpr = (
   pointer: Pointer,
   sourceAlias: string,
@@ -8736,6 +9060,7 @@ const compilePointerArrayExpr = (
   target: RuntimeTarget,
   depth: number,
   modifiers?: SelectExpr,
+  narrowedTarget?: TypeRef,
 ): string => {
   // Nested-shape recursion is driven by the (finite) IR shape, so it terminates
   // on its own when a level has no further link elements. This cap is only a
@@ -8755,10 +9080,10 @@ const compilePointerArrayExpr = (
   const rowExpr = compileShapeObjectExpr(targetAlias, targetShape, params, options, target, depth, joinAlias);
 
   if (pointer.direction === "inbound") {
-    return compileBacklinkArrayExpr(pointer, sourceAlias, targetAlias, joinAlias, projectedCols, rowExpr, options, modifiers, params, target);
+    return compileBacklinkArrayExpr(pointer, sourceAlias, targetAlias, joinAlias, projectedCols, rowExpr, options, modifiers, params, target, narrowedTarget);
   }
 
-  return compileOutboundLinkArrayExpr(pointer, sourceAlias, targetAlias, joinAlias, projectedCols, rowExpr, options, modifiers, params, target);
+  return compileOutboundLinkArrayExpr(pointer, sourceAlias, targetAlias, joinAlias, projectedCols, rowExpr, options, modifiers, params, target, narrowedTarget);
 };
 
 const compileOutboundLinkArrayExpr = (
@@ -8772,8 +9097,9 @@ const compileOutboundLinkArrayExpr = (
   modifiers: SelectExpr | undefined,
   params: ScalarValue[],
   target: RuntimeTarget,
+  narrowedTarget?: TypeRef,
 ): string => {
-  const targetSource = compilePolymorphicSource(pointer.ptrref.outTarget, false, targetAlias, projectedCols, options);
+  const targetSource = compilePolymorphicSource(narrowedTarget ?? pointer.ptrref.outTarget, false, targetAlias, projectedCols, options);
   // `Comment.issue.owner`: the leaf (`owner`) anchors on the intermediate
   // `.issue`, not the outer `Comment` row. Resolve the intermediate id-set.
   const chainedSourceIds = pointer.source.expr.kind === "pointer"
@@ -8807,8 +9133,9 @@ const compileBacklinkArrayExpr = (
   modifiers: SelectExpr | undefined,
   params: ScalarValue[],
   target: RuntimeTarget,
+  narrowedTarget?: TypeRef,
 ): string => {
-  const sourceType = pointer.ptrref.outSource;
+  const sourceType = narrowedTarget ?? pointer.ptrref.outSource;
   const projectedBacklinkCols = shouldUseLinkTable(pointer)
     ? projectedCols
     : [...new Set<string>([...projectedCols, `${pointer.ptrref.shortName}_id`])];
@@ -9134,6 +9461,7 @@ const compilePublicShapeObjectExpr = (
         target,
         depth + 1,
         elemUnwrapped.selectExpr,
+        narrowedLinkTarget(elemResult),
       );
       const key = quoteLiteral(shapeAliasForElement(element, elemResult, depth));
       if (element.cardinality === "many" || element.cardinality === "at_least_one") {
@@ -9158,9 +9486,35 @@ const compilePublicShapeObjectExpr = (
       continue;
     }
 
+    // Tuple-valued computed (`b := { c := 2, d := random() }`): emit a
+    // json_object over the per-field values.
+    if (element.expr.expr.kind === "tuple" && (element.expr.expr as Tuple).named) {
+      const tuple = element.expr.expr as Tuple;
+      const checkpoint = params.length;
+      const tuplePairs: string[] = [];
+      let allCompiled = true;
+      for (const tupleEl of tuple.elements) {
+        const valueSql = tupleEl.name
+          ? compileValueSetSQL(tupleEl.val, sourceAlias, params, target, options)
+          : null;
+        if (!valueSql || !tupleEl.name) {
+          allCompiled = false;
+          break;
+        }
+        tuplePairs.push(`${quoteLiteral(tupleEl.name)}, ${valueSql}`);
+      }
+      if (allCompiled) {
+        pairs.push(`${quoteLiteral(shapeAliasForElement(element, element.expr, depth))}, json_object(${tuplePairs.join(", ")})`);
+        continue;
+      }
+      params.length = checkpoint;
+    }
+
     const computed = compileValueSetSQL(element.expr, sourceAlias, params, target, options);
     if (computed) {
       pairs.push(`${quoteLiteral(shapeAliasForElement(element, element.expr, depth))}, ${computed}`);
+    } else if (options.strictShape) {
+      throw new ShapeLoweringMiss(shapeAliasForElement(element, element.expr, depth));
     }
   }
 
@@ -9200,6 +9554,7 @@ const compileShapeObjectExpr = (
         target,
         depth + 1,
         elemUnwrapped.selectExpr,
+        narrowedLinkTarget(elemResult),
       );
       const key = quoteLiteral(shapeAliasForElement(element, elemResult, depth));
       if (element.cardinality === "many" || element.cardinality === "at_least_one") {

@@ -615,14 +615,14 @@ describe("TestEdgeQLGroup", () => {
             `,
       unorderedBag([
             {
-              "elements": [
+              "elements": unorderedBag([
                 {
                   "name": "Bog monster",
                 },
                 {
                   "name": "Giant turtle",
                 },
-              ],
+              ]),
               "grouping": ["element"],
               "key": {
                 "element": "Water",
@@ -630,14 +630,14 @@ describe("TestEdgeQLGroup", () => {
               },
             },
             {
-              "elements": [
+              "elements": unorderedBag([
                 {
                   "name": "Dragon",
                 },
                 {
                   "name": "Imp",
                 },
-              ],
+              ]),
               "grouping": ["element"],
               "key": {
                 "element": "Fire",
@@ -645,14 +645,14 @@ describe("TestEdgeQLGroup", () => {
               },
             },
             {
-              "elements": [
+              "elements": unorderedBag([
                 {
                   "name": "Dwarf",
                 },
                 {
                   "name": "Golem",
                 },
-              ],
+              ]),
               "grouping": ["element"],
               "key": {
                 "element": "Earth",
@@ -660,7 +660,7 @@ describe("TestEdgeQLGroup", () => {
               },
             },
             {
-              "elements": [
+              "elements": unorderedBag([
                 {
                   "name": "Djinn",
                 },
@@ -670,7 +670,7 @@ describe("TestEdgeQLGroup", () => {
                 {
                   "name": "Sprite",
                 },
-              ],
+              ]),
               "grouping": ["element"],
               "key": {
                 "element": "Air",
@@ -678,11 +678,11 @@ describe("TestEdgeQLGroup", () => {
               },
             },
             {
-              "elements": [
+              "elements": unorderedBag([
                 {
                   "name": "Golem",
                 },
-              ],
+              ]),
               "grouping": ["nowners"],
               "key": {
                 "element": null,
@@ -690,14 +690,14 @@ describe("TestEdgeQLGroup", () => {
               },
             },
             {
-              "elements": [
+              "elements": unorderedBag([
                 {
                   "name": "Bog monster",
                 },
                 {
                   "name": "Giant turtle",
                 },
-              ],
+              ]),
               "grouping": ["nowners"],
               "key": {
                 "element": null,
@@ -705,7 +705,7 @@ describe("TestEdgeQLGroup", () => {
               },
             },
             {
-              "elements": [
+              "elements": unorderedBag([
                 {
                   "name": "Djinn",
                 },
@@ -721,7 +721,7 @@ describe("TestEdgeQLGroup", () => {
                 {
                   "name": "Sprite",
                 },
-              ],
+              ]),
               "grouping": ["nowners"],
               "key": {
                 "element": null,
@@ -729,11 +729,11 @@ describe("TestEdgeQLGroup", () => {
               },
             },
             {
-              "elements": [
+              "elements": unorderedBag([
                 {
                   "name": "Imp",
                 },
-              ],
+              ]),
               "grouping": ["nowners"],
               "key": {
                 "element": null,
