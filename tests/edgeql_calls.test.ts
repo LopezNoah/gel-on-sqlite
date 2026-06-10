@@ -873,7 +873,7 @@ describe("TestEdgeQLFuncCalls", () => {
     );
   });
 
-  it.skip("test_edgeql_calls_20 [xerror: Polymorphic callable matching is currently too dumb to realize that `+` _is_ defined for 'anyreal', even though there are multiple actual forms defined.]", () => {
+  it("test_edgeql_calls_20 [xerror: Polymorphic callable matching is currently too dumb to realize that `+` _is_ defined for 'anyreal', even though there are multiple actual forms defined.]", () => {
     h.script(
       `
             CREATE FUNCTION call20_1(

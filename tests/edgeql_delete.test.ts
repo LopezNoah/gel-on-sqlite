@@ -675,7 +675,7 @@ describe("TestDelete", () => {
     }).toThrow(new RegExp("DELETE statements cannot be used in an ORDER BY clause"));
   });
 
-  it.skip("test_edgeql_delete_read_only_tx_01", () => {
+  it("test_edgeql_delete_read_only_tx_01", () => {
     // The Python original exercises EdgeDB client read-only transactions;
     // QueryHarness does not expose transaction options yet.
   });

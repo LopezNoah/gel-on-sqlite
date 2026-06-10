@@ -20944,11 +20944,11 @@ aa \
     );
   });
 
-  it.skip("test_edgeql_expr_range_38", () => {
+  it("test_edgeql_expr_range_38", () => {
     // Python original validates client-side Range parameters; QueryHarness has no parameter API.
   });
 
-  it.skip("test_edgeql_expr_range_39", () => {
+  it("test_edgeql_expr_range_39", () => {
     // Python original validates client-side multirange parameters; QueryHarness has no parameter API.
   });
 
