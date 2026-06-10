@@ -61,6 +61,11 @@ export type FilterTarget =
       // EdgeQL this is a name reference that must resolve to a binding/type,
       // so the semantic analyzer flags it for a clearer diagnostic.
       bareName?: string;
+      // The leading type-like segment parseFieldReference stripped from the
+      // written path (`I2.priority.name` → root "I2", field "priority.name").
+      // Lets IR building anchor the path at a WITH binding / non-subject type
+      // instead of assuming the statement subject.
+      root?: string;
     }
   | {
       kind: "backlink";
@@ -83,6 +88,8 @@ export type FilterValue =
   | {
       kind: "field_ref";
       field: string;
+      // See FilterTarget.root.
+      root?: string;
     }
   | {
       kind: "backlink_property_ref";

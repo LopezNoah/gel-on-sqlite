@@ -30,6 +30,7 @@ import type {
   CallArg,
   CoalesceExpr,
   BaseConstant,
+  FunctionCall as IRFunctionCall,
   Global,
   IfElseExpr,
   Multiplicity,
@@ -1252,6 +1253,64 @@ const failSemantic = (message: string): never => {
   throw new AppError("E_SEMANTIC", message, 1, 1);
 };
 
+// EdgeQL forbids unioning two object types when a same-named pointer resolves
+// to incompatible types across the branches (`SELECT Dummy1 union Dummy2`
+// where both declare `foo` with different types). Surface the exact upstream
+// error so these stay validation failures rather than producing a bogus row
+// set ("no such column").
+const validateUnionPointerCompat = (left: Set, right: Set, ctx: IRCompileContext): void => {
+  const lId = left.typeref?.id;
+  const rId = right.typeref?.id;
+  if (!lId || !rId || lId.startsWith("unknown:") || rId.startsWith("unknown:")) return;
+  if (left.typeref?.isScalar || right.typeref?.isScalar) return;
+  const lDef = getSchemaType(ctx, lId);
+  const rDef = getSchemaType(ctx, rId);
+  if (!lDef || !rDef) return;
+  const unionName = `(${lId} | ${rId})`;
+  const fieldStdName = (f: FieldDef): string => f.enumTypeName ?? scalarToStdName(f.type);
+  const qLink = (l: LinkDef): string => qualifyTypeName(l.targetType, ctx.module);
+  const lProps = new Map((lDef.fields ?? []).filter((f) => !f.isLinkColumn).map((f) => [f.name, f] as const));
+  const rProps = new Map((rDef.fields ?? []).filter((f) => !f.isLinkColumn).map((f) => [f.name, f] as const));
+  const lLinks = new Map((lDef.links ?? []).map((l) => [l.name, l] as const));
+  const rLinks = new Map((rDef.links ?? []).map((l) => [l.name, l] as const));
+  const names = new globalThis.Set<string>([...lProps.keys(), ...rProps.keys(), ...lLinks.keys(), ...rLinks.keys()]);
+  for (const name of names) {
+    if (name === "id" || name === "__type__") continue;
+    const lp = lProps.get(name);
+    const rp = rProps.get(name);
+    const ll = lLinks.get(name);
+    const rl = rLinks.get(name);
+    if (lp && rp) {
+      const lt = fieldStdName(lp);
+      const rt = fieldStdName(rp);
+      if (lt !== rt) {
+        failSemantic(`cannot create union ${unionName} with property '${name}' using incompatible types ${lt}, ${rt}`);
+      }
+    } else if (ll && rl) {
+      const lt = qLink(ll);
+      const rt = qLink(rl);
+      if (lt !== rt) {
+        failSemantic(`cannot create union ${unionName} with link '${name}' using incompatible types ${lt}, ${rt}`);
+      }
+      const lProp = new Map((ll.properties ?? []).map((p) => [p.name, p] as const));
+      for (const rprop of rl.properties ?? []) {
+        const lprop = lProp.get(rprop.name);
+        if (lprop) {
+          const a = scalarToStdName(lprop.type);
+          const b = scalarToStdName(rprop.type);
+          if (a !== b) {
+            failSemantic(`cannot create union ${unionName} with link '${name}' with property '${rprop.name}' using incompatible types ${a}, ${b}`);
+          }
+        }
+      }
+    } else if ((ll && rp) || (lp && rl)) {
+      const linkDef = (ll ?? rl)!;
+      const propDef = (lp ?? rp)!;
+      failSemantic(`cannot create union ${unionName} with link '${name}' using incompatible types ${qLink(linkDef)}, ${fieldStdName(propDef)}`);
+    }
+  }
+};
+
 const enumValuesOfTypeDef = (typeDef: TypeDef | undefined): string[] | undefined => {
   if (!typeDef) return undefined;
   const first = typeDef.fields[0];
@@ -1464,6 +1523,13 @@ const inferAstExprTypeName = (expr: FreeObjectExpr, ctx: IRCompileContext): stri
       // case can emit the type itself.
       if (expr.name.includes("::")) return expr.name;
       return undefined;
+    }
+    case "select_expr_subquery": {
+      // A parenthesised subquery (`(SELECT User …)`) carries the same element
+      // type as its inner statement, so element-type inference (e.g. for the
+      // single-element array inside `array_unpack([(SELECT User …)])`) sees
+      // the object type rather than std::anytype.
+      return inferAstExprTypeName((expr as { expr: FreeObjectExpr }).expr, ctx);
     }
     case "select": {
       // `INTROSPECT TYPEOF Card` / `INTROSPECT TYPEOF schema::ObjectType`
@@ -1697,6 +1763,13 @@ const inferAstExprTypeName = (expr: FreeObjectExpr, ctx: IRCompileContext): stri
         return first ?? "std::float64";
       }
       if (shortName === "abs") return first;
+      // Cardinality/identity assertions pass their argument's type through
+      // unchanged, so a shape applied to `assert_single(SELECT User …)`
+      // resolves against User rather than std::anytype.
+      if (shortName === "assert_single" || shortName === "assert_exists"
+        || shortName === "assert_distinct") {
+        return first;
+      }
       if (shortName === "random") return "std::float64";
       if (shortName === "array_get" || shortName === "array_unpack") {
         // Element-type extraction: `array<T>` → `T`. The parser already
@@ -2250,7 +2323,16 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
     }
 
     case "set_expr": {
-      const result = compileSetConstructor(expr.values.map((value) => compileFreeObjectExpr(value, ctx)), "set_expr");
+      const compiledValues = expr.values.map((value) => compileFreeObjectExpr(value, ctx));
+      // A set constructor `{A, B}` over object types (the parse of `A union B`)
+      // is a type union — reject incompatible same-named pointers across the
+      // members, matching EdgeQL's union-type rules.
+      for (let i = 0; i < compiledValues.length; i += 1) {
+        for (let j = i + 1; j < compiledValues.length; j += 1) {
+          validateUnionPointerCompat(compiledValues[i]!, compiledValues[j]!, ctx);
+        }
+      }
+      const result = compileSetConstructor(compiledValues, "set_expr");
       // Apply the inferred scalar type so downstream `INTROSPECT TYPEOF X` /
       // `X IS T` checks see the promoted type instead of `std::anyscalar`.
       const inferred = inferAstExprTypeName(expr, ctx);
@@ -3070,6 +3152,16 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
     }
 
     case "is_type": {
+      // `X IS A | B` forms a type union in type position — apply the same
+      // incompatible-pointer check as a value-level union (`A union B`).
+      const typeExpr = (expr as { typeExpr?: { kind?: string; left?: { name?: string }; right?: { name?: string } } }).typeExpr;
+      if (typeExpr?.kind === "type_union" && typeExpr.left?.name && typeExpr.right?.name) {
+        validateUnionPointerCompat(
+          setFromTypeRoot(resolveTypeRef(ctx, typeExpr.left.name)),
+          setFromTypeRoot(resolveTypeRef(ctx, typeExpr.right.name)),
+          ctx,
+        );
+      }
       const left = compileFreeObjectExpr(expr.expr, ctx);
       const right = resolveTypeRef(ctx, expr.typeName);
       return {
@@ -3286,7 +3378,18 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
       // function results instead of seeing `std::anytype`. Falls back to
       // anytype when we don't know the function's return shape.
       const inferredReturnTypeName = inferAstExprTypeName(expr, ctx);
-      const callTyperef = inferredReturnTypeName
+      // If the inferred return type names a schema object type (e.g.
+      // `assert_single(SELECT User …)` → User), build a full type ref so a
+      // trailing shape resolves its pointers against the real type rather
+      // than an unqualified `unknown:User` the shape compiler can't find.
+      const inferredObjectType = inferredReturnTypeName
+        && !inferredReturnTypeName.startsWith("array<")
+        && !inferredReturnTypeName.startsWith("tuple<")
+        ? getSchemaType(ctx, inferredReturnTypeName)
+        : undefined;
+      const callTyperef = inferredObjectType
+        ? typeRefFromTypeDef(ctx, inferredObjectType)
+        : inferredReturnTypeName
         ? unknownTypeRef(inferredReturnTypeName)
         : unknownTypeRef("std::anytype");
       return {
@@ -3927,6 +4030,9 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
       // throwing during AST→IR.
       const left = compileFreeObjectExpr(expr.left, ctx);
       const right = compileFreeObjectExpr(expr.right, ctx);
+      if (expr.op === "union") {
+        validateUnionPointerCompat(left, right, ctx);
+      }
       return {
         kind: "set",
         expr: {
@@ -3973,7 +4079,7 @@ const compileOrderExprChain = (orderBy: OrderExprChain, ctx: IRCompileContext): 
       kind: "sort_expr",
       path: compileFreeObjectExpr(cursor.expr, ctx),
       direction: cursor.direction,
-      nonesOrder: "last",
+      nonesOrder: cursor.nullsPosition ?? (cursor.direction === "desc" ? "last" : "first"),
     });
     cursor = cursor.then;
   }
@@ -3990,7 +4096,7 @@ const compileSelectOrderExprChain = (orderBy: OrderExpr, ctx: IRCompileContext):
         ? compileFreeObjectExpr(cursor.expr, ctx)
         : compileFreeObjectExpr({ kind: "field_access", expr: { kind: "binding_ref", name: "__current__" }, field: cursor.field, optional: false }, ctx),
       direction: cursor.direction,
-      nonesOrder: cursor.nullsPosition ?? "last",
+      nonesOrder: cursor.nullsPosition ?? (cursor.direction === "desc" ? "last" : "first"),
     });
     cursor = cursor.then;
   }
@@ -4019,6 +4125,38 @@ const statementBase = (ctx: IRCompileContext) => ({
   unsafeIsolationDangers: [],
 });
 
+// Resolve a written path root (`I2` / `Issue` / `User`) plus dotted segments
+// to a pointer-chain Set. The root may be a WITH binding or a type name; when
+// it isn't resolvable (or a segment is missing) returns undefined so callers
+// keep their legacy subject-anchored behaviour.
+const tryCompileRootedFieldPath = (
+  root: string,
+  field: string,
+  ctx: IRCompileContext,
+): Set | undefined => {
+  let out = resolveBinding(ctx, root);
+  if (!out) {
+    const typeref = resolveTypeRef(ctx, root);
+    if (!typeref || typeref.id.startsWith("unknown:")) return undefined;
+    out = setFromTypeRoot(typeref);
+  }
+  for (const segment of field.split(".")) {
+    const ptrref = resolvePointerRef(ctx, out.typeref, segment);
+    if (!ptrref) {
+      const computedSet = tryLowerComputedPropertyOnTypePath(ctx, out, segment);
+      if (!computedSet) return undefined;
+      out = computedSet;
+      continue;
+    }
+    out = extendPathSetDirectional(
+      out,
+      ptrref,
+      ptrref.computedLinkAliasIsBackward ? "inbound" : "outbound",
+    );
+  }
+  return out;
+};
+
 const compileFilterValue = (value: FilterValue, ctx: IRCompileContext): Set => {
   if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
     return literalToSet(value);
@@ -4027,6 +4165,10 @@ const compileFilterValue = (value: FilterValue, ctx: IRCompileContext): Set => {
     return compileFreeObjectExpr({ kind: "binding_ref", name: value.name }, ctx);
   }
   if (value.kind === "field_ref") {
+    if (value.root) {
+      const rooted = tryCompileRootedFieldPath(value.root, value.field, ctx);
+      if (rooted) return rooted;
+    }
     return compileFreeObjectExpr({ kind: "binding_ref", name: value.field }, ctx);
   }
   if (value.kind === "set_literal") {
@@ -4050,6 +4192,21 @@ const compileFilterTarget = (target: FilterTarget, subject: Set, ctx: IRCompileC
         return { ...literalToSet(subject.typeref.id), dynamicTypeName: true } as Set;
       }
       return literalToSet(subject.typeref.id);
+    }
+    // The written path carried an explicit root (`I2.priority.name`). When it
+    // names a WITH binding, or a type other than the subject's, anchor the
+    // path THERE — collapsing to the subject would conflate `I2` with the
+    // iteration row. Paths rooted at the subject's own type keep the legacy
+    // subject-anchored lowering below.
+    if ("root" in target && target.root) {
+      const rootBinding = resolveBinding(ctx, target.root);
+      const rootType = rootBinding ? undefined : resolveTypeRef(ctx, target.root);
+      const sameAsSubject = !rootBinding
+        && (!rootType || rootType.id.startsWith("unknown:") || rootType.id === subject.typeref.id);
+      if (!sameAsSubject) {
+        const rooted = tryCompileRootedFieldPath(target.root, target.field, ctx);
+        if (rooted) return rooted;
+      }
     }
     // A bare leading identifier (no leading dot) that names a WITH binding is a
     // free reference to that binding's value — `WITH x := '010' … FILTER x IN
@@ -4780,18 +4937,49 @@ const inferComputedShapeIsMany = (set: Set): boolean => {
       // a type_root is many-cardinality. Peel through nested select_expr layers
       // (parens-induced) to find the innermost result; if any layer carries a
       // LIMIT, the chain collapses to single.
+      const limitIsLiteralOne = (limitSet: Set | undefined): boolean => {
+        if (!limitSet) return false;
+        const e = limitSet.expr;
+        return e.kind === "integer_constant" && Number((e as { value: unknown }).value) <= 1;
+      };
       let cursor: Set = se.result;
       let foundLimit = !!se.limit;
+      let foundLimitOne = limitIsLiteralOne(se.limit);
       while (cursor.expr.kind === "select_expr") {
         const inner = cursor.expr as SelectExpr;
         if (inner.limit) foundLimit = true;
+        if (limitIsLiteralOne(inner.limit)) foundLimitOne = true;
         cursor = inner.result;
       }
+      // `LIMIT 1` clamps to single no matter what the underlying expression
+      // is — including inbound-pointer chains the loop below would otherwise
+      // flag as many.
+      if (foundLimitOne) return false;
       if (!foundLimit && cursor.expr.kind === "type_root") {
         return true;
       }
       cur = cursor;
       continue;
+    }
+    // Element-wise scalar expressions inherit the cardinality of their
+    // operands: `.tags = 'red' or .name like '%a%'` yields one boolean per
+    // tags element. Aggregates collapse to single, so don't recurse into
+    // them.
+    if (expr.kind === "operator_call") {
+      const oc = expr as OperatorCall;
+      if (oc.operator === "union") return true;
+      if (oc.operator === "??" || oc.operator === "exists") return false;
+      return Object.values(oc.args).some((arg) => inferComputedShapeIsMany(arg.expr));
+    }
+    if (expr.kind === "function_call") {
+      const fc = expr as IRFunctionCall;
+      const shortName = (fc.functionName ?? "").split("::").pop() ?? "";
+      const collapsing = new globalThis.Set([
+        "count", "sum", "min", "max", "avg", "all", "any",
+        "array_agg", "assert_single", "exists",
+      ]);
+      if (collapsing.has(shortName)) return false;
+      return Object.values(fc.args).some((arg: CallArg) => inferComputedShapeIsMany(arg.expr));
     }
     return false;
   }
@@ -6320,7 +6508,7 @@ const compileSelectStatement = (rawStatement: SelectStatement, ctx: IRCompileCon
     bindValue(scoped, "__current__", shapedSubject);
     bindValue(scoped, "__subject__", shapedSubject);
   }
-  const compileOrderEntry = (entry: { field?: string; expr?: FreeObjectExpr; direction: "asc" | "desc"; then?: any }): SortExpr => {
+  const compileOrderEntry = (entry: { field?: string; expr?: FreeObjectExpr; direction: "asc" | "desc"; nullsPosition?: "first" | "last"; then?: any }): SortExpr => {
     // The parser stamps `field = "__expr__"` when ORDER BY carries an
     // arbitrary expression (`ORDER BY count(...)`), with the real expr
     // hanging off `entry.expr`. Falling back to resolvePointerRef on the
@@ -6330,8 +6518,17 @@ const compileSelectStatement = (rawStatement: SelectStatement, ctx: IRCompileCon
     if (entry.expr) {
       path = compileFreeObjectExpr(entry.expr, scoped);
     } else if (entry.field) {
-      const ptrref = resolvePointerRef(scoped, subject.typeref, entry.field);
-      path = ptrref ? extendPathSet(subject, ptrref) : literalToSet(null);
+      // Walk dotted paths (`priority.name`) segment by segment so link
+      // traversals become pointer chains instead of degrading to a NULL
+      // literal (which sorts every row identically).
+      const segments = entry.field.split(".");
+      let cursor: Set | undefined = subject;
+      for (const segment of segments) {
+        if (!cursor) break;
+        const ptrref = resolvePointerRef(scoped, cursor.typeref, segment);
+        cursor = ptrref ? extendPathSet(cursor, ptrref) : undefined;
+      }
+      path = cursor ?? literalToSet(null);
     } else {
       path = literalToSet(null);
     }
@@ -6339,7 +6536,7 @@ const compileSelectStatement = (rawStatement: SelectStatement, ctx: IRCompileCon
       kind: "sort_expr",
       path,
       direction: entry.direction,
-      nonesOrder: "last",
+      nonesOrder: entry.nullsPosition ?? (entry.direction === "desc" ? "last" : "first"),
     };
   };
   const orderBy: SortExpr[] | undefined = (() => {

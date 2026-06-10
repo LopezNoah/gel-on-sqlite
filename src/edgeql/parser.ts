@@ -6963,6 +6963,15 @@ class Parser {
         const inner = this.parseOrFilterExpr();
         if (this.peek().kind !== "rparen") return undefined;
         this.consume();
+        // The paren group is only a complete boolean filter operand if no
+        // binary VALUE operator follows — `(len(a) - len(b)) ^ 2 <= 25` must
+        // re-parse as one comparison expression, not stop at the parens.
+        const next = this.peek().kind;
+        if (next === "pow" || next === "plus" || next === "minus" || next === "star"
+            || next === "slash" || next === "floor_div" || next === "modulo" || next === "concat"
+            || next === "lt" || next === "gt" || next === "lte" || next === "gte") {
+          return undefined;
+        }
         return inner;
       });
       if (filterAttempt) return filterAttempt;
@@ -7365,6 +7374,7 @@ class Parser {
     const startTokenKind = this.peek().kind;
     const startTokenLexeme = this.isNameToken(this.peek()) ? this.peek().lexeme : "";
     const fieldName = this.parseFieldReference("filter");
+    const strippedRoot = this.lastStrippedFieldRoot;
     // Track "bare name" cases: the user wrote `filter foo = ...` (no leading
     // `.`, no type-qualified path). In EdgeQL that's a name reference that
     // must resolve to a binding/type — the semantic analyzer surfaces a clear
@@ -7378,6 +7388,7 @@ class Parser {
       kind: "field",
       field: fieldName,
       bareName: isBare ? fieldName : undefined,
+      root: strippedRoot,
     };
   }
 
@@ -7406,7 +7417,13 @@ class Parser {
     };
   }
 
+  // Set by parseFieldReference when it strips a leading type-like segment
+  // (`Issue.priority.name` → `priority.name`): callers that need the path's
+  // ROOT (a WITH binding or non-subject type) read it immediately after.
+  private lastStrippedFieldRoot: string | undefined;
+
   private parseFieldReference(context: string): string {
+    this.lastStrippedFieldRoot = undefined;
     if (this.peek().kind === "at") {
       this.consume();
       // Link-property names keep their literal (lowercase) spelling — unlike
@@ -7436,6 +7453,7 @@ class Parser {
     }
 
     if (parts.length >= 2 && this.isTypeLikeName(parts[0]!)) {
+      this.lastStrippedFieldRoot = parts[0]!;
       return parts.slice(1).join(".");
     }
 
@@ -7468,9 +7486,11 @@ class Parser {
       // resolution treats `Issue.owner` and `.owner` identically — matching
       // the behaviour of parseFilterTarget for the LHS.
       if (this.peekNext().kind === "dot" && this.isTypeLikeName(this.peek().lexeme)) {
+        const field = this.parseFieldReference("filter value");
         return {
           kind: "field_ref",
-          field: this.parseFieldReference("filter value"),
+          field,
+          root: this.lastStrippedFieldRoot,
         };
       }
       return {
