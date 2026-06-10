@@ -7939,8 +7939,28 @@ const executeQueryWithTraceImpl = (
       };
     }
     validateParsedStatement(ast, { schema, module: ast.withModule });
+    preValidateStatementAst(schema, ast);
     const statementType = statementTypeOf(ast);
     enforceBuiltinPermissions(context, statementType, ast.pos.line, ast.pos.column);
+    // Fully-constant subscripts (`select "abc"[1]`, `select [1,2,3][0:9]`)
+    // are evaluated directly — see tryEvalConstantSubscriptStatement.
+    {
+      const constRows = tryEvalConstantSubscriptStatement(ast);
+      if (constRows !== undefined) {
+        return {
+          ast,
+          ir: { kind: "select", rows: [] } as unknown as IRStatement,
+          sql: { sql: "", params: [], loweringMode: "single_statement" } as SQLArtifact,
+          compiler: { key: "const-subscript", status: "miss", stats: { hits: 0, misses: 0, size: 0 } },
+          sqlTrail: [],
+          overlays: [],
+          result: { kind: "select", rows: constRows },
+        };
+      }
+    }
+    // `assert_exists(...)`/`array_agg(...)[i]` pointer steps over an empty /
+    // out-of-bounds inner set must raise instead of returning empty rows.
+    enforceRootSetAssertions(db, schema, ast, context, runtimeTarget);
     // `FOR g IN (GROUP …) UNION (…body…)` — the IR/SQL pipeline can't lower
     // group_expr in iterator position. Route through the runtime FOR-group
     // executor, which compiles the GROUP, runs runGroupIR, and evaluates the
@@ -13493,3 +13513,747 @@ const readRowById = (db: SQLiteDatabase, table: string, id: string): Record<stri
     .all(id)[0];
   return row ?? null;
 };
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AST pre-validation (EdgeDB parity diagnostics)
+//
+// The GelIR→SQL pipeline doesn't surface several semantic errors the
+// reference implementation raises (illegal type unions over computed
+// pointers, single/multi mismatches, invalid property references on
+// primitives, …). These checks run on the parsed AST right after
+// `validateParsedStatement` so invalid queries fail with the reference
+// error message instead of silently compiling.
+// ═══════════════════════════════════════════════════════════════════════════
+
+interface AstPreValidationCtx {
+  schema: SchemaSnapshot;
+  module: string;
+  bindings: Map<string, WithBindingValue>;
+}
+
+function preValidationFail(message: string): never {
+  throw new AppError("E_SEMANTIC", message, 1, 1);
+}
+
+function qualifyAstTypeName(name: string, module: string): string {
+  return name.includes("::") ? name : `${module}::${name}`;
+}
+
+function lookupAstObjectType(ctx: AstPreValidationCtx, name: string): TypeDef | undefined {
+  return ctx.schema.getType(qualifyAstTypeName(name, ctx.module))
+    ?? ctx.schema.getType(name)
+    ?? ctx.schema.getType(`default::${name}`);
+}
+
+type AstPointerInfo =
+  | { kind: "field"; field: FieldDef; owner: TypeDef }
+  | { kind: "link"; link: NonNullable<TypeDef["links"]>[number]; owner: TypeDef };
+
+// Resolve a pointer (property or link) on a type, walking `extends`.
+function findAstPointer(ctx: AstPreValidationCtx, typeDef: TypeDef, name: string): AstPointerInfo | undefined {
+  const queue: TypeDef[] = [typeDef];
+  const seen = new Set<string>();
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    const qname = qualifiedTypeName(current);
+    if (seen.has(qname)) continue;
+    seen.add(qname);
+    const field = current.fields.find((f) => f.name === name && !f.isLinkColumn);
+    if (field) return { kind: "field", field, owner: current };
+    const link = current.links?.find((l) => l.name === name);
+    if (link) return { kind: "link", link, owner: current };
+    for (const base of current.extends ?? []) {
+      const baseDef = lookupAstObjectType(ctx, base);
+      if (baseDef) queue.push(baseDef);
+    }
+  }
+  return undefined;
+}
+
+const STD_SCALAR_NAME_BY_TYPE: Record<string, string> = {
+  str: "std::str",
+  int: "std::int64",
+  float: "std::float64",
+  bool: "std::bool",
+  uuid: "std::uuid",
+  datetime: "std::datetime",
+  json: "std::json",
+  bytes: "std::bytes",
+  decimal: "std::decimal",
+  bigint: "std::bigint",
+};
+
+function declaredScalarTypeName(field: FieldDef): string {
+  return field.targetTypeName ?? field.enumTypeName ?? STD_SCALAR_NAME_BY_TYPE[field.type] ?? `std::${field.type}`;
+}
+
+// Generic recursive walk over every object node carrying a string `kind`.
+function walkAstForValidation(node: unknown, visit: (n: Record<string, unknown> & { kind: string }) => void, seen: Set<unknown> = new Set()): void {
+  if (!node || typeof node !== "object") return;
+  if (seen.has(node)) return;
+  seen.add(node);
+  if (Array.isArray(node)) {
+    for (const item of node) walkAstForValidation(item, visit, seen);
+    return;
+  }
+  const record = node as Record<string, unknown>;
+  if (typeof record.kind === "string") {
+    visit(record as Record<string, unknown> & { kind: string });
+  }
+  for (const value of Object.values(record)) {
+    walkAstForValidation(value, visit, seen);
+  }
+}
+
+// ── union-branch pointer info (setops_14/15, banned_free_shape_01) ─────────
+
+interface UnionBranchInfo {
+  computed: Set<string>;
+  typeName?: string;
+  bindingName?: string;
+}
+
+function unionBranchInfo(ctx: AstPreValidationCtx, value: unknown, depth = 0): UnionBranchInfo | undefined {
+  if (!value || typeof value !== "object" || depth > 6) return undefined;
+  const node = value as Record<string, unknown> & { kind?: string };
+  switch (node.kind) {
+    case "select": {
+      const computed = new Set<string>();
+      for (const el of (node.shape as ShapeElement[] | undefined) ?? []) {
+        if (el.kind === "computed") computed.add(el.name);
+      }
+      return { computed, typeName: node.typeName as string | undefined };
+    }
+    case "free_object_constructor": {
+      if (node.tupleLike) return undefined;
+      const computed = new Set<string>();
+      for (const entry of (node.entries as Array<{ name: string }> | undefined) ?? []) {
+        computed.add(entry.name);
+      }
+      return { computed };
+    }
+    case "shape_projection": {
+      const inner = unionBranchInfo(ctx, node.expr, depth + 1);
+      const computed = new Set<string>(inner?.computed ?? []);
+      for (const el of (node.shape as ShapeElement[] | undefined) ?? []) {
+        if (el.kind === "computed") computed.add(el.name);
+      }
+      return { computed, typeName: inner?.typeName };
+    }
+    case "binding_ref": {
+      const binding = ctx.bindings.get(node.name as string);
+      if (!binding) return undefined;
+      const info = bindingUnionBranchInfo(ctx, binding, depth + 1);
+      if (info) info.bindingName = node.name as string;
+      return info;
+    }
+    case "cast": {
+      const castType = node.castType as string | undefined;
+      if (castType && lookupAstObjectType(ctx, castType)) {
+        return { computed: new Set(), typeName: castType };
+      }
+      return undefined;
+    }
+    default:
+      return undefined;
+  }
+}
+
+function bindingUnionBranchInfo(ctx: AstPreValidationCtx, binding: WithBindingValue, depth: number): UnionBranchInfo | undefined {
+  switch (binding.kind) {
+    case "subquery": {
+      const computed = new Set<string>();
+      for (const el of binding.query.shape ?? []) {
+        if (el.kind === "computed") computed.add(el.name);
+      }
+      return { computed, typeName: binding.query.typeName };
+    }
+    case "subquery_expr":
+      return unionBranchInfo(ctx, unwrapSubqueryWrappers(binding.expr), depth);
+    case "subquery_statement":
+      return unionBranchInfo(ctx, binding.statement, depth);
+    default:
+      return undefined;
+  }
+}
+
+function unwrapSubqueryWrappers(expr: unknown): unknown {
+  let current = expr as Record<string, unknown> & { kind?: string };
+  let guard = 0;
+  while (current && typeof current === "object" && guard < 8) {
+    if (current.kind === "select_expr_subquery" || current.kind === "subquery_expr") {
+      current = current.expr as Record<string, unknown> & { kind?: string };
+      guard += 1;
+      continue;
+    }
+    break;
+  }
+  return current;
+}
+
+function branchHasSchemaPointer(ctx: AstPreValidationCtx, info: UnionBranchInfo, name: string): boolean {
+  if (!info.typeName) return false;
+  const typeDef = lookupAstObjectType(ctx, info.typeName);
+  if (!typeDef) return false;
+  return findAstPointer(ctx, typeDef, name) !== undefined;
+}
+
+// `SELECT { Issue{number := 'foo'}, Issue }` — a union may not mix a shape
+// computed pointer with another version of the same pointer.
+function checkUnionComputedPointerMix(ctx: AstPreValidationCtx, values: unknown[]): void {
+  if (values.length < 2) return;
+  const infos = values.map((v) => unionBranchInfo(ctx, unwrapSubqueryWrappers(v)));
+  for (let i = 0; i < infos.length; i += 1) {
+    const info = infos[i];
+    if (!info) continue;
+    for (const name of info.computed) {
+      for (let j = 0; j < infos.length; j += 1) {
+        if (j === i) continue;
+        const other = infos[j];
+        if (!other) continue;
+        // The same WITH binding unioned with itself is a single view type —
+        // no pointer mixing happens.
+        if (info.bindingName !== undefined && info.bindingName === other.bindingName) continue;
+        if (other.computed.has(name) || branchHasSchemaPointer(ctx, other, name)) {
+          preValidationFail(
+            `it is illegal to create a type union that causes a computed property '${name}' to mix with other versions of the same property '${name}'`,
+          );
+        }
+      }
+    }
+  }
+}
+
+// `(Issue UNION <Named>{}).number` — a pointer accessed on a union must
+// exist on every branch of the union.
+function checkUnionFieldAccess(ctx: AstPreValidationCtx, setValues: unknown[], field: string): void {
+  if (setValues.length < 2) return;
+  if (field === "id" || field === "__type__" || field.startsWith("@")) return;
+  const branches: Array<{ typeDef: TypeDef; computed: Set<string> }> = [];
+  for (const value of setValues) {
+    const info = unionBranchInfo(ctx, unwrapSubqueryWrappers(value));
+    if (!info || !info.typeName) return; // unresolvable branch — skip the check
+    const typeDef = lookupAstObjectType(ctx, info.typeName);
+    if (!typeDef) return;
+    branches.push({ typeDef, computed: info.computed });
+  }
+  for (const branch of branches) {
+    if (branch.computed.has(field)) continue;
+    if (findAstPointer(ctx, branch.typeDef, field)) continue;
+    preValidationFail(`object type '${qualifiedTypeName(branch.typeDef)}' has no link or property '${field}'`);
+  }
+}
+
+// ── computed pointer checks (computable_17 / computable_34) ────────────────
+
+// Whether a computed expression is statically known to produce more than one
+// element (a set literal / UNION with several branches).
+function computedExprIsMulti(expr: unknown, depth = 0): boolean {
+  if (!expr || typeof expr !== "object" || depth > 6) return false;
+  const node = expr as Record<string, unknown> & { kind?: string };
+  if (node.kind === "set_literal") return ((node.values as unknown[]) ?? []).length > 1;
+  if (node.kind === "set_expr") return ((node.values as unknown[]) ?? []).length > 1;
+  if (node.kind === "select_expr" || node.kind === "select_expr_subquery" || node.kind === "subquery_expr") {
+    return computedExprIsMulti(node.expr, depth + 1);
+  }
+  return false;
+}
+
+// `SELECT V { single foo := .foo }` where V's `foo` is a multi computed.
+function checkSingleDeclaredComputeds(ctx: AstPreValidationCtx, shape: ShapeElement[], sourceShape: ShapeElement[] | undefined): void {
+  if (!sourceShape) return;
+  for (const el of shape) {
+    if (el.kind !== "computed") continue;
+    const cardinality = (el as { cardinality?: string }).cardinality;
+    if (cardinality !== "one") continue;
+    const referenced = computedElementReferencedField(el.expr);
+    if (!referenced) continue;
+    const source = sourceShape.find((s) => s.kind === "computed" && s.name === referenced) as Extract<ShapeElement, { kind: "computed" }> | undefined;
+    if (!source) continue;
+    if ((source as { multi?: boolean }).multi || computedExprIsMulti(source.expr)) {
+      preValidationFail(
+        `possibly more than one element returned by an expression for a computed property '${el.name}' declared as 'single'`,
+      );
+    }
+  }
+}
+
+function computedElementReferencedField(expr: unknown, depth = 0): string | undefined {
+  if (!expr || typeof expr !== "object" || depth > 4) return undefined;
+  const node = expr as Record<string, unknown> & { kind?: string };
+  if (node.kind === "field_ref") return node.field as string;
+  if (node.kind === "select_expr" || node.kind === "select_expr_subquery") {
+    return computedElementReferencedField(node.expr, depth + 1);
+  }
+  if (node.kind === "field_access") {
+    const base = node.expr as Record<string, unknown> & { kind?: string };
+    if (base?.kind === "current_item") return node.field as string;
+  }
+  return undefined;
+}
+
+// Resolve a `current_item`-rooted field-access chain to its final pointer,
+// starting at `subjectType`. Returns undefined when any step is unknown.
+function resolveCurrentItemPathPointer(ctx: AstPreValidationCtx, expr: unknown, subjectType: TypeDef): AstPointerInfo | undefined {
+  const fields: string[] = [];
+  let current = expr as Record<string, unknown> & { kind?: string };
+  let guard = 0;
+  while (current && typeof current === "object" && current.kind === "field_access" && guard < 12) {
+    fields.unshift(current.field as string);
+    current = current.expr as Record<string, unknown> & { kind?: string };
+    guard += 1;
+  }
+  if (!current || current.kind !== "current_item" || fields.length === 0) return undefined;
+  let typeDef: TypeDef = subjectType;
+  let pointer: AstPointerInfo | undefined;
+  for (const field of fields) {
+    pointer = findAstPointer(ctx, typeDef, field);
+    if (!pointer) return undefined;
+    if (pointer.kind === "link") {
+      const target = lookupAstObjectType(ctx, pointer.link.targetType.split("|")[0]!);
+      if (!target) return pointer;
+      typeDef = target;
+    } else {
+      typeDef = undefined as unknown as TypeDef;
+    }
+    if (!typeDef && field !== fields[fields.length - 1]) return undefined;
+  }
+  return pointer;
+}
+
+// `foo := .owner.todo UNION .owner.todo` — a computed link must be a
+// provably distinct set; a UNION of link paths is not.
+function checkComputedLinkUnions(ctx: AstPreValidationCtx, typeName: string, shape: ShapeElement[]): void {
+  const subjectType = lookupAstObjectType(ctx, typeName);
+  if (!subjectType) return;
+  for (const el of shape) {
+    if (el.kind !== "computed") continue;
+    let expr: unknown = el.expr;
+    const wrapper = expr as Record<string, unknown> & { kind?: string };
+    if (wrapper?.kind === "select_expr" || wrapper?.kind === "select_expr_subquery") expr = wrapper.expr;
+    const setNode = expr as Record<string, unknown> & { kind?: string };
+    if (setNode?.kind !== "set_expr") continue;
+    const values = (setNode.values as unknown[]) ?? [];
+    if (values.length < 2) continue;
+    const allLinkPaths = values.every((value) => {
+      const pointer = resolveCurrentItemPathPointer(ctx, value, subjectType);
+      return pointer?.kind === "link";
+    });
+    if (allLinkPaths) {
+      preValidationFail(`possibly not a distinct set returned by an expression for a computed link '${el.name}'`);
+    }
+  }
+}
+
+// ── scalar path misuse (type_03 / partial_06 / precedence_02) ──────────────
+
+// Resolve `field_access(select T, f)` (a `T.f` path) to the property def.
+function scalarPathProperty(ctx: AstPreValidationCtx, node: unknown): FieldDef | undefined {
+  const access = node as Record<string, unknown> & { kind?: string };
+  if (!access || access.kind !== "field_access") return undefined;
+  const base = access.expr as Record<string, unknown> & { kind?: string };
+  if (!base || base.kind !== "select" || typeof base.typeName !== "string") return undefined;
+  const typeDef = lookupAstObjectType(ctx, base.typeName as string);
+  if (!typeDef) return undefined;
+  const pointer = findAstPointer(ctx, typeDef, access.field as string);
+  if (pointer?.kind !== "field") return undefined;
+  if (pointer.field.collection) return undefined;
+  return pointer.field;
+}
+
+function exprContainsPartialPathRef(node: unknown): boolean {
+  let found = false;
+  walkAstForValidation(node, (n) => {
+    if (n.kind === "current_item" || n.kind === "field_ref") found = true;
+  });
+  return found;
+}
+
+// ── function call signature checks (func_06 / func_08) ─────────────────────
+
+function functionCallArgLiteral(ctx: AstPreValidationCtx, arg: FunctionCallArgExpr): { value: ScalarValue; numericKind?: string } | undefined {
+  if (arg.kind === "literal") return { value: arg.value };
+  if (arg.kind === "expr") {
+    const inner = arg.expr as Record<string, unknown> & { kind?: string };
+    if (inner?.kind === "literal") {
+      return { value: inner.value as ScalarValue, numericKind: inner.numericKind as string | undefined };
+    }
+    if (inner?.kind === "binding_ref") {
+      return bindingLiteralValue(ctx, inner.name as string);
+    }
+    return undefined;
+  }
+  if (arg.kind === "binding_ref") return bindingLiteralValue(ctx, arg.name);
+  return undefined;
+}
+
+function bindingLiteralValue(ctx: AstPreValidationCtx, name: string): { value: ScalarValue } | undefined {
+  const binding = ctx.bindings.get(name);
+  if (!binding) return undefined;
+  if (binding.kind === "literal") return { value: binding.value };
+  if (binding.kind === "subquery_expr") {
+    const inner = binding.expr as Record<string, unknown> & { kind?: string };
+    if (inner?.kind === "literal") return { value: inner.value as ScalarValue };
+  }
+  return undefined;
+}
+
+function literalStdTypeName(literal: { value: ScalarValue; numericKind?: string }): string | undefined {
+  const { value, numericKind } = literal;
+  if (typeof value === "string") return "std::str";
+  if (typeof value === "boolean") return "std::bool";
+  if (typeof value === "number") {
+    if (numericKind === "float" || !Number.isInteger(value)) return "std::float64";
+    return "std::int64";
+  }
+  return undefined;
+}
+
+function checkFunctionCallSignatures(ctx: AstPreValidationCtx, call: FunctionCallExpr): void {
+  const leaf = call.name.includes("::") ? call.name.split("::").pop()! : call.name;
+
+  // `sum` only accepts numeric arguments. The SQL pipeline silently coerces
+  // strings, so reject the statically-known-string case here.
+  if (leaf === "sum" && call.args.length === 1) {
+    const literal = functionCallArgLiteral(ctx, call.args[0]!);
+    if (literal && typeof literal.value === "string") {
+      preValidationFail(`function "sum(arg0: std::str)" does not exist`);
+    }
+  }
+
+  // Schema (user-declared) functions: validate literal argument types against
+  // the declared parameter types — the reference raises "function … does not
+  // exist" when no overload matches.
+  const moduleName = call.name.includes("::") ? call.name.slice(0, call.name.lastIndexOf("::")) : ctx.module;
+  const fnDef = ctx.schema.findFunction(moduleName, leaf, call.args.length)
+    ?? (moduleName === "default" ? undefined : ctx.schema.findFunction("default", leaf, call.args.length));
+  if (!fnDef) return;
+  for (let i = 0; i < call.args.length; i += 1) {
+    const arg = call.args[i]!;
+    if (arg.kind === "named_arg") continue;
+    const param = fnDef.params[Math.min(i, fnDef.params.length - 1)];
+    if (!param) continue;
+    const paramIsVariadicTail = param.variadic && i >= fnDef.params.length - 1;
+    if (i >= fnDef.params.length && !paramIsVariadicTail) continue;
+    const paramType = param.type.replace(/^std::/, "");
+    const literal = functionCallArgLiteral(ctx, arg);
+    if (!literal) continue;
+    const argType = literalStdTypeName(literal);
+    if (!argType) continue;
+    const isStrParam = paramType === "str";
+    const isNumericArg = argType === "std::int64" || argType === "std::float64";
+    if (isStrParam && isNumericArg) {
+      const renderedArgs = call.args.map((_, idx) => `arg${idx}: ${literalStdTypeName(functionCallArgLiteral(ctx, call.args[idx]!) ?? { value: "" }) ?? "std::str"}`).join(", ");
+      preValidationFail(`function "${leaf}(${renderedArgs})" does not exist`);
+    }
+  }
+}
+
+// ── statement-level static pre-validation ──────────────────────────────────
+
+function preValidateStatementAst(schema: SchemaSnapshot, statement: Statement): void {
+  const module = (statement as { withModule?: string }).withModule ?? "default";
+  const bindings = new Map<string, WithBindingValue>();
+  for (const binding of (statement as { with?: WithBinding[] }).with ?? []) {
+    bindings.set(binding.name, binding.value);
+  }
+  const ctx: AstPreValidationCtx = { schema, module, bindings };
+
+  // `SELECT T.scalarProp FILTER .x …` — partial paths can't be resolved
+  // against a primitive subject. (Checked before the generic walk so the
+  // error reports the *declared* scalar type, e.g. a custom scalar.)
+  if (statement.kind === "select_expr") {
+    const wrapper = (statement as { expr?: unknown }).expr as Record<string, unknown> & { kind?: string };
+    if (wrapper?.kind === "select_expr_subquery" && wrapper.filter) {
+      const prop = scalarPathProperty(ctx, wrapper.expr);
+      if (prop && exprContainsPartialPathRef(wrapper.filter)) {
+        preValidationFail(`invalid property reference on an expression of primitive type '${declaredScalarTypeName(prop)}'`);
+      }
+    }
+  }
+
+  walkAstForValidation(statement, (node) => {
+    switch (node.kind) {
+      case "set_expr": {
+        const values = (node.values as unknown[]) ?? [];
+        checkUnionComputedPointerMix(ctx, values);
+        break;
+      }
+      case "field_access": {
+        const base = node.expr as Record<string, unknown> & { kind?: string };
+        if (base?.kind === "set_expr") {
+          checkUnionFieldAccess(ctx, (base.values as unknown[]) ?? [], node.field as string);
+        }
+        // `User.name.__type__` — property reference on a primitive.
+        if (node.field === "__type__" && scalarPathProperty(ctx, base)) {
+          preValidationFail("invalid property reference on an expression of primitive type");
+        }
+        break;
+      }
+      case "index_access": {
+        // `Issue.time_estimate[0]` — index indirection on a non-indexable scalar.
+        const prop = scalarPathProperty(ctx, node.expr);
+        if (prop && (prop.type === "int" || prop.type === "bool")) {
+          const label = prop.type === "int" ? "std::int64" : "std::bool";
+          preValidationFail(`index indirection cannot be applied to scalar type '${label}'`);
+        }
+        break;
+      }
+      case "distinct": {
+        const inner = node.expr as Record<string, unknown> & { kind?: string };
+        if (inner?.kind === "free_object_constructor" && !inner.tupleLike) {
+          preValidationFail("cannot use DISTINCT on free shape");
+        }
+        break;
+      }
+      case "polymorphic_field_ref": {
+        if (node.field === "id") {
+          preValidationFail("cannot access property 'id' on a polymorphic shape element");
+        }
+        break;
+      }
+      case "function_call": {
+        const call = (node.call ?? node) as unknown as FunctionCallExpr;
+        if (call && typeof call.name === "string" && Array.isArray(call.args)) {
+          checkFunctionCallSignatures(ctx, call);
+        }
+        break;
+      }
+      case "select": {
+        const typeName = node.typeName as string | undefined;
+        const shape = node.shape as ShapeElement[] | undefined;
+        if (typeName && shape) {
+          checkComputedLinkUnions(ctx, typeName, shape);
+        }
+        break;
+      }
+      case "shape_projection": {
+        const base = node.expr as Record<string, unknown> & { kind?: string };
+        if (base?.kind === "binding_ref") {
+          const info = ctx.bindings.get(base.name as string);
+          const sourceShape = bindingSelectShape(info);
+          checkSingleDeclaredComputeds(ctx, (node.shape as ShapeElement[]) ?? [], sourceShape);
+        }
+        break;
+      }
+      default:
+        break;
+    }
+  });
+}
+
+function bindingSelectShape(binding: WithBindingValue | undefined): ShapeElement[] | undefined {
+  if (!binding) return undefined;
+  if (binding.kind === "subquery") return binding.query.shape;
+  if (binding.kind === "subquery_expr") {
+    const inner = unwrapSubqueryWrappers(binding.expr) as Record<string, unknown> & { kind?: string };
+    if (inner?.kind === "select") return inner.shape as ShapeElement[];
+    return undefined;
+  }
+  if (binding.kind === "subquery_statement" && binding.statement.kind === "select") {
+    return binding.statement.shape;
+  }
+  return undefined;
+}
+
+// ── constant index/slice evaluation (bigint_index_01/02/03) ────────────────
+//
+// `select <literal>[<literal index or slice>]` — the SQL lowering for string
+// and JSON subscripting is incomplete (and 64-bit indexes overflow SQLite's
+// int32 binding), so evaluate fully-constant subscripts here. Out-of-bounds
+// constant indexes raise the reference error.
+
+type ConstSubscriptBase =
+  | { category: "array"; items: unknown[] }
+  | { category: "string"; chars: string[] }
+  | { category: "JSON"; items: unknown[] };
+
+function constSubscriptBase(expr: unknown): ConstSubscriptBase | undefined {
+  const node = expr as Record<string, unknown> & { kind?: string };
+  if (!node || typeof node !== "object") return undefined;
+  if (node.kind === "literal" && typeof node.value === "string") {
+    return { category: "string", chars: Array.from(node.value as string) };
+  }
+  if (node.kind === "array_literal_expr") {
+    const values = (node.values as Array<Record<string, unknown> & { kind?: string }>) ?? [];
+    if (!values.every((v) => v?.kind === "literal")) return undefined;
+    return { category: "array", items: values.map((v) => v.value) };
+  }
+  if (node.kind === "array_literal") {
+    return { category: "array", items: [...((node.values as unknown[]) ?? [])] };
+  }
+  if (node.kind === "function_call") {
+    const call = node.call as FunctionCallExpr | undefined;
+    const leaf = call?.name?.includes("::") ? call.name.split("::").pop() : call?.name;
+    if (leaf === "to_json" && call?.args.length === 1) {
+      const arg = call.args[0]!;
+      let raw: unknown;
+      if (arg.kind === "literal") raw = arg.value;
+      else if (arg.kind === "expr") {
+        const inner = arg.expr as Record<string, unknown> & { kind?: string };
+        if (inner?.kind === "literal") raw = inner.value;
+      }
+      if (typeof raw !== "string") return undefined;
+      try {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return { category: "JSON", items: parsed };
+      } catch {
+        return undefined;
+      }
+    }
+  }
+  return undefined;
+}
+
+function constSubscriptIndexValue(node: Record<string, unknown>): number | undefined {
+  const indexExpr = node.indexExpr as Record<string, unknown> & { kind?: string } | undefined;
+  if (indexExpr) {
+    if (indexExpr.kind === "set_literal") {
+      const values = (indexExpr.values as unknown[]) ?? [];
+      if (values.length === 1 && typeof values[0] === "number" && Number.isInteger(values[0])) {
+        return values[0] as number;
+      }
+      return undefined;
+    }
+    if (indexExpr.kind === "literal" && typeof indexExpr.value === "number" && Number.isInteger(indexExpr.value)) {
+      return indexExpr.value as number;
+    }
+    return undefined;
+  }
+  return typeof node.index === "number" && Number.isInteger(node.index) ? (node.index as number) : undefined;
+}
+
+// Returns the rows for a constant subscript statement, or undefined when the
+// statement isn't a fully-constant subscript.
+function tryEvalConstantSubscriptStatement(statement: Statement): unknown[] | undefined {
+  if (statement.kind !== "select_expr") return undefined;
+  if ((statement as { with?: unknown[] }).with?.length) return undefined;
+  const expr = (statement as { expr?: unknown }).expr as Record<string, unknown> & { kind?: string };
+  if (!expr || (expr.kind !== "index_access" && expr.kind !== "slice_access")) return undefined;
+  const base = constSubscriptBase(expr.expr);
+  if (!base) return undefined;
+  const length = base.category === "string" ? base.chars.length : base.items.length;
+
+  if (expr.kind === "index_access") {
+    const index = constSubscriptIndexValue(expr);
+    if (index === undefined) return undefined;
+    const normalized = index < 0 ? length + index : index;
+    if (normalized < 0 || normalized >= length) {
+      preValidationFail(`${base.category} index ${index} is out of bounds`);
+    }
+    return [base.category === "string" ? base.chars[normalized] : base.items[normalized]];
+  }
+
+  const clamp = (value: number | undefined, fallback: number): number => {
+    if (value === undefined) return fallback;
+    const adjusted = value < 0 ? length + value : value;
+    return Math.max(0, Math.min(length, adjusted));
+  };
+  if (typeof expr.startExpr === "object" && expr.startExpr !== null) return undefined;
+  if (typeof expr.endExpr === "object" && expr.endExpr !== null) return undefined;
+  const start = clamp(expr.start as number | undefined, 0);
+  const end = clamp(expr.end as number | undefined, length);
+  const sliceEnd = Math.max(start, end);
+  if (base.category === "string") {
+    return [base.chars.slice(start, sliceEnd).join("")];
+  }
+  return [base.items.slice(start, sliceEnd)];
+}
+
+// ── runtime assert checks (assert_fail_object_computed_01) ─────────────────
+//
+// `SELECT assert_exists(<set>).ptr` and `SELECT array_agg(<set>)[i].ptr` —
+// the SQL lowering of a pointer step over these calls silently drops empty /
+// out-of-bounds results, so evaluate the inner set's cardinality up front.
+
+function unwrapRootPointerSteps(expr: unknown): { node: Record<string, unknown> & { kind: string }; crossedPointer: boolean } | undefined {
+  let current = expr as Record<string, unknown> & { kind?: string };
+  let crossedPointer = false;
+  let guard = 0;
+  while (current && typeof current === "object" && guard < 10) {
+    if (current.kind === "field_access" || current.kind === "shape_projection") {
+      crossedPointer = crossedPointer || current.kind === "field_access";
+      current = current.expr as Record<string, unknown> & { kind?: string };
+      guard += 1;
+      continue;
+    }
+    if (current.kind === "select_expr_subquery" && !current.filter && !current.orderBy) {
+      current = current.expr as Record<string, unknown> & { kind?: string };
+      guard += 1;
+      continue;
+    }
+    break;
+  }
+  if (!current || typeof current.kind !== "string") return undefined;
+  return { node: current as Record<string, unknown> & { kind: string }, crossedPointer };
+}
+
+function functionCallLeafName(call: FunctionCallExpr | undefined): string | undefined {
+  if (!call || typeof call.name !== "string") return undefined;
+  return call.name.includes("::") ? call.name.split("::").pop() : call.name;
+}
+
+function countFunctionArgRows(
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  statement: Statement,
+  arg: FunctionCallArgExpr,
+  context: SecurityContext,
+  runtimeTarget: RuntimeTarget,
+): number | undefined {
+  if (arg.kind !== "expr") return undefined;
+  const innerStatement = {
+    kind: "select_expr",
+    expr: arg.expr,
+    with: (statement as { with?: WithBinding[] }).with,
+    withModule: (statement as { withModule?: string }).withModule,
+    pos: (statement as { pos?: { line: number; column: number } }).pos ?? { line: 1, column: 1 },
+  } as unknown as Statement;
+  try {
+    const compiled = getCompilerService().compile(schema, innerStatement, { globals: context.globals, target: runtimeTarget });
+    if (compiled.sql.loweringMode !== "single_statement" || compiled.sql.sql.length === 0) return undefined;
+    const rows = runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
+    return rows.length;
+  } catch {
+    return undefined;
+  }
+}
+
+function enforceRootSetAssertions(
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  statement: Statement,
+  context: SecurityContext,
+  runtimeTarget: RuntimeTarget,
+): void {
+  if (statement.kind !== "select_expr") return;
+  const unwrapped = unwrapRootPointerSteps((statement as { expr?: unknown }).expr);
+  if (!unwrapped || !unwrapped.crossedPointer) return;
+  const { node } = unwrapped;
+
+  if (node.kind === "function_call") {
+    const call = node.call as FunctionCallExpr | undefined;
+    if (functionCallLeafName(call) === "assert_exists" && call!.args.length >= 1) {
+      const count = countFunctionArgRows(db, schema, statement, call!.args[0]!, context, runtimeTarget);
+      if (count === 0) {
+        throw new AppError("E_SEMANTIC", "assert_exists violation", 1, 1);
+      }
+    }
+    return;
+  }
+
+  if (node.kind === "index_access") {
+    const base = node.expr as Record<string, unknown> & { kind?: string };
+    if (base?.kind !== "function_call") return;
+    const call = base.call as FunctionCallExpr | undefined;
+    if (functionCallLeafName(call) !== "array_agg" || call!.args.length !== 1) return;
+    const index = constSubscriptIndexValue(node);
+    if (index === undefined) return;
+    const count = countFunctionArgRows(db, schema, statement, call!.args[0]!, context, runtimeTarget);
+    if (count === undefined) return;
+    const normalized = index < 0 ? count + index : index;
+    if (normalized < 0 || normalized >= count) {
+      throw new AppError("E_SEMANTIC", `array index ${index} is out of bounds`, 1, 1);
+    }
+  }
+}
