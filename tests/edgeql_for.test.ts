@@ -666,7 +666,7 @@ describe("TestEdgeQLFor", () => {
     );
   });
 
-  it.skip("test_edgeql_for_in_computable_03 [xerror: deeply nested linkprop hoisting is currently broken]", () => {
+  it("test_edgeql_for_in_computable_03 [xerror: deeply nested linkprop hoisting is currently broken]", () => {
     assertQueryResult(
       h,
       `
@@ -707,7 +707,7 @@ describe("TestEdgeQLFor", () => {
     );
   });
 
-  it.skip("test_edgeql_for_in_computable_04 [xerror: See comment on why this test doesn't contain a FOR. The result is *almost* correct, but oddly @letter is not a singleton, even though it's equal to a tuple element, which should be a singleton by definition. See `test_edgeql_scope_tuple_13` for a shorter version of the same issue.]", () => {
+  it("test_edgeql_for_in_computable_04 [xerror: See comment on why this test doesn't contain a FOR. The result is *almost* correct, but oddly @letter is not a singleton, even though it's equal to a tuple element, which should be a singleton by definition. See `test_edgeql_scope_tuple_13` for a shorter version of the same issue.]", () => {
     assertQueryResult(
       h,
       `
@@ -922,7 +922,7 @@ describe("TestEdgeQLFor", () => {
     );
   });
 
-  it.skip("test_edgeql_for_in_computable_09 [xerror: 'letter' does not exist]", () => {
+  it("test_edgeql_for_in_computable_09 [xerror: 'letter' does not exist]", () => {
     assertQueryResult(
       h,
       `
@@ -961,7 +961,7 @@ describe("TestEdgeQLFor", () => {
     );
   });
 
-  it.skip("test_edgeql_for_in_computable_10 [xerror: This outputs [\"I\", \"B\"] as letter for both objects.]", () => {
+  it("test_edgeql_for_in_computable_10 [xerror: This outputs [\"I\", \"B\"] as letter for both objects.]", () => {
     assertQueryResult(
       h,
       `

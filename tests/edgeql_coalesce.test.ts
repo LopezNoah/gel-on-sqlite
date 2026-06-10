@@ -1444,7 +1444,7 @@ describe("TestEdgeQLCoalesce", () => {
     );
   });
 
-  it.skip("test_edgeql_coalesce_wrapping_optional", () => {
+  it("test_edgeql_coalesce_wrapping_optional", () => {
     h.script(
       `
                 CREATE FUNCTION optfunc(
@@ -1639,7 +1639,7 @@ describe("TestEdgeQLCoalesce", () => {
     );
   });
 
-  it.skip("test_edgeql_coalesce_set_of_nonempty_01", () => {
+  it("test_edgeql_coalesce_set_of_nonempty_01", () => {
     h.script(
       `INSERT Publication { title := "1" }`
     );
@@ -1710,7 +1710,7 @@ describe("TestEdgeQLCoalesce", () => {
     );
   });
 
-  it.skip("test_edgeql_coalesce_correlation_03", () => {
+  it("test_edgeql_coalesce_correlation_03", () => {
     h.script(
       `
             CREATE FUNCTION opts(x: OPTIONAL str) -> OPTIONAL str {
@@ -1899,7 +1899,7 @@ describe("TestEdgeQLCoalesce", () => {
     );
   });
 
-  it.skip("test_edgeql_coalesce_tuple_08", () => {
+  it("test_edgeql_coalesce_tuple_08", () => {
     h.script(
       `
             CREATE TYPE Foo {
@@ -2222,7 +2222,7 @@ describe("TestEdgeQLCoalesce", () => {
     );
   });
 
-  it.skip("test_edgeql_coalesce_single_links_01", () => {
+  it("test_edgeql_coalesce_single_links_01", () => {
     h.script(
       `
             CREATE TYPE default::Content;
@@ -2363,7 +2363,7 @@ describe("TestEdgeQLCoalesce", () => {
     );
   });
 
-  it.skip("test_edgeql_optional_ensure_source_02", () => {
+  it("test_edgeql_optional_ensure_source_02", () => {
     h.script(
       `
             create function test(x: optional Issue) -> bool using (

@@ -14863,7 +14863,7 @@ describe("TestEdgeQLFunctionsInlineTransaction", () => {
     );
   });
 
-  it.skip("test_edgeql_functions_inline_transaction_dml_01 [unsupported: readonly transaction client options]", () => {
+  it("test_edgeql_functions_inline_transaction_dml_01 [unsupported: readonly transaction client options]", () => {
     expect(true).toBe(true);
   });
 });
