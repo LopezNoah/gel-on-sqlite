@@ -1,3 +1,4 @@
+import { AppError } from "../errors.js";
 import type { ScalarValue } from "../types.js";
 
 export type RuntimeFunctionArg =
@@ -226,14 +227,14 @@ export const executeStdlibFunction = (name: string, args: RuntimeFunctionArg[]):
     case "math::acos":
       return unaryNumeric(args[0], (value) => {
         if (value < -1 || value > 1 || !Number.isFinite(value)) {
-          throw new Error("input is out of range for math::acos");
+          throw new AppError("E_VALIDATION", "input is out of range for math::acos");
         }
         return Math.acos(value);
       });
     case "math::asin":
       return unaryNumeric(args[0], (value) => {
         if (value < -1 || value > 1 || !Number.isFinite(value)) {
-          throw new Error("input is out of range for math::asin");
+          throw new AppError("E_VALIDATION", "input is out of range for math::asin");
         }
         return Math.asin(value);
       });
@@ -243,22 +244,22 @@ export const executeStdlibFunction = (name: string, args: RuntimeFunctionArg[]):
       return Math.atan2(toNumber(args[0]), toNumber(args[1]));
     case "math::cos":
       return unaryNumeric(args[0], (value) => {
-        if (!Number.isFinite(value)) throw new Error("input is out of range for math::cos");
+        if (!Number.isFinite(value)) throw new AppError("E_VALIDATION", "input is out of range for math::cos");
         return Math.cos(value);
       });
     case "math::cot":
       return unaryNumeric(args[0], (value) => {
-        if (!Number.isFinite(value)) throw new Error("input is out of range for math::cot");
+        if (!Number.isFinite(value)) throw new AppError("E_VALIDATION", "input is out of range for math::cot");
         return 1 / Math.tan(value);
       });
     case "math::sin":
       return unaryNumeric(args[0], (value) => {
-        if (!Number.isFinite(value)) throw new Error("input is out of range for math::sin");
+        if (!Number.isFinite(value)) throw new AppError("E_VALIDATION", "input is out of range for math::sin");
         return Math.sin(value);
       });
     case "math::tan":
       return unaryNumeric(args[0], (value) => {
-        if (!Number.isFinite(value)) throw new Error("input is out of range for math::tan");
+        if (!Number.isFinite(value)) throw new AppError("E_VALIDATION", "input is out of range for math::tan");
         return Math.tan(value);
       });
     case "std::datetime_current":
@@ -281,7 +282,7 @@ export const executeStdlibFunction = (name: string, args: RuntimeFunctionArg[]):
         : raw;
       const isEmpty = Array.isArray(inner) ? inner.length === 0 : inner == null;
       if (isEmpty) {
-        throw new Error("assert_exists violation");
+        throw new AppError("E_VALIDATION", "assert_exists violation");
       }
       return inner;
     }
@@ -292,7 +293,7 @@ export const executeStdlibFunction = (name: string, args: RuntimeFunctionArg[]):
       const values = isSet ? raw.values : Array.isArray(raw) ? raw : raw == null ? [] : [raw];
       if (values.length > 1) {
         const msg = args.length > 1 ? extractScalar(args[1]) : null;
-        throw new Error(typeof msg === "string" && msg ? msg : "assert_single violation");
+        throw new AppError("E_VALIDATION", typeof msg === "string" && msg ? msg : "assert_single violation");
       }
       return isSet ? raw.values : raw;
     }
@@ -302,7 +303,7 @@ export const executeStdlibFunction = (name: string, args: RuntimeFunctionArg[]):
       const values = isSet ? raw.values : Array.isArray(raw) ? raw : raw == null ? [] : [raw];
       if (values.length !== new Set(values.map((v) => JSON.stringify(v))).size) {
         const msg = args.length > 1 ? extractScalar(args[1]) : null;
-        throw new Error(typeof msg === "string" && msg ? msg : "assert_distinct violation");
+        throw new AppError("E_VALIDATION", typeof msg === "string" && msg ? msg : "assert_distinct violation");
       }
       return isSet ? raw.values : raw;
     }
@@ -312,7 +313,7 @@ export const executeStdlibFunction = (name: string, args: RuntimeFunctionArg[]):
       const cond = extractScalar(args[0]);
       if (cond === false || cond === 0) {
         const msg = args.length > 1 ? extractScalar(args[1]) : null;
-        throw new Error(typeof msg === "string" && msg ? msg : "assertion failed");
+        throw new AppError("E_VALIDATION", typeof msg === "string" && msg ? msg : "assertion failed");
       }
       return cond;
     }
@@ -360,10 +361,10 @@ export const executeStdlibFunction = (name: string, args: RuntimeFunctionArg[]):
     case "std::sum": {
       const rawArg = args[0];
       if (typeof rawArg === "string") {
-        throw new Error(`function "sum(arg0: std::str)" does not exist`);
+        throw new AppError("E_SEMANTIC", `function "sum(arg0: std::str)" does not exist`);
       }
       if (Array.isArray(rawArg) && rawArg.some((v) => typeof v === "string")) {
-        throw new Error(`function "sum(arg0: std::str)" does not exist`);
+        throw new AppError("E_SEMANTIC", `function "sum(arg0: std::str)" does not exist`);
       }
       const values = toNumberList(rawArg);
       if (values.length === 0) {
@@ -487,7 +488,7 @@ export const executeStdlibFunction = (name: string, args: RuntimeFunctionArg[]):
       const idx = toNumber(args[1]);
       const normalized = idx < 0 ? arr.length + idx : idx;
       if (normalized < 0 || normalized >= arr.length) {
-        throw new Error(`array index ${idx} is out of bounds`);
+        throw new AppError("E_VALIDATION", `array index ${idx} is out of bounds`);
       }
       const value = extractScalar(args[2]) as ScalarValue;
       arr[normalized] = value;
@@ -505,7 +506,7 @@ export const executeStdlibFunction = (name: string, args: RuntimeFunctionArg[]):
       // [-len, -1] (negative offsets from the end). Anything outside that band
       // raises "array index N is out of bounds".
       if (idx > arr.length || idx < -arr.length - 1) {
-        throw new Error(`array index ${idx} is out of bounds`);
+        throw new AppError("E_VALIDATION", `array index ${idx} is out of bounds`);
       }
       const normalized = idx < 0 ? arr.length + idx + 1 : idx;
       const value = extractScalar(args[2]) as ScalarValue;
@@ -576,7 +577,7 @@ export const executeStdlibFunction = (name: string, args: RuntimeFunctionArg[]):
       if (part === "day") {
         return date.day;
       }
-      throw new Error(`invalid unit for cal::date_get: '${part}'`);
+      throw new AppError("E_VALIDATION", `invalid unit for cal::date_get: '${part}'`);
     }
     case "cal::time_get": {
       const time = parseTimeComponents(String(extractScalar(args[0]) ?? ""));
@@ -590,7 +591,7 @@ export const executeStdlibFunction = (name: string, args: RuntimeFunctionArg[]):
       if (part === "second") {
         return time.second;
       }
-      throw new Error(`invalid unit for cal::time_get: '${part}'`);
+      throw new AppError("E_VALIDATION", `invalid unit for cal::time_get: '${part}'`);
     }
     case "std::duration_get": {
       const duration = parseDurationParts(String(extractScalar(args[0]) ?? ""));
@@ -606,7 +607,7 @@ export const executeStdlibFunction = (name: string, args: RuntimeFunctionArg[]):
       }
       // EdgeQL only accepts hours/minutes/seconds — `days`, `epoch`, etc. are
       // rejected. Match the upstream message so tests recognise it.
-      throw new Error(`invalid unit for std::duration_get: '${part}'`);
+      throw new AppError("E_VALIDATION", `invalid unit for std::duration_get: '${part}'`);
     }
     case "std::datetime_truncate": {
       const part = String(extractScalar(args[0]) ?? "").toLowerCase();
@@ -739,7 +740,7 @@ const parseDateTime = (arg: RuntimeFunctionArg): string => {
   const scalar = extractScalar(arg);
   const date = new Date(String(scalar ?? ""));
   if (Number.isNaN(date.getTime())) {
-    throw new Error("Invalid datetime input");
+    throw new AppError("E_VALIDATION", "Invalid datetime input");
   }
   return date.toISOString();
 };
@@ -747,7 +748,7 @@ const parseDateTime = (arg: RuntimeFunctionArg): string => {
 const parseLocalDateTime = (value: ScalarValue | null): string => {
   const text = String(value ?? "");
   if (!isValidLocalDateTime(text)) {
-    throw new Error("Invalid local_datetime input");
+    throw new AppError("E_VALIDATION", "Invalid local_datetime input");
   }
   return text;
 };
@@ -755,7 +756,7 @@ const parseLocalDateTime = (value: ScalarValue | null): string => {
 const parseLocalDate = (value: ScalarValue | null): string => {
   const text = String(value ?? "");
   if (!isValidLocalDate(text)) {
-    throw new Error("Invalid local_date input");
+    throw new AppError("E_VALIDATION", "Invalid local_date input");
   }
   return text;
 };
@@ -763,7 +764,7 @@ const parseLocalDate = (value: ScalarValue | null): string => {
 const parseLocalTime = (value: ScalarValue | null): string => {
   const text = String(value ?? "");
   if (!isValidLocalTime(text)) {
-    throw new Error("Invalid local_time input");
+    throw new AppError("E_VALIDATION", "Invalid local_time input");
   }
   return text;
 };
@@ -771,7 +772,7 @@ const parseLocalTime = (value: ScalarValue | null): string => {
 const parseDuration = (value: ScalarValue | null): string => {
   const text = String(value ?? "");
   if (!/^[-+]?P/.test(text)) {
-    throw new Error("Invalid duration input");
+    throw new AppError("E_VALIDATION", "Invalid duration input");
   }
   return text;
 };
@@ -779,7 +780,7 @@ const parseDuration = (value: ScalarValue | null): string => {
 const parseDateComponents = (value: string): { year: number; month: number; day: number } => {
   const matched = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!matched) {
-    throw new Error("Invalid local_date input");
+    throw new AppError("E_VALIDATION", "Invalid local_date input");
   }
   return {
     year: Number(matched[1]),
@@ -791,7 +792,7 @@ const parseDateComponents = (value: string): { year: number; month: number; day:
 const parseTimeComponents = (value: string): { hour: number; minute: number; second: number } => {
   const matched = value.match(/^(\d{2}):(\d{2})(?::(\d{2}))?/);
   if (!matched) {
-    throw new Error("Invalid local_time input");
+    throw new AppError("E_VALIDATION", "Invalid local_time input");
   }
   return {
     hour: Number(matched[1]),
@@ -803,7 +804,7 @@ const parseTimeComponents = (value: string): { hour: number; minute: number; sec
 const parseDurationParts = (value: string): { hours: number; minutes: number; seconds: number } => {
   const matched = value.match(/^[-+]?P(?:\d+D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/);
   if (!matched) {
-    throw new Error("Invalid duration input");
+    throw new AppError("E_VALIDATION", "Invalid duration input");
   }
   return {
     hours: Number(matched[1] ?? "0"),
