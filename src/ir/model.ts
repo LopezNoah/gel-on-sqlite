@@ -574,8 +574,6 @@ export interface InsertIR extends MutationBaseIR {
   values: Record<string, ScalarValue>;
   linkAssignments?: InsertLinkAssignmentIR[];
   linkDefaults?: InsertLinkDefaultIR[];
-  triggers?: TriggerIR[];
-  policies?: PolicyIR[];
   inference?: InferenceResult;
 }
 
@@ -600,8 +598,6 @@ export interface UpdateIR extends MutationBaseIR {
   };
   values: Record<string, ScalarValue>;
   linkAssignments?: UpdateLinkAssignmentIR[];
-  triggers?: TriggerIR[];
-  policies?: PolicyIR[];
   inference?: InferenceResult;
 }
 
@@ -611,8 +607,6 @@ export interface DeleteIR extends MutationBaseIR {
     column: string;
     value: ScalarValue;
   };
-  triggers?: TriggerIR[];
-  policies?: PolicyIR[];
   inference?: InferenceResult;
 }
 
