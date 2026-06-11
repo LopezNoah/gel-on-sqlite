@@ -1,6 +1,8 @@
 import BetterSQLite3 from "better-sqlite3";
 import { createRequire } from "node:module";
 
+import { AppError } from "../errors.js";
+
 import type { SchemaSnapshot } from "../schema/schema.js";
 import { qualifiedTypeName } from "../schema/schema.js";
 import { populateSchemaIntrospection } from "../schema/schema_introspection.js";
@@ -45,6 +47,37 @@ const toRowRecords = (value: unknown): Record<string, unknown>[] => {
     }
   }
   return out;
+};
+
+// JS RegExp rejects a bad pattern with a SyntaxError at construction time;
+// rewrap it so the calling query gets the same "invalid regular expression"
+// wording the Gel server produces, naming the UDF and the offending pattern.
+const compileRegex = (fname: string, source: string, flags: string): RegExp => {
+  try {
+    return new RegExp(source, flags);
+  } catch (cause) {
+    throw new AppError(
+      "E_RUNTIME",
+      `invalid regular expression in ${fname}: '${source}'`,
+      { cause },
+    );
+  }
+};
+
+// The array UDFs receive their array argument as a JSON-encoded string; a
+// parse failure means the stored data (or an upstream encoder) is corrupt,
+// so surface it instead of pretending the array was empty.
+const parseJsonArg = (fname: string, raw: string): unknown[] => {
+  try {
+    return JSON.parse(raw) as unknown[];
+  } catch (cause) {
+    const sample = raw.length > 64 ? `${raw.slice(0, 61)}...` : raw;
+    throw new AppError(
+      "E_RUNTIME",
+      `${fname}: argument is not valid JSON: '${sample}'`,
+      { cause },
+    );
+  }
 };
 
 export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime => {
@@ -134,11 +167,7 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
     // str, else 0. SQLite lacks REGEXP by default; map to JS RegExp.
     db.function("_gel_re_test", (pattern: string | null, value: string | null) => {
       if (pattern === null || value === null) return null;
-      try {
-        return new RegExp(String(pattern)).test(String(value)) ? 1 : 0;
-      } catch {
-        return 0;
-      }
+      return compileRegex("std::re_test", String(pattern), "").test(String(value)) ? 1 : 0;
     });
     // `std::re_match(pattern, str)` — returns the array<str> of the first
     // match's groups, or NULL when no match. Mirrors PostgreSQL's
@@ -148,37 +177,32 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
     // unwrap with json_each / pass through json_group_array.
     db.function("_gel_re_match_first", (pattern: string | null, value: string | null) => {
       if (pattern === null || value === null) return null;
-      try {
-        const flagsMatch = /^\(\?([a-zA-Z]+)\)(.*)$/s.exec(String(pattern));
-        let source: string;
-        let flags = "";
-        if (flagsMatch) {
-          const flagChars = flagsMatch[1];
-          if (flagChars.includes("i")) flags += "i";
-          if (flagChars.includes("m")) flags += "m";
-          if (flagChars.includes("s")) flags += "s";
-          source = flagsMatch[2];
-        } else {
-          source = String(pattern);
-        }
-        const m = new RegExp(source, flags).exec(String(value));
-        if (!m) return null;
-        const groups = m.length === 1 ? [m[0]] : Array.from(m).slice(1);
-        return JSON.stringify(groups);
-      } catch {
-        return null;
+      const flagsMatch = /^\(\?([a-zA-Z]+)\)(.*)$/s.exec(String(pattern));
+      let source: string;
+      let flags = "";
+      if (flagsMatch) {
+        const flagChars = flagsMatch[1];
+        if (flagChars.includes("i")) flags += "i";
+        if (flagChars.includes("m")) flags += "m";
+        if (flagChars.includes("s")) flags += "s";
+        source = flagsMatch[2];
+      } else {
+        source = String(pattern);
       }
+      const m = compileRegex("std::re_match", source, flags).exec(String(value));
+      if (!m) return null;
+      const groups = m.length === 1 ? [m[0]] : Array.from(m).slice(1);
+      return JSON.stringify(groups);
     });
     // `std::re_replace(pattern, replacement, str, flags?)` — string substitution.
     db.function("_gel_re_replace", { varargs: true }, (...args: unknown[]) => {
       const pattern = args[0]; const replacement = args[1]; const value = args[2];
       const flags = (args[3] as string | undefined) ?? "";
       if (pattern == null || replacement == null || value == null) return null;
-      try {
-        return String(value).replace(new RegExp(String(pattern), flags), String(replacement));
-      } catch {
-        return value as string;
-      }
+      return String(value).replace(
+        compileRegex("std::re_replace", String(pattern), flags),
+        String(replacement),
+      );
     });
     // `std::assert_single(x)` — raise if more than one element. `x` is the
     // JSON-encoded array (multi-cardinality sets surface as `json_group_array`).
@@ -186,7 +210,7 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
       const v = args[0];
       let arr: unknown[];
       if (typeof v === "string" && v.startsWith("[")) {
-        try { arr = JSON.parse(v); } catch { arr = []; }
+        arr = parseJsonArg("std::assert_single", v);
       } else if (Array.isArray(v)) {
         arr = v;
       } else {
@@ -204,9 +228,9 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
       const a = args[0];
       const idx = Number(args[1]);
       const dflt = args.length > 2 ? args[2] : null;
-      let arr: unknown[];
-      try { arr = typeof a === "string" ? JSON.parse(a) : Array.isArray(a) ? a : []; }
-      catch { arr = []; }
+      const arr = typeof a === "string"
+        ? parseJsonArg("std::array_get", a)
+        : Array.isArray(a) ? a : [];
       const normalized = idx < 0 ? arr.length + idx : idx;
       if (normalized < 0 || normalized >= arr.length) return dflt as number | string | null;
       const v = arr[normalized];
@@ -216,8 +240,7 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
     // return the mutated array as JSON.
     db.function("_gel_array_set", (a: string | null, idxRaw: number | null, val: unknown) => {
       const idx = Number(idxRaw);
-      let arr: unknown[];
-      try { arr = a ? JSON.parse(a) : []; } catch { arr = []; }
+      const arr = a ? parseJsonArg("std::array_set", a) : [];
       const normalized = idx < 0 ? arr.length + idx : idx;
       if (normalized < 0 || normalized >= arr.length) {
         throw new Error(`array index ${idx} is out of bounds`);
@@ -231,8 +254,7 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
     // are not).
     db.function("_gel_array_insert", (a: string | null, idxRaw: number | null, val: unknown) => {
       const idx = Number(idxRaw);
-      let arr: unknown[];
-      try { arr = a ? JSON.parse(a) : []; } catch { arr = []; }
+      const arr = a ? parseJsonArg("std::array_insert", a) : [];
       if (idx > arr.length || idx < -arr.length) {
         throw new Error(`array index ${idx} is out of bounds`);
       }
