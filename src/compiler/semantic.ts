@@ -6532,7 +6532,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       // materialiser uses `inference.cardinality` to decide whether the link
       // payload comes back as an array or a single object.
       const linkInference: InferenceResult = (nested.filter
-        && isExclusivePropertyEqualityFilter(nested.filter, schema.getType(effectiveTargetType) ?? linkOwnerType))
+        && isExclusivePropertyEqualityFilter(nested.filter, schema.getType(effectiveTargetType) ?? linkOwnerType, (name) => schema.getType(name)))
         ? { ...nested.inference, cardinality: "at_most_one" }
         : nested.inference;
       shapeElements.push({
@@ -9549,16 +9549,19 @@ const isDirectIdEqualityFilter = (filter: FilterExprIR | undefined): boolean =>
 const isExclusivePropertyEqualityFilter = (
   filter: FilterExprIR | undefined,
   typeDef: TypeDef,
+  resolveType?: (name: string) => TypeDef | undefined,
 ): boolean => {
   if (!filter) return false;
   if (filter.kind === "and") {
-    return isExclusivePropertyEqualityFilter(filter.left, typeDef)
-      || isExclusivePropertyEqualityFilter(filter.right, typeDef);
+    return isExclusivePropertyEqualityFilter(filter.left, typeDef, resolveType)
+      || isExclusivePropertyEqualityFilter(filter.right, typeDef, resolveType);
   }
   if (filter.kind !== "field" || filter.op !== "=") return false;
   const column = filter.column;
   // Walk the inheritance chain looking for an exclusive constraint on this
-  // property (declared either directly or inherited from a parent type).
+  // property (declared either directly or inherited from a parent type). Base
+  // types are resolved via `resolveType` (the schema snapshot's getType); when
+  // it is absent only the subject type itself is inspected.
   const visited = new Set<string>();
   const stack: TypeDef[] = [typeDef];
   while (stack.length > 0) {
@@ -9570,11 +9573,12 @@ const isExclusivePropertyEqualityFilter = (
     if (field?.constraints?.some((c) => c.name === "std::exclusive" || c.name === "exclusive")) {
       return true;
     }
-    // The schema doesn't carry parent TypeDefs on the type itself in a single
-    // walkable form here (and isExclusivePropertyEqualityFilter is a top-level
-    // function without schema access), so the walk only sees typeDef itself.
-    // Most exclusive constraints in the test corpus are declared directly on
-    // the subject type, so this still covers the common case.
+    if (resolveType) {
+      for (const baseName of t.extends ?? []) {
+        const base = resolveType(baseName);
+        if (base) stack.push(base);
+      }
+    }
   }
   return false;
 };
