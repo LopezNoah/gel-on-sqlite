@@ -804,6 +804,7 @@ const registerDynamicTypeDDL = (schema: SchemaSnapshot, statement: string, defau
     // body isn't materialised as a column — record the declaration so backlink
     // resolution can flag attempts to follow `<foo` without an `[IS T]` filter
     // (the canonical EdgeQL error message names the computed-link's type).
+    if (member.kind !== "computed_link") continue;
     computeds.push({
       kind: "link",
       name: member.name,
@@ -1956,6 +1957,10 @@ const tryRuntimeSelectExprEvaluationAst = (
           }
           if (computed?.kind === "property" && computed.expr.kind === "link_aggregate") {
             const aggregateExpr = computed.expr;
+            // A fieldless aggregate (`count(.link)`) has nothing to read off
+            // the linked rows — aggregate over the empty set, matching the
+            // parsed-runtime branch below.
+            const aggregateField = aggregateExpr.field;
             const sourceEnv = new Map(env);
             sourceEnv.set("__computed_source__", row);
             const linked = evalExpr({
@@ -1967,13 +1972,13 @@ const tryRuntimeSelectExprEvaluationAst = (
             const linkItems = Array.isArray(linked)
               ? linked
               : linked === null || linked === undefined ? [] : [linked];
-            const values = linkItems.flatMap((item) => {
+            const values = aggregateField === undefined ? [] : linkItems.flatMap((item) => {
               const linkEnv = new Map(env);
               linkEnv.set("__computed_link__", item);
               const value = evalExpr({
                 kind: "field_access",
                 expr: { kind: "binding_ref", name: "__computed_link__" },
-                field: aggregateExpr.field,
+                field: aggregateField,
                 optional: false,
               }, linkEnv);
               return Array.isArray(value) ? value : value === null || value === undefined ? [] : [value];
@@ -5314,11 +5319,15 @@ const tryEvaluateParsedRuntimeSelect = (
         }
         if (computed?.kind === "property" && computed.expr.kind === "link_aggregate") {
           const aggregateExpr = computed.expr;
+          // A fieldless aggregate (`count(.link)`) has no per-row field to
+          // read — both lookups below would come up empty, so aggregate
+          // over the empty set directly.
+          const aggregateField = aggregateExpr.field;
           const linkRows = readForwardLink(row, sourceType, aggregateExpr.link);
-          const fieldValues = readPresentFieldValues(linkRows, aggregateExpr.field) ?? linkRows.flatMap((linkRow) => {
-            const value = readForwardLink(linkRow, rowTypeName(linkRow), aggregateExpr.field);
+          const fieldValues = aggregateField === undefined ? [] : (readPresentFieldValues(linkRows, aggregateField) ?? linkRows.flatMap((linkRow) => {
+            const value = readForwardLink(linkRow, rowTypeName(linkRow), aggregateField);
             return value.length > 0 ? value : [];
-          });
+          }));
           return evaluateRuntimeAggregate(aggregateExpr.functionName, fieldValues);
         }
         // Shape-level computed (e.g. `unique := count(...)` declared in
@@ -8200,11 +8209,11 @@ export const executeQueryUnitWithTrace = (
       const peelInnerMutation = (
         outer: Extract<Statement, { kind: "select_expr" }>,
       ): Statement | null => {
-        if (outer.filter !== undefined
-          || outer.orderBy !== undefined
-          || outer.limit !== undefined
-          || outer.offset !== undefined
-        ) {
+        // Statement-level `select_expr` never carries limit/offset/filter —
+        // the parser folds pagination and filters into the inner
+        // `select_expr_subquery` (checked below); only `orderBy` lives on
+        // the statement itself.
+        if (outer.filter !== undefined || outer.orderBy !== undefined) {
           return null;
         }
         let inner: FreeObjectExpr = outer.expr;
@@ -8259,12 +8268,10 @@ export const executeQueryUnitWithTrace = (
       const ast = expanded[stmtIdx];
       if (ast.kind === "for" && ast.body.kind === "select_expr") {
         const outer = ast.body;
-        if (
-          outer.filter === undefined
-          && outer.orderBy === undefined
-          && outer.limit === undefined
-          && outer.offset === undefined
-        ) {
+        // Statement-level `select_expr` never carries limit/offset/filter —
+        // the parser folds those into the inner `select_expr_subquery`
+        // (checked below); only `orderBy` lives on the statement itself.
+        if (outer.orderBy === undefined) {
           let bodyExpr: FreeObjectExpr = outer.expr;
           const innerWith: WithBinding[] = [];
           if (bodyExpr.kind === "select_expr_subquery"
@@ -9212,11 +9219,25 @@ const bindSelectAstVariable = (
 // with the Nth element of `tuple`. Also replaces a bare `binding_ref(variable)`
 // reference with a literal JSON dump of the tuple so callers that bind a
 // non-tuple-index reference still get a usable scalar.
-const substituteTupleIndexAccess = (
+// Overloaded: shape-computed entries pass a `ComputedExpr` (whose
+// `select_expr` wrapper carries the FreeObjectExpr to rewrite); filters pass
+// a bare `FreeObjectExpr`. Kinds outside the handled cases pass through
+// unchanged either way.
+function substituteTupleIndexAccess(
   expr: FreeObjectExpr,
   variable: string,
   tuple: unknown[],
-): FreeObjectExpr => {
+): FreeObjectExpr;
+function substituteTupleIndexAccess(
+  expr: ComputedExpr,
+  variable: string,
+  tuple: unknown[],
+): ComputedExpr;
+function substituteTupleIndexAccess(
+  expr: FreeObjectExpr | ComputedExpr,
+  variable: string,
+  tuple: unknown[],
+): FreeObjectExpr | ComputedExpr {
   const literalOf = (value: unknown): FreeObjectExpr => {
     if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
       return { kind: "literal", value };
@@ -9268,7 +9289,7 @@ const substituteTupleIndexAccess = (
     default:
       return expr;
   }
-};
+}
 
 const ensureSelectAstHasId = (ast: SelectStatement): SelectStatement => {
   const hasId = ast.shape.some((element) => element.kind === "field" && element.name === "id");

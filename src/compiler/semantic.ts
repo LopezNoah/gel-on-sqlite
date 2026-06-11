@@ -1,7 +1,7 @@
 import { AppError, tryResult } from "../errors.js";
 import { parseEdgeQL } from "../edgeql/parser.js";
 import { simpleTypeName } from "../edgeql/ast.js";
-import type { ClauseChain, ComputedExpr, FilterExpr, FreeObjectExpr, FunctionCallExpr, GroupByAtom, GroupByElement, OrderExpr, OrderExprChain, SelectStatement, ShapeElement, Statement, TypeExpr, WithBindingValue } from "../edgeql/ast.js";
+import type { ClauseChain, ComputedExpr, FilterExpr, FreeObjectExpr, FunctionCallExpr, GroupByAtom, GroupByElement, OrderExpr, OrderExprChain, SelectStatement, SetLiteralValue, ShapeElement, Statement, TypeExpr, WithBindingValue } from "../edgeql/ast.js";
 import type { GeneratedSchema } from "../codegen/schema.js";
 import type {
   BacklinkSourceIR,
@@ -27,7 +27,7 @@ import type {
   PolicyIR,
 } from "../ir/model.js";
 import { qualifiedTypeName, SchemaSnapshot } from "../schema/schema.js";
-import type { AccessPolicyCondition, ScalarType, ScalarValue, TypeDef } from "../types.js";
+import type { AccessPolicyCondition, FieldDef, ScalarType, ScalarValue, TypeDef } from "../types.js";
 import { tryResolveStdlibFunction } from "../stdlib/functions.js";
 import { checkScopeTreeViolations } from "./scope_tree_check.js";
 import { coerceCastScalarValue, coerceRuntimeScalarValue, compileDmlToIR, isValidScalarValue } from "./dml_lowering.js";
@@ -853,7 +853,6 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       case "global_ref":
         return "stable";
       case "current_item":
-      case "current_item_field":
       case "field_ref":
       case "polymorphic_field_ref":
       case "field_suffix_math":
@@ -1395,7 +1394,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
   };
 
   const compileFilterExpr = (
-    fieldByName: Map<string, { name: string; type: ScalarType; required?: boolean }>,
+    fieldByName: Map<string, FieldDef>,
     knownFields: Set<string>,
     typeLabel: string,
     filter: FilterExpr,
@@ -3879,7 +3878,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     if (k === "binding_ref") return { kind: "binding_ref", name: (a as { name: string }).name } as FreeObjectExpr;
     if (k === "literal") return { kind: "literal", value: (a as { value: ScalarValue }).value } as FreeObjectExpr;
     if (k === "parameter") return { kind: "parameter", name: (a as { name: string }).name } as FreeObjectExpr;
-    if (k === "set_literal") return { kind: "set_literal", values: (a as { values: FreeObjectExpr[] }).values } as FreeObjectExpr;
+    if (k === "set_literal") return { kind: "set_literal", values: (a as SetLiteralValue).values };
     if (k === "array_literal") return { kind: "array_literal_expr", values: [] } as FreeObjectExpr;
     if (k === "function_call") return { kind: "function_call", call: (a as { call: FunctionCallExpr }).call } as FreeObjectExpr;
     return undefined;
@@ -4471,7 +4470,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     if (expr.kind === "for_expr") return resolveShapeSourceObjectType(expr.body);
     if (expr.kind === "mutation_expr") {
       const stmt = expr.statement;
-      if (stmt.kind === "insert" || stmt.kind === "select" || stmt.kind === "update") {
+      if (stmt.kind === "insert" || stmt.kind === "update") {
         return resolveObjectTypeOrAliasSource(stmt.typeName);
       }
       return undefined;
@@ -4544,7 +4543,6 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       }
       return false;
     }
-    if (cur.kind === "field_access") return false;
     if (!isSubjectReference(cur, typeDef) && cur.kind !== "current_item") {
       const aliases = subjectAliasesFor(typeDef);
       if (cur.kind === "binding_ref" && !aliases.has(cur.name)) return false;
@@ -4928,7 +4926,10 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     shape: ShapeElement[],
     clauses: {
       filter?: SelectStatement["filter"];
-      orderBy?: SelectStatement["orderBy"];
+      // Subquery/backlink shape elements carry `select_expr_subquery`-style
+      // order clauses (`OrderExprChain`, always expression-based) in addition
+      // to the field-based `OrderExpr` of plain SELECT clauses.
+      orderBy?: SelectStatement["orderBy"] | OrderExprChain;
       limit?: SelectStatement["limit"];
       offset?: SelectStatement["offset"];
     },
@@ -5269,9 +5270,9 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
                 `Unknown link target type '${relation.targetType}' from '${qualifiedName}.${computed.expr.link}'`,
               );
               const targetFields = new Set(["id", ...collectFields(targetType, true).map((field) => field.name)]);
-              if (!targetFields.has(computed.expr.field)) {
-                fail(`Unknown field '${computed.expr.field}' on aggregate target '${relation.targetType}'`);
-              }
+              const aggregateColumn = computed.expr.field !== undefined && targetFields.has(computed.expr.field)
+                ? computed.expr.field
+                : fail(`Unknown field '${computed.expr.field}' on aggregate target '${relation.targetType}'`);
               shapeElements.push({
                 kind: "computed",
                 name: shapeElement.name,
@@ -5280,7 +5281,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
                   kind: "link_aggregate",
                   functionName: computed.expr.functionName,
                   relation,
-                  column: computed.expr.field,
+                  column: aggregateColumn,
                 },
               });
             } else if (computed.expr.kind === "edgeql_expr") {
@@ -6109,7 +6110,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
               // while collecting any orderBy/limit/offset clauses they carry.
               // These attach to the select_expr_subquery layer, not to the
               // inner `select`'s clauses.
-              type SubqClause = { orderBy?: unknown; limit?: number; offset?: number; filter?: unknown };
+              type SubqClause = { orderBy?: OrderExpr | OrderExprChain; limit?: number; offset?: number; filter?: unknown };
               let resolved: unknown = bound;
               const wrappedClauses: SubqClause = {};
               while (resolved && typeof resolved === "object") {
@@ -6119,7 +6120,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
                   continue;
                 }
                 if (rk === "select_expr_subquery") {
-                  const subq = resolved as { expr: unknown; orderBy?: unknown; limit?: number; offset?: number; filter?: unknown };
+                  const subq = resolved as { expr: unknown; orderBy?: OrderExprChain; limit?: number; offset?: number; filter?: unknown };
                   if (subq.orderBy) wrappedClauses.orderBy = subq.orderBy;
                   if (subq.limit !== undefined) wrappedClauses.limit = subq.limit;
                   if (subq.offset !== undefined) wrappedClauses.offset = subq.offset;
@@ -6157,7 +6158,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
             let inner: FreeObjectExpr = rewrittenInnerExpr;
             let limit: number | undefined;
             let offset: number | undefined;
-            let orderByClause: unknown;
+            let orderByClause: OrderExprChain | undefined;
             let filterClause: FreeObjectExpr | undefined;
             if (inner.kind === "select_expr_subquery") {
               const subq = inner;
@@ -6199,7 +6200,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
                   backlinkShape.shape,
                   {
                     filter: backlinkShape.filter as unknown as FilterExpr,
-                    orderBy: backlinkShape.orderBy as unknown as OrderExprChain,
+                    orderBy: backlinkShape.orderBy,
                     limit: backlinkShape.limit,
                     offset: backlinkShape.offset,
                   },
@@ -6601,7 +6602,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         ? sourceTables.filter((source) => source.name === resolvedFilter.value)
         : sourceTables;
 
-    const resolveOrderByTerm = (term: OrderExpr | undefined): OrderByIR<string> | undefined => {
+    const resolveOrderByTerm = (term: OrderExpr | OrderExprChain | undefined): OrderByIR<string> | undefined => {
       if (!term) return undefined;
       if (term.expr) {
         const built: OrderByIR<string> = {
@@ -6614,6 +6615,9 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         if (nextTerm) built.then = nextTerm;
         return built;
       }
+      // An `OrderExprChain` always carries `expr` and is handled above; only
+      // the field-based `OrderExpr` form reaches here.
+      if (!("field" in term)) return undefined;
       let value = term.field.startsWith("@") ? term.field.slice(1) : term.field;
       if (term.field.startsWith("@") && options.linkProperties) {
         value = [...options.linkProperties]
@@ -8051,7 +8055,10 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       if (expr.kind === "compare") {
         return {
           kind: "compare",
-          op: expr.op,
+          // Union gap: the parser emits "not_like"/"not_ilike" (`a NOT LIKE b`)
+          // but the IR compare entry op union in src/ir/model.ts lacks them;
+          // pass them through unchanged pending the shared-type addition.
+          op: expr.op as Extract<SelectExprIREntry, { kind: "compare" }>["op"],
           left: asNestedExprEntry(compileExprToIREntry(expr.left, currentItemBinding)),
           right: asNestedExprEntry(compileExprToIREntry(expr.right, currentItemBinding)),
         };
@@ -9260,7 +9267,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       if (!filter) return false;
       if (filter.kind === "predicate" && filter.op === "=" && filter.target.kind === "field") {
         const v = filter.value;
-        if (v.kind === "binding_ref" && v.name === statement.variable) return true;
+        if (typeof v === "object" && v !== null && v.kind === "binding_ref" && v.name === statement.variable) return true;
       }
       if (filter.kind === "and") return isDirectIterFilter(filter.left) || isDirectIterFilter(filter.right);
       if (filter.kind === "free_expr") {
