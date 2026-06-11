@@ -186,7 +186,8 @@ const runtimeExprAliases = new WeakMap<SchemaSnapshot, Map<string, string>>();
 export const listAllRuntimeAliasNames = (schema: SchemaSnapshot): string[] => {
   const names = new Set<string>();
   const addAliasShapeTypeName = (aliasModule: string, aliasName: string, sourceType: string): void => {
-    const baseName = sourceType.includes("::") ? sourceType.split("::").pop()! : sourceType;
+    const parts = sourceType.split("::");
+    const baseName = parts[parts.length - 1];
     names.add(`${aliasModule}::__${aliasName}__${baseName}`);
   };
 
@@ -288,9 +289,9 @@ const likeMatch = (value: unknown, pattern: unknown, caseInsensitive: boolean): 
   if (typeof value !== "string" || typeof pattern !== "string") return false;
   let regex = "^";
   for (let i = 0; i < pattern.length; i += 1) {
-    const ch = pattern[i]!;
+    const ch = pattern[i];
     if (ch === "\\" && i + 1 < pattern.length) {
-      regex += pattern[i + 1]!.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      regex += pattern[i + 1].replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       i += 1;
       continue;
     }
@@ -466,7 +467,7 @@ const splitTopLevelScriptStatements = (script: string): string[] => {
   };
 
   for (let i = 0; i < script.length; i += 1) {
-    const ch = script[i]!;
+    const ch = script[i];
     if (dollarMarker) {
       if (script.startsWith(dollarMarker, i)) {
         i += dollarMarker.length - 1;
@@ -658,10 +659,10 @@ const stripBacktickName = (lexeme: string): string =>
 
 const sliceTokenRange = (tokens: readonly Token[], startIdx: number, source: string): string => {
   if (startIdx >= tokens.length) return "";
-  const startTok = tokens[startIdx]!;
+  const startTok = tokens[startIdx];
   let endOffset = source.length;
   for (let j = tokens.length - 1; j >= startIdx; j -= 1) {
-    const t = tokens[j]!;
+    const t = tokens[j];
     if (t.kind === "eof") continue;
     endOffset = t.offset + t.lexeme.length;
     break;
@@ -679,8 +680,8 @@ const parseMemberHeader = (entry: string): MemberHeader | undefined => {
   if (tokens[i]?.kind !== "kw_create") return undefined;
   i += 1;
   const modifiers = { required: false, optional: false, multi: false, single: false };
-  while (tokens[i] && MEMBER_MODIFIER_KINDS.has(tokens[i]!.kind)) {
-    const k = tokens[i]!.kind;
+  while (tokens[i] && MEMBER_MODIFIER_KINDS.has(tokens[i].kind)) {
+    const k = tokens[i].kind;
     if (k === "kw_required") modifiers.required = true;
     else if (k === "kw_optional") modifiers.optional = true;
     else if (k === "kw_multi") modifiers.multi = true;
@@ -839,7 +840,7 @@ const parseCreateFutureFlag = (statement: string): string | undefined => {
   i += 1;
   // `future` isn't a reserved keyword in our tokenizer; the lexeme arrives
   // as a regular identifier.
-  if (!tokens[i] || tokens[i]!.lower !== "future") return undefined;
+  if (!tokens[i] || tokens[i].lower !== "future") return undefined;
   i += 1;
   const nameTok = tokens[i];
   if (!nameTok || (nameTok.kind !== "identifier" && nameTok.kind !== "backtick_name")) return undefined;
@@ -1106,9 +1107,10 @@ const readRuntimeTypedAliasSourceRows = (
     const table = tableNameForType(sourceTypeName);
     const selected = db.prepare(`SELECT * FROM ${quoteIdent(table)}`).all() as Record<string, unknown>[];
     for (const row of selected) {
+      const filterValues = alias.filterValues;
       if (
-        alias.filterValues
-        && !alias.filterValues.values.some((value) => runtimeAliasPredicateMatches(row[alias.filterValues!.field], "=", value))
+        filterValues
+        && !filterValues.values.some((value) => runtimeAliasPredicateMatches(row[filterValues.field], "=", value))
       ) {
         continue;
       }
@@ -2519,9 +2521,10 @@ const tryRuntimeSelectExprEvaluationAst = (
           linkOverrides: [],
         });
         rows = rows.filter((row) => evalFilter(row, expr.clauses.filter, env, sourceType));
-        if (expr.clauses.orderBy) {
-          const direction = expr.clauses.orderBy.direction === "desc" ? -1 : 1;
-          rows.sort((a, b) => String(a[expr.clauses.orderBy!.field] ?? "").localeCompare(String(b[expr.clauses.orderBy!.field] ?? "")) * direction);
+        const clausesOrderBy = expr.clauses.orderBy;
+        if (clausesOrderBy) {
+          const direction = clausesOrderBy.direction === "desc" ? -1 : 1;
+          rows.sort((a, b) => String(a[clausesOrderBy.field] ?? "").localeCompare(String(b[clausesOrderBy.field] ?? "")) * direction);
         }
         if (expr.clauses.limit !== undefined) {
           rows = rows.slice(0, expr.clauses.limit);
@@ -2617,18 +2620,20 @@ const tryRuntimeSelectExprEvaluationAst = (
           return value;
         }
         let rows = Array.isArray(value) ? [...value] : [value];
-        if (expr.filter) {
+        const filterExpr = expr.filter;
+        if (filterExpr) {
           rows = rows.filter((item) => {
             const childEnv = new Map(env);
             if (expr.alias) childEnv.set(expr.alias, item);
             childEnv.set("__current__", item as Record<string, unknown>);
-            const result = evalExpr(expr.filter!, childEnv);
+            const result = evalExpr(filterExpr, childEnv);
             return Array.isArray(result) ? result.some(Boolean) : Boolean(result);
           });
         }
-        if (expr.orderBy) {
+        const orderByClause = expr.orderBy;
+        if (orderByClause) {
           const enumOrder = enumOrderForRows(rows);
-          const direction = expr.orderBy.direction === "desc" ? -1 : 1;
+          const direction = orderByClause.direction === "desc" ? -1 : 1;
           rows.sort((a, b) => {
             const leftEnv = new Map(env);
             const rightEnv = new Map(env);
@@ -2638,8 +2643,8 @@ const tryRuntimeSelectExprEvaluationAst = (
             }
             leftEnv.set("__current__", a as Record<string, unknown>);
             rightEnv.set("__current__", b as Record<string, unknown>);
-            const left = evalExpr(expr.orderBy!.expr, leftEnv);
-            const right = evalExpr(expr.orderBy!.expr, rightEnv);
+            const left = evalExpr(orderByClause.expr, leftEnv);
+            const right = evalExpr(orderByClause.expr, rightEnv);
             const leftEnumIndex = typeof left === "string" ? enumOrder?.get(left) : undefined;
             const rightEnumIndex = typeof right === "string" ? enumOrder?.get(right) : undefined;
             if (leftEnumIndex !== undefined && rightEnumIndex !== undefined && leftEnumIndex !== rightEnumIndex) {
@@ -3072,9 +3077,9 @@ const tokensIncludeQualifiedName = (
   const t = typeName.toLowerCase();
   for (let i = 0; i + 2 < tokens.length; i += 1) {
     if (
-      tokens[i]!.lower === m
-      && tokens[i + 1]!.kind === "coloncolon"
-      && tokens[i + 2]!.lower === t
+      tokens[i].lower === m
+      && tokens[i + 1].kind === "coloncolon"
+      && tokens[i + 2].lower === t
     ) {
       return true;
     }
@@ -3095,9 +3100,9 @@ const tokensIncludeWithModuleSelect = (
   let withSchemaAt = -1;
   for (let i = 0; i + 2 < tokens.length; i += 1) {
     if (
-      tokens[i]!.kind === "kw_with"
-      && tokens[i + 1]!.kind === "kw_module"
-      && tokens[i + 2]!.lower === m
+      tokens[i].kind === "kw_with"
+      && tokens[i + 1].kind === "kw_module"
+      && tokens[i + 2].lower === m
     ) {
       withSchemaAt = i + 3;
       break;
@@ -3105,7 +3110,7 @@ const tokensIncludeWithModuleSelect = (
   }
   if (withSchemaAt < 0) return false;
   for (let i = withSchemaAt; i + 1 < tokens.length; i += 1) {
-    if (tokens[i]!.kind === "kw_select" && tokens[i + 1]!.lower === t) {
+    if (tokens[i].kind === "kw_select" && tokens[i + 1].lower === t) {
       return true;
     }
   }
@@ -3121,7 +3126,7 @@ const tokensHaveSelectFollowedBy = (
 ): boolean => {
   if (!tokens) return false;
   for (let i = 0; i + 1 < tokens.length; i += 1) {
-    if (tokens[i]!.kind === "kw_select" && tokens[i + 1]!.kind === followKind) {
+    if (tokens[i].kind === "kw_select" && tokens[i + 1].kind === followKind) {
       return true;
     }
   }
@@ -3140,13 +3145,13 @@ const tokensIncludeBacklinkTargetIntersection = (
   const t = typeName.toLowerCase();
   for (let i = 0; i + 6 < tokens.length; i += 1) {
     if (
-      tokens[i]!.kind === "backward_link"
-      && tokens[i + 1]!.lower === "target"
-      && tokens[i + 2]!.kind === "lbracket"
-      && tokens[i + 3]!.kind === "kw_is"
-      && tokens[i + 4]!.lower === m
-      && tokens[i + 5]!.kind === "coloncolon"
-      && tokens[i + 6]!.lower === t
+      tokens[i].kind === "backward_link"
+      && tokens[i + 1].lower === "target"
+      && tokens[i + 2].kind === "lbracket"
+      && tokens[i + 3].kind === "kw_is"
+      && tokens[i + 4].lower === m
+      && tokens[i + 5].kind === "coloncolon"
+      && tokens[i + 6].lower === t
     ) {
       return true;
     }
@@ -3166,12 +3171,12 @@ const tokensIncludeTypeIntersection = (
   const targets = new Set(typeNames.map((n) => n.toLowerCase()));
   for (let i = 0; i + 5 < tokens.length; i += 1) {
     if (
-      tokens[i]!.kind === "lbracket"
-      && tokens[i + 1]!.kind === "kw_is"
-      && tokens[i + 2]!.lower === m
-      && tokens[i + 3]!.kind === "coloncolon"
-      && targets.has(tokens[i + 4]!.lower)
-      && tokens[i + 5]!.kind === "rbracket"
+      tokens[i].kind === "lbracket"
+      && tokens[i + 1].kind === "kw_is"
+      && tokens[i + 2].lower === m
+      && tokens[i + 3].kind === "coloncolon"
+      && targets.has(tokens[i + 4].lower)
+      && tokens[i + 5].kind === "rbracket"
     ) {
       return true;
     }
@@ -3189,7 +3194,7 @@ const tokensContainBareWord = (
   if (!tokens) return false;
   const lower = word.toLowerCase();
   for (let i = 0; i < tokens.length; i += 1) {
-    if (tokens[i]!.lower !== lower) continue;
+    if (tokens[i].lower !== lower) continue;
     const prev = tokens[i - 1];
     if (prev && (prev.kind === "coloncolon" || prev.kind === "dot" || prev.kind === "at")) {
       continue;
@@ -3207,9 +3212,9 @@ const tokensIncludeWithModule = (
   const m = moduleName.toLowerCase();
   for (let i = 0; i + 2 < tokens.length; i += 1) {
     if (
-      tokens[i]!.kind === "kw_with"
-      && tokens[i + 1]!.kind === "kw_module"
-      && tokens[i + 2]!.lower === m
+      tokens[i].kind === "kw_with"
+      && tokens[i + 1].kind === "kw_module"
+      && tokens[i + 2].lower === m
     ) {
       return true;
     }
@@ -3227,7 +3232,7 @@ const tokensIncludeAtIdentifier = (
   if (!tokens) return false;
   const lower = name.toLowerCase();
   for (let i = 0; i + 1 < tokens.length; i += 1) {
-    if (tokens[i]!.kind === "at" && tokens[i + 1]!.lower === lower) return true;
+    if (tokens[i].kind === "at" && tokens[i + 1].lower === lower) return true;
   }
   return false;
 };
@@ -3244,7 +3249,7 @@ const matchDotPath = (
   let i = from;
   for (let step = 0; step < path.length; step += 1) {
     if (tokens[i]?.kind !== "dot") return -1;
-    if (tokens[i + 1]?.lower !== path[step]!.toLowerCase()) return -1;
+    if (tokens[i + 1]?.lower !== path[step].toLowerCase()) return -1;
     i += 2;
   }
   return i - 1;
@@ -3257,7 +3262,7 @@ const tokensIncludeExistsPath = (
 ): boolean => {
   if (!tokens) return false;
   for (let i = 0; i + 1 < tokens.length; i += 1) {
-    if (tokens[i]!.kind !== "kw_exists") continue;
+    if (tokens[i].kind !== "kw_exists") continue;
     if (matchDotPath(tokens, i + 1, path) >= 0) return true;
   }
   return false;
@@ -3273,9 +3278,9 @@ const tokensIncludeFilterExistsPath = (
 ): boolean => {
   if (!tokens) return false;
   for (let i = 0; i < tokens.length; i += 1) {
-    if (tokens[i]!.kind !== "kw_filter") continue;
+    if (tokens[i].kind !== "kw_filter") continue;
     for (let j = i + 1; j + 1 < tokens.length; j += 1) {
-      if (tokens[j]!.kind !== "kw_exists") continue;
+      if (tokens[j].kind !== "kw_exists") continue;
       if (matchDotPath(tokens, j + 1, path) >= 0) return true;
     }
   }
@@ -3291,10 +3296,10 @@ const tokensIncludeOrderByDotField = (
   const lower = field.toLowerCase();
   for (let i = 0; i + 3 < tokens.length; i += 1) {
     if (
-      tokens[i]!.kind === "kw_order"
-      && tokens[i + 1]!.kind === "kw_by"
-      && tokens[i + 2]!.kind === "dot"
-      && tokens[i + 3]!.lower === lower
+      tokens[i].kind === "kw_order"
+      && tokens[i + 1].kind === "kw_by"
+      && tokens[i + 2].kind === "dot"
+      && tokens[i + 3].lower === lower
     ) {
       return true;
     }
@@ -3312,9 +3317,9 @@ const tokensIncludeStringInDotPath = (
 ): boolean => {
   if (!tokens) return false;
   for (let i = 0; i + 1 < tokens.length; i += 1) {
-    if (tokens[i]!.kind !== "string") continue;
-    if (decodeStringLexeme(tokens[i]!.lexeme) !== literal) continue;
-    if (tokens[i + 1]!.kind !== "kw_in") continue;
+    if (tokens[i].kind !== "string") continue;
+    if (decodeStringLexeme(tokens[i].lexeme) !== literal) continue;
+    if (tokens[i + 1].kind !== "kw_in") continue;
     if (matchDotPath(tokens, i + 2, path) >= 0) return true;
   }
   return false;
@@ -3326,8 +3331,8 @@ const tokensIncludeStringInDotPath = (
 // don't appear in the bypass paths.
 const decodeStringLexeme = (lexeme: string): string => {
   if (lexeme.length >= 2) {
-    const first = lexeme[0]!;
-    const last = lexeme[lexeme.length - 1]!;
+    const first = lexeme[0];
+    const last = lexeme[lexeme.length - 1];
     if ((first === "'" && last === "'") || (first === "\"" && last === "\"")) {
       return lexeme.slice(1, -1).replace(/\\(['"\\])/g, "$1");
     }
@@ -3344,12 +3349,12 @@ const extractDotFieldLikeLiteral = (
   const lower = field.toLowerCase();
   for (let i = 0; i + 3 < tokens.length; i += 1) {
     if (
-      tokens[i]!.kind === "dot"
-      && tokens[i + 1]!.lower === lower
-      && tokens[i + 2]!.kind === "kw_like"
-      && tokens[i + 3]!.kind === "string"
+      tokens[i].kind === "dot"
+      && tokens[i + 1].lower === lower
+      && tokens[i + 2].kind === "kw_like"
+      && tokens[i + 3].kind === "string"
     ) {
-      return decodeStringLexeme(tokens[i + 3]!.lexeme);
+      return decodeStringLexeme(tokens[i + 3].lexeme);
     }
   }
   return undefined;
@@ -3365,12 +3370,12 @@ const extractDotFieldEqualsLiterals = (
   const out: string[] = [];
   for (let i = 0; i + 3 < tokens.length; i += 1) {
     if (
-      tokens[i]!.kind === "dot"
-      && tokens[i + 1]!.lower === lower
-      && tokens[i + 2]!.kind === "equals"
-      && tokens[i + 3]!.kind === "string"
+      tokens[i].kind === "dot"
+      && tokens[i + 1].lower === lower
+      && tokens[i + 2].kind === "equals"
+      && tokens[i + 3].kind === "string"
     ) {
-      out.push(decodeStringLexeme(tokens[i + 3]!.lexeme));
+      out.push(decodeStringLexeme(tokens[i + 3].lexeme));
     }
   }
   return out;
@@ -3382,15 +3387,15 @@ const extractFilterNameInSetLiterals = (
 ): string[] | undefined => {
   if (!tokens) return undefined;
   for (let i = 0; i + 4 < tokens.length; i += 1) {
-    if (tokens[i]!.kind !== "kw_filter") continue;
-    if (tokens[i + 1]!.kind !== "dot") continue;
-    if (tokens[i + 2]!.lower !== "name") continue;
-    if (tokens[i + 3]!.kind !== "kw_in") continue;
-    if (tokens[i + 4]!.kind !== "lbrace") continue;
+    if (tokens[i].kind !== "kw_filter") continue;
+    if (tokens[i + 1].kind !== "dot") continue;
+    if (tokens[i + 2].lower !== "name") continue;
+    if (tokens[i + 3].kind !== "kw_in") continue;
+    if (tokens[i + 4].kind !== "lbrace") continue;
     const out: string[] = [];
     let depth = 1;
     for (let j = i + 5; j < tokens.length; j += 1) {
-      const tk = tokens[j]!;
+      const tk = tokens[j];
       if (tk.kind === "lbrace") depth += 1;
       else if (tk.kind === "rbrace") {
         depth -= 1;
@@ -3732,7 +3737,7 @@ const scalarTypeNameForRuntimeValue = (value: string): string => {
   // forms are recognised by the same lexer the rest of the engine uses.
   const tokens = tryTokenize(value.trim());
   if (!tokens || tokens.length === 0) return "std::str";
-  const first = tokens[0]!;
+  const first = tokens[0];
   if (first.kind === "string") return "std::str";
   if (first.kind === "kw_true" || first.kind === "kw_false") return "std::bool";
   if (first.kind === "number") {
@@ -3740,8 +3745,8 @@ const scalarTypeNameForRuntimeValue = (value: string): string => {
       ? "std::float64"
       : "std::int64";
   }
-  if (first.kind === "minus" && tokens.length > 1 && tokens[1]!.kind === "number") {
-    return tokens[1]!.lexeme.includes(".") || tokens[1]!.lexeme.toLowerCase().includes("e")
+  if (first.kind === "minus" && tokens.length > 1 && tokens[1].kind === "number") {
+    return tokens[1].lexeme.includes(".") || tokens[1].lexeme.toLowerCase().includes("e")
       ? "std::float64"
       : "std::int64";
   }
@@ -3757,28 +3762,28 @@ const splitParenthesisedTupleElements = (expr: string): string[] | undefined => 
   const tokens = tryTokenize(expr.trim());
   if (!tokens || tokens.length < 3) return undefined;
   // Trim the trailing eof token so we operate on real syntax.
-  const lastIdx = tokens[tokens.length - 1]!.kind === "eof"
+  const lastIdx = tokens[tokens.length - 1].kind === "eof"
     ? tokens.length - 2
     : tokens.length - 1;
   if (lastIdx < 1) return undefined;
-  if (tokens[0]!.kind !== "lparen" || tokens[lastIdx]!.kind !== "rparen") {
+  if (tokens[0].kind !== "lparen" || tokens[lastIdx].kind !== "rparen") {
     return undefined;
   }
 
   const elements: string[] = [];
   let depth = 0;
-  let elementStart = tokens[1]!.offset;
+  let elementStart = tokens[1].offset;
   for (let i = 1; i < lastIdx; i += 1) {
-    const tk = tokens[i]!;
+    const tk = tokens[i];
     if (tk.kind === "lparen" || tk.kind === "lbrace" || tk.kind === "lbracket") depth += 1;
     else if (tk.kind === "rparen" || tk.kind === "rbrace" || tk.kind === "rbracket") depth -= 1;
     else if (tk.kind === "comma" && depth === 0) {
       const slice = expr.slice(elementStart, tk.offset).trim();
       if (slice.length > 0) elements.push(slice);
-      elementStart = tokens[i + 1]!.offset;
+      elementStart = tokens[i + 1].offset;
     }
   }
-  const tail = expr.slice(elementStart, tokens[lastIdx]!.offset).trim();
+  const tail = expr.slice(elementStart, tokens[lastIdx].offset).trim();
   if (tail.length > 0) elements.push(tail);
   return elements;
 };
@@ -3963,7 +3968,7 @@ const tryEvaluateParsedRuntimeSelect = (
   const isLinkAggregateFunctionCall = (expr: Extract<ComputedExpr, { kind: "function_call" }>): boolean => {
     if (expr.call.name !== "sum" && expr.call.name !== "std::sum") return false;
     if (expr.call.args.length !== 1) return false;
-    const arg = expr.call.args[0]!;
+    const arg = expr.call.args[0];
     if (arg.kind !== "expr") return false;
     const outer = arg.expr;
     if (outer.kind !== "field_access" || outer.field.startsWith("@")) return false;
@@ -4560,7 +4565,7 @@ const tryEvaluateParsedRuntimeSelect = (
     }
     if (env.outerRows) {
       for (let i = env.outerRows.length - 1; i >= 0; i -= 1) {
-        const outer = env.outerRows[i]!;
+        const outer = env.outerRows[i];
         if (matches(outer.row, outer.rowType)) {
           return [outer.row];
         }
@@ -4795,7 +4800,7 @@ const tryEvaluateParsedRuntimeSelect = (
       if (inner.kind === "select") {
         let rows = evalSelect(inner.typeName, inner.shape, inner.clauses, env);
         for (let i = wrappers.length - 1; i >= 0; i -= 1) {
-          const w = wrappers[i]!;
+          const w = wrappers[i];
           if (w.filter) {
             const filter = w.filter;
             rows = rows.filter((row) => {
@@ -4842,8 +4847,11 @@ const tryEvaluateParsedRuntimeSelect = (
       const rowType = row ? rowTypeName(row, qualifyType(value.head)) : undefined;
       return row && rowType ? readBacklink(row, rowType, value.link, value.sourceType, value.sourceTypeExpr) : [];
     }
-    if (value.kind === "path" && env.bindings.has(value.head)) {
-      return env.bindings.get(value.head)!.map((row) => ({ __count: countForwardLink(row, rowTypeName(row), value.tail) }));
+    if (value.kind === "path") {
+      const boundRows = env.bindings.get(value.head);
+      if (boundRows) {
+        return boundRows.map((row) => ({ __count: countForwardLink(row, rowTypeName(row), value.tail) }));
+      }
     }
     if (value.kind === "path") {
       const qualifiedHead = qualifyType(value.head);
@@ -4910,8 +4918,8 @@ const tryEvaluateParsedRuntimeSelect = (
     if (left.kind === "path_steps" && right.kind === "path_steps") {
       if (left.steps.length !== right.steps.length) return false;
       for (let i = 0; i < left.steps.length; i += 1) {
-        const ls = left.steps[i]!;
-        const rs = right.steps[i]!;
+        const ls = left.steps[i];
+        const rs = right.steps[i];
         if (ls.kind !== rs.kind) return false;
         if (ls.kind === "object_ref" && rs.kind === "object_ref") {
           if (ls.name !== rs.name) return false;
@@ -5081,7 +5089,7 @@ const tryEvaluateParsedRuntimeSelect = (
           const remainingSteps = ptrSteps.slice(iterSteps.length);
           let followedInboundPointer = false;
           for (let stepIndex = 0; stepIndex < remainingSteps.length; stepIndex += 1) {
-            const step = remainingSteps[stepIndex]!;
+            const step = remainingSteps[stepIndex];
             if (step.kind === "type_intersection" && step.typeExpr) {
               const typeExpr = step.typeExpr;
               current = current.filter((row) => rowMatchesTypeExpr(row, currentType, typeExpr));
@@ -5136,7 +5144,7 @@ const tryEvaluateParsedRuntimeSelect = (
       let followedInboundPointer = false;
       const pathSteps = expr.steps.slice(1);
       for (let stepIndex = 0; stepIndex < pathSteps.length; stepIndex += 1) {
-        const step = pathSteps[stepIndex]!;
+        const step = pathSteps[stepIndex];
         if (step.kind === "type_intersection" && step.typeExpr) {
           const typeExpr = step.typeExpr;
           current = current.filter((row) => rowMatchesTypeExpr(row, currentType, typeExpr));
@@ -5193,9 +5201,12 @@ const tryEvaluateParsedRuntimeSelect = (
       }
       return bound;
     }
-    if (expr.kind === "path" && env.bindings.has(expr.head)) {
-      const values = env.bindings.get(expr.head)!.map((row) => row[expr.tail] ?? null);
-      return values.length === 1 ? values[0] : values;
+    if (expr.kind === "path") {
+      const boundRows = env.bindings.get(expr.head);
+      if (boundRows) {
+        const values = boundRows.map((row) => row[expr.tail] ?? null);
+        return values.length === 1 ? values[0] : values;
+      }
     }
     if (expr.kind === "current_item") {
       return env.row ?? null;
@@ -5205,8 +5216,9 @@ const tryEvaluateParsedRuntimeSelect = (
       if (bound && !schema.getType(qualifyType(expr.typeName))) {
         const boundType = qualifyType(expr.typeName);
         let rows = bound.filter((row) => evalFilter(row, rowTypeName(row, boundType), expr.clauses.filter, { ...env, row, rowType: rowTypeName(row, boundType) }));
-        if (expr.clauses.orderBy?.field) {
-          rows = [...rows].sort((a, b) => compareRowsByOrder(a, b, expr.clauses.orderBy!));
+        const orderByClause = expr.clauses.orderBy;
+        if (orderByClause?.field) {
+          rows = [...rows].sort((a, b) => compareRowsByOrder(a, b, orderByClause));
         }
         if (expr.clauses.offset !== undefined) rows = rows.slice(expr.clauses.offset);
         if (expr.clauses.limit !== undefined) rows = rows.slice(0, expr.clauses.limit);
@@ -5230,7 +5242,7 @@ const tryEvaluateParsedRuntimeSelect = (
         const qualifiedType = qualifyType(expr.typeName);
         const assignable = new Set(schema.listConcreteTypesAssignableTo(qualifiedType).map((typeDef) => qualifiedTypeName(typeDef)));
         for (let i = env.outerRows.length - 1; i >= 0; i -= 1) {
-          const outer = env.outerRows[i]!;
+          const outer = env.outerRows[i];
           const outerType = rowTypeName(outer.row, outer.rowType);
           if (outerType !== qualifiedType && !assignable.has(outerType)) continue;
           if (expr.clauses.filter) {
@@ -5256,7 +5268,7 @@ const tryEvaluateParsedRuntimeSelect = (
         const qualifiedType = qualifyType(expr.typeName);
         const assignable = new Set(schema.listConcreteTypesAssignableTo(qualifiedType).map((typeDef) => qualifiedTypeName(typeDef)));
         for (let i = env.outerRows.length - 1; i >= 0; i -= 1) {
-          const outer = env.outerRows[i]!;
+          const outer = env.outerRows[i];
           const outerType = rowTypeName(outer.row, outer.rowType);
           if (outerType !== qualifiedType && !assignable.has(outerType)) {
             continue;
@@ -5290,13 +5302,14 @@ const tryEvaluateParsedRuntimeSelect = (
         const raw = row[expr.field] ?? null;
         return materializeFieldValue(schema, sourceType, expr.field, raw);
       };
-      if (env.iterationPath && env.row) {
+      const iterationPath = env.iterationPath;
+      if (iterationPath && env.row) {
         const innerPath = extractIterationPath(expr.expr);
         if (
           innerPath
-          && innerPath.typeName === env.iterationPath.typeName
-          && innerPath.steps.length === env.iterationPath.steps.length
-          && innerPath.steps.every((s, i) => s === env.iterationPath!.steps[i])
+          && innerPath.typeName === iterationPath.typeName
+          && innerPath.steps.length === iterationPath.steps.length
+          && innerPath.steps.every((s, i) => s === iterationPath.steps[i])
         ) {
           const row = env.row as ParsedRuntimeRow;
           if (Object.prototype.hasOwnProperty.call(row, expr.field)) return readStoredField(row, rowTypeName(row, env.rowType));
@@ -5399,20 +5412,22 @@ const tryEvaluateParsedRuntimeSelect = (
         }
         const value = evalFreeExpr(expr.body, scopedEnv);
         let bodyItems = Array.isArray(value) ? value : value === null || value === undefined ? [] : [value];
-        if (expr.filter) {
+        const bodyFilter = expr.filter;
+        if (bodyFilter) {
           const iterationPath = extractIterationPath(expr.body) ?? extractCurrentItemIterationPath(expr.body, scopedEnv);
           bodyItems = bodyItems.filter((bodyItem) => {
             const bodyEnv = isRecordRow(bodyItem)
               ? withInnerRow(scopedEnv, bodyItem, rowTypeName(bodyItem, scopedEnv.rowType), { iterationPath })
               : scopedEnv;
-            const filterValue = evalFreeExpr(expr.filter!, bodyEnv);
+            const filterValue = evalFreeExpr(bodyFilter, bodyEnv);
             return Array.isArray(filterValue) ? filterValue.some(Boolean) : Boolean(filterValue);
           });
         }
         return bodyItems;
       });
-      if (expr.orderBy) {
-        mapped = [...mapped].sort((a, b) => compareByExprOrder(expr.orderBy!, a, b, env));
+      const orderByExpr = expr.orderBy;
+      if (orderByExpr) {
+        mapped = [...mapped].sort((a, b) => compareByExprOrder(orderByExpr, a, b, env));
       }
       if (expr.offset !== undefined || expr.limit !== undefined) {
         const offset = expr.offset ?? 0;
@@ -5658,8 +5673,8 @@ const tryEvaluateParsedRuntimeSelect = (
       const firstIndex = indexes[0] ?? 0;
       if (expr.expr.kind === "binding_ref") {
         const bound = env.bindings.get(expr.expr.name);
-        const tupleValue = bound?.length === 1 && Object.prototype.hasOwnProperty.call(bound[0]!, "__scalar")
-          ? bound[0]!.__scalar
+        const tupleValue = bound?.length === 1 && Object.prototype.hasOwnProperty.call(bound[0], "__scalar")
+          ? bound[0].__scalar
           : undefined;
         if (Array.isArray(tupleValue)) {
           return tupleValue[firstIndex] ?? null;
@@ -5762,7 +5777,8 @@ const tryEvaluateParsedRuntimeSelect = (
         let value = evalFreeExpr(projection.expr, subqueryEnv);
         if (Array.isArray(value)) {
           let items = [...value];
-          if (expr.filter) {
+          const projectionFilter = expr.filter;
+          if (projectionFilter) {
             const iterationPath = extractIterationPath(projection.expr) ?? extractCurrentItemIterationPath(projection.expr, subqueryEnv);
             items = items.filter((item) => {
               const bindings = new Map(subqueryEnv.bindings);
@@ -5772,12 +5788,13 @@ const tryEvaluateParsedRuntimeSelect = (
               const itemEnv = isRecordRow(item)
                 ? withInnerRow(subqueryEnv, item, rowTypeName(item, subqueryEnv.rowType), { bindings, iterationPath })
                 : { ...subqueryEnv, bindings };
-              const filterValue = evalFreeExpr(expr.filter!, itemEnv);
+              const filterValue = evalFreeExpr(projectionFilter, itemEnv);
               return Array.isArray(filterValue) ? filterValue.some(Boolean) : Boolean(filterValue);
             });
           }
-          if (expr.orderBy) {
-            items.sort((a, b) => compareByExprOrder(expr.orderBy!, a, b, subqueryEnv, expr.alias));
+          const projectionOrderBy = expr.orderBy;
+          if (projectionOrderBy) {
+            items.sort((a, b) => compareByExprOrder(projectionOrderBy, a, b, subqueryEnv, expr.alias));
           }
           const offset = expr.offset ?? 0;
           items = expr.limit === undefined ? items.slice(offset) : items.slice(offset, offset + expr.limit);
@@ -5791,7 +5808,8 @@ const tryEvaluateParsedRuntimeSelect = (
       let value = evalFreeExpr(expr.expr, subqueryEnv);
       if (Array.isArray(value)) {
         let items = [...value];
-        if (expr.filter) {
+        const subqueryFilter = expr.filter;
+        if (subqueryFilter) {
           const iterationPath = extractIterationPath(expr.expr) ?? extractCurrentItemIterationPath(expr.expr, subqueryEnv);
           const iterationSource = expr.expr;
           // EdgeQL `SELECT <binding> FILTER ...` rebinds the iteration name to
@@ -5818,7 +5836,7 @@ const tryEvaluateParsedRuntimeSelect = (
             const itemEnv = isRecordRow(item)
               ? withInnerRow(subqueryEnv, item, rowTypeName(item, subqueryEnv.rowType), { bindings, iterationPath, iterationSource })
               : { ...subqueryEnv, bindings, iterationSource };
-            const filterValue = evalFreeExpr(expr.filter!, itemEnv);
+            const filterValue = evalFreeExpr(subqueryFilter, itemEnv);
             return Array.isArray(filterValue) ? filterValue.some(Boolean) : Boolean(filterValue);
           });
         }
@@ -6253,8 +6271,9 @@ const tryEvaluateParsedRuntimeSelect = (
           : value;
       } else if (element.kind === "backlink") {
         const rows = readBacklink(row, rowTypeName(row, typeName), element.expr.link, element.expr.sourceType);
-        out[element.name] = element.shape
-          ? rows.map((child) => materialize(child, rowTypeName(child), element.shape!, { ...env, row: child, rowType: rowTypeName(child) }))
+        const backlinkShape = element.shape;
+        out[element.name] = backlinkShape
+          ? rows.map((child) => materialize(child, rowTypeName(child), backlinkShape, { ...env, row: child, rowType: rowTypeName(child) }))
           : rows;
       } else if (element.kind === "link") {
         const resolvedLink = findRuntimeLinkDef(schema, rowTypeName(row, typeName), element.name)
@@ -6267,8 +6286,9 @@ const tryEvaluateParsedRuntimeSelect = (
           ? existing as ParsedRuntimeRow[]
           : readForwardLink(row, rowTypeName(row, typeName), element.name);
         rows = rows.filter((child) => evalFilter(child, rowTypeName(child), element.clauses.filter, { ...env, row: child, rowType: rowTypeName(child) }));
-        if (element.clauses.orderBy?.field) {
-          rows = [...rows].sort((a, b) => compareRowsByOrder(a, b, element.clauses.orderBy!));
+        const linkOrderBy = element.clauses.orderBy;
+        if (linkOrderBy?.field) {
+          rows = [...rows].sort((a, b) => compareRowsByOrder(a, b, linkOrderBy));
         }
         if (element.clauses.offset !== undefined) {
           rows = rows.slice(element.clauses.offset);
@@ -6524,12 +6544,13 @@ const tryEvaluateParsedRuntimeSelect = (
         : concreteRowsForType(typeName));
     const qualified = schema.getType(qualifyType(typeName)) ? qualifyType(typeName) : typeName;
     let rows = source.filter((row) => evalFilter(row, rowTypeName(row, qualified), clauses.filter, { ...env, bindings }));
-    if (clauses.orderBy?.field) {
+    const orderByClause = clauses.orderBy;
+    if (orderByClause?.field) {
       // Tag the env with an iteration path so a free expression like
       // `len(Text.body)` resolves `Text.body` against the current row, not
       // the global Text set.
       const sortEnv: ParsedRuntimeEnv = { ...env, bindings, iterationPath: { typeName, steps: [] } };
-      rows = [...rows].sort((a, b) => compareRowsByOrder(a, b, clauses.orderBy!, sortEnv));
+      rows = [...rows].sort((a, b) => compareRowsByOrder(a, b, orderByClause, sortEnv));
     }
     if (clauses.offset !== undefined) rows = rows.slice(clauses.offset);
     if (clauses.limit !== undefined) rows = rows.slice(0, clauses.limit);
@@ -6718,14 +6739,14 @@ const findMatchingBraceContent = (
   if (tokens[openIndex]?.kind !== "lbrace") return undefined;
   let depth = 1;
   for (let i = openIndex + 1; i < tokens.length; i += 1) {
-    const tk = tokens[i]!;
+    const tk = tokens[i];
     if (tk.kind === "lbrace") depth += 1;
     else if (tk.kind === "rbrace") {
       depth -= 1;
       if (depth === 0) {
         const next = tokens[i + 1];
         return {
-          contentStart: tokens[openIndex]!.offset + 1,
+          contentStart: tokens[openIndex].offset + 1,
           contentEnd: tk.offset,
           afterStart: next ? next.offset : source.length,
         };
@@ -6739,8 +6760,8 @@ const extractObjectTypeShape = (query: string): string | undefined => {
   const tokens = tryTokenize(query);
   if (!tokens) return undefined;
   for (let i = 0; i + 1 < tokens.length; i += 1) {
-    if (tokens[i]!.lower !== "objecttype") continue;
-    if (tokens[i + 1]!.kind !== "lbrace") continue;
+    if (tokens[i].lower !== "objecttype") continue;
+    if (tokens[i + 1].kind !== "lbrace") continue;
     const span = findMatchingBraceContent(tokens, i + 1, query);
     if (!span) return undefined;
     return query.slice(span.contentStart, span.contentEnd);
@@ -6758,7 +6779,7 @@ const extractTopLevelBlock = (source: string, key: string): TopLevelBlock | unde
   const lowerKey = key.toLowerCase();
   let depth = 0;
   for (let i = 0; i < tokens.length; i += 1) {
-    const tk = tokens[i]!;
+    const tk = tokens[i];
     if (tk.kind === "lbrace") {
       depth += 1;
       continue;
@@ -6793,7 +6814,7 @@ const hasTopLevelIdentifier = (source: string, identifier: string): boolean => {
   const lowered = identifier.toLowerCase();
   let depth = 0;
   for (let i = 0; i < tokens.length; i += 1) {
-    const tk = tokens[i]!;
+    const tk = tokens[i];
     if (tk.kind === "lbrace") {
       depth += 1;
       continue;
@@ -7224,7 +7245,8 @@ const scalarAncestorsForDeclaration = (
   }
 
   const base = (baseTypeName ?? "str").trim();
-  const lower = base.includes("::") ? base.split("::").at(-1)!.toLowerCase() : base.toLowerCase();
+  const baseParts = base.split("::");
+  const lower = baseParts[baseParts.length - 1].toLowerCase();
 
   if (lower === "anyenum") {
     return ["std::anyenum", "std::anyscalar"];
@@ -7374,7 +7396,7 @@ const schemaObjectTypeQueryNeedsRuntimeBypass = (query: string): boolean => {
   if (!isObjectTypeQuery) return false;
   // Pattern 1: `IN .properties.annotations.name` (a backlink-style filter).
   for (let i = 0; i + 1 < tokens.length; i += 1) {
-    if (tokens[i]!.kind !== "kw_in") continue;
+    if (tokens[i].kind !== "kw_in") continue;
     if (matchDotPath(tokens, i + 1, ["properties", "annotations", "name"]) >= 0) return true;
   }
   // Pattern 2: `constraints: { ... annotations: ... }` nested shape.
@@ -7610,7 +7632,7 @@ const resolveObjectSet = (
       const parts = n.parts as string[];
       let cur = resolveObjectSet(db, schema, { kind: "binding_ref", name: parts[0] }, env, current, context, defaultModule);
       for (let i = 1; i < parts.length; i += 1) {
-        cur = traverseLinkIds(db, schema, cur.typeName, cur.ids, parts[i]!);
+        cur = traverseLinkIds(db, schema, cur.typeName, cur.ids, parts[i]);
       }
       return cur;
     }
@@ -7688,10 +7710,11 @@ const executeDmlChainStatement = (
   // subject, or a bare type + FILTER.
   const stmtAny = stmt as unknown as { target?: unknown; typeName: string; filter?: FilterExpr; values?: Record<string, unknown>; operations?: Record<string, string> };
   let target: ObjectSet;
+  const envTarget = env.get(stmtAny.typeName);
   if (stmtAny.target) {
     target = resolveObjectSet(db, schema, stmtAny.target, env, outerCurrent, context, defaultModule);
-  } else if (env.has(stmtAny.typeName)) {
-    target = env.get(stmtAny.typeName)!;
+  } else if (envTarget) {
+    target = envTarget;
   } else {
     const rows = executeSelectExprRows(
       db,
@@ -8054,7 +8077,10 @@ const executeQueryWithTraceImpl = (
         result = { kind: "select", rows };
       }
     } else {
-      const writeResult = runWriteWithAccessPolicies(db, schema, ast, ir, sqlArtifact, subjectType!, context);
+      if (!subjectType) {
+        throw new Error("invariant: write IR reached execution without a resolved subject type");
+      }
+      const writeResult = runWriteWithAccessPolicies(db, schema, ast, ir, sqlArtifact, subjectType, context);
 
       result = {
         kind: ir.kind,
@@ -8453,7 +8479,10 @@ export const executeQueryUnitWithTrace = (
           ast.pos.column,
         );
       } else {
-        const writeResult = runWriteWithAccessPolicies(db, schema, ast, ir, sqlArtifact, subjectType!, context);
+        if (!subjectType) {
+          throw new Error("invariant: write IR reached execution without a resolved subject type");
+        }
+        const writeResult = runWriteWithAccessPolicies(db, schema, ast, ir, sqlArtifact, subjectType, context);
         result = { kind: ir.kind, changes: writeResult.changes, rows: writeResult.rows };
       }
 
@@ -9184,23 +9213,22 @@ const bindSelectAstVariable = (
         }
         return entry;
       });
-    const rewriteFilter = (f: FilterExpr | undefined): FilterExpr | undefined => {
-      if (!f) return f;
+    const rewriteFilter = (f: FilterExpr): FilterExpr => {
       if (f.kind === "free_expr") {
         return { ...f, expr: substituteTupleIndexAccess(f.expr, variable, value) };
       }
       if (f.kind === "and" || f.kind === "or") {
-        return { ...f, left: rewriteFilter(f.left)!, right: rewriteFilter(f.right)! };
+        return { ...f, left: rewriteFilter(f.left), right: rewriteFilter(f.right) };
       }
       if (f.kind === "not") {
-        return { ...f, expr: rewriteFilter(f.expr)! };
+        return { ...f, expr: rewriteFilter(f.expr) };
       }
       return f;
     };
     return {
       ...body,
       shape: rewriteShape(body.shape),
-      filter: rewriteFilter(body.filter),
+      filter: body.filter === undefined ? undefined : rewriteFilter(body.filter),
     };
   }
 
@@ -9767,13 +9795,14 @@ const tryEvaluateBacklinkShapeExpr = (
     // No projected shape — return the raw rows.
     return sourceRows.map((entry) => entry.row);
   }
+  const finalShape = projectedShape;
 
   // Apply the projected shape to each found source row. Field references read
   // from the row directly; computed shape elements recurse through this
   // evaluator so nested computeds (`name_upper := str_upper(.name)`) work.
   const projected = sourceRows.map((entry) => {
     const out: Record<string, unknown> = {};
-    for (const shapeEl of projectedShape!) {
+    for (const shapeEl of finalShape) {
       if (shapeEl.kind === "field") {
         out[shapeEl.name] = entry.row[shapeEl.name] ?? null;
         continue;
@@ -9895,7 +9924,7 @@ const evaluateSelectExprShapeEntry = (
 
   let current: unknown = row;
   for (let i = 1; i < steps.length; i += 1) {
-    const step = steps[i]!;
+    const step = steps[i];
     if (step.kind !== "ptr") return null;
     if (!current || typeof current !== "object" || Array.isArray(current)) return null;
     const currentRow = current as Record<string, unknown>;
@@ -10529,8 +10558,9 @@ const partitionAndPostProcessGroup = (
     groupRows = groupRows.map((row) => projectShape(row, postShape, undefined, ctx) as Record<string, unknown>);
   }
 
-  if (ir.postFilter) {
-    groupRows = groupRows.filter((row) => Boolean(evalGroupRowExpr(ir.postFilter!, row, undefined, ctx)));
+  const postFilter = ir.postFilter;
+  if (postFilter) {
+    groupRows = groupRows.filter((row) => Boolean(evalGroupRowExpr(postFilter, row, undefined, ctx)));
   }
 
   if (ir.postOrderBy) {
@@ -10694,7 +10724,7 @@ const parseBacklinkStep = (
 ): { kind: "backlink_path"; link: string; sourceType?: string } | undefined => {
   const m = /^<([A-Za-z_][\w]*)(?:\s*\[\s*is\s+([\w:]+)\s*\])?$/.exec(step);
   if (!m) return undefined;
-  return { kind: "backlink_path", link: m[1]!, sourceType: m[2] };
+  return { kind: "backlink_path", link: m[1], sourceType: m[2] };
 };
 
 // Convert a parsed PathStep into the string step name understood by
@@ -10748,9 +10778,9 @@ const evalGroupRowExpr = (
       return current;
     }
     case "path_chain": {
-      let current: unknown = bindings?.get(expr.parts[0]!);
+      let current: unknown = bindings?.get(expr.parts[0]);
       for (let i = 1; i < expr.parts.length; i += 1) {
-        current = stepGroupRowField(current, expr.parts[i]!, ctx);
+        current = stepGroupRowField(current, expr.parts[i], ctx);
       }
       for (const step of expr.steps ?? []) {
         const name = pathStepToFieldName(step);
@@ -10953,7 +10983,8 @@ const evalGroupRowFunctionCall = (
     return null;
   });
 
-  const name = call.name.split("::").pop()!;
+  const nameParts = call.name.split("::");
+  const name = nameParts[nameParts.length - 1];
 
   if (name === "count") {
     const value = args[0];
@@ -11414,7 +11445,8 @@ const executeFunctionCall = (
   let resolvedName = qualifiedName;
   let builtin = resolveStdlibFunction(qualifiedName, args.length);
   if (!builtin) {
-    const shortName = qualifiedName.includes("::") ? qualifiedName.split("::").pop()! : qualifiedName;
+    const qualifiedParts = qualifiedName.split("::");
+    const shortName = qualifiedParts[qualifiedParts.length - 1];
     for (const prefix of ["std", "math", "cal"]) {
       const candidate = `${prefix}::${shortName}`;
       const hit = resolveStdlibFunction(candidate, args.length);
@@ -12107,7 +12139,7 @@ const linkJunctionFromSql = (
     throw new AppError("E_SQL", "Missing link table metadata");
   }
   if (tables.length === 1) {
-    return `${quoteIdent(tables[0]!)} ${alias}`;
+    return `${quoteIdent(tables[0])} ${alias}`;
   }
   const projection = ["source", "target", ...(relation.propertyColumns ?? [])]
     .map((column) => quoteIdent(column))
@@ -12670,7 +12702,7 @@ const runWriteWithAccessPolicies = (
           }
 
           const inlineColumn = `${link.name}_id`;
-          const targets = resolveInsertTargets(db, schema, ast.values[link.name]!, context, ast);
+          const targets = resolveInsertTargets(db, schema, ast.values[link.name], context, ast);
           insertValues[inlineColumn] = targets[0]?.id ?? null;
         }
       }
@@ -13244,9 +13276,10 @@ const applyInsertLinkAssignments = (
     validateLinkTargetIds(db, assignment.linkName, targetIds, assignment.expectedTargetTables, ast.pos);
 
     if (assignment.storage === "table") {
+      if (!assignment.linkTable) throw new Error("invariant: table-storage link assignment missing linkTable");
       writeLinkTableRows(
         db,
-        assignment.linkTable!,
+        assignment.linkTable,
         assignment.propertyColumns ?? [],
         assignment.properties ?? [],
         sourceId,
@@ -13257,8 +13290,9 @@ const applyInsertLinkAssignments = (
       continue;
     }
 
+    if (!assignment.inlineColumn) throw new Error("invariant: inline-storage link assignment missing inlineColumn");
     const inlineTarget = targetIds[0] ?? null;
-    db.prepare(`UPDATE ${quoteIdent(assignment.ownerTable)} SET ${quoteIdent(assignment.inlineColumn!)} = ? WHERE ${quoteIdent("id")} = ?`)
+    db.prepare(`UPDATE ${quoteIdent(assignment.ownerTable)} SET ${quoteIdent(assignment.inlineColumn)} = ? WHERE ${quoteIdent("id")} = ?`)
       .run(inlineTarget, sourceId);
   }
 
@@ -13267,9 +13301,10 @@ const applyInsertLinkAssignments = (
     if (targets.length === 0) continue;
 
     if (spec.storage === "table") {
+      if (!spec.linkTable) throw new Error("invariant: table-storage link default missing linkTable");
       writeLinkTableRows(
         db,
-        spec.linkTable!,
+        spec.linkTable,
         spec.propertyColumns ?? [],
         spec.properties ?? [],
         sourceId,
@@ -13280,7 +13315,8 @@ const applyInsertLinkAssignments = (
       continue;
     }
 
-    db.prepare(`UPDATE ${quoteIdent(spec.ownerTable)} SET ${quoteIdent(spec.inlineColumn!)} = ? WHERE ${quoteIdent("id")} = ?`)
+    if (!spec.inlineColumn) throw new Error("invariant: inline-storage link default missing inlineColumn");
+    db.prepare(`UPDATE ${quoteIdent(spec.ownerTable)} SET ${quoteIdent(spec.inlineColumn)} = ? WHERE ${quoteIdent("id")} = ?`)
       .run(targets[0]?.id ?? null, sourceId);
   }
 };
@@ -13292,12 +13328,13 @@ const writeUpdateLinkTableRows = (
   targets: ReadonlyArray<{ id: string; properties: Record<string, ScalarValue> }>,
 ): void => {
   if (targets.length === 0) return;
+  if (!spec.linkTable) throw new Error("invariant: table-storage update link assignment missing linkTable");
   const propertyColumns = spec.propertyColumns ?? [];
   const columns = ["source", "target", ...propertyColumns];
   const propertyByName = new Map((spec.properties ?? []).map((p) => [p.name, p] as const));
   const rowPlaceholders = `(${columns.map(() => "?").join(", ")})`;
   const verb = spec.operation === "append" ? "INSERT OR IGNORE" : "INSERT";
-  const sql = `${verb} INTO ${quoteIdent(spec.linkTable!)} (${columns.map(quoteIdent).join(", ")}) VALUES ${targets.map(() => rowPlaceholders).join(", ")}`;
+  const sql = `${verb} INTO ${quoteIdent(spec.linkTable)} (${columns.map(quoteIdent).join(", ")}) VALUES ${targets.map(() => rowPlaceholders).join(", ")}`;
   const params: ScalarValue[] = [];
   for (const target of targets) {
     params.push(sourceId, target.id);
@@ -13343,14 +13380,16 @@ const applyUpdateLinkAssignments = (
     validateLinkTargetIds(db, spec.linkName, targetIds, spec.expectedTargetTables, ast.pos);
 
     if (spec.storage === "table") {
+      const linkTable = spec.linkTable;
+      if (!linkTable) throw new Error("invariant: table-storage update link assignment missing linkTable");
       for (const sourceId of sourceIds) {
         if (spec.operation === "assign") {
-          db.prepare(`DELETE FROM ${quoteIdent(spec.linkTable!)} WHERE ${quoteIdent("source")} = ?`).run(sourceId);
+          db.prepare(`DELETE FROM ${quoteIdent(linkTable)} WHERE ${quoteIdent("source")} = ?`).run(sourceId);
         }
         if (spec.operation === "subtract") {
           if (targetIds.length > 0) {
             const placeholders = targetIds.map(() => "?").join(", ");
-            db.prepare(`DELETE FROM ${quoteIdent(spec.linkTable!)} WHERE ${quoteIdent("source")} = ? AND ${quoteIdent("target")} IN (${placeholders})`)
+            db.prepare(`DELETE FROM ${quoteIdent(linkTable)} WHERE ${quoteIdent("source")} = ? AND ${quoteIdent("target")} IN (${placeholders})`)
               .run(sourceId, ...targetIds);
           }
           continue;
@@ -13360,16 +13399,18 @@ const applyUpdateLinkAssignments = (
       continue;
     }
 
+    const inlineColumn = spec.inlineColumn;
+    if (!inlineColumn) throw new Error("invariant: inline-storage update link assignment missing inlineColumn");
     const inlineTarget = targetIds[0] ?? null;
     if (spec.operation === "subtract") {
       const placeholders = sourceIds.map(() => "?").join(", ");
-      db.prepare(`UPDATE ${quoteIdent(spec.ownerTable)} SET ${quoteIdent(spec.inlineColumn!)} = NULL WHERE ${quoteIdent("id")} IN (${placeholders}) AND ${quoteIdent(spec.inlineColumn!)} = ?`)
+      db.prepare(`UPDATE ${quoteIdent(spec.ownerTable)} SET ${quoteIdent(inlineColumn)} = NULL WHERE ${quoteIdent("id")} IN (${placeholders}) AND ${quoteIdent(inlineColumn)} = ?`)
         .run(...sourceIds, inlineTarget);
       continue;
     }
 
     const placeholders = sourceIds.map(() => "?").join(", ");
-    db.prepare(`UPDATE ${quoteIdent(spec.ownerTable)} SET ${quoteIdent(spec.inlineColumn!)} = ? WHERE ${quoteIdent("id")} IN (${placeholders})`)
+    db.prepare(`UPDATE ${quoteIdent(spec.ownerTable)} SET ${quoteIdent(inlineColumn)} = ? WHERE ${quoteIdent("id")} IN (${placeholders})`)
       .run(inlineTarget, ...sourceIds);
   }
 };
@@ -13676,7 +13717,8 @@ function findAstPointer(ctx: AstPreValidationCtx, typeDef: TypeDef, name: string
   const queue: TypeDef[] = [typeDef];
   const seen = new Set<string>();
   while (queue.length > 0) {
-    const current = queue.shift()!;
+    const current = queue.shift();
+    if (!current) break;
     const qname = qualifiedTypeName(current);
     if (seen.has(qname)) continue;
     seen.add(qname);
@@ -13932,7 +13974,7 @@ function resolveCurrentItemPathPointer(ctx: AstPreValidationCtx, expr: unknown, 
     pointer = findAstPointer(ctx, typeDef, field);
     if (!pointer) return undefined;
     if (pointer.kind === "link") {
-      const target = lookupAstObjectType(ctx, pointer.link.targetType.split("|")[0]!);
+      const target = lookupAstObjectType(ctx, pointer.link.targetType.split("|")[0]);
       if (!target) return pointer;
       typeDef = target;
     } else {
@@ -14032,12 +14074,13 @@ function literalStdTypeName(literal: { value: ScalarValue; numericKind?: string 
 }
 
 function checkFunctionCallSignatures(ctx: AstPreValidationCtx, call: FunctionCallExpr): void {
-  const leaf = call.name.includes("::") ? call.name.split("::").pop()! : call.name;
+  const callNameParts = call.name.split("::");
+  const leaf = callNameParts[callNameParts.length - 1];
 
   // `sum` only accepts numeric arguments. The SQL pipeline silently coerces
   // strings, so reject the statically-known-string case here.
   if (leaf === "sum" && call.args.length === 1) {
-    const literal = functionCallArgLiteral(ctx, call.args[0]!);
+    const literal = functionCallArgLiteral(ctx, call.args[0]);
     if (literal && typeof literal.value === "string") {
       preValidationFail(`function "sum(arg0: std::str)" does not exist`);
     }
@@ -14051,7 +14094,7 @@ function checkFunctionCallSignatures(ctx: AstPreValidationCtx, call: FunctionCal
     ?? (moduleName === "default" ? undefined : ctx.schema.findFunction("default", leaf, call.args.length));
   if (!fnDef) return;
   for (let i = 0; i < call.args.length; i += 1) {
-    const arg = call.args[i]!;
+    const arg = call.args[i];
     if (arg.kind === "named_arg") continue;
     const param = fnDef.params[Math.min(i, fnDef.params.length - 1)];
     if (!param) continue;
@@ -14065,7 +14108,7 @@ function checkFunctionCallSignatures(ctx: AstPreValidationCtx, call: FunctionCal
     const isStrParam = paramType === "str";
     const isNumericArg = argType === "std::int64" || argType === "std::float64";
     if (isStrParam && isNumericArg) {
-      const renderedArgs = call.args.map((_, idx) => `arg${idx}: ${literalStdTypeName(functionCallArgLiteral(ctx, call.args[idx]!) ?? { value: "" }) ?? "std::str"}`).join(", ");
+      const renderedArgs = call.args.map((_, idx) => `arg${idx}: ${literalStdTypeName(functionCallArgLiteral(ctx, call.args[idx]) ?? { value: "" }) ?? "std::str"}`).join(", ");
       preValidationFail(`function "${leaf}(${renderedArgs})" does not exist`);
     }
   }
@@ -14208,7 +14251,7 @@ function constSubscriptBase(expr: unknown): ConstSubscriptBase | undefined {
     const call = node.call as FunctionCallExpr | undefined;
     const leaf = call?.name?.includes("::") ? call.name.split("::").pop() : call?.name;
     if (leaf === "to_json" && call?.args.length === 1) {
-      const arg = call.args[0]!;
+      const arg = call.args[0];
       let raw: unknown;
       if (arg.kind === "literal") raw = arg.value;
       else if (arg.kind === "expr") {
@@ -14361,8 +14404,8 @@ function enforceRootSetAssertions(
 
   if (node.kind === "function_call") {
     const call = node.call as FunctionCallExpr | undefined;
-    if (functionCallLeafName(call) === "assert_exists" && call!.args.length >= 1) {
-      const count = countFunctionArgRows(db, schema, statement, call!.args[0]!, context, runtimeTarget);
+    if (call && functionCallLeafName(call) === "assert_exists" && call.args.length >= 1) {
+      const count = countFunctionArgRows(db, schema, statement, call.args[0], context, runtimeTarget);
       if (count === 0) {
         throw new AppError("E_SEMANTIC", "assert_exists violation", 1, 1);
       }
@@ -14374,10 +14417,10 @@ function enforceRootSetAssertions(
     const base = node.expr as Record<string, unknown> & { kind?: string };
     if (base?.kind !== "function_call") return;
     const call = base.call as FunctionCallExpr | undefined;
-    if (functionCallLeafName(call) !== "array_agg" || call!.args.length !== 1) return;
+    if (!call || functionCallLeafName(call) !== "array_agg" || call.args.length !== 1) return;
     const index = constSubscriptIndexValue(node);
     if (index === undefined) return;
-    const count = countFunctionArgRows(db, schema, statement, call!.args[0]!, context, runtimeTarget);
+    const count = countFunctionArgRows(db, schema, statement, call.args[0], context, runtimeTarget);
     if (count === undefined) return;
     const normalized = index < 0 ? count + index : index;
     if (normalized < 0 || normalized >= count) {

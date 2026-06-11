@@ -385,7 +385,7 @@ const compileGroupStatement = (
     for (const item of items) {
       const len = out.length;
       for (let i = 0; i < len; i += 1) {
-        out.push([...out[i]!, item]);
+        out.push([...out[i], item]);
       }
     }
     return out;
@@ -450,7 +450,7 @@ const compileGroupStatement = (
     ];
     source = {
       kind: "select",
-      typeName: sourceTypeName!,
+      typeName: sourceTypeName,
       shape: completeShape,
       fields: [],
       filter: sourceClauses?.filter,
@@ -475,7 +475,7 @@ const compileGroupStatement = (
     // through the parsed runtime select path. Do NOT flatten it to an empty
     // select.
     const innerExpr: FreeObjectExpr = sourceIsBinding
-      ? { kind: "binding_ref", name: sourceTypeName! }
+      ? { kind: "binding_ref", name: sourceTypeName }
       : rawSource;
     const projection: FreeObjectExpr = sourceIsBinding && augmentedShape.length > 0
       ? { kind: "shape_projection", expr: innerExpr, shape: augmentedShape }
@@ -717,8 +717,9 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
   };
 
   const inferTypeNameVolatility = (typeName: string, bindings: Map<string, WithBindingValue>): VolatilityLevel => {
-    if (bindings.has(typeName)) {
-      return inferWithBindingValueVolatility(bindings.get(typeName)!, bindings);
+    const boundValue = bindings.get(typeName);
+    if (boundValue !== undefined) {
+      return inferWithBindingValueVolatility(boundValue, bindings);
     }
     const normalized = normalizeTypeName(typeName, activeModule);
     if (schema.getType(normalized)) return "stable";
@@ -1283,9 +1284,9 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           const normalizedEnumType = normalizeTypeName(binding.enumType, activeModule);
           const enumTypeDef = schema.getType(normalizedEnumType);
           if (!enumTypeDef) {
-            fail(`Unknown enum type '${normalizedEnumType}'`);
+            return fail(`Unknown enum type '${normalizedEnumType}'`);
           }
-          const allEnumValues = enumTypeDef!.fields.flatMap((f) => f.enumValues ?? []);
+          const allEnumValues = enumTypeDef.fields.flatMap((f) => f.enumValues ?? []);
           if (allEnumValues.length === 0) {
             fail(`Type '${normalizedEnumType}' is not an enum`);
           }
@@ -1348,12 +1349,10 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           const normalizedHead = normalizeTypeName(binding.head, activeModule);
           const headTypeDef = schema.getType(normalizedHead);
           if (headTypeDef) {
-            const isEnumScalarType = headTypeDef.fields.length === 1
-              && headTypeDef.fields[0]?.name === "__enum__"
-              && headTypeDef.fields[0]?.enumValues
-              && headTypeDef.fields[0].enumValues.length > 0;
-            if (isEnumScalarType) {
-              const allEnumValues = headTypeDef.fields[0]!.enumValues!;
+            const headField = headTypeDef.fields.length === 1 ? headTypeDef.fields[0] : undefined;
+            const headEnumValues = headField?.name === "__enum__" ? headField.enumValues : undefined;
+            if (headEnumValues !== undefined && headEnumValues.length > 0) {
+              const allEnumValues = headEnumValues;
               if (!allEnumValues.includes(binding.tail)) {
                 fail(`enum '${normalizedHead}' has no member called '${binding.tail}'`);
               }
@@ -1499,7 +1498,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           const nextTypeName = computedLink.expr.sourceType
             ? normalizeTypeName(computedLink.expr.sourceType, currentModule)
             : sources.length === 1
-              ? sources[0]!.sourceType
+              ? sources[0].sourceType
               : undefined;
           currentType = nextTypeName ? schema.getType(nextTypeName) : undefined;
           continue;
@@ -1508,7 +1507,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         return undefined;
       }
 
-      const targetColumn = path[path.length - 1]!;
+      const targetColumn = path[path.length - 1];
       if (!currentType || !collectFields(currentType, true).some((field) => field.name === targetColumn)) {
         return undefined;
       }
@@ -1604,11 +1603,15 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         return { kind: "binop", op: expr.op, left, right };
       }
       if (expr.kind === "concat") {
-        const parts = expr.parts.map((part) => tryCompileScalarExpr(part));
-        if (parts.some((p) => !p)) return undefined;
-        let acc = parts[0]!;
+        const maybeParts = expr.parts.map((part) => tryCompileScalarExpr(part));
+        const parts: ScalarExprIR[] = [];
+        for (const part of maybeParts) {
+          if (!part) return undefined;
+          parts.push(part);
+        }
+        let acc = parts[0];
         for (let i = 1; i < parts.length; i++) {
-          acc = { kind: "binop", op: "++", left: acc, right: parts[i]! };
+          acc = { kind: "binop", op: "++", left: acc, right: parts[i] };
         }
         return acc;
       }
@@ -1785,7 +1788,8 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       // unions / intersections into the matching concrete type set; if the
       // expansion is empty the predicate is constant false.
       if (expr.kind === "is_type") {
-        const shortTypeLabel = typeLabel.includes("::") ? typeLabel.split("::").at(-1)! : typeLabel;
+        const typeLabelSegments = typeLabel.split("::");
+      const shortTypeLabel = typeLabelSegments[typeLabelSegments.length - 1];
         const isSubjectRef = (e: FreeObjectExpr): boolean => {
           if (e.kind === "current_item") return true;
           if (e.kind === "binding_ref" && (e.name === typeLabel || e.name === shortTypeLabel)) return true;
@@ -1998,7 +2002,8 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         }
       }
       if (expr.kind === "exists") {
-        const shortTypeLabel = typeLabel.includes("::") ? typeLabel.split("::").at(-1)! : typeLabel;
+        const typeLabelSegments = typeLabel.split("::");
+      const shortTypeLabel = typeLabelSegments[typeLabelSegments.length - 1];
         const isSubjectRef = (e: FreeObjectExpr): boolean => {
           if (e.kind === "current_item") return true;
           if (e.kind === "binding_ref" && (e.name === typeLabel || e.name === shortTypeLabel)) return true;
@@ -2207,7 +2212,8 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       // `field_access(select{Item}, tag_set1)` rather than `field_access(
       // current_item, tag_set1)`. Treat the bare-subject-SELECT root as the
       // same as the current iteration row.
-      const shortTypeLabel = typeLabel.includes("::") ? typeLabel.split("::").at(-1)! : typeLabel;
+      const typeLabelSegments = typeLabel.split("::");
+      const shortTypeLabel = typeLabelSegments[typeLabelSegments.length - 1];
       const isSubjectScopedFieldAccess = (e: FreeObjectExpr): string | undefined => {
         if (e.kind !== "field_access") return undefined;
         if (e.field.startsWith("@")) return undefined;
@@ -2649,7 +2655,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
             storage: usesLinkTable ? "table" : "inline",
             inlineColumn: usesLinkTable ? undefined : `${link.name}_id`,
             linkTable: usesLinkTable ? `${tableNameForType(ownerQualifiedName)}__${link.name.toLowerCase()}` : undefined,
-            linkTables: usesLinkTable ? collectLinkTableSources(options.subjectType!, link.name) : undefined,
+            linkTables: usesLinkTable ? collectLinkTableSources(options.subjectType, link.name) : undefined,
           },
           property: linkPropertyMatch[2],
         };
@@ -3332,8 +3338,10 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     "min", "max", "avg", "mean", "assert_single",
   ]);
 
-  const stripModulePrefix = (name: string): string =>
-    name.includes("::") ? name.split("::").pop()! : name;
+  const stripModulePrefix = (name: string): string => {
+    const segments = name.split("::");
+    return segments[segments.length - 1];
+  };
 
   const isAggregating = (name: string): boolean =>
     AGGREGATING_FUNCTIONS.has(stripModulePrefix(name));
@@ -3857,10 +3865,12 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     let anyType = false;
     let overlap = false;
     for (let i = 0; i < types.length && !overlap; i++) {
-      if (!types[i]) continue;
+      const typeAtI = types[i];
+      if (!typeAtI) continue;
       anyType = true;
       for (let j = i + 1; j < types.length; j++) {
-        if (types[j] && objectTypesOverlap(types[i]!, types[j]!)) {
+        const typeAtJ = types[j];
+        if (typeAtJ && objectTypesOverlap(typeAtI, typeAtJ)) {
           overlap = true;
           break;
         }
@@ -4078,7 +4088,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         // Within an active shape context, `current_item.<field>` may resolve
         // to a sibling computed in the surrounding shape. Look it up.
         if (expr.expr.kind === "current_item" && shapeContextStack.length > 0) {
-          const ctx = shapeContextStack[shapeContextStack.length - 1]!;
+          const ctx = shapeContextStack[shapeContextStack.length - 1];
           for (const el of ctx) {
             if ("name" in el && el.name === expr.field && el.kind === "computed") {
               const inner = computedExprToFree((el as { expr: unknown }).expr);
@@ -4483,7 +4493,8 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
   // WITH-binding aliases that resolve to the same type.
   const subjectAliasesFor = (typeDef: TypeDef): Set<string> => {
     const typeName = qualifiedTypeName(typeDef);
-    const shortName = typeName.includes("::") ? typeName.split("::").pop()! : typeName;
+    const typeNameSegments = typeName.split("::");
+    const shortName = typeNameSegments[typeNameSegments.length - 1];
     const aliases = new Set<string>([typeName, shortName]);
     for (const [name, boundType] of bindingTypes.entries()) {
       if (qualifiedTypeName(boundType) === typeName) {
@@ -5692,7 +5703,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
             if (resolved.qualifiedName !== "std::sum") return undefined;
             const args = shapeElement.expr.call.args;
             if (args.length !== 1) return undefined;
-            const arg = args[0]!;
+            const arg = args[0];
             if (arg.kind !== "expr") return undefined;
             // Match `field_access(field_access(current_item, link), field)`.
             const outer = arg.expr;
@@ -5943,7 +5954,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
                 visited.add(key);
                 const baseTypes = (t.extends ?? [])
                   .map((n) => schema.getType(n))
-                  .filter((b): b is TypeDef => Boolean(b) && hasName(b!));
+                  .filter((b): b is TypeDef => b !== undefined && hasName(b));
                 if (baseTypes.length === 0) {
                   return hasName(t) ? new Set([key]) : new Set();
                 }
@@ -5984,7 +5995,8 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           // lowered to a correlated-subquery aggregate. Detect the pattern
           // here so the shape doesn't need per-row N+1 evaluation.
           const aggregateLinkExpr2 = (() => {
-            const shortTypeName = qualifiedName.includes("::") ? qualifiedName.split("::").at(-1)! : qualifiedName;
+            const qualifiedNameSegments = qualifiedName.split("::");
+            const shortTypeName = qualifiedNameSegments[qualifiedNameSegments.length - 1];
             const isSubject = (e: FreeObjectExpr): boolean => {
               if (e.kind === "current_item") return true;
               if (e.kind === "select") {
@@ -7382,12 +7394,10 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         const normalizedHead = normalizeTypeName(expr.head, activeModule);
         const headTypeDef = schema.getType(normalizedHead);
         if (headTypeDef) {
-          const isEnumScalarType = headTypeDef.fields.length === 1
-            && headTypeDef.fields[0]?.name === "__enum__"
-            && headTypeDef.fields[0]?.enumValues
-            && headTypeDef.fields[0].enumValues.length > 0;
-          if (isEnumScalarType) {
-            const allEnumValues = headTypeDef.fields[0]!.enumValues!;
+          const headField = headTypeDef.fields.length === 1 ? headTypeDef.fields[0] : undefined;
+          const headEnumValues = headField?.name === "__enum__" ? headField.enumValues : undefined;
+          if (headEnumValues !== undefined && headEnumValues.length > 0) {
+            const allEnumValues = headEnumValues;
             if (!allEnumValues.includes(expr.tail)) {
               fail(`enum '${normalizedHead}' has no member called '${expr.tail}'`);
             }
@@ -8418,9 +8428,9 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         const normalizedEnumType = normalizeTypeName(expr.enumType, activeModule);
         const enumTypeDef = schema.getType(normalizedEnumType);
         if (!enumTypeDef) {
-          fail(`Unknown enum type '${normalizedEnumType}'`);
+          return fail(`Unknown enum type '${normalizedEnumType}'`);
         }
-        const allEnumValues = enumTypeDef!.fields.flatMap((f) => f.enumValues ?? []);
+        const allEnumValues = enumTypeDef.fields.flatMap((f) => f.enumValues ?? []);
         if (allEnumValues.length === 0) {
           fail(`Type '${normalizedEnumType}' is not an enum`);
         }
@@ -8502,12 +8512,10 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
           : normalizedHead;
         const headTypeDef = resolveObjectTypeOrAliasSource(expr.head, activeModule);
         if (headTypeDef) {
-          const isEnumScalarType = headTypeDef.fields.length === 1
-            && headTypeDef.fields[0]?.name === "__enum__"
-            && headTypeDef.fields[0]?.enumValues
-            && headTypeDef.fields[0].enumValues.length > 0;
-          if (isEnumScalarType) {
-            const allEnumValues = headTypeDef.fields[0]!.enumValues!;
+          const headField = headTypeDef.fields.length === 1 ? headTypeDef.fields[0] : undefined;
+          const headEnumValues = headField?.name === "__enum__" ? headField.enumValues : undefined;
+          if (headEnumValues !== undefined && headEnumValues.length > 0) {
+            const allEnumValues = headEnumValues;
             if (!allEnumValues.includes(expr.tail)) {
               fail(`enum has no member called '${expr.tail}'`);
             }
@@ -8759,12 +8767,10 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
             const normalizedHead = normalizeTypeName(bindingValue.head, activeModule);
             const headTypeDef = schema.getType(normalizedHead);
             if (headTypeDef) {
-              const isEnumScalarType = headTypeDef.fields.length === 1
-                && headTypeDef.fields[0]?.name === "__enum__"
-                && headTypeDef.fields[0]?.enumValues
-                && headTypeDef.fields[0].enumValues.length > 0;
-              if (isEnumScalarType) {
-                const allEnumValues = headTypeDef.fields[0]!.enumValues!;
+              const headField = headTypeDef.fields.length === 1 ? headTypeDef.fields[0] : undefined;
+              const headEnumValues = headField?.name === "__enum__" ? headField.enumValues : undefined;
+              if (headEnumValues !== undefined && headEnumValues.length > 0) {
+                const allEnumValues = headEnumValues;
                 if (!allEnumValues.includes(bindingValue.tail)) {
                   fail(`enum '${normalizedHead}' has no member called '${bindingValue.tail}'`);
                 }
@@ -9569,7 +9575,8 @@ const isExclusivePropertyEqualityFilter = (
   const visited = new Set<string>();
   const stack: TypeDef[] = [typeDef];
   while (stack.length > 0) {
-    const t = stack.pop()!;
+    const t = stack.pop();
+    if (t === undefined) break;
     const key = qualifiedTypeName(t);
     if (visited.has(key)) continue;
     visited.add(key);
