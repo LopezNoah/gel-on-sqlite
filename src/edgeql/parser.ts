@@ -8,6 +8,7 @@ import type {
   DDLStatement,
   ConfigureStatement,
   FilterExpr,
+  FilterTarget,
   FunctionDecl,
   FunctionParamDecl,
   ForStatement,
@@ -1685,7 +1686,7 @@ class Parser {
       // Unknown mode option — bail out and let the tail consumer pick up.
       throw new AppError("E_SYNTAX", "unrecognized transaction mode option", ...this.posPair(this.peek()));
     };
-    if (action === "start" && (this.peek().kind === "name" || this.isKeywordLikeToken(this.peek()))) {
+    if (action === "start" && this.isKeywordLikeToken(this.peek())) {
       // First mode option (no leading comma).
       const head = this.peek();
       const headLower = head.lower;
@@ -2130,7 +2131,6 @@ class Parser {
     const enforcesReservedNames = objectKind === "role"
       || (objectKind === "scalar" && action === "create");
     if (enforcesReservedNames
-      && nameStartToken.kind !== "name"
       && nameStartToken.kind !== "identifier"
       && nameStartToken.kind !== "backtick_name"
       && CURRENT_RESERVED_KEYWORDS_SET.has(nameStartToken.lower)) {
@@ -7405,7 +7405,7 @@ class Parser {
     throw new AppError("E_SYNTAX", "Expected set literal, identifier, or SELECT subquery in IN filter", ...this.posPair(token));
   }
 
-  private parseFilterTarget(): { kind: "field"; field: string; bareName?: string } | { kind: "backlink"; link: string; sourceType?: string } | { kind: "backlink_property"; link: string; sourceType?: string; property: string } {
+  private parseFilterTarget(): FilterTarget {
     if (
       this.isNameToken(this.peek())
       && (
@@ -7534,7 +7534,7 @@ class Parser {
     return parts.join(".");
   }
 
-  private readFilterValue(): ScalarValue | { kind: "binding_ref"; name: string } | { kind: "field_ref"; field: string } | { kind: "backlink_property_ref"; link: string; sourceType?: string; property: string } {
+  private readFilterValue(): ScalarValue | { kind: "binding_ref"; name: string } | { kind: "field_ref"; field: string; root?: string } | { kind: "backlink_property_ref"; link: string; sourceType?: string; property: string } {
     if (this.atBacklink()) {
       return this.parseBacklinkPropertyReference("filter value");
     }

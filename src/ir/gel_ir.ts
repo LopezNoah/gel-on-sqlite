@@ -417,12 +417,6 @@ export interface ConstantSet extends Base {
   typeref?: TypeRef;
 }
 
-export interface LegacyConstantCompat extends Base {
-  kind: "constant";
-  value: ScalarValue;
-  typeref?: TypeRef;
-}
-
 export interface ParameterExpr extends Base {
   kind: "parameter" | "query_parameter" | "function_parameter";
   name: string;
@@ -840,5 +834,4 @@ export type IRNode =
   | WritePolicies
   | Trigger
   | OnConflictClause
-  | Rewrites
-  | LegacyConstantCompat;
+  | Rewrites;

@@ -65,7 +65,7 @@ import type {
   TypeRoot,
   Volatility,
 } from "../ir/gel_ir.js";
-import type { FieldDef, LinkDef, ScalarType, TypeDef } from "../types.js";
+import type { FieldDef, LinkDef, LinkPropertyDef, ScalarType, ScalarValue, TypeDef } from "../types.js";
 import { qualifiedTypeName, type SchemaSnapshot } from "../schema/schema.js";
 import type { GeneratedSchema, GeneratedSchemaType } from "../codegen/schema.js";
 import { resolveSchemaModelForCompile } from "../codegen/schema_loader.js";
@@ -749,11 +749,15 @@ const resolvePointerRef = (ctx: IRCompileContext, source: TypeRef, field: string
     for (const componentId of componentIds) {
       const componentDef = getResolvedSchemaType(ctx, componentId) ?? ctx.schema?.getType(componentId);
       if (!componentDef) continue;
-      const cField = (componentDef.resolvedFields ?? componentDef.fields ?? []).find((c) => c.name === field);
+      // `resolvedFields`/`resolvedLinks` only exist on GeneratedSchemaType;
+      // a plain TypeDef exposes the unresolved `fields`/`links` instead.
+      const componentFields = "resolvedFields" in componentDef ? componentDef.resolvedFields : componentDef.fields;
+      const cField = (componentFields ?? []).find((c) => c.name === field);
       if (cField) {
         return pointerRefFromField(source, cField);
       }
-      const cLink = (componentDef.resolvedLinks ?? componentDef.links ?? []).find((c) => c.name === field);
+      const componentLinks = "resolvedLinks" in componentDef ? componentDef.resolvedLinks : componentDef.links;
+      const cLink = (componentLinks ?? []).find((c) => c.name === field);
       if (cLink) {
         return pointerRefFromLink(source, resolveTypeRef(ctx, cLink.targetType), cLink);
       }
@@ -1955,7 +1959,7 @@ const tryResolveSchemaAliasSet = (ctx: IRCompileContext, name: string): Set | un
   // `alias N := SELECT T {...}` parses to a `select`; `alias N := {2,3,5}`
   // (and other free-expression bodies) parse to `select_expr` wrapping a
   // FreeObjectExpr. Both shapes resolve through `compileFreeObjectExpr`.
-  let ast: EdgeQLStatement | undefined;
+  let ast: Extract<EdgeQLStatement, { kind: "select" | "select_expr" }> | undefined;
   for (const candidate of [body, `SELECT ${body}`]) {
     const parsed = tryResult(() => parseEdgeQL(candidate));
     if (!parsed.ok) continue; // query failure only — try next candidate
@@ -2817,7 +2821,7 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
           const components = linkPointer.ptrref.unionComponents?.length
             ? linkPointer.ptrref.unionComponents
             : [linkPointer.ptrref];
-          const propDefs: Array<{ owner: string; prop: { name: string; type: string; required?: boolean } }> = [];
+          const propDefs: Array<{ owner: string; prop: LinkPropertyDef }> = [];
           let anyComponentDefinesLink = false;
           for (const comp of components) {
             const linkOwnerTypeRef = linkPointer.direction === "inbound"
@@ -3440,11 +3444,15 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
           expr: { ...set.expr, kind: "float_constant" },
         };
       }
-      if (typeof expr.value === "number" && kind === "decimal") {
-        return { ...set, expr: { ...set.expr, kind: "decimal_constant" } };
-      }
-      if (typeof expr.value === "number" && kind === "bigint") {
-        return { ...set, expr: { ...set.expr, kind: "bigint_constant" } };
+      // `literalToSet(number)` always yields an integer/float constant, so the
+      // kind checks here only serve to narrow the Expr union to BaseConstant.
+      if (set.expr.kind === "integer_constant" || set.expr.kind === "float_constant") {
+        if (typeof expr.value === "number" && kind === "decimal") {
+          return { ...set, expr: { ...set.expr, kind: "decimal_constant" } };
+        }
+        if (typeof expr.value === "number" && kind === "bigint") {
+          return { ...set, expr: { ...set.expr, kind: "bigint_constant" } };
+        }
       }
       return set;
     }
@@ -3758,9 +3766,11 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
       // matching EdgeQL's "operator 'X' cannot ... 'std::Y'" error.
       const innerTypeName = inferAstExprTypeName(expr.expr, ctx);
       if (innerTypeName) {
-        if ((expr.op === "neg" || expr.op === "pos") && !canApplyUnaryArith(innerTypeName)) {
-          const sym = expr.op === "neg" ? "-" : "+";
-          failSemantic(`operator '${sym}' cannot be applied to operand of type '${innerTypeName}'`);
+        // Unary nodes only carry op "neg" | "not" — the parser never emits a
+        // "pos" node (unary `+` is absorbed during parsing), so the former
+        // `op === "pos"` branch here was dead and has been removed.
+        if (expr.op === "neg" && !canApplyUnaryArith(innerTypeName)) {
+          failSemantic(`operator '-' cannot be applied to operand of type '${innerTypeName}'`);
         }
         if (expr.op === "not" && innerTypeName !== "std::bool") {
           failSemantic(`operator 'NOT' cannot be applied to operand of type '${innerTypeName}'`);
@@ -3792,14 +3802,10 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
       const mathLeftType = inferAstExprTypeName(expr.left, ctx);
       const mathRightType = inferAstExprTypeName(expr.right, ctx);
       if (mathLeftType && mathRightType && !areArithCompatible(mathLeftType, mathRightType)) {
-        const opSym = expr.op === "add" ? "+"
-          : expr.op === "sub" ? "-"
-          : expr.op === "mul" ? "*"
-          : expr.op === "div" ? "/"
-          : expr.op === "mod" ? "%"
-          : expr.op === "pow" ? "^"
-          : expr.op === "floor_div" ? "//"
-          : expr.op;
+        // Math AST nodes already carry the operator symbol (`+`, `-`, …); no
+        // producer emits word-form ops ("add"/"sub"/…), so the former
+        // word→symbol mapping here was dead and has been removed.
+        const opSym = expr.op;
         failSemantic(
           `operator '${opSym}' cannot be applied to operands of type '${mathLeftType}' and '${mathRightType}'`,
         );
@@ -3979,11 +3985,10 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
       // Desugar the parser's `<const> <op> <int64>.field[-fromEnd]` shorthand
       // (e.g. `100 - <int64>.val[-1]`) into the equivalent arithmetic over the
       // field, so it computes instead of collapsing to the bare field / NULL.
-      const opSymbol = expr.op === "const_minus" ? "-"
-        : expr.op === "const_plus" ? "+"
-        : expr.op === "const_mul" ? "*"
-        : expr.op === "const_div" ? "/"
-        : undefined;
+      // The parser only emits `field_suffix_math` with op "const_minus" or
+      // "negate"; the former "const_plus"/"const_mul"/"const_div" branches
+      // were dead and have been removed.
+      const opSymbol = expr.op === "const_minus" ? "-" : undefined;
       const current = resolveBinding(ctx, "__current__") ?? resolveBinding(ctx, "__subject__");
       if ((opSymbol !== undefined || expr.op === "negate") && current) {
         const indexed: FreeObjectExpr = {
@@ -4196,9 +4201,9 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
       // throwing during AST→IR.
       const left = compileFreeObjectExpr(expr.left, ctx);
       const right = compileFreeObjectExpr(expr.right, ctx);
-      if (expr.op === "union") {
-        validateUnionPointerCompat(left, right, ctx);
-      }
+      // No `op === "union"` handling here: the parser lowers `a UNION b` to a
+      // `set_expr` node (see parseFreeObjectSetOpExpr), so `set_op` only ever
+      // carries "intersect" | "except" — the union branch was dead.
       return {
         kind: "set",
         expr: {
@@ -5616,7 +5621,8 @@ const compileShape = (
       // Resolve it by compiling that sibling computed's expression against the
       // link target, since it has no backing pointer.
       if (segments.length === 1) {
-        const computedSibling = el.shape?.find(
+        // Only the "link"/"backlink" shape-element arms carry a nested shape.
+        const computedSibling = ("shape" in el ? el.shape : undefined)?.find(
           (sub): sub is Extract<EdgeQLShapeElement, { kind: "computed" }> =>
             sub.kind === "computed" && sub.name === segments[0] && !!sub.expr,
         );

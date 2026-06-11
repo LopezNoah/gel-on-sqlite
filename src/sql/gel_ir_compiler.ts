@@ -1907,10 +1907,9 @@ const rerootPointerChain = (set: Set, unionRoot: Set, branch: Set): Set => {
 const isEmptySetBranch = (set: Set): boolean => {
   let expr = set.expr;
   while (expr.kind === "type_cast") expr = (expr as TypeCast).expr.expr;
-  if (expr.kind === "set_expr") return (expr as { elements?: unknown[] }).elements?.length === 0;
   if (expr.kind === "empty_set") return true;
   // `<T>{}` lowers to a null-valued constant.
-  if (expr.kind === "string_constant" || expr.kind === "constant") {
+  if (expr.kind === "string_constant") {
     return (expr as BaseConstant).value === null;
   }
   return false;
@@ -2835,7 +2834,7 @@ const compileScalarSelectSQLInner = (
     // Apply the same strict-NULL filter we do for the single-source path so
     // empty operands cause an empty result rather than a NULL row.
     const exprIsStrictMulti = (() => {
-      let expr = sourceSet.expr;
+      let expr: Expr = sourceSet.expr;
       while (expr.kind === "select_expr") expr = (expr as SelectExpr).result.expr;
       if (expr.kind !== "operator_call") return false;
       return STRICT_BINARY_OPS.has((expr as OperatorCall).operator);
@@ -2999,7 +2998,7 @@ const compileScalarSelectSQLInner = (
   // out the synthesized NULLs without disturbing legitimate "no row" cases
   // (which are already empty before the wrap).
   const exprIsStrictMulti = (() => {
-    let expr = sourceSet.expr;
+    let expr: Expr = sourceSet.expr;
     while (expr.kind === "select_expr") expr = (expr as SelectExpr).result.expr;
     while (expr.kind === "type_cast") expr = (expr as TypeCast).expr.expr;
     if (expr.kind === "index_expr" || expr.kind === "slice_expr") return true;
@@ -6994,7 +6993,9 @@ const tryCompileMultiStepPointerExistsSQL = (
     && (op === "=" || op === "!=")
     ? extractObjectPointerPath(leftSet)
     : null;
-  if (objectPath) {
+  // Re-check the op so TS narrows it to the identity-comparison subset that
+  // `objectPath` being non-null already implies.
+  if (objectPath && (op === "=" || op === "!=")) {
     const chainHasBacklink = [...objectPath.links, objectPath.leaf]
       .some((link) => link.direction === "inbound");
     const rightTypeRef = (rightSet.expr as TypeRoot).typeref;
@@ -9752,7 +9753,10 @@ const operatorToInfixSql = (operator: string): string | null => {
 // `'99'`. Inlining (`CAST(99 AS TEXT)` → `'99'`) sidesteps that coercion.
 // Returns the SQL fragment when `expr` is an integer-shaped constant whose
 // JS value is safely representable as a base-10 integer; otherwise undefined.
-const inlineIntegerConstantSql = (expr: Expr, value: ScalarValue): string | undefined => {
+// `value` is widened beyond ScalarValue to accept bigint so out-of-band
+// big-integer constants (which JS `number` cannot represent exactly) inline
+// losslessly if they ever reach here.
+const inlineIntegerConstantSql = (expr: Expr, value: ScalarValue | bigint): string | undefined => {
   if (expr.kind !== "integer_constant") return undefined;
   if (typeof value === "number" && Number.isFinite(value) && Number.isInteger(value)) {
     return String(value);
