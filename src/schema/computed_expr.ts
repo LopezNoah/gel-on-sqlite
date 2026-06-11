@@ -1,5 +1,6 @@
 import { parseEdgeQL } from "../edgeql/parser.js";
 import type { FreeObjectExpr } from "../edgeql/ast.js";
+import { tryResult } from "../errors.js";
 import type { ComputedDef, ScalarValue } from "../types.js";
 
 type ComputedPropertyExpr = Extract<ComputedDef, { kind: "property" }>["expr"];
@@ -38,12 +39,11 @@ const scalarValuesFromSetExpr = (expr: FreeObjectExpr): ScalarValue[] | undefine
 };
 
 export const parseComputedSetLiteralExpr = (text: string): ComputedSetLiteralExpr | undefined => {
-  let statement;
-  try {
-    statement = parseEdgeQL(`select ${text}`);
-  } catch {
-    return undefined;
-  }
+  // Probe: an unparsable expression is just "not a set literal"; engine
+  // bugs inside the parser still propagate via tryResult.
+  const parsed = tryResult(() => parseEdgeQL(`select ${text}`));
+  if (!parsed.ok) return undefined;
+  const statement = parsed.value;
 
   if (statement.kind !== "select_expr") {
     return undefined;

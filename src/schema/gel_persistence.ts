@@ -33,6 +33,7 @@ import { validateMetadata } from "./gel_metadata_schemas.js";
 import { buildAnnotationsBySubject, insertAnnotationRecord, resolveAnnotations } from "./annos.js";
 import type { AnnotationRow } from "./annos.js";
 import { parseComputedSetLiteralExpr } from "./computed_expr.js";
+import { AppError } from "../errors.js";
 
 export const ensureGelSchemaTables = (db: SQLiteDatabase): void => {
   for (const ddl of GEL_SCHEMA_DDL) {
@@ -74,6 +75,9 @@ export const deserializeSchemaFromInstdata = (db: SQLiteDatabase): SchemaSnapsho
     | { data: string }
     | undefined;
 
+  // null means "no snapshot stored here" — callers fall back to other
+  // sources (e.g. gel_* tables). A snapshot that exists but cannot be
+  // decoded is data corruption and must not silently vanish the schema.
   if (!row) return null;
 
   try {
@@ -86,8 +90,12 @@ export const deserializeSchemaFromInstdata = (db: SQLiteDatabase): SchemaSnapsho
     const functions = parsed.functions.map(deserializeFunctionDef);
 
     return new SchemaSnapshot(types, functions);
-  } catch {
-    return null;
+  } catch (e) {
+    throw new AppError(
+      "E_RUNTIME",
+      `corrupt schema snapshot in gel_instdata (key 'schema'): ${String(e instanceof Error ? e.message : e)}; data starts with ${JSON.stringify(row.data.slice(0, 80))}`,
+      { cause: e },
+    );
   }
 };
 
@@ -1162,8 +1170,14 @@ const parseRewriteExpr = (exprStr: string): MutationRewriteExpr => {
   if (exprStr.startsWith(".")) return { kind: "subject_field", field: exprStr.slice(1) };
   try {
     return { kind: "literal", value: JSON.parse(exprStr) };
-  } catch {
-    return { kind: "literal", value: exprStr };
+  } catch (e) {
+    // Literal rewrite expressions are stored via JSON.stringify (see
+    // serializeRewriteExpr), so a non-JSON value is corrupt metadata.
+    throw new AppError(
+      "E_RUNTIME",
+      `corrupt rewrite expression in gel_pointer_rewrites metadata: not valid JSON: ${JSON.stringify(exprStr.slice(0, 80))}`,
+      { cause: e },
+    );
   }
 };
 
@@ -1173,8 +1187,15 @@ const parseScalarValueFromMetadata = (value: string | undefined | null): ScalarV
   }
   try {
     return JSON.parse(value);
-  } catch {
-    return value;
+  } catch (e) {
+    // Scalar values in function-param metadata are stored via
+    // JSON.stringify (see buildFunctionParamMetadata), so a non-JSON value
+    // is corrupt metadata.
+    throw new AppError(
+      "E_RUNTIME",
+      `corrupt scalar value in function metadata: not valid JSON: ${JSON.stringify(value.slice(0, 80))}`,
+      { cause: e },
+    );
   }
 };
 

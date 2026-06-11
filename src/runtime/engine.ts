@@ -1,6 +1,13 @@
 import { getCompilerService, type CompilerCacheMeta } from "../compiler/service.js";
 import { validateParsedStatement } from "../compiler/ast_to_ir.js";
-import { AppError, asAppError } from "../errors.js";
+import { AppError, asAppError, isQueryFailure, tryResult } from "../errors.js";
+
+// Native error classes that always indicate an engine bug rather than an
+// unsupported/unlowerable query. Compile-probe fallback sites swallow plain
+// `Error`s (the compiler signals "not supported by GEL IR lowering" that way)
+// but must never hide these.
+const isNativeBugError = (e: unknown): boolean =>
+  e instanceof TypeError || e instanceof RangeError || e instanceof ReferenceError;
 import { decorateErrorWithUnsupportedTag } from "../diagnostics/unsupported.js";
 import { parseEdgeQL, parseEdgeQLScript, type ParseEdgeQLOptions } from "../edgeql/parser.js";
 import { offsetToLineCol, tokenize, type Token } from "../edgeql/tokenizer.js";
@@ -669,12 +676,11 @@ const sliceTokenRange = (tokens: readonly Token[], startIdx: number, source: str
 };
 
 const parseMemberHeader = (entry: string): MemberHeader | undefined => {
-  let tokens: readonly Token[];
-  try {
-    tokens = tokenize(entry);
-  } catch {
-    return undefined;
-  }
+  // Probe: an untokenizable entry is simply not a member header.
+  // tryResult rethrows non-syntax errors so tokenizer bugs surface.
+  const tokenized = tryResult(() => tokenize(entry));
+  if (!tokenized.ok) return undefined;
+  const tokens: readonly Token[] = tokenized.value;
   let i = 0;
   if (tokens[i]?.kind !== "kw_create") return undefined;
   i += 1;
@@ -828,12 +834,11 @@ const registerDynamicTypeDDL = (schema: SchemaSnapshot, statement: string, defau
 // `no_linkful_computed_splats` is honoured (it drops `count(.x)`-style
 // computeds from deep splat expansion).
 const parseCreateFutureFlag = (statement: string): string | undefined => {
-  let tokens: readonly Token[];
-  try {
-    tokens = tokenize(statement.trim());
-  } catch {
-    return undefined;
-  }
+  // Probe: untokenizable statements are not `create future …`.
+  // tryResult rethrows non-syntax errors so tokenizer bugs surface.
+  const tokenized = tryResult(() => tokenize(statement.trim()));
+  if (!tokenized.ok) return undefined;
+  const tokens: readonly Token[] = tokenized.value;
   let i = 0;
   if (tokens[i]?.kind !== "kw_create") return undefined;
   i += 1;
@@ -934,8 +939,10 @@ const maybeHandleAliasDDLScript = (schema: SchemaSnapshot, script: string): bool
           schemaRegistrable = true;
           break;
         }
-      } catch {
-        // try next form
+      } catch (e) {
+        // Probe: try the next candidate form only on genuine parse
+        // failures; engine bugs must not be masked here.
+        if (!isQueryFailure(e)) throw e;
       }
     }
     if (schemaRegistrable) {
@@ -1125,12 +1132,11 @@ const tryRuntimeSelectExprEvaluation = (
   query: string,
   context: SecurityContext,
 ): QueryResult | undefined => {
-  let ast: Statement;
-  try {
-    ast = parseEdgeQL(query);
-  } catch {
-    return undefined;
-  }
+  // Probe: unparsable queries take other evaluation paths which report the
+  // real error. tryResult rethrows non-syntax errors so bugs surface.
+  const parsed = tryResult(() => parseEdgeQL(query));
+  if (!parsed.ok) return undefined;
+  const ast: Statement = parsed.value;
 
   if (ast.kind !== "select_expr") {
     return undefined;
@@ -3038,19 +3044,16 @@ const tryRuntimeSelectExprEvaluationAst = (
 // and quoting variations all flow through the real tokenizer.
 
 const tryParseStatement = (query: string): Statement | undefined => {
-  try {
-    return parseEdgeQL(query);
-  } catch {
-    return undefined;
-  }
+  // Probe: callers treat undefined as "not an introspection shape".
+  // tryResult rethrows non-syntax errors so parser bugs surface.
+  const parsed = tryResult(() => parseEdgeQL(query));
+  return parsed.ok ? parsed.value : undefined;
 };
 
 const tryTokenize = (query: string): Token[] | undefined => {
-  try {
-    return tokenize(query);
-  } catch {
-    return undefined;
-  }
+  // Probe: see tryParseStatement.
+  const tokenized = tryResult(() => tokenize(query));
+  return tokenized.ok ? tokenized.value : undefined;
 };
 
 // True when `tokens` contain a `module::typeName` sequence (case-insensitive on
@@ -3932,12 +3935,10 @@ const tryEvaluateParsedRuntimeSelect = (
     if (!/^select\b/i.test(exprText)) {
       return undefined;
     }
-    try {
-      const parsed = parseEdgeQL(exprText);
-      return parsed.kind === "select" ? parsed : undefined;
-    } catch {
-      return undefined;
-    }
+    // Probe: alias bodies that don't parse as a plain SELECT take the
+    // expr-alias path instead. Non-syntax errors propagate via tryResult.
+    const parsed = tryResult(() => parseEdgeQL(exprText));
+    return parsed.ok && parsed.value.kind === "select" ? parsed.value : undefined;
   })();
   const selectedAliasNeedsParsedRuntime = Boolean(selectedAliasStatement?.shape.some((element) => element.kind === "link" && (
     Boolean(element.clauses.filter)
@@ -6130,12 +6131,19 @@ const tryEvaluateParsedRuntimeSelect = (
         // Multi-cardinality scalar properties (`multi tags: str`) are stored
         // as JSON-encoded strings; decode them into arrays for output.
         if (fieldDef?.multi && typeof value === "string") {
+          let parsed: unknown;
           try {
-            const parsed = JSON.parse(value);
-            if (Array.isArray(parsed)) value = parsed;
-          } catch {
-            // leave as-is; falls through to caller
+            parsed = JSON.parse(value);
+          } catch (e) {
+            // Multi-property values are stored JSON-encoded; a non-JSON
+            // string here is corrupt stored data, not a decode choice.
+            throw new AppError(
+              "E_RUNTIME",
+              `corrupt stored value for multi property '${element.name}' on ${qualifiedFieldType}: not valid JSON: ${JSON.stringify(value.slice(0, 80))}`,
+              { cause: e },
+            );
           }
+          if (Array.isArray(parsed)) value = parsed;
         } else if (fieldDef?.multi && value === null) {
           value = [];
         }
@@ -6798,12 +6806,11 @@ const RESTRICTED_LINK_PROPERTY_NAMES: Record<string, string> = {
 };
 
 const validateRestrictedLinkPropertyTokens = (query: string): void => {
-  let tokens: Token[];
-  try {
-    tokens = tokenize(query);
-  } catch {
-    return;
-  }
+  // Probe: untokenizable queries fail later with the real parse error;
+  // this pre-pass only needs to inspect valid token streams.
+  const tokenized = tryResult(() => tokenize(query));
+  if (!tokenized.ok) return;
+  const tokens: Token[] = tokenized.value;
   for (let i = 0; i < tokens.length - 1; i++) {
     const token = tokens[i];
     if (token.kind !== "at") continue;
@@ -8622,8 +8629,10 @@ const preEvaluateGroupBindings = (
     if (compiled.sql.loweringMode === "single_statement" && compiled.sql.sql.length > 0) {
       return ast;
     }
-  } catch {
-    // Fall through to pre-evaluation.
+  } catch (e) {
+    // Fall through to pre-evaluation on compile failure (the compiler
+    // signals unlowerable statements with a plain Error); never hide bugs.
+    if (isNativeBugError(e)) throw e;
   }
   let rewrote = false;
   const newWith = ast.with.map((binding) => {
@@ -8665,7 +8674,10 @@ const preEvaluateGroupBindings = (
           expr: { kind: "set_expr" as const, values: rows.map(jsValueToFreeObjectExpr) },
         },
       };
-    } catch {
+    } catch (e) {
+      // Groups the IR pipeline can't compile/run keep their original
+      // binding and are handled downstream; never hide bugs.
+      if (isNativeBugError(e)) throw e;
       return binding;
     }
   });
@@ -9131,7 +9143,10 @@ const tryEvaluateScalarIteratorValues = (
   let values: unknown[];
   try {
     values = evaluateForIteratorValues(expr, schema, db, context);
-  } catch {
+  } catch (e) {
+    // Probe: iterators the interpreter can't reduce here go through the
+    // normal pipeline instead; never hide bugs.
+    if (isNativeBugError(e)) throw e;
     return undefined;
   }
   for (const value of values) {
@@ -9282,6 +9297,8 @@ const coerceUnknownToScalar = (value: unknown): ScalarValue | undefined => {
     try {
       return JSON.stringify(value);
     } catch {
+      // JSON.stringify only throws for circular/BigInt-bearing structures —
+      // by this function's contract those are "not coercible" (undefined).
       return undefined;
     }
   }
@@ -9946,6 +9963,8 @@ const materializeSelectRow = (
             try {
               output[element.name] = JSON.parse(raw);
             } catch {
+              // Load-bearing: the prefix test above is only a heuristic — a
+              // plain string value like "[draft] title" must stay a string.
               output[element.name] = raw;
             }
           } else {
@@ -10004,6 +10023,8 @@ const materializeSelectRow = (
             try {
               output[element.name] = JSON.parse(raw);
             } catch {
+              // Load-bearing: the prefix test above is only a heuristic — a
+              // plain string value like "[draft] title" must stay a string.
               output[element.name] = raw;
             }
           } else {
@@ -10083,38 +10104,53 @@ const materializeFieldValue = (
       return [];
     }
 
+    let parsed: unknown;
     try {
-      const parsed = JSON.parse(value);
-      if (!Array.isArray(parsed)) {
-        return [];
-      }
-      // Preserve the on-disk insertion order — multi-property values are
-      // stored as a JSON array in their write order, and EdgeQL's `multi
-      // property` semantics expose them in that order unless an explicit
-      // `ORDER BY` reshapes them in the shape clause.
-      return parsed.map((item) => coerceScalarForOutput(field.type, item));
-    } catch {
+      parsed = JSON.parse(value);
+    } catch (e) {
+      // Multi-property values are stored JSON-encoded; a non-JSON string
+      // is corrupt stored data and must not silently decode as empty.
+      throw new AppError(
+        "E_RUNTIME",
+        `corrupt stored value for multi property '${fieldName}' on ${sourceType}: not valid JSON: ${JSON.stringify(value.slice(0, 80))}`,
+        { cause: e },
+      );
+    }
+    if (!Array.isArray(parsed)) {
       return [];
     }
+    // Preserve the on-disk insertion order — multi-property values are
+    // stored as a JSON array in their write order, and EdgeQL's `multi
+    // property` semantics expose them in that order unless an explicit
+    // `ORDER BY` reshapes them in the shape clause.
+    return parsed.map((item) => coerceScalarForOutput(field.type, item));
   }
 
   if (field.collection && typeof value === "string") {
     const trimmed = value.trim();
     if ((trimmed.startsWith("[") && trimmed.endsWith("]")) || (trimmed.startsWith("{") && trimmed.endsWith("}"))) {
+      let parsed: unknown;
       try {
-        const parsed = JSON.parse(trimmed);
-        if (field.collection.kind === "array") {
-          return Array.isArray(parsed) ? parsed : [];
-        }
+        parsed = JSON.parse(trimmed);
+      } catch (e) {
+        // Collection (array/tuple) values are stored JSON-encoded; a
+        // bracket-delimited string that fails to parse is corrupt stored
+        // data, not a string to pass through as-is.
+        throw new AppError(
+          "E_RUNTIME",
+          `corrupt stored value for ${field.collection.kind} field '${fieldName}' on ${sourceType}: not valid JSON: ${JSON.stringify(trimmed.slice(0, 80))}`,
+          { cause: e },
+        );
+      }
+      if (field.collection.kind === "array") {
+        return Array.isArray(parsed) ? parsed : [];
+      }
 
-        if (field.collection.kind === "tuple") {
-          if (Array.isArray(parsed) && field.collection.elementNames && field.collection.elementNames.length === parsed.length) {
-            return Object.fromEntries(field.collection.elementNames.map((name, idx) => [name, parsed[idx]]));
-          }
-          return parsed;
+      if (field.collection.kind === "tuple") {
+        if (Array.isArray(parsed) && field.collection.elementNames && field.collection.elementNames.length === parsed.length) {
+          return Object.fromEntries(field.collection.elementNames.map((name, idx) => [name, parsed[idx]]));
         }
-      } catch {
-        return value;
+        return parsed;
       }
     }
   }
@@ -10261,8 +10297,14 @@ const coerceScalarForOutput = (type: ScalarType, value: unknown): unknown => {
   if (type === "json" && typeof value === "string") {
     try {
       return JSON.parse(value);
-    } catch {
-      return value;
+    } catch (e) {
+      // json-typed values are stored as JSON text; anything unparseable is
+      // corrupt stored data, not a string to pass through as-is.
+      throw new AppError(
+        "E_RUNTIME",
+        `corrupt stored json value: not valid JSON: ${JSON.stringify(value.slice(0, 80))}`,
+        { cause: e },
+      );
     }
   }
 
@@ -14163,6 +14205,8 @@ function constSubscriptBase(expr: unknown): ConstSubscriptBase | undefined {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed)) return { category: "JSON", items: parsed };
       } catch {
+        // Probe on user input: `to_json('<not json>')` is not a constant
+        // subscript base; the normal pipeline reports the invalid JSON.
         return undefined;
       }
     }
@@ -14279,7 +14323,10 @@ function countFunctionArgRows(
     if (compiled.sql.loweringMode !== "single_statement" || compiled.sql.sql.length === 0) return undefined;
     const rows = runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
     return rows.length;
-  } catch {
+  } catch (e) {
+    // Args the IR pipeline can't compile/run aren't countable here; the
+    // assertion check is skipped for them. Never hide bugs.
+    if (isNativeBugError(e)) throw e;
     return undefined;
   }
 }
