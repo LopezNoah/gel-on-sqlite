@@ -76,9 +76,24 @@ function normalizeAgainstTemplate(actual: unknown, expected: unknown): unknown {
     const actualItems = isUnorderedBag(actual) || isUnorderedSet(actual)
       ? (actual.items as unknown[])
       : Array.isArray(actual) ? actual : [actual];
-    const normalizedItems = actualItems.map((item, i) => {
-      const template = (expected.items as unknown[])[i % expected.items.length];
-      return normalizeAgainstTemplate(item, template);
+    // Pick the best-matching template per item rather than pairing by array
+    // index: bag/set results come back in arbitrary order (e.g. multi-link
+    // rows ordered by random ids), so index-based pairing nondeterministically
+    // projects an item onto the wrong template's keys (nulling out the fields
+    // the right template asked for). Prefer a template whose normalized form
+    // matches it exactly; otherwise fall back to the first template.
+    const templates = expected.items as unknown[];
+    const templateKeys = templates.map((t) => canonical(t));
+    const normalizedItems = actualItems.map((item) => {
+      let fallback: unknown = item;
+      for (let j = 0; j < templates.length; j++) {
+        const normalized = normalizeAgainstTemplate(item, templates[j]);
+        if (canonical(normalized) === templateKeys[j]) {
+          return normalized;
+        }
+        if (j === 0) fallback = normalized;
+      }
+      return fallback;
     });
     normalizedItems.sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
     return { __kind: "_unordered", items: normalizedItems };
