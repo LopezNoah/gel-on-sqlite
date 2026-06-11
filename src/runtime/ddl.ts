@@ -177,7 +177,7 @@ const validateReadOnlyModule = (ast: DDLStatement): void => {
   if (!isProtectedModule(modulePath)) return;
 
   const verb = verbForAction(ast.action);
-  const reportedHead = modulePath.split("::")[0]!;
+  const reportedHead = modulePath.split("::")[0];
   throw new AppError(
     "E_SEMANTIC",
     `cannot ${verb} ${ast.objectKind} '${ast.name}': module ${reportedHead} is read-only`,
@@ -379,8 +379,9 @@ export const parseCreateTypeHeader = (
   const stripBackticks = (lexeme: string): string =>
     lexeme.startsWith("`") && lexeme.endsWith("`") ? lexeme.slice(1, -1) : lexeme;
   const consumeQualifiedName = (start: number): { name: string; next: number } | null => {
-    if (!isNameLike(tokens[start])) return null;
-    let name = stripBackticks(tokens[start]!.lexeme);
+    const head = tokens[start];
+    if (!isNameLike(head)) return null;
+    let name = stripBackticks(head.lexeme);
     let j = start + 1;
     while (tokens[j]?.kind === "coloncolon") {
       const seg = tokens[j + 1];
@@ -416,13 +417,14 @@ export const parseCreateTypeHeader = (
   }
 
   let bodyText = "";
-  if (tokens[i]?.kind === "lbrace") {
-    const openOffset = tokens[i]!.offset;
+  const openTok = tokens[i];
+  if (openTok?.kind === "lbrace") {
+    const openOffset = openTok.offset;
     let depth = 1;
     let j = i + 1;
     let closeOffset = -1;
     while (j < tokens.length) {
-      const t = tokens[j]!;
+      const t = tokens[j];
       if (t.kind === "eof") break;
       if (t.kind === "lbrace") depth += 1;
       else if (t.kind === "rbrace") {
@@ -440,7 +442,7 @@ export const parseCreateTypeHeader = (
     i = j;
   }
 
-  while (i < tokens.length && (tokens[i]!.kind === "semi" || tokens[i]!.kind === "eof")) i += 1;
+  while (tokens[i]?.kind === "semi" || tokens[i]?.kind === "eof") i += 1;
   if (i < tokens.length) return null;
 
   return { rawName: nameParsed.name, extendsList, bodyText };
@@ -460,11 +462,11 @@ export const extractTrailingBraceBlock = (entry: string): string | undefined => 
   if (!tokenized.ok) return undefined;
   const tokens: readonly Token[] = tokenized.value;
   for (let i = tokens.length - 1; i >= 0; i -= 1) {
-    const t = tokens[i]!;
+    const t = tokens[i];
     if (t.kind === "rbrace") {
       let trailingOk = true;
       for (let k = i + 1; k < tokens.length; k += 1) {
-        const next = tokens[k]!;
+        const next = tokens[k];
         if (next.kind === "eof" || next.kind === "semi") continue;
         trailingOk = false;
         break;
@@ -472,7 +474,7 @@ export const extractTrailingBraceBlock = (entry: string): string | undefined => 
       if (!trailingOk) return undefined;
       let depth = 1;
       for (let j = i - 1; j >= 0; j -= 1) {
-        const u = tokens[j]!;
+        const u = tokens[j];
         if (u.kind === "rbrace") depth += 1;
         else if (u.kind === "lbrace") {
           depth -= 1;
@@ -497,11 +499,11 @@ export const stripTrailingBraceBlock = (entry: string): string => {
   if (!tokenized.ok) return entry;
   const tokens: readonly Token[] = tokenized.value;
   for (let i = tokens.length - 1; i >= 0; i -= 1) {
-    const t = tokens[i]!;
+    const t = tokens[i];
     if (t.kind === "rbrace") {
       let trailingOk = true;
       for (let k = i + 1; k < tokens.length; k += 1) {
-        const next = tokens[k]!;
+        const next = tokens[k];
         if (next.kind === "eof" || next.kind === "semi") continue;
         trailingOk = false;
         break;
@@ -509,7 +511,7 @@ export const stripTrailingBraceBlock = (entry: string): string => {
       if (!trailingOk) return entry;
       let depth = 1;
       for (let j = i - 1; j >= 0; j -= 1) {
-        const u = tokens[j]!;
+        const u = tokens[j];
         if (u.kind === "rbrace") depth += 1;
         else if (u.kind === "lbrace") {
           depth -= 1;

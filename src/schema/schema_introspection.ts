@@ -719,7 +719,7 @@ const scalarAncestorsForDeclaration = (
   seen.add(scalarName);
   if (enumValues && enumValues.length > 0) return ["std::anyenum", "std::anyscalar"];
   const base = (baseTypeName ?? "str").trim();
-  const lower = base.includes("::") ? base.split("::").at(-1)!.toLowerCase() : base.toLowerCase();
+  const lower = (base.includes("::") ? base.slice(base.lastIndexOf("::") + 2) : base).toLowerCase();
   if (lower === "anyenum") return ["std::anyenum", "std::anyscalar"];
   if (lower === "str" || lower === "bytes") return ["std::str", "std::anyscalar"];
   if (lower === "int" || lower === "int64") return ["std::int64", "std::anyint", "std::anyreal", "std::anydiscrete", "std::anypoint", "std::anyscalar"];

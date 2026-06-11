@@ -775,25 +775,20 @@ export const renderDeclarativeSchema = (schema: DeclarativeSchema): string => {
           for (const annotation of member.annotations ?? []) {
             lines.push(`      annotation ${shortTypeName(annotation.name, moduleName)} := ${quoteString(annotation.value)};`);
           }
-          const rewriteOps: string[] = [];
-          if (member.rewrite?.onInsert) {
-            rewriteOps.push(`insert using (${renderMutationRewriteExpr(member.rewrite.onInsert)})`);
-          }
-          if (member.rewrite?.onUpdate) {
-            rewriteOps.push(`update using (${renderMutationRewriteExpr(member.rewrite.onUpdate)})`);
-          }
-          if (rewriteOps.length === 2) {
-            const expr = renderMutationRewriteExpr(member.rewrite!.onInsert!);
-            if (expr === renderMutationRewriteExpr(member.rewrite!.onUpdate!)) {
+          const rewriteOnInsert = member.rewrite?.onInsert;
+          const rewriteOnUpdate = member.rewrite?.onUpdate;
+          if (rewriteOnInsert && rewriteOnUpdate) {
+            const expr = renderMutationRewriteExpr(rewriteOnInsert);
+            if (expr === renderMutationRewriteExpr(rewriteOnUpdate)) {
               lines.push(`      rewrite insert, update using (${expr});`);
             } else {
-              lines.push(`      rewrite insert using (${renderMutationRewriteExpr(member.rewrite!.onInsert!)});`);
-              lines.push(`      rewrite update using (${renderMutationRewriteExpr(member.rewrite!.onUpdate!)});`);
+              lines.push(`      rewrite insert using (${renderMutationRewriteExpr(rewriteOnInsert)});`);
+              lines.push(`      rewrite update using (${renderMutationRewriteExpr(rewriteOnUpdate)});`);
             }
-          } else if (member.rewrite?.onInsert) {
-            lines.push(`      rewrite insert using (${renderMutationRewriteExpr(member.rewrite.onInsert)});`);
-          } else if (member.rewrite?.onUpdate) {
-            lines.push(`      rewrite update using (${renderMutationRewriteExpr(member.rewrite.onUpdate)});`);
+          } else if (rewriteOnInsert) {
+            lines.push(`      rewrite insert using (${renderMutationRewriteExpr(rewriteOnInsert)});`);
+          } else if (rewriteOnUpdate) {
+            lines.push(`      rewrite update using (${renderMutationRewriteExpr(rewriteOnUpdate)});`);
           }
           lines.push("    };");
           continue;

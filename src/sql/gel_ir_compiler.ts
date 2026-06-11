@@ -505,11 +505,11 @@ const isProvablyEmptyTupleSet = (sourceSet: Set, options: GelIRCompileOptions): 
   // outSources name disjoint concrete subtypes (neither assignable to the
   // other) so legitimate polymorphic narrowings of overlapping subtypes are
   // left alone.
-  const head = ptrs[0]!;
+  const head = ptrs[0];
   const headSourceId = head.source.expr.kind === "type_root" ? (head.source.expr as TypeRoot).typeref.id : undefined;
   if (!headSourceId) return false;
   for (let i = 1; i < ptrs.length; i++) {
-    const cur = ptrs[i]!;
+    const cur = ptrs[i];
     if (cur.source.expr.kind !== "type_root") return false;
     if ((cur.source.expr as TypeRoot).typeref.id !== headSourceId) return false;
     if (cur.ptrref.shortName !== head.ptrref.shortName) return false;
@@ -1066,7 +1066,7 @@ const compileGroupRowSortSQL = (
     // `count(.grouping)` / `count(.elements)` over a group row — array
     // lengths, not SQL aggregates.
     if (shortName === "count" && args.length === 1) {
-      let inner: Set = args[0]!.expr;
+      let inner: Set = args[0].expr;
       while (inner.expr.kind === "select_expr") {
         inner = (inner.expr as SelectExpr).result;
       }
@@ -1079,7 +1079,7 @@ const compileGroupRowSortSQL = (
       }
     }
     if (shortName === "array_agg" && args.length === 1) {
-      let inner: Set = args[0]!.expr;
+      let inner: Set = args[0].expr;
       while (inner.expr.kind === "select_expr") {
         inner = (inner.expr as SelectExpr).result;
       }
@@ -1737,11 +1737,12 @@ const tryCompileSetLevelOptionalCompareSQL = (
     collectScalarPointerSources(lcp, sources);
     if (sources.size !== 1) return null;
     const typeRef = sources.values().next().value;
+    if (!typeRef) return null;
     const refs: string[] = [];
     for (const c of collectReferencedColumns(lhs)) refs.push(c);
     for (const c of collectReferencedColumns(rhs)) refs.push(c);
     const projectedColumns = Array.from(new globalThis.Set(refs));
-    const sourceSql = compilePolymorphicSource(typeRef!, false, "g0", projectedColumns, options);
+    const sourceSql = compilePolymorphicSource(typeRef, false, "g0", projectedColumns, options);
     const ckpt = params.length;
     const lhsSql = compileValueSetSQL(lhs, "g0", params, target, options);
     const rhsSql = compileValueSetSQL(rhs, "g0", params, target, options);
@@ -2079,14 +2080,17 @@ const compileScalarSelectSQLInner = (
   // a set-bound `x` would be wrapped in compileValueSetSQL's aggregating
   // path and produce `(json_group_array * json_group_array)` instead of
   // per-row products.
-  if (sourceSet.expr.kind === "function_call" && (sourceSet.expr as FunctionCall).body) {
-    return compileScalarSelectSQL(
-      (sourceSet.expr as FunctionCall).body!,
-      params,
-      target,
-      options,
-      outerWheres,
-    );
+  if (sourceSet.expr.kind === "function_call") {
+    const inlinedBody = (sourceSet.expr as FunctionCall).body;
+    if (inlinedBody) {
+      return compileScalarSelectSQL(
+        inlinedBody,
+        params,
+        target,
+        options,
+        outerWheres,
+      );
+    }
   }
   // `<T>{multi-row-source}` distributes over rows — wrap each row's value
   // with the cast rather than letting `compileValueSetSQL` aggregate the
@@ -2133,7 +2137,7 @@ const compileScalarSelectSQLInner = (
     if ((shortName === "array_unpack" || shortName === "assert_single") && args.length === 1) {
       const inner = args[0].expr;
       if (inner.expr.kind === "array" && (inner.expr as ArrayExpr).elements.length === 1) {
-        return compileScalarSelectSQL((inner.expr as ArrayExpr).elements[0]!, params, target, options, outerWheres);
+        return compileScalarSelectSQL((inner.expr as ArrayExpr).elements[0], params, target, options, outerWheres);
       }
       if (shortName === "array_unpack") {
         // General `array_unpack(arr)` — explode the JSON array into one row
@@ -2373,7 +2377,7 @@ const compileScalarSelectSQLInner = (
     const values: string[] = [];
     const valueRefs: string[] = [];
     for (let i = 0; i < tuple.elements.length; i += 1) {
-      const element = tuple.elements[i]!;
+      const element = tuple.elements[i];
       const elementSql = compileScalarSelectSQL(element.val, params, target, options);
       if (!elementSql) return null;
       const alias = `tuple_${i}`;
@@ -2408,7 +2412,7 @@ const compileScalarSelectSQLInner = (
     const arrSources: string[] = [];
     const arrValues: string[] = [];
     for (let i = 0; i < arr.elements.length; i += 1) {
-      const element = arr.elements[i]!;
+      const element = arr.elements[i];
       const elementSql = compileScalarSelectSQL(element, params, target, options);
       if (!elementSql) return null;
       const alias = `arr_${i}`;
@@ -2486,18 +2490,18 @@ const compileScalarSelectSQLInner = (
         // statically resolve; otherwise emit a runtime CASE over the value.
         const inner = arg.expr.expr;
         let perArm: string;
-        if (memberSet) {
+        if (memberSet && targetEnumMembers) {
           if (inner.kind === "pointer") {
             const ptr = inner as Pointer;
             const fieldMembers = ptr.ptrref.outSource && ptr.ptrref.shortName
               ? options.resolveFieldEnumMembers?.(qualifyTypeName(ptr.ptrref.outSource), ptr.ptrref.shortName)
               : undefined;
-            perArm = fieldMembers && fieldMembers.join("|") === targetEnumMembers!.join("|") ? "json('true')" : "json('false')";
+            perArm = fieldMembers && fieldMembers.join("|") === targetEnumMembers.join("|") ? "json('true')" : "json('false')";
           } else if (inner.kind === "string_constant") {
             const value = (inner as BaseConstant).value;
             perArm = typeof value === "string" && memberSet.has(value) ? "json('true')" : "json('false')";
           } else {
-            const branches = targetEnumMembers!.map((m) => `WHEN ${quoteLiteral(m)} THEN json('true')`).join(" ");
+            const branches = targetEnumMembers.map((m) => `WHEN ${quoteLiteral(m)} THEN json('true')`).join(" ");
             perArm = `(CASE "value" ${branches} ELSE json('false') END)`;
           }
         } else {
@@ -2703,7 +2707,11 @@ const compileScalarSelectSQLInner = (
     };
     if (reachableUnions.length > 0) {
       const innerCheckpoint = params.length;
-      const branchesPerUnion = reachableUnions.map((u) => unwrapUnionBranches(u)!);
+      const branchesPerUnion = reachableUnions.map((u) => {
+        const branches = unwrapUnionBranches(u);
+        if (!branches) throw new Error("invariant: reachable union operator_call has no branches");
+        return branches;
+      });
       let combos: number[][] = [[]];
       for (const branches of branchesPerUnion) {
         const next: number[][] = [];
@@ -2845,12 +2853,13 @@ const compileScalarSelectSQLInner = (
     return base;
   }
   const [typeRef] = sources.values();
+  if (!typeRef) return null;
   // When the value references a link-table-backed pointer step (`User.todo`),
   // the source's row alone can't satisfy the access — we need to iterate the
   // link's storage table. Promote the FROM to a chain that walks one such
   // common prefix and provides aliases for the inner compile. Falls back to
   // the plain single-source FROM if no such pointer is found.
-  const linkIterationSqlAttempt = tryBuildLinkIterationSingleSource(sourceSet, typeRef!, params, target, options, valueSql, appliedOuterWheres, innerWheres);
+  const linkIterationSqlAttempt = tryBuildLinkIterationSingleSource(sourceSet, typeRef, params, target, options, valueSql, appliedOuterWheres, innerWheres);
   if (linkIterationSqlAttempt) {
     return linkIterationSqlAttempt;
   }
@@ -2880,13 +2889,14 @@ const compileScalarSelectSQLInner = (
     // When the multi-scalar's root row is supplied by an enclosing iteration
     // (a computed shape element), correlate to that alias instead of opening
     // a fresh scan of the whole type table.
-    const firstLeafPtr = tryExtractMultiScalarLeafPointer(leafSets[0]!)!;
+    const firstLeafPtr = tryExtractMultiScalarLeafPointer(leafSets[0]);
+    if (!firstLeafPtr) break elementwise;
     let leafRootSet: Set = firstLeafPtr.source;
     while (leafRootSet.expr.kind === "select_expr") {
       leafRootSet = (leafRootSet.expr as SelectExpr).result;
     }
     const outerMatch = findMatchingOuterScope(
-      { typerefId: typeRef!.id, namespace: leafRootSet.pathId?.namespace ?? [] },
+      { typerefId: typeRef.id, namespace: leafRootSet.pathId?.namespace ?? [] },
       options,
     );
     const baseAlias = outerMatch ? outerMatch.alias : "g0";
@@ -2897,7 +2907,8 @@ const compileScalarSelectSQLInner = (
       for (const leafSet of leafSets) {
         const key = pathIdKey(leafSet);
         if (multiBindings.has(key)) continue;
-        const leafPtr = tryExtractMultiScalarLeafPointer(leafSet)!;
+        const leafPtr = tryExtractMultiScalarLeafPointer(leafSet);
+        if (!leafPtr) continue;
         const jeAlias = `jem${jeIdx++}`;
         finalJoins.push(`json_each(COALESCE(${baseAlias}.${quoteIdent(columnForPointer(leafPtr))}, '[]')) ${jeAlias}`);
         const elementValue = `${jeAlias}.${quoteIdent("value")}`;
@@ -2922,7 +2933,7 @@ const compileScalarSelectSQLInner = (
         const leafPtr = tryExtractMultiScalarLeafPointer(leafSet);
         if (leafPtr) refCols.push(columnForPointer(leafPtr));
       }
-      const fromSql = compilePolymorphicSource(typeRef!, false, "g0", [...new Set(refCols)], options);
+      const fromSql = compilePolymorphicSource(typeRef, false, "g0", [...new Set(refCols)], options);
       sql = `SELECT ${elementValueSql} AS ${quoteIdent("value")} FROM ${fromSql} CROSS JOIN ${finalJoins.join(" CROSS JOIN ")}`;
     }
     if (sortDirs.length > 0) {
@@ -2977,7 +2988,7 @@ const compileScalarSelectSQLInner = (
     }
     return compiled.sql;
   })();
-  const sourceSql = clauseSourceSql ?? compilePolymorphicSource(typeRef!, false, "g0", projectedColumns, options);
+  const sourceSql = clauseSourceSql ?? compilePolymorphicSource(typeRef, false, "g0", projectedColumns, options);
 
   // If every pointer to the source is wrapped in a set-level operator
   // (?=, ?!=, ??), the source's empty case should still produce one row
@@ -3059,7 +3070,7 @@ const extractScalarPointerPath = (set: Set): ScalarPointerPath | null => {
     return null;
   }
 
-  const leaf = chain[0]!;
+  const leaf = chain[0];
   if (!leaf.ptrref.outTarget.isScalar || leaf.ptrref.isLinkProperty) {
     return null;
   }
@@ -3080,12 +3091,12 @@ const pointerPathAliasColumns = (path: ScalarPointerPath): string[][] => {
     }
     const inlineColumn = `${link.ptrref.shortName}_id`;
     if (link.direction === "inbound") {
-      columns[index + 1]!.add(inlineColumn);
+      columns[index + 1].add(inlineColumn);
     } else {
-      columns[index]!.add(inlineColumn);
+      columns[index].add(inlineColumn);
     }
   });
-  columns[columns.length - 1]!.add(columnForPointer(path.leaf));
+  columns[columns.length - 1].add(columnForPointer(path.leaf));
   return columns.map((entry) => [...entry]);
 };
 
@@ -3126,13 +3137,13 @@ const tryCompileScalarPointerPathSelectSQL = (
   const checkpoint = params.length;
   const aliasColumns = pointerPathAliasColumns(path);
   const rootAlias = "p0";
-  let fromSql = compilePolymorphicSource(path.root.typeref, false, rootAlias, aliasColumns[0]!, options);
+  let fromSql = compilePolymorphicSource(path.root.typeref, false, rootAlias, aliasColumns[0], options);
   let previousAlias = rootAlias;
 
   path.links.forEach((link, index) => {
     const nextAlias = `p${index + 1}`;
     const targetType = link.direction === "inbound" ? link.ptrref.outSource : link.ptrref.outTarget;
-    const targetSource = compilePolymorphicSource(targetType, false, nextAlias, aliasColumns[index + 1]!, options);
+    const targetSource = compilePolymorphicSource(targetType, false, nextAlias, aliasColumns[index + 1], options);
     if (shouldUseLinkTable(link)) {
       const linkAlias = `pj${index}`;
       const linkTable = linkTableNameForPointer(link, options);
@@ -3390,7 +3401,7 @@ const tryCompileMultiScalarPointerSelectSQL = (
     if (links.length === 0) {
       rootCols.add(leafColumn);
     } else {
-      const firstLink = links[0]!;
+      const firstLink = links[0];
       if (!shouldUseLinkTable(firstLink)) {
         const inlineColumn = `${firstLink.ptrref.shortName}_id`;
         if (firstLink.direction === "outbound") rootCols.add(inlineColumn);
@@ -3402,7 +3413,7 @@ const tryCompileMultiScalarPointerSelectSQL = (
 
   links.reverse();
   for (let index = 0; index < links.length; index += 1) {
-    const link = links[index]!;
+    const link = links[index];
     const linkAlias = `pj${index}`;
     const nextAlias = `p${index + 1}`;
     const targetType = link.direction === "inbound" ? link.ptrref.outSource : link.ptrref.outTarget;
@@ -3411,7 +3422,7 @@ const tryCompileMultiScalarPointerSelectSQL = (
     if (isLast) {
       targetCols.add(leafColumn);
     } else {
-      const next = links[index + 1]!;
+      const next = links[index + 1];
       if (!shouldUseLinkTable(next)) {
         const inlineColumn = `${next.ptrref.shortName}_id`;
         if (next.direction === "outbound") targetCols.add(inlineColumn);
@@ -3698,11 +3709,11 @@ const compileTupleWithMultiScalarsSQL = (
       params.length = checkpoint;
       return null;
     }
-    projectionSql = elementSqls[idx]!;
+    projectionSql = elementSqls[idx];
     // The projected slot is either a multi-scalar value (je.value — a JSON
     // string from json_each) or a single-element compile. Treat scalar
     // values as non-JSON so the aggregate emits them as JSON strings.
-    projectionIsJson = setValueIsJson(classified[idx]!.element.val);
+    projectionIsJson = setValueIsJson(classified[idx].element.val);
   } else if (tuple.named) {
     const pairs = classified.map((item, i) => `${quoteLiteral(item.element.name ?? String(i))}, ${elementSqls[i]}`);
     projectionSql = `json_object(${pairs.join(", ")})`;
@@ -3727,7 +3738,7 @@ const compileTupleWithMultiScalarsSQL = (
   const valueRef = (i: number) => `je${i}.${quoteIdent("value")}`;
   const multiIndices: number[] = [];
   for (let i = 0; i < classified.length; i++) {
-    if (classified[i]!.kind === "multi") multiIndices.push(multiIndices.length);
+    if (classified[i].kind === "multi") multiIndices.push(multiIndices.length);
   }
   let orderParts: string[];
   if (indexProjection !== undefined && classified[indexProjection]?.kind === "multi") {
@@ -3735,7 +3746,7 @@ const compileTupleWithMultiScalarsSQL = (
     let projectedJeIdx = -1;
     let runningJeIdx = 0;
     for (let i = 0; i < classified.length; i++) {
-      if (classified[i]!.kind === "multi") {
+      if (classified[i].kind === "multi") {
         if (i === indexProjection) projectedJeIdx = runningJeIdx;
         runningJeIdx++;
       }
@@ -3796,7 +3807,7 @@ const tryCompileLinkPropertyPathSelectSQL = (
   const path = extractLinkPropertyPath(set);
   if (!path) return null;
 
-  const terminalLink = path.links[path.links.length - 1]!;
+  const terminalLink = path.links[path.links.length - 1];
   // Link properties only live on link-table-backed links. If the schema
   // decided this terminal link is inline-FK only (no properties, single
   // outbound), the property reference is meaningless and we bail.
@@ -3809,7 +3820,7 @@ const tryCompileLinkPropertyPathSelectSQL = (
   let previousAlias = rootAlias;
 
   for (let index = 0; index < path.links.length; index += 1) {
-    const link = path.links[index]!;
+    const link = path.links[index];
     const isTerminal = index === path.links.length - 1;
     const linkAlias = `pj${index}`;
     const linkTable = linkTableNameForPointer(link, options);
@@ -4030,9 +4041,10 @@ const containsMultiScalarPointer = (set: Set): boolean => {
       return;
     }
     if (e.kind === "slice_expr") {
-      visit((s.expr as SliceExpr).expr);
-      if ((s.expr as SliceExpr).start) visit((s.expr as SliceExpr).start!);
-      if ((s.expr as SliceExpr).end) visit((s.expr as SliceExpr).end!);
+      const slice = s.expr as SliceExpr;
+      visit(slice.expr);
+      if (slice.start) visit(slice.start);
+      if (slice.end) visit(slice.end);
       return;
     }
     if (e.kind === "select_expr") {
@@ -4207,7 +4219,7 @@ const buildCorrelatedScalarPointerPath = (
   if (!path) return null;
   if (path.links.length === 0) return null;
 
-  const firstLink = path.links[0]!;
+  const firstLink = path.links[0];
   const firstTargetType = firstLink.direction === "inbound" ? firstLink.ptrref.outSource : firstLink.ptrref.outTarget;
   const firstAlias = "cp1";
   let fromSql: string;
@@ -4252,7 +4264,7 @@ const buildCorrelatedScalarPointerPath = (
   let prevAlias = firstAlias;
 
   for (let i = 1; i < path.links.length; i += 1) {
-    const link = path.links[i]!;
+    const link = path.links[i];
     const nextAlias = `cp${i + 1}`;
     const targetType = link.direction === "inbound" ? link.ptrref.outSource : link.ptrref.outTarget;
     const targetTable = resolveTypeTableName(targetType, options);
@@ -4433,19 +4445,19 @@ const unwrapObjectPassthrough = (set: Set): Set | null => {
     const args = orderedCallArgs(call.args);
     if ((shortName === "assert_single" || shortName === "assert_exists" || shortName === "assert_distinct")
         && args.length === 1) {
-      return args[0]!.expr;
+      return args[0].expr;
     }
     if (shortName === "array_unpack" && args.length === 1) {
-      const inner = args[0]!.expr;
+      const inner = args[0].expr;
       if (inner.expr.kind === "array" && (inner.expr as ArrayExpr).elements.length === 1) {
-        return (inner.expr as ArrayExpr).elements[0]!;
+        return (inner.expr as ArrayExpr).elements[0];
       }
     }
     return null;
   }
   if (expr.kind === "operator_call" && (expr as OperatorCall).operator === "distinct") {
     const args = orderedCallArgs((expr as OperatorCall).args);
-    if (args.length === 1) return args[0]!.expr;
+    if (args.length === 1) return args[0].expr;
   }
   return null;
 };
@@ -4554,7 +4566,7 @@ const compileSelectSource = (
       // Compile in SQL textual order so the shared `params` array stays
       // aligned with the placeholders: the full-row source appears first,
       // then the EXCEPT/INTERSECT id-set subquery.
-      const branchWithShape: Set = { ...args[0]!.expr, shape: sourceSet.shape };
+      const branchWithShape: Set = { ...args[0].expr, shape: sourceSet.shape };
       const full = compileSelectSource(branchWithShape, where, orderBy, options, params, target);
       if (!full) return null;
       const idSelects = args.map((arg) => {
@@ -4633,15 +4645,15 @@ const compileSelectSource = (
     if (cursor.kind !== "type_root") return null;
   }
   const links = chain.reverse();
-  const rootPointer = links[0]!;
+  const rootPointer = links[0];
   const rootTyperef = rootPointer.source.typeref;
   const rootAlias = "s0";
-  const rootCols = collectChainSourceColumns(links[0]!, "root");
+  const rootCols = collectChainSourceColumns(links[0], "root");
   let fromSql = compilePolymorphicSource(rootTyperef, false, rootAlias, rootCols, options);
   let previousAlias = rootAlias;
   let previousTyperef = rootTyperef;
   for (let i = 0; i < links.length; i++) {
-    const link = links[i]!;
+    const link = links[i];
     const isLeaf = i === links.length - 1;
     const targetType = link.direction === "inbound" ? link.ptrref.outSource : link.ptrref.outTarget;
     const targetAlias = isLeaf ? "t0" : `m${i}`;
@@ -4653,7 +4665,7 @@ const compileSelectSource = (
     const inlineInboundFK = (!shouldUseLinkTable(link) && link.direction === "inbound")
       ? `${link.ptrref.shortName}_id`
       : null;
-    const baseCols = isLeaf ? projectedColumns : collectChainSourceColumns(links[i + 1]!, "via");
+    const baseCols = isLeaf ? projectedColumns : collectChainSourceColumns(links[i + 1], "via");
     const targetCols = inlineInboundFK ? [...new Set<string>([...baseCols, inlineInboundFK])] : baseCols;
     const targetSql = compilePolymorphicSource(targetType, false, targetAlias, targetCols, options);
     if (shouldUseLinkTable(link)) {
@@ -4932,7 +4944,8 @@ const compileForExprSource = (
   } else if (levels[0].tuples) {
     fromSql = `(${tupleUnionAllSql(levels[0].tuples)}) ${firstAlias}`;
   } else {
-    const consts = levels[0].constants!;
+    const consts = levels[0].constants;
+    if (!consts) throw new Error("invariant: FOR iteration level has no source (typeRef/precompiled/tuples/constants all unset)");
     const parts = consts.map((c) => {
       if (typeof c === "string") return `SELECT ${quoteLiteral(c)} AS ${quoteIdent("value")}`;
       if (typeof c === "number") return `SELECT ${c} AS ${quoteIdent("value")}`;
@@ -5247,7 +5260,7 @@ const nullPropagatingTupleSQL = (tuple: Tuple, parts: Array<string | null>): str
   // SQLite's JSON subtype doesn't survive that round-trip, so re-`json(...)` it
   // to embed it as nested JSON rather than a quoted string.
   const valueOf = (idx: number): string =>
-    setValueIsJson(tuple.elements[idx]!.val) ? `json(${aliases[idx]})` : aliases[idx]!;
+    setValueIsJson(tuple.elements[idx].val) ? `json(${aliases[idx]})` : aliases[idx];
   const projected = tuple.named
     ? `json_object(${tuple.elements.map((element, idx) => `${quoteLiteral(element.name ?? String(idx))}, ${valueOf(idx)}`).join(", ")})`
     : `json_array(${tuple.elements.map((_, idx) => valueOf(idx)).join(", ")})`;
@@ -6764,8 +6777,8 @@ const rewriteFilterAgainstChainSource = (filterSet: Set, sourceSet: Set): Set =>
     if (cur.kind !== "type_root" || sourceChain.length === 0) return filterSet;
   }
   const sourceKey = sourceChain.slice().reverse().map((p) => p.ptrref.id).join("|");
-  const sourceRootSet: Set = (sourceChain[sourceChain.length - 1]!.source);
-  const sourceLeafType = sourceChain[0]!.ptrref.outTarget;
+  const sourceRootSet: Set = (sourceChain[sourceChain.length - 1].source);
+  const sourceLeafType = sourceChain[0].ptrref.outTarget;
 
   const rewriteSet = (s: Set): Set => {
     const expr = s.expr;
@@ -6959,7 +6972,7 @@ const extractObjectPointerPath = (set: Set): ScalarPointerPath | null => {
     return null;
   }
 
-  const leaf = chain[0]!;
+  const leaf = chain[0];
   if (leaf.ptrref.outTarget.isScalar) return null;
 
   const links = chain.slice(1).reverse();
@@ -7031,7 +7044,7 @@ const tryCompileMultiStepPointerExistsSQL = (
   path.links.forEach((link, index) => {
     const nextAlias = `lt${index}`;
     const targetType = link.direction === "inbound" ? link.ptrref.outSource : link.ptrref.outTarget;
-    const targetSource = compilePolymorphicSource(targetType, false, nextAlias, aliasColumns[index + 1]!, options);
+    const targetSource = compilePolymorphicSource(targetType, false, nextAlias, aliasColumns[index + 1], options);
     const isFirstStepFromPolyRoot = index === 0 && rootIsPolymorphic;
     const isSingleLink = link.ptrref.outCardinality === "one"
       || link.ptrref.outCardinality === "at_most_one";
@@ -7285,7 +7298,7 @@ const tryCompileExistsObjectPointerSQL = (
   const links = chain.reverse();
 
   if (links.length === 1) {
-    const pointer = links[0]!;
+    const pointer = links[0];
     if (shouldUseLinkTable(pointer)) {
       const linkTable = linkTableNameForPointer(pointer, options);
       const sideAnchor = pointer.direction === "inbound" ? "target" : "source";
@@ -7311,7 +7324,7 @@ const tryCompileExistsObjectPointerSQL = (
   const whereSqls: string[] = [];
   let prevAlias = sourceAlias;
   for (let i = 0; i < links.length; i++) {
-    const link = links[i]!;
+    const link = links[i];
     const targetType = link.direction === "inbound" ? link.ptrref.outSource : link.ptrref.outTarget;
     const targetAlias = `_ex${i}`;
     const cols = new globalThis.Set<string>(["id"]);
@@ -7988,9 +8001,10 @@ const compileValueSetSQL = (
         params.length = checkpoint;
         return null;
       }
-      const targetIsNamed = targetTupleSlots.length > 0 && targetTupleSlots.every((s) => s.name !== undefined);
+      const targetSlotNames = targetTupleSlots.map((s) => s.name).filter((n): n is string => n !== undefined);
+      const targetIsNamed = targetTupleSlots.length > 0 && targetSlotNames.length === targetTupleSlots.length;
       if (targetIsNamed) {
-        return `json_object(${targetTupleSlots.map((slot, idx) => `${quoteLiteral(slot.name!)}, ${sourceParts[idx]}`).join(", ")})`;
+        return `json_object(${targetSlotNames.map((name, idx) => `${quoteLiteral(name)}, ${sourceParts[idx]}`).join(", ")})`;
       }
       return `json_array(${sourceParts.slice(0, targetTupleSlots.length).join(", ")})`;
     }
@@ -8416,7 +8430,7 @@ const compileOperatorValueSQL = (
     const truthy = (col: string): string => `(${col} = json('true') OR (${col} NOT IN (json('false')) AND ${col}))`;
     if (call.operator === "not") {
       if (operandSqls.length < 1) return null;
-      const p = operandSqls[0]!;
+      const p = operandSqls[0];
       return `(SELECT CASE WHEN p IS NULL THEN NULL WHEN p = json('true') THEN json('false') WHEN p = json('false') THEN json('true') WHEN p THEN json('false') ELSE json('true') END FROM (SELECT (${p}) AS p))`;
     }
     if (operandSqls.length < 2) return null;
@@ -9059,7 +9073,7 @@ const compileEmbeddedGroupSQL = (
   // key: one entry per requested key field (default: one per BY atom).
   const keyFieldNames = group.keyFields ?? [...new Set(group.byAtoms.map((a) => a.name))];
   const keyPairs = keyFieldNames.map((name) => {
-    const atom = group.byAtoms.find((a) => a.name === name) ?? group.byAtoms[0]!;
+    const atom = group.byAtoms.find((a) => a.name === name) ?? group.byAtoms[0];
     return `${quoteLiteral(name)}, ${atomColumn(atom)}`;
   });
   const itemPairs = [`${quoteLiteral("key")}, json_object(${keyPairs.join(", ")})`];

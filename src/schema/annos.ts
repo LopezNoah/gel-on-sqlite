@@ -189,8 +189,9 @@ export class AnnotationResolver<T extends { extends?: string[]; annotations?: An
       return new AnnotationSet();
     }
 
-    if (this.cache.has(qualifiedName)) {
-      return this.cache.get(qualifiedName)!.clone();
+    const cached = this.cache.get(qualifiedName);
+    if (cached !== undefined) {
+      return cached.clone();
     }
 
     stack.add(qualifiedName);
@@ -228,10 +229,12 @@ export interface AnnotationRow {
 export const buildAnnotationsBySubject = (rows: AnnotationRow[]): Map<string, AnnotationRow[]> => {
   const map = new Map<string, AnnotationRow[]>();
   for (const row of rows) {
-    if (!map.has(row.subject_id)) {
-      map.set(row.subject_id, []);
+    let list = map.get(row.subject_id);
+    if (!list) {
+      list = [];
+      map.set(row.subject_id, list);
     }
-    map.get(row.subject_id)!.push(row);
+    list.push(row);
   }
   return map;
 };

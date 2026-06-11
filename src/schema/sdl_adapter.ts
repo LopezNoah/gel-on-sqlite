@@ -1125,8 +1125,8 @@ const stripLeadingSelectKeyword = (text: string): string | undefined => {
 const parseCastScalarLiteral = (text: string): ScalarValue | undefined => {
   const tokens = tokenize(text.trim());
   let index = 0;
-  const consume = (): Token => tokens[index++]!;
-  const peek = (): Token => tokens[index]!;
+  const consume = (): Token => tokens[index++];
+  const peek = (): Token => tokens[index];
 
   if (consume().kind !== "lt") {
     return undefined;
@@ -1245,7 +1245,7 @@ const detectCountOfLink = (exprText: string): string | undefined => {
   const last = call.call.name.split("::").pop() ?? call.call.name;
   if (last !== "count") return undefined;
   if (call.call.args.length !== 1) return undefined;
-  const argWrapper = call.call.args[0]!;
+  const argWrapper = call.call.args[0];
   // Args arrive as `{ kind: "expr", expr: <FreeObjectExpr> }`.
   const argExpr = argWrapper.kind === "expr"
     ? (argWrapper as unknown as { expr: { kind?: string } }).expr
@@ -1390,8 +1390,8 @@ const parseComputedSelectTypeLinkExpr = (
 ): Extract<ComputedDef, { kind: "link" }>["expr"] | undefined => {
   const tokens = tokenize(trimmed);
   let index = 0;
-  const peek = (): Token => tokens[index]!;
-  const consume = (): Token => tokens[index++]!;
+  const peek = (): Token => tokens[index];
+  const consume = (): Token => tokens[index++];
 
   if (peek().kind !== "kw_select") {
     return undefined;
@@ -1971,13 +1971,13 @@ const convertDeclarationToMember = (
       declaredType = inherited?.target;
     }
     if (declaredType === undefined) {
-      const usingExpr = declaration.body?.using?.text;
-      if (usingExpr) {
+      const usingNode = declaration.body?.using;
+      if (usingNode?.text) {
         try {
           return convertComputedDeclarationToMember({
             ...declaration,
             computed: true,
-            expr: declaration.body!.using!,
+            expr: usingNode,
           });
         } catch (err) {
           if (err instanceof UnsupportedSDLFeatureError) {
@@ -2282,7 +2282,8 @@ class PointerInheritanceResolver {
     const visited = new Set<string>();
     const queue: string[] = [typeFullName];
     while (queue.length > 0) {
-      const current = queue.shift()!;
+      const current = queue.shift();
+      if (current === undefined) break;
       if (visited.has(current)) continue;
       visited.add(current);
       const info = this.types.get(current);

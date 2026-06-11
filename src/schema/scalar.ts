@@ -198,7 +198,7 @@ export class ScalarRegistry {
 
   private static normalizeName(name: string): string {
     if (name.includes("::")) {
-      return name.split("::").at(-1)!;
+      return name.slice(name.lastIndexOf("::") + 2);
     }
     return name;
   }

@@ -412,20 +412,22 @@ class Parser {
   private tokenAfterQualifiedNameAndDot(): Token {
     let i = this.index + 1;
     while (true) {
-      if (this.tokens[i]?.kind === "coloncolon" && this.tokens[i + 1] && this.isNameToken(this.tokens[i + 1]!)) {
+      const t1 = this.tokens[i + 1];
+      const t2 = this.tokens[i + 2];
+      if (this.tokens[i]?.kind === "coloncolon" && t1 && this.isNameToken(t1)) {
         i += 2;
         continue;
       }
-      if (this.tokens[i]?.kind === "colon" && this.tokens[i + 1]?.kind === "colon" && this.tokens[i + 2] && this.isNameToken(this.tokens[i + 2]!)) {
+      if (this.tokens[i]?.kind === "colon" && t1?.kind === "colon" && t2 && this.isNameToken(t2)) {
         i += 3;
         continue;
       }
       break;
     }
     if (this.tokens[i]?.kind === "dot") {
-      return this.tokens[i + 1] ?? this.tokens[this.tokens.length - 1]!;
+      return this.tokens[i + 1] ?? this.tokens[this.tokens.length - 1];
     }
-    return this.tokens[i] ?? this.tokens[this.tokens.length - 1]!;
+    return this.tokens[i] ?? this.tokens[this.tokens.length - 1];
   }
 
   private atDotField(): boolean {
@@ -835,11 +837,13 @@ class Parser {
 
     let i = this.index + 1;
     while (true) {
-      if (this.tokens[i]?.kind === "coloncolon" && this.tokens[i + 1] && this.isNameToken(this.tokens[i + 1]!)) {
+      const t1 = this.tokens[i + 1];
+      const t2 = this.tokens[i + 2];
+      if (this.tokens[i]?.kind === "coloncolon" && t1 && this.isNameToken(t1)) {
         i += 2;
         continue;
       }
-      if (this.tokens[i]?.kind === "colon" && this.tokens[i + 1]?.kind === "colon" && this.tokens[i + 2] && this.isNameToken(this.tokens[i + 2]!)) {
+      if (this.tokens[i]?.kind === "colon" && t1?.kind === "colon" && t2 && this.isNameToken(t2)) {
         i += 3;
         continue;
       }
@@ -2642,7 +2646,7 @@ class Parser {
       if (usingCount === 0 || !usingBody) {
         this.notSupported(closingBrace, "function body missing USING", "a function body must include a USING command");
       }
-      return usingBody!;
+      return usingBody;
     }
     this.expect("kw_using", "Expected 'USING' in CREATE FUNCTION");
     return this.parseUsingBodyContents();
@@ -3433,12 +3437,13 @@ class Parser {
         kw_delete: "DELETE",
       };
       for (let i = this.index + 1; i < this.tokens.length; i += 1) {
-        const dml = dmlByKind[this.tokens[i]!.kind];
+        const tok = this.tokens[i];
+        const dml = dmlByKind[tok.kind];
         if (dml) {
           throw new AppError(
             "E_SEMANTIC",
             `${dml} statements cannot be used in ${clauseLabel}`,
-            ...this.posPair(this.tokens[i]!),
+            ...this.posPair(tok),
           );
         }
       }
@@ -3817,17 +3822,18 @@ class Parser {
           if (index === binders.length - 1) {
             return this.parseFreeObjectExpr();
           }
+          const next = binders[index + 1];
           return {
             kind: "for_expr",
-            variable: binders[index + 1]!.variable,
-            iterator: binders[index + 1]!.iterator,
-            optional: binders[index + 1]!.optional,
+            variable: next.variable,
+            iterator: next.iterator,
+            optional: next.optional,
             body: parseBody(index + 1),
             //filter:
           };
         });
       };
-      const first = binders[0]!;
+      const first = binders[0];
       let expr: FreeObjectExpr = {
         kind: "for_expr",
         variable: first.variable,
@@ -4228,7 +4234,7 @@ class Parser {
       return { kind: "literal", value: "" };
     }
     if (parts.length === 1) {
-      return parts[0]!;
+      return parts[0];
     }
     return { kind: "concat", parts };
   }
@@ -5492,11 +5498,11 @@ class Parser {
       let i = this.index + 1;
       // Skip a chain of `.fieldName` tokens.
       while (i + 1 < this.tokens.length
-        && this.isNameToken(this.tokens[i]!)
+        && this.isNameToken(this.tokens[i])
         && this.tokens[i + 1]?.kind === "dot") {
         i += 2;
       }
-      if (i < this.tokens.length && this.isNameToken(this.tokens[i]!)) {
+      if (i < this.tokens.length && this.isNameToken(this.tokens[i])) {
         const afterChain = this.tokens[i + 1]?.kind;
         const continuesAsBinary: Array<Token["kind"]> = [
           "plus", "minus", "star", "slash",
@@ -5583,7 +5589,7 @@ class Parser {
       let depth = 0;
       let i = this.index;
       while (i < this.tokens.length) {
-        const k = this.tokens[i]!.kind;
+        const k = this.tokens[i].kind;
         if (k === "lparen") depth += 1;
         else if (k === "rparen") {
           depth -= 1;
@@ -5598,7 +5604,7 @@ class Parser {
           "concat", "kw_union",
           "dot", "lbracket", "at",
         ];
-        if (continuesAsExpr.includes(this.tokens[i]!.kind)) {
+        if (continuesAsExpr.includes(this.tokens[i].kind)) {
           return undefined;
         }
       }
@@ -5742,7 +5748,7 @@ class Parser {
     let depth = 0;
     let i = this.index;
     while (i < this.tokens.length) {
-      const k = this.tokens[i]!.kind;
+      const k = this.tokens[i].kind;
       if (k === "lparen") depth += 1;
       else if (k === "rparen") {
         depth -= 1;
@@ -5761,7 +5767,7 @@ class Parser {
         //   foo(.b)@property    — link-property access
         "dot", "lbracket", "at",
       ];
-      if (continuesAsExpr.includes(this.tokens[i]!.kind)) {
+      if (continuesAsExpr.includes(this.tokens[i].kind)) {
         // Defer to general expression parser. parseComputedFunctionCallExpr
         // pre-checks atFunctionCall, so the index doesn't need restoration —
         // but be defensive.
@@ -7189,7 +7195,7 @@ class Parser {
     // the simple predicate form doesn't apply — `user.name` isn't a field on
     // the current row. Rewind and parse the whole predicate as a free_expr.
     if (target.kind === "field" && target.field.includes(".")) {
-      const head = target.field.split(".")[0]!;
+      const head = target.field.split(".")[0];
       if (this.localBindings.includes(head)) {
         this.index = beforeTarget;
         const expr = this.parseFreeObjectExpr();
@@ -7526,8 +7532,9 @@ class Parser {
       return "__type__.name";
     }
 
-    if (parts.length >= 2 && this.isTypeLikeName(parts[0]!)) {
-      this.lastStrippedFieldRoot = parts[0]!;
+    const root = parts[0];
+    if (parts.length >= 2 && this.isTypeLikeName(root)) {
+      this.lastStrippedFieldRoot = root;
       return parts.slice(1).join(".");
     }
 
@@ -7997,7 +8004,8 @@ class Parser {
           parts.push(this.consume().lexeme);
         }
         if (parts.length === 2) {
-          return { kind: "path", head: parts[0]!, tail: parts[1]!, steps: this.pathStepsFromParts(parts) };
+          const [head, tail] = parts;
+          return { kind: "path", head, tail, steps: this.pathStepsFromParts(parts) };
         }
         return { kind: "path_chain", parts, steps: this.pathStepsFromParts(parts) };
       }
@@ -8400,7 +8408,7 @@ class Parser {
       return [];
     }
     const [head, ...tail] = parts;
-    const steps: PathStep[] = [{ kind: "object_ref", name: head! }];
+    const steps: PathStep[] = [{ kind: "object_ref", name: head }];
     for (const field of tail) {
       steps.push({ kind: "ptr", name: field, direction: "outbound" });
     }
@@ -8661,20 +8669,23 @@ const parseSetModuleStatementFromTokens = (tokens: Token[]): string | undefined 
 
   const parts: string[] = [];
   let i = 2;
-  if (!isNameKind(tokens[i]?.kind)) {
+  const first = tokens[i];
+  if (!first || !isNameKind(first.kind)) {
     return undefined;
   }
-  parts.push(tokens[i]!.lexeme);
+  parts.push(first.lexeme);
   i += 1;
 
   while (true) {
-    if (tokens[i]?.kind === "coloncolon" && isNameKind(tokens[i + 1]?.kind)) {
-      parts.push(tokens[i + 1]!.lexeme);
+    const t1 = tokens[i + 1];
+    const t2 = tokens[i + 2];
+    if (tokens[i]?.kind === "coloncolon" && t1 && isNameKind(t1.kind)) {
+      parts.push(t1.lexeme);
       i += 2;
       continue;
     }
-    if (tokens[i]?.kind === "colon" && tokens[i + 1]?.kind === "colon" && isNameKind(tokens[i + 2]?.kind)) {
-      parts.push(tokens[i + 2]!.lexeme);
+    if (tokens[i]?.kind === "colon" && t1?.kind === "colon" && t2 && isNameKind(t2.kind)) {
+      parts.push(t2.lexeme);
       i += 3;
       continue;
     }
@@ -8725,7 +8736,7 @@ export const parseEdgeQLScript = (input: string, options: ParseEdgeQLOptions = {
   const parsePiece = (start: number, end: number, finalPiece: boolean): void => {
     if (start >= end) return;
     const piece = tokens.slice(start, end);
-    const refTok = tokens[end] ?? tokens[tokens.length - 1]!;
+    const refTok = tokens[end] ?? tokens[tokens.length - 1];
     piece.push({
       kind: "eof",
       lexeme: "",
@@ -8746,7 +8757,7 @@ export const parseEdgeQLScript = (input: string, options: ParseEdgeQLOptions = {
   };
 
   for (let i = 0; i < tokens.length; i += 1) {
-    const token = tokens[i]!;
+    const token = tokens[i];
     if (token.kind === "eof") break;
 
     if (token.kind === "semi" && depth === 0) {
@@ -8765,7 +8776,7 @@ export const parseEdgeQLScript = (input: string, options: ParseEdgeQLOptions = {
 
   // Final piece (no trailing semi). Find the index just before EOF.
   let endIdx = tokens.length;
-  if (endIdx > 0 && tokens[endIdx - 1]!.kind === "eof") endIdx -= 1;
+  if (endIdx > 0 && tokens[endIdx - 1]?.kind === "eof") endIdx -= 1;
   parsePiece(stmtStart, endIdx, true);
 
   return statements;
