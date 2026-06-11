@@ -8055,10 +8055,7 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       if (expr.kind === "compare") {
         return {
           kind: "compare",
-          // Union gap: the parser emits "not_like"/"not_ilike" (`a NOT LIKE b`)
-          // but the IR compare entry op union in src/ir/model.ts lacks them;
-          // pass them through unchanged pending the shared-type addition.
-          op: expr.op as Extract<SelectExprIREntry, { kind: "compare" }>["op"],
+          op: expr.op,
           left: asNestedExprEntry(compileExprToIREntry(expr.left, currentItemBinding)),
           right: asNestedExprEntry(compileExprToIREntry(expr.right, currentItemBinding)),
         };

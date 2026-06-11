@@ -223,7 +223,7 @@ type RuntimeTypedAliasDef = {
   sourceType: string;
   filter?: {
     field: string;
-    op: "=" | "!=" | "<" | "<=" | ">" | ">=" | "?=" | "?!=" | "like" | "ilike";
+    op: "=" | "!=" | "<" | "<=" | ">" | ">=" | "?=" | "?!=" | "like" | "ilike" | "not_like" | "not_ilike";
     value: ScalarValue;
   };
   filterValues?: {
@@ -1051,7 +1051,7 @@ const runtimeAliasLikeMatches = (value: unknown, pattern: string): boolean => {
 
 const runtimeAliasPredicateMatches = (
   value: unknown,
-  op: "=" | "!=" | "<" | "<=" | ">" | ">=" | "?=" | "?!=" | "like" | "ilike",
+  op: "=" | "!=" | "<" | "<=" | ">" | ">=" | "?=" | "?!=" | "like" | "ilike" | "not_like" | "not_ilike",
   expected: ScalarValue,
 ): boolean => {
   if (op === "=") {
@@ -1086,9 +1086,11 @@ const runtimeAliasPredicateMatches = (
   if (op === "?!=") {
     return value === null || value === undefined || value !== expected;
   }
-  const left = op === "ilike" && typeof value === "string" ? value.toLowerCase() : value;
-  const right = op === "ilike" ? expected.toLowerCase() : expected;
-  return runtimeAliasLikeMatches(left, right);
+  const caseInsensitive = op === "ilike" || op === "not_ilike";
+  const left = caseInsensitive && typeof value === "string" ? value.toLowerCase() : value;
+  const right = caseInsensitive ? expected.toLowerCase() : expected;
+  const matched = runtimeAliasLikeMatches(left, right);
+  return op === "not_like" || op === "not_ilike" ? !matched : matched;
 };
 
 const readRuntimeTypedAliasSourceRows = (
@@ -2293,6 +2295,9 @@ const tryRuntimeSelectExprEvaluationAst = (
           if (expr.op === "<=") return Number(l) <= Number(r);
           if (expr.op === "like" || expr.op === "ilike") {
             return likeMatch(l, r, expr.op === "ilike");
+          }
+          if (expr.op === "not_like" || expr.op === "not_ilike") {
+            return !likeMatch(l, r, expr.op === "not_ilike");
           }
           return false;
         };
