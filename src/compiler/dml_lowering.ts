@@ -202,9 +202,9 @@ export const compileDmlToIR = (
           const normalizedEnumType = normalizeTypeName(binding.enumType, activeModule);
           const enumTypeDef = schema.getType(normalizedEnumType);
           if (!enumTypeDef) {
-            fail(`Unknown enum type '${normalizedEnumType}'`);
+            return fail(`Unknown enum type '${normalizedEnumType}'`);
           }
-          const allEnumValues = enumTypeDef!.fields.flatMap((f) => f.enumValues ?? []);
+          const allEnumValues = enumTypeDef.fields.flatMap((f) => f.enumValues ?? []);
           if (allEnumValues.length === 0) {
             fail(`Type '${normalizedEnumType}' is not an enum`);
           }
@@ -267,12 +267,10 @@ export const compileDmlToIR = (
           const normalizedHead = normalizeTypeName(binding.head, activeModule);
           const headTypeDef = schema.getType(normalizedHead);
           if (headTypeDef) {
-            const isEnumScalarType = headTypeDef.fields.length === 1
-              && headTypeDef.fields[0]?.name === "__enum__"
-              && headTypeDef.fields[0]?.enumValues
-              && headTypeDef.fields[0].enumValues.length > 0;
-            if (isEnumScalarType) {
-              const allEnumValues = headTypeDef.fields[0]!.enumValues!;
+            const enumField = headTypeDef.fields.length === 1 ? headTypeDef.fields[0] : undefined;
+            const enumValues = enumField?.name === "__enum__" ? enumField.enumValues : undefined;
+            if (enumValues !== undefined && enumValues.length > 0) {
+              const allEnumValues = enumValues;
               if (!allEnumValues.includes(binding.tail)) {
                 fail(`enum '${normalizedHead}' has no member called '${binding.tail}'`);
               }

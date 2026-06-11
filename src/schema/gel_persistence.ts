@@ -132,15 +132,14 @@ export const serializeSchemaToGelTables = (db: SQLiteDatabase, snapshot: SchemaS
   const types = snapshot.listTypes();
   const functions = snapshot.listFunctions();
 
-  const idMap = new Map<string, string>();
+  const typeEntries = types.map((typeDef) => ({ typeDef, typeId: generateId(typeDef) }));
 
-  for (const typeDef of types) {
-    const typeId = generateId(typeDef);
+  const idMap = new Map<string, string>();
+  for (const { typeDef, typeId } of typeEntries) {
     idMap.set(qualifiedTypeName(typeDef), typeId);
   }
 
-  for (const typeDef of types) {
-    const typeId = idMap.get(qualifiedTypeName(typeDef))!;
+  for (const { typeDef, typeId } of typeEntries) {
     serializeTypeToGelTables(db, typeDef, typeId, idMap, snapshot);
   }
 
@@ -220,26 +219,32 @@ export const deserializeSchemaFromGelTables = (db: SQLiteDatabase): SchemaSnapsh
 
   const pointersBySource = new Map<string, Array<{ pointer_id: string }>>();
   for (const p of pointers) {
-    if (!pointersBySource.has(p.source_id)) {
-      pointersBySource.set(p.source_id, []);
+    let list = pointersBySource.get(p.source_id);
+    if (!list) {
+      list = [];
+      pointersBySource.set(p.source_id, list);
     }
-    pointersBySource.get(p.source_id)!.push(p);
+    list.push(p);
   }
 
   const linkPropsByLink = new Map<string, string[]>();
   for (const lp of linkProps) {
-    if (!linkPropsByLink.has(lp.link_id)) {
-      linkPropsByLink.set(lp.link_id, []);
+    let list = linkPropsByLink.get(lp.link_id);
+    if (!list) {
+      list = [];
+      linkPropsByLink.set(lp.link_id, list);
     }
-    linkPropsByLink.get(lp.link_id)!.push(lp.property_id);
+    list.push(lp.property_id);
   }
 
   const basesBySubject = new Map<string, Array<{ object_id: string; idx: number }>>();
   for (const b of bases) {
-    if (!basesBySubject.has(b.subject_id)) {
-      basesBySubject.set(b.subject_id, []);
+    let list = basesBySubject.get(b.subject_id);
+    if (!list) {
+      list = [];
+      basesBySubject.set(b.subject_id, list);
     }
-    basesBySubject.get(b.subject_id)!.push(b);
+    list.push(b);
   }
 
   const annotationsBySubject = buildAnnotationsBySubject(typeAnnotations);
@@ -249,26 +254,32 @@ export const deserializeSchemaFromGelTables = (db: SQLiteDatabase): SchemaSnapsh
 
   const triggersByType = new Map<string, string[]>();
   for (const t of typeTriggers) {
-    if (!triggersByType.has(t.type_id)) {
-      triggersByType.set(t.type_id, []);
+    let list = triggersByType.get(t.type_id);
+    if (!list) {
+      list = [];
+      triggersByType.set(t.type_id, list);
     }
-    triggersByType.get(t.type_id)!.push(t.trigger_id);
+    list.push(t.trigger_id);
   }
 
   const policiesByType = new Map<string, string[]>();
   for (const p of typePolicies) {
-    if (!policiesByType.has(p.type_id)) {
-      policiesByType.set(p.type_id, []);
+    let list = policiesByType.get(p.type_id);
+    if (!list) {
+      list = [];
+      policiesByType.set(p.type_id, list);
     }
-    policiesByType.get(p.type_id)!.push(p.policy_id);
+    list.push(p.policy_id);
   }
 
   const rewritesByPointer = new Map<string, string[]>();
   for (const r of pointerRewrites) {
-    if (!rewritesByPointer.has(r.pointer_id)) {
-      rewritesByPointer.set(r.pointer_id, []);
+    let list = rewritesByPointer.get(r.pointer_id);
+    if (!list) {
+      list = [];
+      rewritesByPointer.set(r.pointer_id, list);
     }
-    rewritesByPointer.get(r.pointer_id)!.push(r.rewrite_id);
+    list.push(r.rewrite_id);
   }
 
   const types: TypeDef[] = [];
@@ -505,8 +516,7 @@ const serializeTypeToGelTables = (
     JSON.stringify(objectTypeMeta),
   );
 
-  for (let i = 0; i < (typeDef.extends ?? []).length; i++) {
-    const baseName = typeDef.extends![i];
+  for (const [i, baseName] of (typeDef.extends ?? []).entries()) {
     const baseId = idMap.get(baseName) ?? baseName;
     db.prepare(`INSERT INTO gel_bases (subject_id, object_id, idx) VALUES (?, ?, ?)`).run(typeId, baseId, i);
   }

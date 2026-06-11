@@ -277,10 +277,10 @@ export const offsetToLineCol = (
   let hi = source.length - 1;
   while (lo < hi) {
     const mid = (lo + hi + 1) >>> 1;
-    if (source[mid]! <= offset) lo = mid;
+    if (source[mid] <= offset) lo = mid;
     else hi = mid - 1;
   }
-  return { line: lo + 1, column: offset - source[lo]! + 1 };
+  return { line: lo + 1, column: offset - source[lo] + 1 };
 };
 
 const KEYWORDS: Record<string, TokenKind> = {
@@ -512,7 +512,7 @@ const tokenizeImpl = (input: string): TokenizeResult => {
       if (!isHex(c)) {
         return syntaxError(`Unsupported escape sequence '\\${name}'`, tokenOffset);
       }
-      codepoint = codepoint * 16 + parseInt(input[i + k]!, 16);
+      codepoint = codepoint * 16 + parseInt(input[i + k], 16);
     }
     i += count;
     return codepoint;
@@ -908,13 +908,13 @@ const tokenizeImpl = (input: string): TokenizeResult => {
     const cc = input.charCodeAt(i);
 
     // String interpolation continuation: ')' that closes a held interpolation.
+    const interpTop = strInterpStack[strInterpStack.length - 1];
     if (
-      strInterpStack.length > 0 &&
+      interpTop !== undefined &&
       cc === CC_RPAREN &&
-      strInterpStack[strInterpStack.length - 1]!.parenDepth === openParens
+      interpTop.parenDepth === openParens
     ) {
-      const top = strInterpStack[strInterpStack.length - 1]!;
-      scanStringInterpolationCont(top.quote, tokenOffset);
+      scanStringInterpolationCont(interpTop.quote, tokenOffset);
       continue;
     }
 

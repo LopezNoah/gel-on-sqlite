@@ -144,7 +144,7 @@ export const tryResolveStdlibFunction = (name: string, arity: number, activeModu
   const candidates: string[] = [];
   if (name.includes("::")) {
     candidates.push(name);
-    const shortName = name.split("::").pop()!;
+    const shortName = name.slice(name.lastIndexOf("::") + 2);
     candidates.push(`std::${shortName}`, `math::${shortName}`, `cal::${shortName}`);
   } else {
     candidates.push(`${activeModule}::${name}`, `std::${name}`, `math::${name}`, `cal::${name}`);

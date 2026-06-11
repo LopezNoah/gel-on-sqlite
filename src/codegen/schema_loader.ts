@@ -40,7 +40,7 @@ export const resolveSchemaModelForCompile = (options: ResolveSchemaModelOptions)
 
   const registered = listRegisteredGeneratedSchemaModels();
   if (registered.length === 1) {
-    const only = getRegisteredGeneratedSchemaModel(registered[0]!);
+    const only = getRegisteredGeneratedSchemaModel(registered[0]);
     if (only && matchesSchema(only)) {
       return only;
     }

@@ -533,7 +533,7 @@ const unknownTypeRef = (nameHint: string): TypeRef => {
     kind: "type_ref",
     id: `unknown:${nameHint}`,
     nameHint,
-    module: nameHint.includes("::") ? nameHint.split("::")[0]! : "default",
+    module: nameHint.includes("::") ? nameHint.split("::")[0] : "default",
     isView: false,
     isScalar: false,
     isAbstract: false,
@@ -845,7 +845,7 @@ const resolveBacklinkPointerRef = (
   // by an abstract (or otherwise polymorphic) supertype. When the filter is a
   // concrete type, this collapses to `{filter id}`.
   const allowedSourceIds = sourceHint
-    ? new globalThis.Set<string>([sourceHint, ...(hintTypeDef ? ctx.schema!.listConcreteTypesAssignableTo(sourceHint).map((td) => qualifyTypeNameOf(td)) : [])])
+    ? new globalThis.Set<string>([sourceHint, ...(hintTypeDef && ctx.schema ? ctx.schema.listConcreteTypesAssignableTo(sourceHint).map((td) => qualifyTypeNameOf(td)) : [])])
     : undefined;
   // Targets accepted by this backlink. Includes the requested type and any
   // ancestor whose link target is a union (`Issue.references: File | URL | …`)
@@ -910,7 +910,7 @@ const resolveBacklinkPointerRef = (
   // Abstract `[IS T]` covering multiple concrete sources: surface a union
   // ptrref. The SQL compiler reads `outSource` / `unionComponents` when
   // building the polymorphic FROM, and the link table is per-concrete-type.
-  const merged: PointerRef = { ...matches[0]! };
+  const merged: PointerRef = { ...matches[0] };
   merged.unionComponents = matches;
   // outSource broadens to the requested abstract type so downstream type
   // queries (e.g. `[IS Named]`) reason against the filter, not just the
@@ -1237,9 +1237,9 @@ const compileSetConstructor = (values: Set[], label: string): Set => {
     return literalToSet(null);
   }
   if (values.length === 1) {
-    return values[0]!;
+    return values[0];
   }
-  const first = values[0]!;
+  const first = values[0];
   return {
     kind: "set",
     expr: {
@@ -1312,10 +1312,10 @@ const validateUnionPointerCompat = (left: Set, right: Set, ctx: IRCompileContext
           }
         }
       }
-    } else if ((ll && rp) || (lp && rl)) {
-      const linkDef = (ll ?? rl)!;
-      const propDef = (lp ?? rp)!;
-      failSemantic(`cannot create union ${unionName} with link '${name}' using incompatible types ${qLink(linkDef)}, ${fieldStdName(propDef)}`);
+    } else if (ll && rp) {
+      failSemantic(`cannot create union ${unionName} with link '${name}' using incompatible types ${qLink(ll)}, ${fieldStdName(rp)}`);
+    } else if (lp && rl) {
+      failSemantic(`cannot create union ${unionName} with link '${name}' using incompatible types ${qLink(rl)}, ${fieldStdName(lp)}`);
     }
   }
 };
@@ -1342,9 +1342,9 @@ const resolvePathToEnumLiteral = (ctx: IRCompileContext, head: string, tail: str
   const enumType = lookupEnumScalar(ctx, head);
   if (!enumType) return undefined;
   if (tail === undefined) {
-    failSemantic(`enum path expression lacks an enum member name, as in '${head}.${enumType.members[0]}'`);
+    return failSemantic(`enum path expression lacks an enum member name, as in '${head}.${enumType.members[0]}'`);
   }
-  if (!enumType.members.includes(tail!)) {
+  if (!enumType.members.includes(tail)) {
     // Matches upstream Gel's phrasing ("enum has no member called 'X'");
     // the type name lives in the path, not the message.
     failSemantic(`enum has no member called '${tail}'`);
@@ -1352,7 +1352,7 @@ const resolvePathToEnumLiteral = (ctx: IRCompileContext, head: string, tail: str
   // Tag the member literal with its (scalar) enum type so downstream
   // primitive-reference checks fire on `color_enum_t.RED.GREEN` etc. without
   // having to special-case bare string constants everywhere.
-  const literal = enumLiteralSet(tail!);
+  const literal = enumLiteralSet(tail);
   return { ...literal, typeref: { ...unknownTypeRef(enumType.qualifiedName), isScalar: true } };
 };
 
@@ -1390,7 +1390,7 @@ const tryExtractSetOfStringConstants = (set: Set): string[] | undefined => {
   if (expr.kind === "operator_call" && expr.operator === "union" && expr.args) {
     const values: string[] = [];
     for (const key of Object.keys(expr.args).sort((a, b) => Number(a) - Number(b))) {
-      const inner = tryExtractStringConstant(expr.args[key]!.expr);
+      const inner = tryExtractStringConstant(expr.args[key].expr);
       if (inner === undefined) return undefined;
       values.push(inner);
     }
@@ -1508,9 +1508,9 @@ const inferAstExprTypeName = (expr: FreeObjectExpr, ctx: IRCompileContext): stri
     case "path_chain": {
       const parts = expr.parts;
       if (parts.length < 1) return undefined;
-      const enumType = lookupEnumScalar(ctx, parts[0]!);
+      const enumType = lookupEnumScalar(ctx, parts[0]);
       if (enumType) return enumType.qualifiedName;
-      if (parts.length === 2) return inferPropertyTypeName(ctx, parts[0]!, parts[1]!);
+      if (parts.length === 2) return inferPropertyTypeName(ctx, parts[0], parts[1]);
       return undefined;
     }
     case "path_steps": {
@@ -1728,7 +1728,7 @@ const inferAstExprTypeName = (expr: FreeObjectExpr, ctx: IRCompileContext): stri
       // types; anything else falls back to undefined and downstream code
       // treats it as std::anytype.
       const fnName = expr.call.name;
-      const shortName = fnName.includes("::") ? fnName.split("::").pop()! : fnName;
+      const shortName = fnName.includes("::") ? fnName.slice(fnName.lastIndexOf("::") + 2) : fnName;
       const argTypes = expr.call.args.map((arg): string | undefined => {
         const a = arg as { kind?: string; expr?: FreeObjectExpr; arg?: { expr?: FreeObjectExpr } };
         if (a.kind === "expr" && a.expr) return inferAstExprTypeName(a.expr, ctx);
@@ -2082,8 +2082,8 @@ const substituteBindingRefsInFreeObjectExpr = (
             // binding_ref-shaped FunctionCallArgExpr (not wrapped in `expr`).
             // Substitute by name so nested `inner(x)` calls inside a UDF
             // body pick up the inlined parameter binding.
-            if (arg.kind === "binding_ref" && substitutions.has(arg.name)) {
-              const replacement = substitutions.get(arg.name)!;
+            const replacement = arg.kind === "binding_ref" ? substitutions.get(arg.name) : undefined;
+            if (replacement !== undefined) {
               if (replacement.kind === "binding_ref") return { kind: "binding_ref", name: replacement.name };
               if (replacement.kind === "literal") return { kind: "literal", value: replacement.value };
               if (replacement.kind === "function_call") return { kind: "function_call", call: replacement.call };
@@ -2198,11 +2198,12 @@ const tryBuildInlinedUDFBody = (
   positionalCursor = 0;
   for (const param of fn.params) {
     let argExpr: FreeObjectExpr;
+    const namedArg = namedArgs.get(param.name);
     if (!param.namedOnly && positionalCursor < positionalArgs.length) {
       argExpr = functionCallArgToFreeObjectExpr(positionalArgs[positionalCursor]);
       positionalCursor += 1;
-    } else if (namedArgs.has(param.name)) {
-      argExpr = functionCallArgToFreeObjectExpr(namedArgs.get(param.name)!);
+    } else if (namedArg !== undefined) {
+      argExpr = functionCallArgToFreeObjectExpr(namedArg);
     } else if (param.default !== undefined) {
       argExpr = { kind: "literal", value: param.default };
     } else {
@@ -2327,7 +2328,7 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
       // members, matching EdgeQL's union-type rules.
       for (let i = 0; i < compiledValues.length; i += 1) {
         for (let j = i + 1; j < compiledValues.length; j += 1) {
-          validateUnionPointerCompat(compiledValues[i]!, compiledValues[j]!, ctx);
+          validateUnionPointerCompat(compiledValues[i], compiledValues[j], ctx);
         }
       }
       const result = compileSetConstructor(compiledValues, "set_expr");
@@ -2848,7 +2849,7 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
             }
           }
           if (propDefs.length > 0) {
-            const first = propDefs[0]!.prop;
+            const first = propDefs[0].prop;
             const propertyPtrRef: PointerRef = {
               kind: "pointer_ref",
               id: `${linkPointer.ptrref.id}.${expr.field}`,
@@ -3184,9 +3185,9 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
         // defined operand must be an array; mixing an array with a scalar is
         // the genuine type error.
         const nonArrayIndex = partTypes.findIndex((typeName) => typeName !== undefined && !isArrayType(typeName));
-        if (nonArrayIndex >= 0) {
-          const offenderType = partTypes[nonArrayIndex]!;
-          const otherType = definedTypes.find(isArrayType)!;
+        const offenderType = nonArrayIndex >= 0 ? partTypes[nonArrayIndex] : undefined;
+        const otherType = definedTypes.find(isArrayType);
+        if (offenderType !== undefined && otherType !== undefined) {
           const [leftType, rightType] = nonArrayIndex === 0 ? [offenderType, otherType] : [otherType, offenderType];
           failSemantic(`operator '++' cannot be applied to operands of type '${leftType}' and '${rightType}'`);
         }
@@ -3208,14 +3209,15 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
           return true;
         };
         const concreteElements = definedTypes.map(elementType);
-        const mismatch = concreteElements.find((elem) => elementsIncompatible(concreteElements[0]!, elem));
+        const mismatch = concreteElements.find((elem) => elementsIncompatible(concreteElements[0], elem));
         if (mismatch !== undefined) {
           failSemantic(`operator '++' cannot be applied to operands of type '${concreteElements[0]}' and '${mismatch}'`);
         }
       } else {
         const nonStrIndex = partTypes.findIndex((typeName) => typeName !== undefined && typeName !== "std::str");
-        if (nonStrIndex >= 0) {
-          const offenderType = partTypes[nonStrIndex]!;
+        const nonStrType = nonStrIndex >= 0 ? partTypes[nonStrIndex] : undefined;
+        if (nonStrType !== undefined) {
+          const offenderType = nonStrType;
           const otherType = partTypes.find((typeName, index) => index !== nonStrIndex && typeName !== undefined) ?? "std::str";
           const [leftType, rightType] = nonStrIndex === 0 ? [offenderType, otherType] : [otherType, offenderType];
           failSemantic(`operator '++' cannot be applied to operands of type '${leftType}' and '${rightType}'`);
@@ -4386,14 +4388,14 @@ const compileFilterTarget = (target: FilterTarget, subject: Set, ctx: IRCompileC
     // property" error and the target silently collapses to the subject set.
     if ("bareName" in target && target.bareName) {
       const segments = target.field.split(".");
-      const first = segments[0]!;
+      const first = segments[0];
       const bound = first === "__current__" || first === "__subject__"
         ? undefined
         : resolveBinding(ctx, first);
       if (bound) {
         let result = bound;
         for (let i = 1; i < segments.length; i++) {
-          const ptrref = resolvePointerRef(ctx, result.typeref, segments[i]!);
+          const ptrref = resolvePointerRef(ctx, result.typeref, segments[i]);
           if (!ptrref) {
             break;
           }
@@ -4427,7 +4429,7 @@ const compileFilterTarget = (target: FilterTarget, subject: Set, ctx: IRCompileC
     const segments = target.field.split(".");
     let result = subject;
     for (let i = 0; i < segments.length; i++) {
-      const segment = segments[i]!;
+      const segment = segments[i];
       const ptrref = resolvePointerRef(ctx, result.typeref, segment);
       if (!ptrref) {
         // `.field` against a known schema type — surface the "no link or
@@ -5235,6 +5237,7 @@ const validateSplatTypeIntersections = (
   ctx: IRCompileContext,
 ): void => {
   if (!ctx.schema) return;
+  const schema = ctx.schema;
   const splatTypes: string[] = [];
   for (const el of shape) {
     if (el.kind !== "splat") continue;
@@ -5264,8 +5267,8 @@ const validateSplatTypeIntersections = (
   }
   for (let i = 0; i < splatTypes.length; i += 1) {
     for (let j = i + 1; j < splatTypes.length; j += 1) {
-      const a = splatTypes[i]!;
-      const b = splatTypes[j]!;
+      const a = splatTypes[i];
+      const b = splatTypes[j];
       if (a === b) continue;
       const aSubB = ctx.schema.isTypeSubtypeOf(a, b);
       const bSubA = ctx.schema.isTypeSubtypeOf(b, a);
@@ -5275,8 +5278,8 @@ const validateSplatTypeIntersections = (
       // an ancestor of both), the splats are still considered related
       // because each intersection refines the subject independently.
       if (!subjectIsUniversal) {
-        const aRelatedToSubject = [...subjectBranches].some((branch) => ctx.schema!.isTypeSubtypeOf(a, branch));
-        const bRelatedToSubject = [...subjectBranches].some((branch) => ctx.schema!.isTypeSubtypeOf(b, branch));
+        const aRelatedToSubject = [...subjectBranches].some((branch) => schema.isTypeSubtypeOf(a, branch));
+        const bRelatedToSubject = [...subjectBranches].some((branch) => schema.isTypeSubtypeOf(b, branch));
         if (aRelatedToSubject && bRelatedToSubject) continue;
       }
       throw new AppError(
@@ -6973,7 +6976,7 @@ const buildGroupStmtParts = (
     const out: string[][] = [[]];
     for (const item of items) {
       const len = out.length;
-      for (let i = 0; i < len; i += 1) out.push([...out[i]!, item]);
+      for (let i = 0; i < len; i += 1) out.push([...out[i], item]);
     }
     return out;
   };
@@ -7049,11 +7052,9 @@ const buildGroupStmtParts = (
       // would diverge between the two fields, so it stays on the runtime
       // grouper.
       let computed: Extract<EdgeQLShapeElement, { kind: "computed" }>["expr"] | undefined;
-      if (usingBinding.expr.kind === "binding_ref" && usingComputeds.has(usingBinding.expr.name)) {
-        const prior = usingComputeds.get(usingBinding.expr.name)!;
-        if (!containsVolatileCall(prior)) {
-          computed = prior;
-        }
+      const prior = usingBinding.expr.kind === "binding_ref" ? usingComputeds.get(usingBinding.expr.name) : undefined;
+      if (prior !== undefined && !containsVolatileCall(prior)) {
+        computed = prior;
       }
       if (!computed) {
         if (containsBindingRef(usingBinding.expr)) {
