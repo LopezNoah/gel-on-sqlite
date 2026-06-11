@@ -7296,7 +7296,7 @@ const parseGroupRowProjection = (
   const out: GroupRowProjection[] = [];
   const dbg = (reason: string, el?: unknown): { unlowerable: true } => {
     if (process.env.DBG_GROUP_PROJ) console.error("[group-proj] unlowerable:", reason, JSON.stringify(el ?? null)?.slice(0, 220));
-    return dbg("site1", el);
+    return { unlowerable: true };
   };
   for (const el of shape) {
     if (!("name" in el) || typeof el.name !== "string") return dbg("unnamed", el);
