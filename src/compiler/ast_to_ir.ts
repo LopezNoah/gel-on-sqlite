@@ -4055,7 +4055,11 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
         const literal = tryExtractStringConstant(innerSet);
         if (literal !== undefined) {
           const normalized = normalizeDateTimeLiteral(literal);
-          if (normalized !== undefined) return enumLiteralSet(normalized);
+          // Keep the datetime typeref on the folded constant — the client
+          // result codec keys value conversion off it.
+          if (normalized !== undefined) {
+            return { ...enumLiteralSet(normalized), typeref: unknownTypeRef("std::datetime") };
+          }
         }
       }
 

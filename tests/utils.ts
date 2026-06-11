@@ -8,7 +8,7 @@ import {
   deserializeSchemaFromInstdata,
   deserializeSchemaFromGelTables,
 } from "../src/schema/gel_persistence.js";
-import { executeQuery, executeScript } from "../src/runtime/engine.js";
+import { Client } from "../src/client/index.js";
 // import { parseDeclarativeSchema } from "../src/schema/declarative.js";
 import { schemaSnapshotFromDeclarative } from "../src/schema/uiSchema.js";
 import { SchemaSnapshot } from "../src/schema/schema.js";
@@ -151,21 +151,21 @@ export class QueryHarness {
   db: any;
   schema: any;
   private readonly defaultModule: string;
-  // When set, the harness threads a security context with this flag through
-  // to executeScript / executeQuery so the engine enforces user-DDL
-  // restrictions (see HarnessOptions.strictUserDDL).
-  private strictUserDDL: boolean = false;
+  // The harness runs every query through the public Client facade (in raw
+  // mode: the conformance suite's expected values were ported verbatim from
+  // the Python suite's JSON-ish shapes, so the result codec is bypassed).
+  // This keeps the conformance tests exercising the same pipeline
+  // application code uses via `createClient`.
+  private readonly client: Client;
 
   private constructor(db: any, schema: any, defaultModule = "default") {
     this.db = db;
     this.schema = schema;
     this.defaultModule = defaultModule;
-  }
-
-  private buildSecurityContext() {
-    return this.strictUserDDL
-      ? { strictUserDDL: true as const }
-      : undefined;
+    this.client = Client.fromParts(db, schema, {
+      defaultModule,
+      rawResults: true,
+    });
   }
 
   /**
@@ -175,7 +175,7 @@ export class QueryHarness {
    * rejects generic types, USING SQL bodies, etc.
    */
   setStrictUserDDL(value: boolean): void {
-    this.strictUserDDL = value;
+    this.client.setSecurityContext(value ? { strictUserDDL: true } : undefined);
   }
 
   /**
@@ -326,14 +326,14 @@ export class QueryHarness {
   }
 
   query(q: string) {
-    return executeQuery(this.db, this.schema, q, this.buildSecurityContext());
+    return this.client.querySyncEnvelope(q);
   }
 
   /**
    * Execute a multi-statement script (semicolon-separated)
    */
   script(s: string) {
-    return executeScript(this.db, this.schema, s, this.buildSecurityContext(), { defaultModule: this.defaultModule });
+    return this.client.scriptSyncEnvelope(s);
   }
 
   /**
