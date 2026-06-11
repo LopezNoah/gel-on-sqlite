@@ -170,6 +170,22 @@ const normalizeRuntimeFloat = (value: number): number => (
   Number.isFinite(value) ? Number(value.toPrecision(15)) : value
 );
 
+// Fieldless `count(.link)` aggregates over the link target rows themselves.
+// Mirror the SQL lowering (`COUNT(DISTINCT target)` in countForwardLink) by
+// deduping id-bearing rows before handing them to the aggregate.
+const dedupeRowsById = (rows: unknown[]): unknown[] => {
+  const seen = new Set<string>();
+  return rows.filter((item) => {
+    const id = item && typeof item === "object" && !Array.isArray(item)
+      ? (item as { id?: unknown }).id
+      : undefined;
+    if (typeof id !== "string") return true;
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+};
+
 const runtimeExprAliases = new WeakMap<SchemaSnapshot, Map<string, string>>();
 
 // Lists every alias known for a schema — both schema::Alias entries
@@ -1961,9 +1977,6 @@ const tryRuntimeSelectExprEvaluationAst = (
           }
           if (computed?.kind === "property" && computed.expr.kind === "link_aggregate") {
             const aggregateExpr = computed.expr;
-            // A fieldless aggregate (`count(.link)`) has nothing to read off
-            // the linked rows — aggregate over the empty set, matching the
-            // parsed-runtime branch below.
             const aggregateField = aggregateExpr.field;
             const sourceEnv = new Map(env);
             sourceEnv.set("__computed_source__", row);
@@ -1976,7 +1989,15 @@ const tryRuntimeSelectExprEvaluationAst = (
             const linkItems = Array.isArray(linked)
               ? linked
               : linked === null || linked === undefined ? [] : [linked];
-            const values = aggregateField === undefined ? [] : linkItems.flatMap((item) => {
+            if (aggregateField === undefined) {
+              // Fieldless `count(.link)`: aggregate over the link target
+              // rows themselves, matching the SQL path's
+              // COUNT(DISTINCT target). Only `count` is produced fieldless
+              // upstream (sdl_adapter's detectCountOfLink); numeric
+              // aggregates over object rows reduce to the empty set.
+              return evaluateRuntimeAggregate(aggregateExpr.functionName, dedupeRowsById(linkItems));
+            }
+            const values = linkItems.flatMap((item) => {
               const linkEnv = new Map(env);
               linkEnv.set("__computed_link__", item);
               const value = evalExpr({
@@ -5337,15 +5358,18 @@ const tryEvaluateParsedRuntimeSelect = (
         }
         if (computed?.kind === "property" && computed.expr.kind === "link_aggregate") {
           const aggregateExpr = computed.expr;
-          // A fieldless aggregate (`count(.link)`) has no per-row field to
-          // read — both lookups below would come up empty, so aggregate
-          // over the empty set directly.
           const aggregateField = aggregateExpr.field;
           const linkRows = readForwardLink(row, sourceType, aggregateExpr.link);
-          const fieldValues = aggregateField === undefined ? [] : (readPresentFieldValues(linkRows, aggregateField) ?? linkRows.flatMap((linkRow) => {
+          if (aggregateField === undefined) {
+            // Fieldless `count(.link)`: aggregate over the link target rows
+            // themselves, matching the SQL path's COUNT(DISTINCT target).
+            // Only `count` is produced fieldless upstream.
+            return evaluateRuntimeAggregate(aggregateExpr.functionName, dedupeRowsById(linkRows));
+          }
+          const fieldValues = readPresentFieldValues(linkRows, aggregateField) ?? linkRows.flatMap((linkRow) => {
             const value = readForwardLink(linkRow, rowTypeName(linkRow), aggregateField);
             return value.length > 0 ? value : [];
-          }));
+          });
           return evaluateRuntimeAggregate(aggregateExpr.functionName, fieldValues);
         }
         // Shape-level computed (e.g. `unique := count(...)` declared in
