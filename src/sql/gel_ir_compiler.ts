@@ -1,4 +1,5 @@
 import { quoteIdent, quoteLiteral, tableNameForType } from "../codegen/sql.js";
+import { AppError } from "../errors.js";
 import type { RuntimeTarget } from "../runtime/target.js";
 import { lowerStdlibFunctionSql } from "./stdlib_lowering.js";
 import type {
@@ -155,11 +156,11 @@ export const compileGelIRToSQL = (
   const stmtOffsetForValidation = statement.offset ?? topSelect.selectExpr?.offset;
   const limitForValidation = extractNumericLiteral(stmtLimitForValidation);
   if (limitForValidation !== undefined && limitForValidation < 0) {
-    throw new Error("LIMIT must not be negative");
+    throw new AppError("E_VALIDATION", "LIMIT must not be negative");
   }
   const offsetForValidation = extractNumericLiteral(stmtOffsetForValidation);
   if (offsetForValidation !== undefined && offsetForValidation < 0) {
-    throw new Error("OFFSET must not be negative");
+    throw new AppError("E_VALIDATION", "OFFSET must not be negative");
   }
 
   // `SELECT (GROUP …) [{…}] [FILTER/ORDER BY]` — group rows in statement

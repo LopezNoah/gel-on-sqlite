@@ -1126,7 +1126,12 @@ const serializeRewriteExpr = (expr: NonNullable<MutationRewriteDef["onInsert"]>)
   if (expr.kind === "literal") return JSON.stringify(expr.value);
   if (expr.kind === "subject_field") return `.${expr.field}`;
   if (expr.kind === "old_field") return `__old__.${expr.field}`;
-  return "";
+  // Returning "" here would round-trip as "no expr" (the reader treats an
+  // empty expr as absent), silently dropping the rewrite — fail loudly.
+  throw new AppError(
+    "E_RUNTIME",
+    `cannot serialize mutation rewrite expression of unknown kind '${(expr as { kind: string }).kind}'`,
+  );
 };
 
 const parseComputedPropertyExpr = (exprStr: string): Extract<ComputedDef, { kind: "property" }>["expr"] => {

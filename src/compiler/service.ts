@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import "../codegen/generated/schema_model.js";
 
 import type { Statement } from "../edgeql/ast.js";
+import { AppError } from "../errors.js";
 import type { Set as GelIRSet, Statement as GelIRStatement, TypeRef as GelIRTypeRef } from "../ir/gel_ir.js";
 import type { IRStatement, OverlayIR } from "../ir/model.js";
 import type { RuntimeTarget } from "../runtime/target.js";
@@ -292,7 +293,7 @@ const compileSqlFromGelIR = (
   context: CompileContext,
 ): { sql: GelIRSQLArtifact; gelIr: GelIRStatement } => {
   if (!isGelIRCompatibleStatement(statement)) {
-    throw new Error(`Statement kind '${statement.kind}' is not supported by GEL IR SQL lowering`);
+    throw new AppError("E_UNSUPPORTED", `Statement kind '${statement.kind}' is not supported by GEL IR SQL lowering`);
   }
 
   const gelIr = compileASTToGelIR(statement, {

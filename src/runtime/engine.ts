@@ -8631,9 +8631,10 @@ const preEvaluateGroupBindings = (
       return ast;
     }
   } catch (e) {
-    // Fall through to pre-evaluation on compile failure (the compiler
-    // signals unlowerable statements with a plain Error); never hide bugs.
-    if (isNativeBugError(e)) throw e;
+    // Fall through to pre-evaluation on compile failure. The compile
+    // pipeline signals unsupported/unlowerable statements with AppErrors
+    // (E_UNSUPPORTED/E_SEMANTIC/...); anything else is a bug — rethrow.
+    if (!isQueryFailure(e)) throw e;
   }
   let rewrote = false;
   const newWith = ast.with.map((binding) => {
@@ -8677,7 +8678,9 @@ const preEvaluateGroupBindings = (
       };
     } catch (e) {
       // Groups the IR pipeline can't compile/run keep their original
-      // binding and are handled downstream; never hide bugs.
+      // binding and are handled downstream; never hide bugs. Must tolerate
+      // plain Errors: runCompiledGroup executes via the interpreter/stdlib
+      // (stdlib/functions.ts throws plain Errors for expected conditions).
       if (isNativeBugError(e)) throw e;
       return binding;
     }
@@ -9146,7 +9149,9 @@ const tryEvaluateScalarIteratorValues = (
     values = evaluateForIteratorValues(expr, schema, db, context);
   } catch (e) {
     // Probe: iterators the interpreter can't reduce here go through the
-    // normal pipeline instead; never hide bugs.
+    // normal pipeline instead; never hide bugs. Must tolerate plain Errors:
+    // evaluateForIteratorValues calls stdlib/functions.ts, which throws
+    // plain Errors for expected conditions (e.g. math domain errors).
     if (isNativeBugError(e)) throw e;
     return undefined;
   }
@@ -14318,7 +14323,9 @@ function countFunctionArgRows(
     return rows.length;
   } catch (e) {
     // Args the IR pipeline can't compile/run aren't countable here; the
-    // assertion check is skipped for them. Never hide bugs.
+    // assertion check is skipped for them. Never hide bugs. Must tolerate
+    // plain Errors: runGelSelectSQL executes SQL whose UDFs (stdlib) and
+    // the SQLite driver itself throw plain Errors for expected conditions.
     if (isNativeBugError(e)) throw e;
     return undefined;
   }
