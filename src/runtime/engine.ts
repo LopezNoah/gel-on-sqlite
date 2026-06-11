@@ -7376,11 +7376,15 @@ export const executeQuery = (
   query: string,
   securityContext: SecurityContext = DEFAULT_SECURITY_CONTEXT,
 ): QueryResult => {
-  // Runtime fallbacks (tryRuntime*, trySchema*, tryEvaluateParsedRuntimeSelect,
-  // preEvaluateGroupBindings, etc.) have been disabled. Everything must lower
-  // through the compile pipeline. FOR-INSERT still routes through the unit
-  // path so the script harness can surface the unsupported-lowering error
-  // uniformly; FOR-SELECT goes through the normal compile pipeline.
+  // SELECTs execute the gelIR SQL artifact; INSERT/UPDATE/DELETE compile
+  // through ast_to_ir (SQL artifact) plus dml_lowering (runtime mutation
+  // plan: link-table writes, defaults, conflict handling still run here in
+  // the engine). GROUP is the remaining interpreter surface: it tries the
+  // SQL artifact first and falls back to runGroupIR/preEvaluateGroupBindings
+  // for shapes compileGroupStmtToSQL can't lower yet. FOR-INSERT still
+  // routes through the unit path so the script harness can surface the
+  // unsupported-lowering error uniformly; FOR-SELECT goes through the
+  // normal compile pipeline.
   const rewrittenQuery = injectRuntimeAliasBinding(schema, query);
   validateRestrictedLinkPropertyTokens(rewrittenQuery);
   const parsedQuery = parseEdgeQL(rewrittenQuery);
