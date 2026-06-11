@@ -31,8 +31,7 @@ import type { AccessPolicyCondition, ScalarType, ScalarValue, TypeDef } from "..
 import { tryResolveStdlibFunction } from "../stdlib/functions.js";
 import { checkScopeTreeViolations } from "./scope_tree_check.js";
 import { coerceCastScalarValue, coerceRuntimeScalarValue, compileDmlToIR, isValidScalarValue } from "./dml_lowering.js";
-
-const tableNameForType = (qualifiedName: string): string => qualifiedName.replaceAll("::", "__").toLowerCase();
+import { tableNameForType } from "../codegen/sql.js";
 
 export interface CompileContext {
   overlays?: OverlayIR[];

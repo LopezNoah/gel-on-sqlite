@@ -20,7 +20,8 @@ import { assertTargetSqlCompatibility, type RuntimeTarget } from "./target.js";
 import type { ShapeElement as GelIRShapeElement, Set as GelIRSet, Statement as GelIRStatement, TypeRef as GelIRTypeRef } from "../ir/gel_ir.js";
 import type { GroupIR, InsertIR, InsertLinkDefaultIR, InsertLinkPropertyIR, IRStatement, OverlayIR, SelectIR, SelectShapeElementIR, UpdateIR, UpdateLinkAssignmentIR } from "../ir/model.js";
 import type { AccessPolicyCondition, AccessPolicyDef, ComputedLinkPropertyExpr, FieldDef, FunctionDef, FunctionExprDef, LinkPropertyDef, ScalarType, ScalarValue, TypeDef } from "../types.js";
-import { qualifiedTypeName } from "../schema/schema.js";
+import { normalizeLinkTargetNames, qualifiedTypeName } from "../schema/schema.js";
+import { tableNameForType } from "../codegen/sql.js";
 import { populateSchemaIntrospection } from "../schema/schema_introspection.js";
 import { materializeSchema, type SQLiteDatabase } from "../runtime/database.js";
 import {
@@ -12223,16 +12224,8 @@ const extractOverlays = (ir: IRStatement): OverlayIR[] => {
   return ir.overlays;
 };
 
-const tableNameForType = (qualifiedName: string): string => qualifiedName.replaceAll("::", "__").toLowerCase();
 const PENDING_INLINE_LINK_VALUE = "__gel_pending_inline_link__";
 const PENDING_INSERT_REWRITE_VALUE = "__gel_pending_insert_rewrite__";
-
-const normalizeLinkTargetNames = (targetType: string, moduleName: string): string[] =>
-  targetType
-    .split("|")
-    .map((part) => part.trim())
-    .filter((part) => part.length > 0)
-    .map((part) => (part.includes("::") ? part : `${moduleName}::${part}`));
 
 const assignableTargetTablesForTargets = (
   schema: SchemaSnapshot,

@@ -7,3 +7,21 @@ ui/
 .artifacts/
 .DS_Store
 .claude/worktrees/
+
+# Local debug runners (developer scratch files at repo root)
+/qast.ts
+/qir.ts
+/qsql.ts
+/cdbg.ts
+/csql.ts
+/sdbg.ts
+/dbgfree.ts
+/debug_*.ts
+/debug-*.ts
+/inspect_*.ts
+/sql_trace.ts
+
+# Debug output dumps
+/debug_*.txt
+/debug-*.txt
+/estimated_tree_sql.txt

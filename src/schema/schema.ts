@@ -208,6 +208,17 @@ export const qualifiedTypeName = (typeDef: TypeDef): string => {
   return `${module}::${typeDef.name}`;
 };
 
+/**
+ * Splits a (possibly union, e.g. "A | B") link target type string into a list
+ * of fully qualified type names, qualifying bare names with `moduleName`.
+ */
+export const normalizeLinkTargetNames = (targetType: string, moduleName: string): string[] =>
+  targetType
+    .split("|")
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0)
+    .map((part) => (part.includes("::") ? part : `${moduleName}::${part}`));
+
 const isUniversalObjectName = (name: string): boolean =>
   name === "default::Object" || name === "std::Object" || name === "Object";
 
