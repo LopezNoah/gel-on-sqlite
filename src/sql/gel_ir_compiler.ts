@@ -263,13 +263,41 @@ export const compileGelIRToSQL = (
     ? compileSelectSource(sourceSet, statement.where ?? selectWhere, statement.orderBy ?? selectOrderBy, options, params, target)
     : null;
   if (!compiledSource) {
+    // `SELECT (X.<l[IS A], X.<l[IS B])` with disjoint subtypes is provably
+    // empty by shared-path semantics — check BEFORE the scalar fallback,
+    // which can now lower the backlink elements independently (a zip/cross
+    // that ignores the shared path) and return phantom rows.
+    if (sourceSet && isProvablyEmptyTupleSet(sourceSet, options)) {
+      return {
+        sql: `SELECT NULL AS ${quoteIdent("id")}, NULL AS ${quoteIdent("__source_type")} WHERE 0`,
+        params,
+        loweringMode: "single_statement",
+      };
+    }
     if (sourceSet) {
       const outerWheres = selectWhere ? [selectWhere] : [];
       const scalarSql = compileScalarSelectSQL(sourceSet, params, target, options, outerWheres);
       if (scalarSql) {
         let sql = scalarSql;
         if (selectOrderBy && selectOrderBy.length > 0) {
-          const orderSql = compileValueSortExprs(selectOrderBy, quoteIdent("value"), target, options.resolveEnumMembers, options.resolveFieldEnumMembers);
+          let orderSql = compileValueSortExprs(selectOrderBy, quoteIdent("value"), target, options.resolveEnumMembers, options.resolveFieldEnumMembers);
+          if (!orderSql) {
+            // Sort paths over a tuple source (`SELECT (Status.name, count(…))
+            // ORDER BY Status.name`) sort by the matching tuple slot.
+            let tupleCursor: Set = sourceSet;
+            while (tupleCursor.expr.kind === "select_expr") tupleCursor = (tupleCursor.expr as SelectExpr).result;
+            if (tupleCursor.expr.kind === "tuple") {
+              const tupleExpr = tupleCursor.expr as Tuple;
+              const slotByKey = new Map<string, number>();
+              tupleExpr.elements.forEach((el, i) => slotByKey.set(pathIdKey(el.val), i));
+              const parts = selectOrderBy.map((entry) => {
+                const slot = slotByKey.get(pathIdKey(entry.path));
+                if (slot === undefined) return "";
+                return `json_extract(${quoteIdent("value")}, '$[${slot}]') ${entry.direction.toUpperCase()}${sortNullsClause(entry)}`;
+              }).filter((p) => p.length > 0);
+              if (parts.length === selectOrderBy.length) orderSql = parts.join(", ");
+            }
+          }
           if (orderSql) {
             // SQLite forbids ORDER BY expressions over a `UNION ALL` chain
             // unless wrapped in a subquery — only bare column names are
@@ -297,19 +325,6 @@ export const compileGelIRToSQL = (
         }
         return { sql, params, loweringMode: "single_statement" };
       }
-    }
-    // `SELECT (X.<l[IS A], X.<l[IS B])` where A and B share the source path
-    // but the intersection filters describe disjoint concrete subtypes (a
-    // row can't be both A and B). EdgeQL's shared-path semantics requires
-    // the same backlink object to satisfy both filters, so the result set
-    // is provably empty — surface a 0-row select instead of the implicit
-    // 1-row NULL fallback.
-    if (sourceSet && isProvablyEmptyTupleSet(sourceSet, options)) {
-      return {
-        sql: `SELECT NULL AS ${quoteIdent("id")}, NULL AS ${quoteIdent("__source_type")} WHERE 0`,
-        params,
-        loweringMode: "single_statement",
-      };
     }
     return {
       sql: `SELECT NULL AS ${quoteIdent("id")}, NULL AS ${quoteIdent("__source_type")}`,
@@ -1566,12 +1581,20 @@ const tryCompileSetLevelCoalesceSQL = (
   }
 
   if (!rhsRowsSql) {
+    const rhsValueCheckpoint = params.length;
     const rhsSql = compileValueSetSQL(coalesce.right, "g0", params, target, options);
-    if (!rhsSql) {
-      params.length = paramsStart;
-      return null;
+    if (rhsSql) {
+      rhsRowsSql = `SELECT ${rhsSql} AS ${quoteIdent("value")}`;
+    } else {
+      // Set-producing RHS (`?? [User]`, `?? Type.ptr`) — one fallback row
+      // per element, via the row-set compiler.
+      params.length = rhsValueCheckpoint;
+      rhsRowsSql = compileScalarSelectSQL(coalesce.right, params, target, options);
+      if (!rhsRowsSql) {
+        params.length = paramsStart;
+        return null;
+      }
     }
-    rhsRowsSql = `SELECT ${rhsSql} AS ${quoteIdent("value")}`;
   }
 
   if (lhsFrom) {
@@ -2289,6 +2312,56 @@ const compileScalarSelectSQLInner = (
     }
     return sql;
   }
+  // Set-valued IF/ELSE (`<array<User>>{} IF false ELSE [User]`): pick the
+  // arm row set by the condition. The condition is projected through a CTE
+  // so its placeholders aren't duplicated; a NULL (empty) condition excludes
+  // both arms, matching EdgeQL's empty-condition semantics.
+  if (sourceSet.expr.kind === "if_else_expr") {
+    const ifElse = sourceSet.expr as IfElseExpr;
+    const ifElseCheckpoint = params.length;
+    // Only handle source-free conditions (`IF false`, `IF <param>`) here —
+    // a condition over row paths needs the correlated lowerings below, and
+    // compiling it against a phantom alias would emit dangling references.
+    const condSources = new Map<string, TypeRef>();
+    collectScalarPointerSources(ifElse.condition, condSources);
+    if (condSources.size > 0) {
+      params.length = ifElseCheckpoint;
+    }
+    const condSql = condSources.size === 0
+      ? compileValueSetSQL(ifElse.condition, "g0", params, target, options)
+      : null;
+    const ifRows = condSql ? compileScalarSelectSQL(ifElse.ifExpr, params, target, options, outerWheres) : null;
+    const elseRows = ifRows ? compileScalarSelectSQL(ifElse.elseExpr, params, target, options, outerWheres) : null;
+    if (condSql && ifRows && elseRows) {
+      // Conditions arrive as either native SQL booleans (0/1) or JSON-text
+      // booleans ('true'/'false') — normalize once so WHERE doesn't cast
+      // the text 'true' to 0.
+      return `WITH cond_raw AS (SELECT ${condSql} AS ${quoteIdent("r")}),`
+        + ` cond_q AS (SELECT (CASE WHEN ${quoteIdent("r")} IN (1, 'true') THEN 1 WHEN ${quoteIdent("r")} IN (0, 'false') THEN 0 ELSE NULL END) AS ${quoteIdent("c")} FROM cond_raw)`
+        + ` SELECT ${quoteIdent("value")} FROM (${ifRows}) WHERE (SELECT ${quoteIdent("c")} FROM cond_q)`
+        + ` UNION ALL SELECT ${quoteIdent("value")} FROM (${elseRows}) WHERE NOT (SELECT ${quoteIdent("c")} FROM cond_q)`;
+    }
+    params.length = ifElseCheckpoint;
+  }
+
+  // EdgeQL `X.__type__.name` resolves to the source row's type label —
+  // intercept BEFORE the generic pointer lowerings, which would walk
+  // `__type__` as a real link into a nonexistent `std__anytype` table.
+  if (sourceSet.expr.kind === "pointer") {
+    const nameStep0 = sourceSet.expr as Pointer;
+    if (nameStep0.ptrref.shortName === "name" && nameStep0.source.expr.kind === "pointer") {
+      const typeStep0 = nameStep0.source.expr as Pointer;
+      let typeRootProbe0: Set = typeStep0.source;
+      while (typeRootProbe0.expr.kind === "select_expr") typeRootProbe0 = (typeRootProbe0.expr as SelectExpr).result;
+      if (typeStep0.ptrref.shortName === "__type__" && typeRootProbe0.expr.kind === "type_root") {
+        const compiledSource = compileSelectSource(typeStep0.source, undefined, undefined, options, params, target);
+        if (compiledSource) {
+          return `SELECT ${compiledSource.alias}.${quoteIdent("__source_type")} AS ${quoteIdent("value")} FROM ${compiledSource.sql}`;
+        }
+      }
+    }
+  }
+
   // `(A UNION B).field` — a pointer (or pointer chain) applied to a union of
   // object sets. Distribute the access into each branch and UNION ALL the
   // per-branch scalar selects: `(A.field) UNION ALL (B.field)`. Without this,
@@ -2314,10 +2387,20 @@ const compileScalarSelectSQLInner = (
       if (ok && parts.length > 0) return parts.join(" UNION ALL ");
     }
   }
-  if (sourceSet.shape.length > 0 && (sourceSet.expr.kind === "type_root" || sourceSet.expr.kind === "pointer")) {
-    const compiledSource = compileSelectSource(sourceSet, undefined, undefined, options, params, target);
+  const isObjectSourceSet = sourceSet.expr.kind === "pointer"
+    && !(sourceSet.expr as Pointer).ptrref.outTarget.isScalar
+    && !(sourceSet.expr as Pointer).ptrref.isLinkProperty;
+  if ((sourceSet.shape.length > 0 || isObjectSourceSet) && (sourceSet.expr.kind === "type_root" || sourceSet.expr.kind === "pointer")) {
+    const compiledSource = compileSelectSource(
+      sourceSet, undefined, undefined, options, params, target, undefined,
+      outerWheres.flatMap((w) => collectReferencedColumns(w)),
+    );
     if (compiledSource) {
-      const valueExpr = compilePublicShapeObjectExpr(compiledSource.alias, sourceSet.shape, params, options, target, 0);
+      // A shapeless object set (e.g. a backlink branch of a DISTINCT/count
+      // union) surfaces its identity so dedup and counting work by id.
+      const valueExpr = sourceSet.shape.length > 0
+        ? compilePublicShapeObjectExpr(compiledSource.alias, sourceSet.shape, params, options, target, 0)
+        : `json_object(${quoteLiteral("id")}, ${compiledSource.alias}.${quoteIdent("id")})`;
       let sql = `SELECT ${valueExpr} AS ${quoteIdent("value")} FROM ${compiledSource.sql}`;
       const whereSqls: string[] = [];
       for (const where of outerWheres) {
@@ -2339,7 +2422,12 @@ const compileScalarSelectSQLInner = (
     const nameStep = sourceSet.expr as Pointer;
     if (nameStep.ptrref.shortName === "name" && nameStep.source.expr.kind === "pointer") {
       const typeStep = nameStep.source.expr as Pointer;
-      if (typeStep.ptrref.shortName === "__type__" && typeStep.source.expr.kind === "type_root") {
+      // The source may be a bare type_root OR a clause-bearing subquery
+      // (`WITH sub := (SELECT Text … LIMIT 1) SELECT sub.__type__.name`) —
+      // compileSelectSource handles both (incl. ORDER BY/LIMIT lowering).
+      let typeRootProbe: Set = typeStep.source;
+      while (typeRootProbe.expr.kind === "select_expr") typeRootProbe = (typeRootProbe.expr as SelectExpr).result;
+      if (typeStep.ptrref.shortName === "__type__" && typeRootProbe.expr.kind === "type_root") {
         const compiledSource = compileSelectSource(typeStep.source, undefined, undefined, options, params, target);
         if (compiledSource) {
           return `SELECT ${compiledSource.alias}.${quoteIdent("__source_type")} AS ${quoteIdent("value")} FROM ${compiledSource.sql}`;
@@ -2372,6 +2460,213 @@ const compileScalarSelectSQLInner = (
     const tuple = sourceSet.expr as Tuple;
     if (tuple.elements.length === 0) {
       return `SELECT json_array() AS ${quoteIdent("value")}`;
+    }
+    // EdgeQL path sharing: a type root referenced by MULTIPLE tuple elements
+    // (`('x' ?? Issue.log.body, Issue)`) is one shared iteration — one tuple
+    // per root row — not a cross product of independent scans. Detect a
+    // single shared root, hoist it as the FROM, and compile each element as
+    // a correlated single value against it. Falls through to the independent
+    // cross-join lowering when elements are multi-valued per root row or no
+    // root is shared.
+    sharedTuple: {
+      const unwrapBare = (s: Set): Set => {
+        let u: Set = s;
+        while (u.expr.kind === "select_expr") {
+          const se = u.expr as SelectExpr;
+          if (se.where || se.limit || se.offset || (se.orderBy && se.orderBy.length > 0)) break;
+          u = se.result;
+        }
+        return u;
+      };
+      const keyOf = (typeref: TypeRef, namespace: readonly string[]): string =>
+        `${qualifyTypeName(typeref)}|${namespace.join(",")}`;
+      // Collect EVERY type root reachable in an element — including inside
+      // aggregates (`count(Status.<status)`) and coalesce/if-else arms —
+      // since path sharing applies across all of them.
+      const collectAllRoots = (s: Set, m: Map<string, TypeRef>): void => {
+        const e = s.expr;
+        if (!e) return;
+        if (e.kind === "type_root") {
+          m.set(keyOf((e as TypeRoot).typeref, s.pathId?.namespace ?? []), (e as TypeRoot).typeref);
+          return;
+        }
+        if (e.kind === "pointer") {
+          const src = (e as Pointer).source;
+          let root: Set = src;
+          while (root.expr.kind === "select_expr") root = (root.expr as SelectExpr).result;
+          if (root.expr.kind === "type_root") {
+            m.set(keyOf((root.expr as TypeRoot).typeref, src.pathId?.namespace ?? []), (root.expr as TypeRoot).typeref);
+          } else {
+            collectAllRoots(src, m);
+          }
+          return;
+        }
+        if (e.kind === "select_expr") {
+          const se = e as SelectExpr;
+          collectAllRoots(se.result, m);
+          if (se.where) collectAllRoots(se.where, m);
+          return;
+        }
+        if (e.kind === "operator_call" || e.kind === "function_call") {
+          for (const arg of orderedCallArgs((e as OperatorCall | FunctionCall).args)) collectAllRoots(arg.expr, m);
+          return;
+        }
+        if (e.kind === "coalesce_expr") {
+          collectAllRoots((e as CoalesceExpr).left, m);
+          collectAllRoots((e as CoalesceExpr).right, m);
+          return;
+        }
+        if (e.kind === "if_else_expr") {
+          collectAllRoots((e as IfElseExpr).condition, m);
+          collectAllRoots((e as IfElseExpr).ifExpr, m);
+          collectAllRoots((e as IfElseExpr).elseExpr, m);
+          return;
+        }
+        if (e.kind === "type_cast") {
+          collectAllRoots((e as TypeCast).expr, m);
+          return;
+        }
+        if (e.kind === "exists_expr") {
+          collectAllRoots((e as ExistsExpr).expr, m);
+          return;
+        }
+        if (e.kind === "tuple") {
+          for (const el of (e as Tuple).elements) collectAllRoots(el.val, m);
+          return;
+        }
+        if (e.kind === "index_expr") {
+          collectAllRoots((e as IndexExpr).expr, m);
+          collectAllRoots((e as IndexExpr).index, m);
+          return;
+        }
+      };
+      // Element-wise roots: like collectAllRoots, but stop at set-level
+      // constructs (`??`, `?=`/`?!=`, aggregates) — those absorb their
+      // argument's cardinality, so a root referenced ONLY inside them does
+      // not make the tuple iterate (`(Pub.title ?= '0', Pub.title ?? …)`
+      // over an empty Pub is one row, not zero).
+      const collectElementWiseRoots = (s: Set, m: Map<string, TypeRef>): void => {
+        const e = s.expr;
+        if (!e) return;
+        if (e.kind === "coalesce_expr") return;
+        if (e.kind === "operator_call") {
+          const oc = e as OperatorCall;
+          if (oc.operator === "??" || oc.operator === "?=" || oc.operator === "?!=") return;
+          for (const arg of orderedCallArgs(oc.args)) collectElementWiseRoots(arg.expr, m);
+          return;
+        }
+        if (e.kind === "function_call") {
+          const fc = e as FunctionCall;
+          const shortName = (fc.functionName ?? "").split("::").pop() ?? "";
+          if (["count", "sum", "min", "max", "avg", "all", "any", "array_agg", "enumerate", "exists"].includes(shortName)) return;
+          for (const arg of orderedCallArgs(fc.args)) collectElementWiseRoots(arg.expr, m);
+          return;
+        }
+        if (e.kind === "exists_expr") return;
+        if (e.kind === "select_expr") {
+          const se = e as SelectExpr;
+          collectElementWiseRoots(se.result, m);
+          if (se.where) collectElementWiseRoots(se.where, m);
+          return;
+        }
+        if (e.kind === "type_cast") {
+          collectElementWiseRoots((e as TypeCast).expr, m);
+          return;
+        }
+        if (e.kind === "if_else_expr") {
+          collectElementWiseRoots((e as IfElseExpr).condition, m);
+          collectElementWiseRoots((e as IfElseExpr).ifExpr, m);
+          collectElementWiseRoots((e as IfElseExpr).elseExpr, m);
+          return;
+        }
+        if (e.kind === "tuple") {
+          for (const el of (e as Tuple).elements) collectElementWiseRoots(el.val, m);
+          return;
+        }
+        if (e.kind === "index_expr") {
+          collectElementWiseRoots((e as IndexExpr).expr, m);
+          collectElementWiseRoots((e as IndexExpr).index, m);
+          return;
+        }
+        collectAllRoots(s, m);
+      };
+      const perElemSources = tuple.elements.map((el) => {
+        const m = new Map<string, TypeRef>();
+        collectAllRoots(el.val, m);
+        return m;
+      });
+      const elementWiseKeys = new Set<string>();
+      for (const el of tuple.elements) {
+        const m = new Map<string, TypeRef>();
+        collectElementWiseRoots(el.val, m);
+        for (const k of m.keys()) elementWiseKeys.add(k);
+      }
+      const counts = new Map<string, number>();
+      const typerefByKey = new Map<string, TypeRef>();
+      for (const m of perElemSources) {
+        for (const [k, t] of m.entries()) {
+          counts.set(k, (counts.get(k) ?? 0) + 1);
+          typerefByKey.set(k, t);
+        }
+      }
+      const sharedKeys = [...counts.entries()]
+        .filter(([k, c]) => c >= 2 && elementWiseKeys.has(k))
+        .map(([k]) => k);
+      if (sharedKeys.length !== 1) break sharedTuple;
+      const sharedKey = sharedKeys[0];
+      const sharedTyperef = typerefByKey.get(sharedKey);
+      if (!sharedTyperef) break sharedTuple;
+      const sharedNs = sharedKey.includes("|") && sharedKey.slice(sharedKey.indexOf("|") + 1).length > 0
+        ? sharedKey.slice(sharedKey.indexOf("|") + 1).split(",")
+        : [];
+      const sharedAlias = "shr0";
+      const sharedCheckpoint = params.length;
+      const innerOptions: GelIRCompileOptions = {
+        ...options,
+        outerScopes: [
+          ...(options.outerScopes ?? []),
+          { alias: sharedAlias, typeref: sharedTyperef, namespace: sharedNs },
+        ],
+      };
+      // Project each element exactly once as `__eN` in an inner select (so a
+      // `?`-bearing element SQL isn't duplicated), assemble the tuple JSON in
+      // an outer select, and drop rows where any non-identity element is
+      // empty (strict tuple semantics).
+      const elemCols: string[] = [];
+      const outerSlots: string[] = [];
+      const guardCols: string[] = [];
+      let allShared = true;
+      for (let i = 0; i < tuple.elements.length; i += 1) {
+        const element = tuple.elements[i];
+        const bare = unwrapBare(element.val);
+        if (bare.expr.kind === "type_root"
+            && keyOf((bare.expr as TypeRoot).typeref, bare.pathId?.namespace ?? []) === sharedKey) {
+          elemCols.push(`json_object(${quoteLiteral("id")}, ${sharedAlias}.${quoteIdent("id")}) AS ${quoteIdent(`__e${i}`)}`);
+          outerSlots.push(`json(${quoteIdent(`__e${i}`)})`);
+          continue;
+        }
+        const v = compileValueSetSQL(element.val, sharedAlias, params, target, innerOptions);
+        if (!v) { allShared = false; break; }
+        elemCols.push(`${v} AS ${quoteIdent(`__e${i}`)}`);
+        guardCols.push(`__e${i}`);
+        const elementType = (element.val.typeref?.id ?? element.val.typeref?.nameHint ?? "").toLowerCase();
+        const isBoolType = elementType === "std::bool" || elementType === "unknown:std::bool" || elementType === "bool";
+        outerSlots.push(setValueIsJson(element.val) || isBoolType ? `json(${quoteIdent(`__e${i}`)})` : quoteIdent(`__e${i}`));
+      }
+      if (!allShared) {
+        params.length = sharedCheckpoint;
+        break sharedTuple;
+      }
+      const referenced = [...new Set(["id", ...collectReferencedColumns(sourceSet)])];
+      const fromSql = compilePolymorphicSource(sharedTyperef, false, sharedAlias, referenced, options);
+      const valueExpr = tuple.named
+        ? `json_object(${tuple.elements.map((element, index) => `${quoteLiteral(element.name ?? String(index))}, ${outerSlots[index]}`).join(", ")})`
+        : `json_array(${outerSlots.join(", ")})`;
+      const inner = `SELECT ${elemCols.join(", ")} FROM ${fromSql}`;
+      const guards = guardCols.length > 0
+        ? ` WHERE ${guardCols.map((c) => `${quoteIdent(c)} IS NOT NULL`).join(" AND ")}`
+        : "";
+      return `SELECT ${valueExpr} AS ${quoteIdent("value")} FROM (${inner})${guards}`;
     }
     const sources: string[] = [];
     const values: string[] = [];
@@ -2799,6 +3094,55 @@ const compileScalarSelectSQLInner = (
   if (!valueSql) return null;
   if (sources.size === 0) {
     if (innerWheres.length > 0 || appliedOuterWheres.length > 0) return null;
+    // A source-free value with FILTERs whose roots all resolve to enclosing
+    // scopes (`SELECT 'yes' FILTER Issue.status.name = 'Open'` inside a
+    // computed on Issue) keeps the filter as a correlated WHERE on the
+    // single-row select — dropping it would emit a phantom row per outer row.
+    if (outerWheres.length > 0) {
+      const preWhereCheckpoint = params.length;
+      const whereSqls: string[] = [];
+      let allCompiled = true;
+      for (const where of outerWheres) {
+        const whereSources = new Map<string, TypeRef>();
+        collectScalarPointerSources(where, whereSources);
+        // A source-free predicate (`filter random() > 0`) references no row
+        // alias at all — compile it against a throwaway anchor.
+        let anchorAlias: string | undefined = whereSources.size === 0 ? "g0" : undefined;
+        let allOuter = true;
+        for (const [key, typeref] of whereSources.entries()) {
+          const ns = key.includes("|") ? key.slice(key.indexOf("|") + 1) : "";
+          const namespace = ns.length > 0 ? ns.split(",") : [];
+          const match = findMatchingOuterScope({ typerefId: typeref.id, namespace }, options);
+          if (!match) { allOuter = false; break; }
+          anchorAlias = anchorAlias ?? match.alias;
+        }
+        const whereCheckpoint = params.length;
+        let whereSql: string | null = null;
+        if (allOuter && anchorAlias) {
+          whereSql = compilePredicateSetSQL(where, anchorAlias, params, target, options)
+            ?? compileValueSetSQL(where, anchorAlias, params, target, options);
+        }
+        // Filter roots that aren't enclosing scopes carry EdgeQL's free-root
+        // existential semantics (`SELECT count(Issue) FILTER Status.name =
+        // 'Open'` keeps the row when ANY Status matches).
+        if (!whereSql) {
+          params.length = whereCheckpoint;
+          whereSql = tryCompileFreeRootExistsWhere(where, "g0", null, params, target, options);
+        }
+        if (!whereSql) {
+          params.length = whereCheckpoint;
+          allCompiled = false;
+          break;
+        }
+        whereSqls.push(whereSql);
+      }
+      if (allCompiled) {
+        return `SELECT ${valueSql} AS ${quoteIdent("value")} WHERE ${whereSqls.join(" AND ")}`;
+      }
+      // Couldn't lower the filter — fall back to the pre-existing behaviour
+      // (drop it) rather than failing the whole value compile.
+      params.length = preWhereCheckpoint;
+    }
     return `SELECT ${valueSql} AS ${quoteIdent("value")}`;
   }
   // Multi-source scalar select: `Status.name ++ Priority.name` references
@@ -2940,9 +3284,14 @@ const compileScalarSelectSQLInner = (
     }
     return sql;
   }
+  // NOTE: link-table FK columns the WHEREs read (`Issue.owner = U` →
+  // `owner_id`) are NOT requested as plain columns here — the LinkProjection
+  // LEFT JOIN below projects them; requesting them as plain columns too
+  // would emit a shadowing `NULL AS "x_id"` duplicate.
   const projectedColumns = Array.from(new Set([
     ...collectReferencedColumns(sourceSet),
     ...appliedOuterWheres.flatMap((w) => collectReferencedColumns(w)),
+    ...innerWheres.flatMap((w) => collectReferencedColumns(w)),
   ]));
   // When the scalar pointer hangs off a select_expr source carrying
   // ORDER BY / LIMIT / OFFSET (`WITH sub := (SELECT Text ORDER BY … LIMIT 1)
@@ -2987,7 +3336,18 @@ const compileScalarSelectSQLInner = (
     }
     return compiled.sql;
   })();
-  const sourceSql = clauseSourceSql ?? compilePolymorphicSource(typeRef, false, "g0", projectedColumns, options);
+  // Wire LinkProjection LEFT JOINs for any single link-table links the value
+  // or its WHEREs reference (`Issue.owner = U` needs `owner_id`).
+  const scalarLinkProjections = ((): LinkProjection[] => {
+    const merged = new Map<string, LinkProjection>();
+    for (const src of [sourceSet, ...innerWheres, ...appliedOuterWheres]) {
+      for (const proj of collectLinkProjectionsForSource([], src, undefined, typeRef.id)) {
+        if (!merged.has(proj.linkName)) merged.set(proj.linkName, proj);
+      }
+    }
+    return [...merged.values()];
+  })();
+  const sourceSql = clauseSourceSql ?? compilePolymorphicSource(typeRef, false, "g0", projectedColumns, options, scalarLinkProjections);
 
   // If every pointer to the source is wrapped in a set-level operator
   // (?=, ?!=, ??), the source's empty case should still produce one row
@@ -4454,10 +4814,6 @@ const unwrapObjectPassthrough = (set: Set): Set | null => {
     }
     return null;
   }
-  if (expr.kind === "operator_call" && (expr as OperatorCall).operator === "distinct") {
-    const args = orderedCallArgs((expr as OperatorCall).args);
-    if (args.length === 1) return args[0].expr;
-  }
   return null;
 };
 
@@ -4476,7 +4832,26 @@ const compileSelectSource = (
     ...collectProjectedColumns(sourceSet.shape, where, orderBy),
     ...(extraColumns ?? []),
   ])];
-  // Unwrap object pass-through wrappers (assert_single/array_unpack/DISTINCT …)
+  // DISTINCT over an object set dedups by row identity. Merge any outer
+  // shape into the operand so its columns project through every branch,
+  // compile the operand as a source, and wrap with SELECT DISTINCT — the
+  // projected columns are functionally dependent on `id`, so row-level
+  // DISTINCT is exactly identity dedup.
+  if (sourceSet.expr.kind === "operator_call" && (sourceSet.expr as OperatorCall).operator === "distinct") {
+    const distinctArgs = orderedCallArgs((sourceSet.expr as OperatorCall).args);
+    if (distinctArgs.length === 1) {
+      const operand = distinctArgs[0].expr;
+      const operandShape = operand.shape ?? [];
+      const outerShape = sourceSet.shape ?? [];
+      const mergedShape = outerShape.length > 0 ? [...outerShape, ...operandShape] : operandShape;
+      const operandSet: Set = mergedShape === operandShape ? operand : { ...operand, shape: mergedShape };
+      const source = compileSelectSource(operandSet, where, orderBy, options, params, target, undefined, projectedColumns);
+      if (source) {
+        return { sql: `(SELECT DISTINCT ${source.alias}.* FROM ${source.sql}) ${alias}`, alias };
+      }
+    }
+  }
+  // Unwrap object pass-through wrappers (assert_single/array_unpack …)
   // so a shape applied to the wrapper projects against the underlying object
   // source. Carry the outer shape down to the inner object set. Only intercept
   // when the wrapper itself carries a shape — when the shape lives on a nested
@@ -4543,8 +4918,17 @@ const compileSelectSource = (
       const unionShape = sourceSet.shape ?? [];
       const inheritedShape = unionShape.length > 0 ? [...unionShape, ...branchShape] : branchShape;
       const branchSet: Set = inheritedShape === branchShape ? arg.expr : { ...arg.expr, shape: inheritedShape };
-      const source = compileSelectSource(branchSet, undefined, undefined, options, params, target);
-      return source ? `SELECT ${source.alias}.* FROM ${source.sql}` : null;
+      const source = compileSelectSource(branchSet, undefined, undefined, options, params, target, undefined, projectedColumns);
+      if (!source) return null;
+      // Branches can project different extra columns (each branch's own
+      // FILTER adds what it needs), so `SELECT g0.*` would feed UNION ALL
+      // mismatched column counts. Project the explicit common list instead:
+      // identity columns plus everything the outer shape/clauses reference.
+      const commonColumns = [...new Set(["id", "__source_type", ...projectedColumns])];
+      const columnList = commonColumns
+        .map((column) => `${source.alias}.${quoteIdent(column)} AS ${quoteIdent(column)}`)
+        .join(", ");
+      return `SELECT ${columnList} FROM ${source.sql}`;
     });
     if (selects.some((entry) => !entry)) return null;
     return { sql: `(${(selects as string[]).join(" UNION ALL ")}) ${alias}`, alias };
@@ -4555,6 +4939,22 @@ const compileSelectSource = (
     const op = (sourceSet.expr as OperatorCall).operator;
     const args = orderedCallArgs((sourceSet.expr as OperatorCall).args);
     const joiner = op === "intersect" ? "INTERSECT" : "EXCEPT";
+    // Empty-set operands resolve statically: `X intersect <T>{}` is empty,
+    // `X except <T>{}` is X.
+    if (args.length === 2) {
+      const leftEmpty = isEmptySetBranch(args[0].expr);
+      const rightEmpty = isEmptySetBranch(args[1].expr);
+      if (leftEmpty || (op === "intersect" && rightEmpty)) {
+        return {
+          sql: `(SELECT NULL AS ${quoteIdent("id")}, NULL AS ${quoteIdent("__source_type")} WHERE 0) ${alias}`,
+          alias,
+        };
+      }
+      if (op === "except" && rightEmpty) {
+        const leftSource = compileSelectSource({ ...args[0].expr, shape: sourceSet.shape ?? args[0].expr.shape }, where, orderBy, options, params, target, aliasOverride, extraColumns);
+        if (leftSource) return leftSource;
+      }
+    }
     // When a shape projects columns beyond identity (`(B except A) {name}`),
     // the narrowed (id, __source_type) result can't satisfy `g0.name`. Compute
     // the surviving identity set, then re-derive full rows from the first
@@ -4616,6 +5016,7 @@ const compileSelectSource = (
   // type, so `compilePolymorphicSource` enumerates just the matching
   // concrete subtypes).
   const chain: Pointer[] = [];
+  let rootHasClauses = false;
   {
     let cursor: Expr = sourceSet.expr;
     while (cursor.kind === "pointer") {
@@ -4629,15 +5030,15 @@ const compileSelectSource = (
       chain.push(ptr);
       cursor = ptr.source.expr;
     }
-    // Peel `select_expr` wrappers that just thread a type_root through with
-    // no FILTER/ORDER BY/LIMIT (the parser inserts these for parenthesised
-    // sources like `(SELECT Issue {…}).watchers`). The pointer chain still
-    // needs to root at the underlying type, otherwise we fall through to the
-    // NULL fallback and the user sees `SELECT NULL AS "id"`.
+    // Peel `select_expr` wrappers threading a type_root through (the parser
+    // inserts these for parenthesised sources like `(SELECT Issue {…})
+    // .watchers`). FILTERs/LIMITs on the wrapper restrict the root rows —
+    // note it so the root source compiles through compileSelectSource (which
+    // lowers the clauses, incl. link projections) instead of a bare scan.
     while (cursor.kind === "select_expr") {
       const se = cursor as SelectExpr;
-      if (se.where || (se.orderBy && se.orderBy.length > 0) || se.limit !== undefined || se.offset !== undefined) {
-        return null;
+      if (se.where || se.limit !== undefined || se.offset !== undefined) {
+        rootHasClauses = true;
       }
       cursor = se.result.expr;
     }
@@ -4648,7 +5049,16 @@ const compileSelectSource = (
   const rootTyperef = rootPointer.source.typeref;
   const rootAlias = "s0";
   const rootCols = collectChainSourceColumns(links[0], "root");
-  let fromSql = compilePolymorphicSource(rootTyperef, false, rootAlias, rootCols, options);
+  let fromSql: string;
+  if (rootHasClauses) {
+    const rootSource = compileSelectSource(
+      links[0].source, undefined, undefined, options, params, target, rootAlias, rootCols,
+    );
+    if (!rootSource) return null;
+    fromSql = rootSource.sql;
+  } else {
+    fromSql = compilePolymorphicSource(rootTyperef, false, rootAlias, rootCols, options);
+  }
   let previousAlias = rootAlias;
   let previousTyperef = rootTyperef;
   for (let i = 0; i < links.length; i++) {
@@ -6258,7 +6668,8 @@ const compileProjectedSourceColumnRef = (set: Set, allowLimitedSource = false): 
   if (sourceExpr.kind === "operator_call"
       && ((sourceExpr as OperatorCall).operator === "union"
           || (sourceExpr as OperatorCall).operator === "intersect"
-          || (sourceExpr as OperatorCall).operator === "except")) {
+          || (sourceExpr as OperatorCall).operator === "except"
+          || (sourceExpr as OperatorCall).operator === "distinct")) {
     return columnForPointer(pointer);
   }
   return null;
@@ -6459,6 +6870,16 @@ const compileShapeProjection = (
   }
 
   const shapeExpr = unwrapSelectExprSet(shape.expr);
+  // `type_name := X.__type__.name` — `__type__` has no storage table; the
+  // dynamic type label is the row's `__source_type` column.
+  if (shapeExpr.result.expr.kind === "pointer") {
+    const namePtr = shapeExpr.result.expr as Pointer;
+    if (namePtr.ptrref.shortName === "name"
+        && namePtr.source.expr.kind === "pointer"
+        && (namePtr.source.expr as Pointer).ptrref.shortName === "__type__") {
+      return `${sourceAlias}.${quoteIdent("__source_type")} AS ${quoteIdent(shapeAliasForElement(shape, shapeExpr.result, depth))}`;
+    }
+  }
   if (shapeExpr.result.expr.kind === "embedded_group") {
     const alias = shapeAliasForElement(shape, shape.expr, depth);
     return `${compileEmbeddedGroupSQL(shapeExpr.result.expr, sourceAlias, params, options, target, depth)} AS ${quoteIdent(alias)}`;
@@ -6499,7 +6920,52 @@ const compileShapeProjection = (
   // the leaf scalar (`name`) on that row. Reading `g0.name` directly is
   // correct and avoids re-walking the path through a correlated subquery
   // anchored on the wrong row identity.
-  const projectedColumn = compileProjectedSourceColumnRef(shapeExpr.result);
+  // A many-cardinality computed whose LEAF pointer is single (`todo_ids :=
+  // .todo.id` — multi link, single id) multiplies through the link; reading
+  // the leaf column off the outer row would return the row's OWN column.
+  // Skip the projected-column shortcut for those so the chain compiles as a
+  // correlated row set below.
+  const elementIsManyViaChain = (shape.cardinality === "many" || shape.cardinality === "at_least_one")
+    && shapeExpr.result.expr.kind === "pointer"
+    && (shapeExpr.result.expr as Pointer).ptrref.outCardinality !== "many"
+    && (shapeExpr.result.expr as Pointer).ptrref.outCardinality !== "at_least_one"
+    && (shapeExpr.result.expr as Pointer).source.expr.kind === "pointer";
+  // A computed whose pointer chain roots at a DIFFERENT type than the shape's
+  // subject (`foo := (SELECT Status FILTER …).name` inside a User shape) is
+  // an independent subquery — reading the leaf column off the subject row
+  // would return the subject's own column of the same name.
+  const elementRootsAtForeignType = ((): boolean => {
+    if (shapeExpr.result.expr.kind !== "pointer" || !shape.source?.typeref) return false;
+    const rootTypeOf = (start: Set): string | undefined => {
+      let cur: Set = start;
+      for (;;) {
+        if (cur.expr.kind === "pointer") { cur = (cur.expr as Pointer).source; continue; }
+        if (cur.expr.kind === "select_expr") { cur = (cur.expr as SelectExpr).result; continue; }
+        break;
+      }
+      return cur.expr.kind === "type_root" ? (cur.expr as TypeRoot).typeref.id : undefined;
+    };
+    const elementRoot = rootTypeOf((shapeExpr.result.expr as Pointer).source);
+    if (!elementRoot) return false;
+    if (elementRoot === shape.source.typeref.id) return false;
+    // Shapes-on-paths (`Issue.owner {name}`): the element chain legitimately
+    // roots at the PATH's root type, not the narrowed subject type.
+    const sourcePathRoot = rootTypeOf(shape.source);
+    return elementRoot !== sourcePathRoot;
+  })();
+  if (elementRootsAtForeignType) {
+    const scratchParams: ScalarValue[] = [];
+    const setSql = compileScalarSelectSQL(shape.expr, scratchParams, target, options);
+    if (setSql) {
+      params.push(...scratchParams);
+      const alias = shapeAliasForElement(shape, shapeExpr.result, depth);
+      if (shape.cardinality === "many" || shape.cardinality === "at_least_one") {
+        return `COALESCE((SELECT json_group_array(${quoteIdent("value")}) FROM (${setSql})), '[]') AS ${quoteIdent(alias)}`;
+      }
+      return `(SELECT ${quoteIdent("value")} FROM (${setSql}) LIMIT 1) AS ${quoteIdent(alias)}`;
+    }
+  }
+  const projectedColumn = (elementIsManyViaChain || elementRootsAtForeignType) ? null : compileProjectedSourceColumnRef(shapeExpr.result);
   if (projectedColumn) {
     const rawValue = `${sourceAlias}.${quoteIdent(projectedColumn)}`;
     const isMultiScalar = shapeExpr.result.expr.kind === "pointer"
@@ -6581,6 +7047,13 @@ const compileShapeProjection = (
     if (shapeExpr.selectExpr.limit) peeledClauses.limit = shapeExpr.selectExpr.limit;
     if (shapeExpr.selectExpr.offset) peeledClauses.offset = shapeExpr.selectExpr.offset;
   }
+  // Carry the outermost explicit shape down through the peel — the computed
+  // element's `sub { body }` shape lives on the WRAPPER set, and the
+  // innermost result often only has the implicit `{id}`.
+  let peeledShapeOverride: ShapeElement[] | undefined =
+    shape.expr.shape && shape.expr.shape.length > 0
+      ? shape.expr.shape
+      : (shapeExpr.result.shape && shapeExpr.result.shape.length > 0 ? shapeExpr.result.shape : undefined);
   while (peeled.expr.kind === "select_expr") {
     const se = peeled.expr as SelectExpr;
     if (se.where && !peeledClauses.where) peeledClauses.where = se.where;
@@ -6588,6 +7061,13 @@ const compileShapeProjection = (
     if (se.limit && !peeledClauses.limit) peeledClauses.limit = se.limit;
     if (se.offset && !peeledClauses.offset) peeledClauses.offset = se.offset;
     peeled = se.result;
+    if (!peeledShapeOverride && peeled.shape && peeled.shape.length > 0) {
+      peeledShapeOverride = peeled.shape;
+    }
+  }
+  if (peeledShapeOverride && peeledShapeOverride !== peeled.shape
+      && peeledShapeOverride.some((el) => el.shapeOrigin === "explicit" || el.name !== undefined)) {
+    peeled = { ...peeled, shape: peeledShapeOverride };
   }
   if (
     peeled.expr.kind === "type_root"
@@ -6738,6 +7218,31 @@ const compileShapeProjection = (
       return `COALESCE((SELECT json_group_array(${elementExpr}) FROM (${setSql})), '[]') AS ${quoteIdent(shapeAliasForElement(shape, shapeExpr.result, depth))}`;
     }
     return `COALESCE((SELECT json_group_array(value) FROM (SELECT ${valueExpr} AS value)), '[]') AS ${quoteIdent(shapeAliasForElement(shape, shapeExpr.result, depth))}`;
+  }
+  // Single-cardinality computed whose RHS is a UNION wrapped in select
+  // clauses (`open := (SELECT (a UNION b) LIMIT 1)`): the plain value path
+  // would aggregate the union eagerly and drop the clauses. Lower the row
+  // set with its clauses applied and take the single row.
+  const hasSelectClauses = shapeExpr.selectExpr
+    && (shapeExpr.selectExpr.limit
+        || shapeExpr.selectExpr.offset
+        || (shapeExpr.selectExpr.orderBy && shapeExpr.selectExpr.orderBy.length > 0)
+        || shapeExpr.selectExpr.where);
+  if (hasSelectClauses && containsUnionOperator(shapeExpr.result)) {
+    const scratchParams: ScalarValue[] = [];
+    const innerScalarOptions: GelIRCompileOptions = {
+      ...options,
+      outerScopes: [
+        ...(options.outerScopes ?? []),
+        { alias: sourceAlias, typeref: shape.source.typeref, namespace: [] },
+      ],
+    };
+    const setSql = compileScalarSelectSQL(shape.expr, scratchParams, target, innerScalarOptions);
+    if (setSql) {
+      params.length = shapeValueCheckpoint;
+      params.push(...scratchParams);
+      return `(SELECT ${quoteIdent("value")} FROM (${setSql}) LIMIT 1) AS ${quoteIdent(shapeAliasForElement(shape, shapeExpr.result, depth))}`;
+    }
   }
   return `${valueExpr} AS ${quoteIdent(shapeAliasForElement(shape, shapeExpr.result, depth))}`;
 };
@@ -7107,6 +7612,18 @@ const tryCompileMultiStepPointerExistsSQL = (
   }
 
   const leafCol = `${previousAlias}.${quoteIdent(columnForPointer(path.leaf))}`;
+  // All-single chains (`Issue.priority.name`) yield at most one value, so a
+  // scalar subquery comparison gives correct three-valued logic: an empty
+  // chain produces NULL, which propagates through NOT/AND/OR per EdgeQL's
+  // empty-set semantics (the EXISTS form would collapse empty to false and
+  // make `NOT (NOT x = 'a' AND …)` keep rows whose x is empty).
+  const allSingleChain = [...path.links, path.leaf].every((link) =>
+    link.direction === "outbound"
+    && (link.ptrref.outCardinality === "one" || link.ptrref.outCardinality === "at_most_one"));
+  if (allSingleChain) {
+    const joinWhere = whereSqls.length > 0 ? ` WHERE ${whereSqls.join(" AND ")}` : "";
+    return `((SELECT ${leafCol} FROM ${fromSql}${joinWhere}) ${op} ${rightSql})`;
+  }
   whereSqls.push(`${leafCol} ${op} ${rightSql}`);
   return `EXISTS (SELECT 1 FROM ${fromSql} WHERE ${whereSqls.join(" AND ")})`;
 };
@@ -7149,7 +7666,14 @@ const tryCompileCorrelatedExistsSelect = (
   const innerOptions: GelIRCompileOptions = {
     ...options,
     outerScopes: [
-      ...(options.outerScopes ?? []),
+      // A WITH-bound subquery (`sub := (SELECT Issue …)`, marked
+      // isWithBinding by the IR builder) is DETACHED: an enclosing scope of
+      // the same type must not capture its inner references. Inline
+      // subqueries keep the outer capture (EdgeQL common-prefix sharing).
+      ...(options.outerScopes ?? []).filter((scope) =>
+        scope.typeref.id !== innerType.id
+        || !((set as { isWithBinding?: boolean }).isWithBinding
+          || (set.pathId?.namespace ?? []).some((ns) => ns.startsWith("with:")))),
       ...[...outerIds].map((id) => ({
         alias: sourceAlias,
         typeref: { kind: "type_ref" as const, id, nameHint: id, isScalar: false } as TypeRef,
@@ -7433,6 +7957,28 @@ const compilePredicateSetSQL = (
     params.length = checkpoint;
     return null;
   }
+  // `FILTER <a> IF <cond> ELSE <b>` — compile all three as predicates and
+  // pick per row with CASE. (EXISTS-style conditions are never NULL, so the
+  // CASE's two-way split matches EdgeQL's semantics here.)
+  if (set.expr.kind === "if_else_expr") {
+    const ifElse = set.expr as IfElseExpr;
+    const cond = compilePredicateSetSQL(ifElse.condition, sourceAlias, params, target, options, linkPropertyAlias)
+      ?? compileValueSetSQL(ifElse.condition, sourceAlias, params, target, options, linkPropertyAlias);
+    const ifPred = cond
+      ? (compilePredicateSetSQL(ifElse.ifExpr, sourceAlias, params, target, options, linkPropertyAlias)
+        ?? compileValueSetSQL(ifElse.ifExpr, sourceAlias, params, target, options, linkPropertyAlias))
+      : null;
+    const elsePred = ifPred
+      ? (compilePredicateSetSQL(ifElse.elseExpr, sourceAlias, params, target, options, linkPropertyAlias)
+        ?? compileValueSetSQL(ifElse.elseExpr, sourceAlias, params, target, options, linkPropertyAlias))
+      : null;
+    if (cond && ifPred && elsePred) {
+      return `(CASE WHEN ${cond} THEN (${ifPred}) ELSE (${elsePred}) END)`;
+    }
+    params.length = checkpoint;
+    return null;
+  }
+
   if (set.expr.kind !== "operator_call") {
     params.length = checkpoint;
     return null;
@@ -7450,6 +7996,7 @@ const compilePredicateSetSQL = (
     // path can compile (`.name like '%on'`, function calls). Try predicate
     // first so AND/OR chains stay flat; fall back to value-level so we don't
     // drop the entire conjunction whenever one side is something exotic.
+    const operandsStart = params.length;
     const left = compilePredicateSetSQL(args[0].expr, sourceAlias, params, target, options, linkPropertyAlias)
       ?? compileValueSetSQL(args[0].expr, sourceAlias, params, target, options, linkPropertyAlias);
     const right = compilePredicateSetSQL(args[1].expr, sourceAlias, params, target, options, linkPropertyAlias)
@@ -7458,6 +8005,7 @@ const compilePredicateSetSQL = (
       params.length = checkpoint;
       return null;
     }
+    const operandsEnd = params.length;
     // EdgeQL AND/OR are strict on empty operands: `{} OR true` is `{}`, so a
     // FILTER drops the row. SQL's OR would instead let the non-empty side
     // win (EXISTS-lowered comparisons surface empty paths as FALSE). Guard
@@ -7480,6 +8028,14 @@ const compilePredicateSetSQL = (
       if (guards.length > 0) {
         return `(${guards.join(" AND ")} AND (${left} OR ${right}))`;
       }
+    }
+    // EdgeQL AND is strict on empty operands too: `{} AND false` is `{}`
+    // (the row drops), but SQLite's three-valued `NULL AND 0` is `0`, which
+    // an enclosing NOT would flip to keep the row. Force NULL propagation —
+    // the ELSE re-emits both operands, so their params are pushed again.
+    if (call.operator === "and") {
+      params.push(...params.slice(operandsStart, operandsEnd));
+      return `(CASE WHEN (${left}) IS NULL OR (${right}) IS NULL THEN NULL ELSE (${left}) AND (${right}) END)`;
     }
     return `(${left} ${call.operator.toUpperCase()} ${right})`;
   }
@@ -7598,6 +8154,22 @@ const compilePredicateSetSQL = (
     }
     params.length = checkpoint;
     return null;
+  }
+
+  // `?=` / `?!=` in predicate position: SQLite's IS / IS NOT are null-safe
+  // equality, and unlike the value-level CASE json('true') form, the result
+  // is a native boolean usable directly in WHERE (the JSON text 'true'
+  // casts to 0 there).
+  if (call.operator === "?=" || call.operator === "?!=") {
+    const optArgs = orderedCallArgs(call.args);
+    if (optArgs.length >= 2) {
+      const left = compileValueSetSQL(optArgs[0].expr, sourceAlias, params, target, options, linkPropertyAlias);
+      const right = left && compileValueSetSQL(optArgs[1].expr, sourceAlias, params, target, options, linkPropertyAlias);
+      if (left && right) {
+        return `(${left} ${call.operator === "?=" ? "IS" : "IS NOT"} ${right})`;
+      }
+      params.length = checkpoint;
+    }
   }
 
   const op = normalizeOperator(call.operator);
@@ -7719,11 +8291,94 @@ const compilePredicateSetSQL = (
       // equality (`ex0.owner_id = g0.owner_id`) instead of a fresh re-scan
       // that re-derives the link and references a bogus column.
       if (isSingleObjectLinkRef(setArg)) continue;
+      // When every pointer source in the arg resolves to an ENCLOSING scope
+      // (`len(User.name)` inside a computed's FILTER), it's a per-outer-row
+      // value, not a set to rescan — let the plain value comparison below
+      // compile it correlated. A fresh compileScalarSelectSQL would open an
+      // independent scan of the outer type (shadowing the outer alias).
+      {
+        // Set-producing wrappers (array_unpack etc.) need set semantics even
+        // when their pointer sources are outer rows.
+        const producesSet = ((): boolean => {
+          let cur: Set = setArg;
+          while (cur.expr.kind === "select_expr") cur = (cur.expr as SelectExpr).result;
+          if (cur.expr.kind !== "function_call") return false;
+          const fn = ((cur.expr as FunctionCall).functionName ?? "").split("::").pop() ?? "";
+          return ["array_unpack", "enumerate", "range_unpack", "json_array_unpack", "json_object_unpack"].includes(fn);
+        })();
+        const argSources = new Map<string, TypeRef>();
+        collectScalarPointerSources(setArg, argSources);
+        if (!producesSet && argSources.size > 0) {
+          let allOuter = true;
+          for (const [key, typeref] of argSources.entries()) {
+            const ns = key.includes("|") ? key.slice(key.indexOf("|") + 1) : "";
+            const namespace = ns.length > 0 ? ns.split(",") : [];
+            if (!findMatchingOuterScope({ typerefId: typeref.id, namespace }, options)) {
+              allOuter = false;
+              break;
+            }
+          }
+          // Prefer the plain correlated comparison — but only commit when
+          // BOTH sides compile as values; otherwise fall through to set
+          // treatment so e.g. a WITH-bound RHS still lowers.
+          if (allOuter) {
+            const valueCheckpoint = params.length;
+            const left = compileValueSetSQL(args[0].expr, sourceAlias, params, target, options, linkPropertyAlias);
+            const right = left && compileValueSetSQL(args[1].expr, sourceAlias, params, target, options, linkPropertyAlias);
+            if (left && right) {
+              return `${wrapPredicateOperand(left)} ${op} ${wrapPredicateOperand(right)}`;
+            }
+            params.length = valueCheckpoint;
+          }
+        }
+      }
+      const swapCheckpoint = params.length;
       const setSelect = compileScalarSelectSQL(setArg, params, target, options);
-      if (!setSelect) continue;
+      if (!setSelect) {
+        params.length = swapCheckpoint;
+        continue;
+      }
       const otherSql = compileValueSetSQL(args[otherIdx].expr, sourceAlias, params, target, options, linkPropertyAlias);
       if (!otherSql) {
-        // Roll back any params pushed by the failed setSelect compile.
+        // Roll back the params pushed by the successful setSelect compile.
+        params.length = swapCheckpoint;
+        continue;
+      }
+      // An object set compared against a single-link FK (`Issue.owner = U`)
+      // is an identity comparison — compile the set side as an id scan under
+      // a non-colliding alias so raw id columns compare directly (the JSON
+      // identity blob would never equal the FK).
+      const setIsObject = ((): boolean => {
+        let u: Set = setArg;
+        while (u.expr.kind === "select_expr") u = (u.expr as SelectExpr).result;
+        return !u.typeref.isScalar && u.typeref.collection === undefined
+          && (u.expr.kind === "type_root"
+              || (u.expr.kind === "pointer" && !(u.expr as Pointer).ptrref.outTarget.isScalar && !(u.expr as Pointer).ptrref.isLinkProperty));
+      })();
+      // Like isSingleObjectLinkRef, but tolerant of clause-bearing wrappers
+      // (`I.owner` for a WITH-bound filtered I) — the FK column exists on
+      // the current row either way.
+      const otherIsSingleLinkFK = ((): boolean => {
+        let cur: Set = args[otherIdx].expr;
+        while (cur.expr.kind === "select_expr") cur = (cur.expr as SelectExpr).result;
+        if (cur.expr.kind !== "pointer") return false;
+        const p = cur.expr as Pointer;
+        if (p.ptrref.isLinkProperty || p.ptrref.outTarget.isScalar || p.direction !== "outbound") return false;
+        if (p.ptrref.outCardinality !== "one" && p.ptrref.outCardinality !== "at_most_one") return false;
+        let root: Set = p.source;
+        while (root.expr.kind === "select_expr") root = (root.expr as SelectExpr).result;
+        return root.expr.kind === "type_root";
+      })();
+      if (setIsObject && otherIsSingleLinkFK) {
+        params.length = swapCheckpoint;
+        const idSource = compileSelectSource(setArg, undefined, undefined, options, params, target, "exo0");
+        const otherIdSql = idSource
+          ? compileValueSetSQL(args[otherIdx].expr, sourceAlias, params, target, options, linkPropertyAlias)
+          : null;
+        if (idSource && otherIdSql) {
+          return `(EXISTS (SELECT 1 FROM ${idSource.sql} WHERE ${idSource.alias}.${quoteIdent("id")} ${op} ${otherIdSql}))`;
+        }
+        params.length = swapCheckpoint;
         continue;
       }
       // Element-wise ∃-semantics for both `=` and `!=`: keep the row when
@@ -7915,6 +8570,15 @@ const compileValueSetSQL = (
     // the row's `id` column — `FILTER .id = <uuid>` / `.id IN {…}` must lower
     // to a column comparison rather than being dropped as an object link.
     if (pointer.ptrref.isIdPointer || (pointer.ptrref.shortName === "id" && pointer.source.expr.kind === "type_root")) {
+      // An id read off an ENCLOSING scope's type root (`Issue.id` inside a
+      // correlated `EXISTS (SELECT Comment …)`) anchors on the outer alias.
+      if (pointer.source.expr.kind === "type_root") {
+        const outerMatch = findMatchingOuterScope(
+          { typerefId: (pointer.source.expr as TypeRoot).typeref.id, namespace: pointer.source.pathId?.namespace ?? [] },
+          options,
+        );
+        if (outerMatch) return `${outerMatch.alias}.${quoteIdent("id")}`;
+      }
       return `${sourceAlias}.${quoteIdent("id")}`;
     }
     if (!pointer.ptrref.outTarget.isScalar) {
@@ -7927,8 +8591,13 @@ const compileValueSetSQL = (
       // level instead of dropping the FILTER (which returns every row).
       const isSingleLink = pointer.ptrref.outCardinality === "one"
         || pointer.ptrref.outCardinality === "at_most_one";
+      // The source may be select_expr-wrapped (`I.owner` for a WITH-bound,
+      // filtered I) — the clauses already shaped the rows behind sourceAlias,
+      // and the FK column name is the same either way.
+      let linkSourceRoot: Set = pointer.source;
+      while (linkSourceRoot.expr.kind === "select_expr") linkSourceRoot = (linkSourceRoot.expr as SelectExpr).result;
       if (
-        pointer.source.expr.kind === "type_root"
+        linkSourceRoot.expr.kind === "type_root"
         && pointer.direction === "outbound"
         && isSingleLink
       ) {
@@ -7937,7 +8606,7 @@ const compileValueSetSQL = (
         // `Comment.owner = Issue.owner` inside `EXISTS (SELECT Comment …)`),
         // read the FK column off the OUTER alias. Otherwise it's the current
         // source's own column.
-        const srcTypeId = (pointer.source.expr as TypeRoot).typeref.id;
+        const srcTypeId = (linkSourceRoot.expr as TypeRoot).typeref.id;
         const outerMatch = findMatchingOuterScope(
           { typerefId: srcTypeId, namespace: pointer.source.pathId?.namespace ?? [] },
           options,
@@ -7962,6 +8631,21 @@ const compileValueSetSQL = (
       );
       if (outerMatch) {
         return `${outerMatch.alias}.${quoteIdent(col)}`;
+      }
+    }
+    // `X.__type__.name` — the row's dynamic type label. `__type__` isn't a
+    // real link (no table); read the projected `__source_type` column.
+    if (pointer.ptrref.shortName === "name"
+        && pointer.source.expr.kind === "pointer"
+        && (pointer.source.expr as Pointer).ptrref.shortName === "__type__") {
+      let typeRootSet: Set = (pointer.source.expr as Pointer).source;
+      while (typeRootSet.expr.kind === "select_expr") typeRootSet = (typeRootSet.expr as SelectExpr).result;
+      if (typeRootSet.expr.kind === "type_root") {
+        const outerMatch = findMatchingOuterScope(
+          { typerefId: (typeRootSet.expr as TypeRoot).typeref.id, namespace: typeRootSet.pathId?.namespace ?? [] },
+          options,
+        );
+        return `${(outerMatch?.alias ?? sourceAlias)}.${quoteIdent("__source_type")}`;
       }
     }
     // Chained pointer (e.g. `.parent.val`): the immediate source isn't the
@@ -8822,7 +9506,12 @@ const compileFunctionCallSQL = (
         if (countArg.result.expr.kind !== "pointer" || countArg.result.typeref.isScalar) return false;
         let ptrSource: Set = (countArg.result.expr as Pointer).source;
         while (ptrSource.expr.kind === "select_expr") {
-          ptrSource = (ptrSource.expr as SelectExpr).result;
+          const se = ptrSource.expr as SelectExpr;
+          // A filtered/clamped source (`(SELECT User FILTER …).<owner`)
+          // is its own row set, not the current row — counting it as a
+          // correlated link would reference an alias that doesn't exist.
+          if (se.where || se.limit || se.offset || (se.orderBy && se.orderBy.length > 0)) return false;
+          ptrSource = se.result;
         }
         return ptrSource.expr.kind === "type_root";
       };
@@ -8852,9 +9541,13 @@ const compileFunctionCallSQL = (
       if (shortName === "count") {
         return `(SELECT count(*) FROM ${fromSql})`;
       }
-      // sum/min/max/avg/array_agg over a bare type_root have no value column,
-      // so they would aggregate over `id` which isn't useful — fall through to
-      // null so the caller can reject the query.
+      // `array_agg(User)` — aggregate the rows' identity objects.
+      if (shortName === "array_agg") {
+        return `(SELECT COALESCE(json_group_array(json_object(${quoteLiteral("id")}, g_agg.${quoteIdent("id")})), '[]') FROM ${fromSql})`;
+      }
+      // sum/min/max/avg over a bare type_root have no value column, so they
+      // would aggregate over `id` which isn't useful — fall through to null
+      // so the caller can reject the query.
     }
     if (argList.length === 1 && shortName !== "count") {
       // Correlated aggregate over a scalar pointer chain (e.g.

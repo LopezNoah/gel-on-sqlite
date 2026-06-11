@@ -477,6 +477,9 @@ const pointerRefFromField = (source: TypeRef, field: FieldDef): PointerRef => ({
   isComputed: false,
   isIdPointer: field.name === "id",
   isLinkProperty: false,
+  isExclusive: (field.constraints ?? []).some(
+    (constraint) => constraint.name === "std::exclusive" || constraint.name === "exclusive",
+  ),
   hasProperties: false,
 });
 
@@ -1063,7 +1066,25 @@ const compilePathSteps = (steps: EdgeQLPathStep[], ctx: IRCompileContext): Set =
       if (out.typeref.isScalar && step.name !== "id" && step.name !== "__type__" && !step.name.startsWith("@")) {
         failSemantic(`invalid property reference on an expression of primitive type`);
       }
-      const ptrref = resolvePointerRef(ctx, out.typeref, step.name);
+      // `X.__type__.name` — `__type__` has no schema pointer; synthesize the
+      // pointer steps so the SQL layer's `__source_type` shortcuts fire
+      // instead of falling into the unresolved-pointer fallback.
+      if (step.name === "__type__") {
+        out = synthesizeTypePointerSet(out);
+        continue;
+      }
+      if (step.name === "name" && out.expr.kind === "pointer" && (out.expr as Pointer).ptrref.shortName === "__type__") {
+        out = synthesizeTypeNamePointerSet(out);
+        continue;
+      }
+      let ptrref = resolvePointerRef(ctx, out.typeref, step.name);
+      // A type intersection can narrow to a SUPERTYPE (`Issue[IS Named]`):
+      // the rows are still the original type's, so a pointer the narrowed
+      // view lacks resolves against the underlying root type.
+      if (!ptrref && out.expr.kind === "type_root"
+          && (out.expr as TypeRoot).typeref.id !== out.typeref.id) {
+        ptrref = resolvePointerRef(ctx, (out.expr as TypeRoot).typeref, step.name);
+      }
       if (!ptrref) {
         // No backing column / link / backlink — but the source type may
         // expose `step.name` as a computed property (`property p := <expr>`).
@@ -1158,7 +1179,15 @@ const withBindings = (ctx: IRCompileContext, bindings: WithBinding[] | undefined
         break;
       }
       case "array_literal":
-        set = literalToSet(binding.value.values.length);
+        // Bind the real array IR — a length placeholder would make
+        // `x[0]` / `SELECT x` read the count instead of the elements.
+        set = compileFreeObjectExpr(
+          {
+            kind: "array_literal_expr",
+            values: binding.value.values.map((value) => ({ kind: "literal", value })),
+          } as unknown as FreeObjectExpr,
+          scoped,
+        );
         break;
       case "parameter":
         set = compileFreeObjectExpr({ kind: "parameter", name: binding.value.name, castType: binding.value.castType }, scoped);
@@ -1187,6 +1216,13 @@ const withBindings = (ctx: IRCompileContext, bindings: WithBinding[] | undefined
       default:
         set = literalToSet(null);
         break;
+    }
+    // WITH bindings are DETACHED from the enclosing query's path scope —
+    // mark subquery-valued ones so the SQL layer suppresses outer-scope
+    // capture of their internals (an inline `EXISTS (SELECT Issue …)` is
+    // IR-identical otherwise but SHARES the outer path prefix).
+    if (set.expr.kind === "select_expr") {
+      set = { ...set, isWithBinding: true } as Set;
     }
     // Tag object identity aliases so a later bare reference to the same type
     // is distinguishable from the WITH binding in SQL outer-scope matching.
@@ -2473,13 +2509,19 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
         return root;
       }
       const where = clauses?.filter ? compileFilterExpr(clauses.filter, root, scoped) : undefined;
+      // ORDER BY paths (`Issue.number` collapses to field `number`, and
+      // leading-dot fields) resolve against THIS select's subject, not the
+      // enclosing query's.
+      const orderCtx = childScope(scoped);
+      bindValue(orderCtx, "__current__", root);
+      bindValue(orderCtx, "__subject__", root);
       return {
         kind: "set",
         expr: {
           kind: "select_expr",
           result: root,
           where,
-          orderBy: clauses?.orderBy ? compileSelectOrderExprChain(clauses.orderBy, scoped) : undefined,
+          orderBy: clauses?.orderBy ? compileSelectOrderExprChain(clauses.orderBy, orderCtx) : undefined,
           offset: clauses?.offset === undefined ? undefined : literalToSet(clauses.offset),
           limit: clauses?.limit === undefined ? undefined : literalToSet(clauses.limit),
           implicitWrapper: false,
@@ -2664,7 +2706,14 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
       let out = resolveHeadSet(first.name);
       for (const step of rest) {
         if (step.kind === "ptr") {
-          const ptrref = resolvePointerRef(ctx, out.typeref, step.name);
+          let ptrref = resolvePointerRef(ctx, out.typeref, step.name);
+          // A type intersection can narrow to a SUPERTYPE (`Issue[IS Named]`):
+          // the rows are still the original type's, so a pointer the narrowed
+          // view lacks resolves against the underlying root type.
+          if (!ptrref && out.expr.kind === "type_root"
+              && (out.expr as TypeRoot).typeref.id !== out.typeref.id) {
+            ptrref = resolvePointerRef(ctx, (out.expr as TypeRoot).typeref, step.name);
+          }
           if (!ptrref) {
             return {
               ...out,
@@ -2675,10 +2724,13 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
           continue;
         }
         if (step.kind === "type_intersection") {
-          out = {
-            ...out,
-            typeref: resolveTypeRef(ctx, step.typeName),
-          };
+          // `Issue[IS Named]` — intersecting with a SUPERTYPE is a no-op:
+          // the set stays the (narrower) current type. Only narrow when the
+          // intersection type is NOT an ancestor of the current type.
+          const intersected = resolveTypeRef(ctx, step.typeName);
+          if (!isSubtypeOf(ctx, out.typeref.id, intersected.id)) {
+            out = { ...out, typeref: intersected };
+          }
           continue;
         }
       }
@@ -2922,7 +2974,48 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
           && entry.targetPtr === undefined
           && !expr.field.startsWith("@"),
       );
-      if (shapedElement) return shapedElement.expr;
+      if (shapedElement) {
+        // `(SELECT T { c := E } FILTER F).c` — the computed body alone loses
+        // the subject's iteration scope and FILTER. Wrap it in a FOR over the
+        // subject so E evaluates once per (filtered) subject row.
+        const sourceHasClauses = ((): boolean => {
+          let cur: Set = source;
+          while (cur.expr.kind === "select_expr") {
+            const se = cur.expr as SelectExpr;
+            if (se.where || se.limit || se.offset || (se.orderBy && se.orderBy.length > 0)) return true;
+            cur = se.result;
+          }
+          return false;
+        })();
+        // Only wrap value-producing computeds — an object-set computed
+        // (type_root / pointer body) may have further path steps applied
+        // (`U.friend.name`), which the pointer-chain compiler can't walk
+        // through a for_expr.
+        const computedIsObjectPath = ((): boolean => {
+          let cur: Set = shapedElement.expr;
+          while (cur.expr.kind === "select_expr") cur = (cur.expr as SelectExpr).result;
+          return (cur.expr.kind === "type_root" || cur.expr.kind === "pointer") && !cur.typeref.isScalar;
+        })();
+        if (sourceHasClauses && !computedIsObjectPath) {
+          return {
+            kind: "set",
+            expr: {
+              kind: "for_expr",
+              iterator: source,
+              body: shapedElement.expr,
+              bindingKind: "with",
+              optional: false,
+            } as ForExpr,
+            pathId: shapedElement.expr.pathId,
+            typeref: shapedElement.expr.typeref,
+            shape: shapedElement.expr.shape ?? [],
+            isBinding: false,
+            isMaterializedRef: false,
+            isSchemaAlias: false,
+          };
+        }
+        return shapedElement.expr;
+      }
       // If the source is a direct `Type.field` reference (no intermediate
       // computed/subquery scope) and the field isn't a built-in pseudo-
       // pointer (`id`/`__type__`) or a link property (`@x`), surface a
@@ -3254,6 +3347,16 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
         );
       }
       const left = compileFreeObjectExpr(expr.expr, ctx);
+      // Collection type checks (`[5] IS (array<int64>)`) resolve statically
+      // on the collection kind — the IR carries the left side's collection
+      // typeref, and a value's collection kind can't vary at runtime.
+      if (expr.typeName === "array" || expr.typeName === "tuple") {
+        // Tuple literals carry `unknown:std::tuple` without a collection tag;
+        // arrays carry `collection: "array"`.
+        const leftKind = left.typeref?.collection
+          ?? (left.typeref && (left.typeref.id === "unknown:std::tuple" || left.expr.kind === "tuple") ? "tuple" : undefined);
+        return literalToSet(leftKind === expr.typeName);
+      }
       const right = resolveTypeRef(ctx, expr.typeName);
       return {
         kind: "set",
@@ -4574,6 +4677,23 @@ const compileFilterExpr = (filter: FilterExpr, subject: Set, ctx: IRCompileConte
     };
   }
   const left = compileFilterTarget(filter.target, subject, ctx);
+  // The filter grammar lowers `EXISTS <bare-name>` to `<name> = true`; when
+  // the name resolved to an OBJECT set (a WITH binding / link), the intent
+  // is an existence test, not a boolean comparison.
+  if (filter.op === "=" && filter.value === true && !left.typeref.isScalar
+      && (left.expr.kind === "select_expr" || left.expr.kind === "type_root"
+          || (left.expr.kind === "pointer" && !(left.expr as Pointer).ptrref.outTarget.isScalar))) {
+    return {
+      kind: "set",
+      expr: { kind: "exists_expr", expr: left } as ExistsExpr,
+      pathId: defaultPathId("filter:exists"),
+      typeref: unknownTypeRef("std::bool"),
+      shape: [],
+      isBinding: false,
+      isMaterializedRef: false,
+      isSchemaAlias: false,
+    };
+  }
   const right = compileFilterValue(filter.value, ctx);
   return {
     kind: "set",
@@ -5115,19 +5235,35 @@ const inferComputedShapeIsMany = (set: Set): boolean => {
         const e = limitSet.expr;
         return e.kind === "integer_constant" && Number((e as { value: unknown }).value) <= 1;
       };
+      // An equality FILTER on an exclusive pointer selects at most one row
+      // (`SELECT Status FILTER Status.name = 'Open'`) — check every peeled
+      // layer's where, the filter often sits on an inner parens layer.
+      const whereClampsToOne = (where: Set | undefined): boolean => {
+        if (!where || where.expr.kind !== "operator_call") return false;
+        const oc = where.expr as OperatorCall;
+        if (oc.operator !== "=") return false;
+        return Object.values(oc.args).some((arg: CallArg) => {
+          let argSet: Set = arg.expr;
+          while (argSet.expr.kind === "select_expr") argSet = (argSet.expr as SelectExpr).result;
+          return argSet.expr.kind === "pointer" && (argSet.expr as Pointer).ptrref.isExclusive === true;
+        });
+      };
       let cursor: Set = se.result;
       let foundLimit = !!se.limit;
       let foundLimitOne = limitIsLiteralOne(se.limit);
+      let foundExclusiveWhere = whereClampsToOne(se.where);
       while (cursor.expr.kind === "select_expr") {
         const inner = cursor.expr as SelectExpr;
         if (inner.limit) foundLimit = true;
         if (limitIsLiteralOne(inner.limit)) foundLimitOne = true;
+        if (whereClampsToOne(inner.where)) foundExclusiveWhere = true;
         cursor = inner.result;
       }
       // `LIMIT 1` clamps to single no matter what the underlying expression
       // is — including inbound-pointer chains the loop below would otherwise
       // flag as many.
       if (foundLimitOne) return false;
+      if (foundExclusiveWhere) return false;
       if (!foundLimit && cursor.expr.kind === "type_root") {
         return true;
       }
@@ -5157,6 +5293,83 @@ const inferComputedShapeIsMany = (set: Set): boolean => {
     return false;
   }
   return false;
+};
+
+// `X.__type__` as a path step — synthesize the pointer set (no real table
+// backs it); the SQL layer reads `__source_type` off the source row.
+const synthesizeTypePointerSet = (source: Set): Set => {
+  const objectTypeRef: TypeRef = {
+    kind: "type_ref",
+    id: "schema::ObjectType",
+    nameHint: "schema::ObjectType",
+    module: "schema",
+    isView: false,
+    isScalar: false,
+    isAbstract: false,
+    inSchema: false,
+  };
+  const ptrref: PointerRef = {
+    kind: "pointer_ref",
+    id: `${source.typeref.id}.link::__type__`,
+    name: "__type__",
+    shortName: "__type__",
+    outSource: source.typeref,
+    outTarget: objectTypeRef,
+    outCardinality: "one",
+    inCardinality: "many",
+    isComputed: false,
+    isIdPointer: false,
+    isLinkProperty: false,
+    hasProperties: false,
+  };
+  return {
+    kind: "set",
+    expr: { kind: "pointer", source, ptrref, direction: "outbound", isDefinition: false } as Pointer,
+    pathId: defaultPathId(`${source.typeref.id}.__type__`),
+    typeref: objectTypeRef,
+    shape: [],
+    isBinding: false,
+    isMaterializedRef: false,
+    isSchemaAlias: false,
+  };
+};
+
+// `.name` applied to a synthesized `__type__` pointer.
+const synthesizeTypeNamePointerSet = (typeSet: Set): Set => {
+  const strRef: TypeRef = {
+    kind: "type_ref",
+    id: "std::str",
+    nameHint: "std::str",
+    module: "std",
+    isView: false,
+    isScalar: true,
+    isAbstract: false,
+    inSchema: false,
+  };
+  const ptrref: PointerRef = {
+    kind: "pointer_ref",
+    id: "schema::ObjectType.property::name",
+    name: "name",
+    shortName: "name",
+    outSource: typeSet.typeref,
+    outTarget: strRef,
+    outCardinality: "one",
+    inCardinality: "many",
+    isComputed: false,
+    isIdPointer: false,
+    isLinkProperty: false,
+    hasProperties: false,
+  };
+  return {
+    kind: "set",
+    expr: { kind: "pointer", source: typeSet, ptrref, direction: "outbound", isDefinition: false } as Pointer,
+    pathId: defaultPathId(`${typeSet.typeref.id}.__type__.name`),
+    typeref: strRef,
+    shape: [],
+    isBinding: false,
+    isMaterializedRef: false,
+    isSchemaAlias: false,
+  };
 };
 
 // Build a shape element for `__type__: { … }`. The SQL compiler keys off the

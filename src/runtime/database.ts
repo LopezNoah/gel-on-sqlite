@@ -53,8 +53,19 @@ const toRowRecords = (value: unknown): Record<string, unknown>[] => {
 // rewrap it so the calling query gets the same "invalid regular expression"
 // wording the Gel server produces, naming the UDF and the offending pattern.
 const compileRegex = (fname: string, source: string, flags: string): RegExp => {
+  // EdgeQL (POSIX/PG-style) regexes accept leading inline option groups like
+  // `(?i)`; JS RegExp doesn't — translate them to equivalent JS flags.
+  let normalizedSource = source;
+  let normalizedFlags = flags;
+  const inlineFlags = /^\(\?([ims]+)\)/.exec(normalizedSource);
+  if (inlineFlags) {
+    normalizedSource = normalizedSource.slice(inlineFlags[0].length);
+    for (const flag of inlineFlags[1]) {
+      if (!normalizedFlags.includes(flag === "m" ? "m" : flag)) normalizedFlags += flag;
+    }
+  }
   try {
-    return new RegExp(source, flags);
+    return new RegExp(normalizedSource, normalizedFlags);
   } catch (cause) {
     throw new AppError(
       "E_RUNTIME",

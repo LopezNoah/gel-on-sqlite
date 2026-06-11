@@ -66,6 +66,9 @@ export interface PointerRef extends Base {
   isDerived?: boolean;
   isIdPointer?: boolean;
   isLinkProperty?: boolean;
+  // The pointer carries an `exclusive` constraint — an equality filter on it
+  // selects at most one row.
+  isExclusive?: boolean;
   hasProperties: boolean;
   definedHere?: boolean;
   computedLinkAlias?: PointerRef;
