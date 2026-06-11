@@ -12710,7 +12710,20 @@ const runWriteWithAccessPolicies = (
     }
   };
 
-  db.prepare("BEGIN").run();
+  // Nest safely inside a client-managed transaction (Client.transaction):
+  // SQLite forbids BEGIN-in-BEGIN, so fall back to a savepoint when a
+  // transaction is already open on this connection. The db wrapper doesn't
+  // expose `inTransaction`, so probe by attempting the BEGIN.
+  let dmlUsesSavepoint = false;
+  try {
+    db.prepare("BEGIN").run();
+  } catch (txErr) {
+    if (!String((txErr as Error).message ?? txErr).includes("within a transaction")) {
+      throw txErr;
+    }
+    dmlUsesSavepoint = true;
+    db.prepare("SAVEPOINT gel_dml").run();
+  }
   try {
     if (ir.kind === "insert") {
       const insertValues: Record<string, ScalarValue> = { ...ir.values };
@@ -12771,12 +12784,12 @@ const runWriteWithAccessPolicies = (
                   const params = updates.map(([, value]) => value);
                   params.push(existingId);
                   const writeResult = db.prepare(sql).run(...params);
-                  db.prepare("COMMIT").run();
+                  db.prepare(dmlUsesSavepoint ? "RELEASE gel_dml" : "COMMIT").run();
                   return { changes: writeResult.changes };
                 }
               }
 
-              db.prepare("COMMIT").run();
+              db.prepare(dmlUsesSavepoint ? "RELEASE gel_dml" : "COMMIT").run();
               return { changes: 0 };
             }
           }
@@ -12798,7 +12811,7 @@ const runWriteWithAccessPolicies = (
         }
       }
 
-      db.prepare("COMMIT").run();
+      db.prepare(dmlUsesSavepoint ? "RELEASE gel_dml" : "COMMIT").run();
       return { changes: writeResult.changes };
     }
 
@@ -12827,7 +12840,7 @@ const runWriteWithAccessPolicies = (
       }
       const updatedRows = preRows.length > 0 ? readRowsByIds(db, ir.table, preRows.map((row) => String(row.id))) : [];
       enforceUpdateWritePolicies(subjectType, updatedRows, context, ast.pos.line, ast.pos.column);
-      db.prepare("COMMIT").run();
+      db.prepare(dmlUsesSavepoint ? "RELEASE gel_dml" : "COMMIT").run();
       return { changes: writeResult.changes };
     }
 
@@ -12837,19 +12850,24 @@ const runWriteWithAccessPolicies = (
       applyOnTargetDeletePolicies(subjectType, preRows.map((row) => String(row.id)), ast.pos);
       if (/\bRETURNING\b/i.test(sqlArtifact.sql)) {
         const rows = db.prepare(sqlArtifact.sql).all(...sqlArtifact.params) as Record<string, unknown>[];
-        db.prepare("COMMIT").run();
+        db.prepare(dmlUsesSavepoint ? "RELEASE gel_dml" : "COMMIT").run();
         return { changes: rows.length, rows };
       }
       const writeResult = db.prepare(sqlArtifact.sql).run(...sqlArtifact.params);
-      db.prepare("COMMIT").run();
+      db.prepare(dmlUsesSavepoint ? "RELEASE gel_dml" : "COMMIT").run();
       return { changes: writeResult.changes };
     }
 
     const writeResult = db.prepare(sqlArtifact.sql).run(...sqlArtifact.params);
-    db.prepare("COMMIT").run();
+    db.prepare(dmlUsesSavepoint ? "RELEASE gel_dml" : "COMMIT").run();
     return { changes: writeResult.changes };
   } catch (err) {
-    db.prepare("ROLLBACK").run();
+    if (dmlUsesSavepoint) {
+      db.prepare("ROLLBACK TO gel_dml").run();
+      db.prepare("RELEASE gel_dml").run();
+    } else {
+      db.prepare("ROLLBACK").run();
+    }
     throw err;
   }
 };

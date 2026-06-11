@@ -2229,7 +2229,7 @@ describe("TestEdgeQLFunctions", () => {
       h,
       `
                 WITH MODULE schema
-                SELECT x := re_match('(\\w+)::(Link|Property)',
+                SELECT x := re_match('(\\\\w+)::(Link|Property)',
                                      ObjectType.name)
                 ORDER BY x;
             `,
@@ -2244,7 +2244,7 @@ describe("TestEdgeQLFunctions", () => {
     expect(() => {
       h.query(
         `
-                select re_match('\\', 'asdf')
+                select re_match('\\\\', 'asdf')
             `
       );
     }).toThrow(new RegExp("invalid regular expression"));
@@ -2392,7 +2392,7 @@ describe("TestEdgeQLFunctions", () => {
       `
                 WITH MODULE schema
                 SELECT count(
-                    ObjectType FILTER re_test(r'(\W\w)bject$', ObjectType.name)
+                    ObjectType FILTER re_test(r'(\\W\\w)bject$', ObjectType.name)
                 ) = 2;
             `,
       [true]
@@ -4401,7 +4401,7 @@ describe("TestEdgeQLFunctions", () => {
     expect(() => {
       h.script(
         `
-                SELECT to_str(b'\x00')
+                SELECT to_str(b'\\x00')
                 `
       );
     }).toThrow(new RegExp("invalid byte sequence for encoding \"UTF8\": 0x00"));
@@ -18277,7 +18277,7 @@ describe("TestEdgeQLFunctions", () => {
     expect(() => {
       h.script(
         `
-                    SELECT to_int16(b'\x01', Endian.Big)
+                    SELECT to_int16(b'\\x01', Endian.Big)
                     `
       );
     }).toThrow(new RegExp("to_int16.*the argument must be exactly 2 bytes long"));
@@ -18331,7 +18331,7 @@ describe("TestEdgeQLFunctions", () => {
       h.script(
         `
                     SELECT to_int64(
-                        b'\x00' ++ to_bytes(62620574343574340, Endian.Big),
+                        b'\\x00' ++ to_bytes(62620574343574340, Endian.Big),
                         Endian.Big,
                     )
                     `
@@ -18368,7 +18368,7 @@ describe("TestEdgeQLFunctions", () => {
     expect(() => {
       h.script(
         `
-                    SELECT to_uuid(b'\xff\xff' ++ to_bytes(uuid_generate_v4()))
+                    SELECT to_uuid(b'\\xff\\xff' ++ to_bytes(uuid_generate_v4()))
                     `
       );
     }).toThrow(new RegExp("to_uuid.*the argument must be exactly 16 bytes long"));
@@ -22742,37 +22742,37 @@ describe("TestEdgeQLFunctions", () => {
     );
     assertQueryResult(
       h,
-      `select bit_count(b'\x00');`,
+      `select bit_count(b'\\x00');`,
       unorderedSet([0])
     );
     assertQueryResult(
       h,
-      `select bit_count(b'\x01');`,
+      `select bit_count(b'\\x01');`,
       unorderedSet([1])
     );
     assertQueryResult(
       h,
-      `select bit_count(b'\xff');`,
+      `select bit_count(b'\\xff');`,
       unorderedSet([8])
     );
     assertQueryResult(
       h,
-      `select bit_count(b'\x01\x01');`,
+      `select bit_count(b'\\x01\\x01');`,
       unorderedSet([2])
     );
     assertQueryResult(
       h,
-      `select bit_count(b'\xff\xff');`,
+      `select bit_count(b'\\xff\\xff');`,
       unorderedSet([16])
     );
     assertQueryResult(
       h,
-      `select bit_count(b'\x01\x01\x01\x01');`,
+      `select bit_count(b'\\x01\\x01\\x01\\x01');`,
       unorderedSet([4])
     );
     assertQueryResult(
       h,
-      `select bit_count(b'\xff\xff\xff\xff');`,
+      `select bit_count(b'\\xff\\xff\\xff\\xff');`,
       unorderedSet([32])
     );
   });

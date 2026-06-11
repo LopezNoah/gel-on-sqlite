@@ -14096,8 +14096,8 @@ describe("TestExpressions", () => {
     assertQueryResult(
       h,
       `
-                WITH x := rb'test\raw\x01' ++ br'\now\x02' ++ b'\x03\x04',
-                SELECT x = b"test\\raw\\x01\\now\\x02\x03\x04";
+                WITH x := rb'test\\raw\\x01' ++ br'\\now\\x02' ++ b'\\x03\\x04',
+                SELECT x = b"test\\\\raw\\\\x01\\\\now\\\\x02\\x03\\x04";
             `,
       [true]
     );
@@ -15060,7 +15060,7 @@ describe("TestExpressions", () => {
     assertQueryResult(
       h,
       `
-                SELECT [(1, 'a')] ++ [(2.0, $$\$$), (3.0, r'\n')];
+                SELECT [(1, 'a')] ++ [(2.0, $$\\$$), (3.0, r'\\n')];
             `,
       [
             [
@@ -16036,22 +16036,22 @@ describe("TestExpressions", () => {
   it("test_edgeql_expr_string_08", () => {
     assertQueryResult(
       h,
-      `SELECT ':\x62:\u2665:\U000025C6:☎️:';`,
+      `SELECT ':\\x62:\\u2665:\\U000025C6:☎️:';`,
       [":b:\u2665:\u25c6:\u260e\ufe0f:"]
     );
     assertQueryResult(
       h,
-      `SELECT '\'"\\\'\""\\x\\u';`,
+      `SELECT '\\'"\\\\\\'\\""\\\\x\\\\u';`,
       ["'\"\\'\"\"\\x\\u"]
     );
     assertQueryResult(
       h,
-      `SELECT "'\"\\\'\"\\x\\u";`,
+      `SELECT "'\\"\\\\\\'\\"\\\\x\\\\u";`,
       ["'\"\\'\"\\x\\u"]
     );
     assertQueryResult(
       h,
-      `SELECT r'\n';`,
+      `SELECT r'\\n';`,
       ["\\n"]
     );
   });
@@ -16059,16 +16059,16 @@ describe("TestExpressions", () => {
   it("test_edgeql_expr_string_09", () => {
     assertQueryResult(
       h,
-      `SELECT 'bb\
-            aa \
+      `SELECT 'bb\\
+            aa \\
             bb';
             `,
       ["bbaa bb"]
     );
     assertQueryResult(
       h,
-      `SELECT 'bb\
-            aa \
+      `SELECT 'bb\\
+            aa \\
 
 
             bb';
@@ -16077,8 +16077,8 @@ describe("TestExpressions", () => {
     );
     assertQueryResult(
       h,
-      `SELECT r'aa\
-            bb \
+      `SELECT r'aa\\
+            bb \\
             aa';`,
       ["aa\\\n            bb \\\n            aa"]
     );
@@ -16087,7 +16087,7 @@ describe("TestExpressions", () => {
   it("test_edgeql_expr_string_10", () => {
     expect(() => {
       h.script(
-        `SELECT 'bb\   
+        `SELECT 'bb\\   
 aa';`
       );
     }).toThrow(new RegExp("invalid string literal: invalid escape sequence '\\\\ '"));
@@ -16096,7 +16096,7 @@ aa';`
   it("test_edgeql_expr_string_11", () => {
     expect(() => {
       h.script(
-        `SELECT 'bb\   aa';`
+        `SELECT 'bb\\   aa';`
       );
     }).toThrow(new RegExp("invalid string literal: invalid escape sequence '\\\\ '"));
   });
@@ -16104,8 +16104,8 @@ aa';`
   it("test_edgeql_expr_string_12", () => {
     assertQueryResult(
       h,
-      `SELECT 'bb\
-aa \
+      `SELECT 'bb\\
+aa \\
             bb';
             `,
       ["bbaa bb"]
@@ -16115,20 +16115,17 @@ aa \
   it("test_edgeql_expr_string_13", () => {
     assertQueryResult(
       h,
-      `SELECT 'bb\
-   aa';`,
+      `SELECT 'bb\\\n   aa';`,
       ["bbaa"]
     );
     assertQueryResult(
       h,
-      `SELECT 'bb\
-   aa';`,
+      `SELECT 'bb\\\r   aa';`,
       ["bbaa"]
     );
     assertQueryResult(
       h,
-      `SELECT 'bb\
-   aa';`,
+      `SELECT 'bb\\\r\n   aa';`,
       ["bbaa"]
     );
   });
@@ -24089,7 +24086,7 @@ aa \
     assertQueryResult(
       h,
       `
-                SELECT 'aaaa' ++ r'\q' ++ $$\n$$;
+                SELECT 'aaaa' ++ r'\\q' ++ $$\\n$$;
             `,
       ["aaaa\\q\\n"]
     );
@@ -24760,22 +24757,22 @@ aa \
     assertQueryResult(
       h,
       `
-                select "1 + 1 = \(1 + 1)"
+                select "1 + 1 = \\(1 + 1)"
             `,
       ["1 + 1 = 2"]
     );
     assertQueryResult(
       h,
       `
-                select ("1 + 1 = \(1 + 1)")
+                select ("1 + 1 = \\(1 + 1)")
             `,
       ["1 + 1 = 2"]
     );
     assertQueryResult(
       h,
-      `select "asdf \(str_reverse("1234") ++
-"[\(sum({1,2,3}))]")! count(User)=\
-\(
+      `select "asdf \\(str_reverse("1234") ++
+"[\\(sum({1,2,3}))]")! count(User)=\\
+\\(
 count(User))" ++ "!";`,
       ["asdf 4321[6]! count(User)=0!"]
     );

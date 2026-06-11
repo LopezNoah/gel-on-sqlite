@@ -948,7 +948,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
             SELECT
                 Text {body}
             FILTER
-                re_test(r'ed([S\s]|$)', Text.body)
+                re_test(r'ed([S\\s]|$)', Text.body)
             ORDER BY Text.body;
             `,
       [
@@ -1017,7 +1017,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
             SELECT
                 Text {body}
             FILTER
-                re_test(r'(?i)ed([S\s]|$)', Text.body)
+                re_test(r'(?i)ed([S\\s]|$)', Text.body)
             ORDER BY Text.body;
             `,
       [
