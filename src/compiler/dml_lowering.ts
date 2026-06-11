@@ -11,7 +11,8 @@ import type {
   UpdateIR,
   UpdateLinkAssignmentIR,
 } from "../ir/model.js";
-import { qualifiedTypeName, type SchemaSnapshot } from "../schema/schema.js";
+import { normalizeLinkTargetNames, qualifiedTypeName, type SchemaSnapshot } from "../schema/schema.js";
+import { tableNameForType } from "../codegen/sql.js";
 import type { ScalarType, ScalarValue, TypeDef } from "../types.js";
 import { checkScopeTreeViolations } from "./scope_tree_check.js";
 
@@ -1145,15 +1146,6 @@ export const compileDmlToIR = (
 /* ---------------------------------- */
 /* Link mutation plans                */
 /* ---------------------------------- */
-
-const tableNameForType = (qualifiedName: string): string => qualifiedName.replaceAll("::", "__").toLowerCase();
-
-const normalizeLinkTargetNames = (targetType: string, moduleName: string): string[] =>
-  targetType
-    .split("|")
-    .map((part) => part.trim())
-    .filter((part) => part.length > 0)
-    .map((part) => (part.includes("::") ? part : `${moduleName}::${part}`));
 
 const linkDefsEquivalent = (
   a: NonNullable<TypeDef["links"]>[number],

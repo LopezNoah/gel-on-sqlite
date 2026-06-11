@@ -18,6 +18,7 @@ import type { AliasDef, AnnotationDef, ConstraintDef, FieldDef, FunctionDef, Lin
 import type { ScalarTypeDeclaration } from "./scalar.js";
 import type { SchemaSnapshot } from "./schema.js";
 import { qualifiedTypeName } from "./schema.js";
+import { tableNameForType } from "../codegen/sql.js";
 
 const typeFields = (): FieldDef[] => [
   { name: "name", type: "str", required: true },
@@ -207,7 +208,6 @@ interface IntrospectionDB {
 
 const SCHEMA_TYPE_TABLE = "schema__type";
 const quoteIdent = (ident: string): string => `"${ident.replaceAll('"', '""')}"`;
-const tableNameForType = (qualifiedName: string): string => qualifiedName.replaceAll("::", "__").toLowerCase();
 const scopedIdFor = (scope: string, name: string): string => syntheticIntrospectionId(`${scope}:${name}`);
 
 type SQLParam = string | number | boolean | null;
