@@ -2579,9 +2579,8 @@ const compileScalarSelectSQLInner = (
           }
         }
         if (ok && fromSources.length > 0) {
-          const valueExpr = op === "ilike"
-            ? `(LOWER(${argSqls[0]}) LIKE LOWER(${argSqls[1]}))`
-            : `(${argSqls[0]} ${op} ${argSqls[1]})`;
+          const valueExpr = likeOperatorSql(opCall.operator, argSqls[0], argSqls[1])
+            ?? `(${argSqls[0]} ${op} ${argSqls[1]})`;
           return `SELECT ${valueExpr} AS ${quoteIdent("value")} FROM ${fromSources.join(", ")}`;
         }
         params.length = innerCheckpoint;
@@ -5599,6 +5598,8 @@ const compileValueSetSQLWithAliases = (
         return null;
       }
       if (call.operator === "^") return `pow(${left}, ${right})`;
+      const likeSql = likeOperatorSql(call.operator, left, right);
+      if (likeSql) return likeSql;
       return `(${left} ${op} ${right})`;
     }
   }
@@ -7500,8 +7501,8 @@ const compilePredicateSetSQL = (
       "<": ">=", ">=": "<",
       ">": "<=", "<=": ">",
       "in": "not in", "not in": "in",
-      "like": "not like", "not like": "like",
-      "ilike": "not ilike", "not ilike": "ilike",
+      "like": "not_like", "not_like": "like",
+      "ilike": "not_ilike", "not_ilike": "ilike",
       "?=": "?!=", "?!=": "?=",
     };
     let operand: Set = args[0].expr;
@@ -8545,8 +8546,9 @@ const compileOperatorValueSQL = (
       }
       compiled.push(piece);
     }
-    if (call.operator === "ilike") {
-      return `(LOWER(${compiled[0]}) LIKE LOWER(${compiled[1]}))`;
+    if (compiled.length === 2) {
+      const likeSql = likeOperatorSql(call.operator, compiled[0], compiled[1]);
+      if (likeSql) return likeSql;
     }
     // `++` over array operands is array concatenation, not string concat —
     // emit a JSON array merge so `[1,2] ++ [3,4]` produces `[1,2,3,4]` rather
@@ -9749,8 +9751,17 @@ const operatorToInfixSql = (operator: string): string | null => {
   if (operator === "like") {
     return "LIKE";
   }
+  if (operator === "not_like") {
+    return "NOT LIKE";
+  }
+  // ILIKE / NOT ILIKE are sentinels: SQLite has no ILIKE operator, so every
+  // emit site must route these through likeOperatorSql rather than joining
+  // the returned token into raw SQL.
   if (operator === "ilike") {
     return "ILIKE";
+  }
+  if (operator === "not_ilike") {
+    return "NOT ILIKE";
   }
   if (operator === "union") {
     return "UNION";
@@ -9777,6 +9788,19 @@ const inlineIntegerConstantSql = (expr: Expr, value: ScalarValue | bigint): stri
   }
   if (typeof value === "bigint") return value.toString(10);
   return undefined;
+};
+
+// The LIKE family needs dedicated emission: the connection sets
+// case_sensitive_like=1, so LIKE is case-sensitive (EdgeQL semantics) and the
+// case-insensitive forms lower through LOWER() on both operands.
+const likeOperatorSql = (operator: string, left: string, right: string): string | undefined => {
+  switch (operator) {
+    case "like": return `(${left} LIKE ${right})`;
+    case "not_like": return `(${left} NOT LIKE ${right})`;
+    case "ilike": return `(LOWER(${left}) LIKE LOWER(${right}))`;
+    case "not_ilike": return `(LOWER(${left}) NOT LIKE LOWER(${right}))`;
+    default: return undefined;
+  }
 };
 
 const extractScalarConstant = (set: Set): ScalarValue | undefined => {
@@ -9822,7 +9846,7 @@ const STRICT_COMPARE_OPS = new Set(["=", "!=", "<", "<=", ">", ">="]);
 const STRICT_BINARY_OPS = new Set([
   ...STRICT_COMPARE_OPS,
   "+", "-", "*", "/", "//", "%", "^", "++",
-  "like", "ilike", "in", "not in",
+  "like", "ilike", "not_like", "not_ilike", "in", "not in",
   "and", "or",
 ]);
 // Stdlib functions that DO NOT propagate empty-set: they yield a defined
