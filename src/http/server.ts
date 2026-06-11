@@ -106,6 +106,7 @@ export const createHttpServer = (deps: {
         error: {
           code: appError.code,
           message: appError.message,
+          hint: appError.hint,
           line: appError.line,
           column: appError.column,
         },
@@ -177,6 +178,7 @@ export const createHttpServer = (deps: {
         error: {
           code: appError.code,
           message: appError.message,
+          hint: appError.hint,
           line: appError.line,
           column: appError.column,
         },
@@ -226,6 +228,7 @@ export const createHttpServer = (deps: {
         error: {
           code: appError.code,
           message: appError.message,
+          hint: appError.hint,
           line: appError.line,
           column: appError.column,
         },
