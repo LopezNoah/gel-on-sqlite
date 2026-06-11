@@ -10,6 +10,7 @@ import { qualifiedTypeName, type SchemaSnapshot } from "../schema/schema.js";
 import { compileGelIRToSQL, type GelIRSQLArtifact } from "../sql/gel_ir_compiler.js";
 import type { ScalarValue } from "../types.js";
 import { compileToIR } from "./semantic.js";
+import { compileDmlToIR } from "./dml_lowering.js";
 import type { GeneratedSchema } from "../codegen/schema.js";
 import { compileASTToGelIR, expandSchemaAliasesInStatement, isGelIRCompatibleStatement } from "./ast_to_ir.js";
 
@@ -96,14 +97,20 @@ export class CompilerService {
     }
     let ir: ReturnType<typeof traceIRFromGelIR>;
     try {
-      ir = needsLegacyRuntimeIR(statement)
-        ? compileToIR(schema, statement, {
-            overlays: context.overlays,
-            globals: context.globals,
-            schemaModel: context.schemaModel,
-            schemaModelName: context.schemaModelName,
-          })
-        : traceIRFromGelIR(statement, gelIr);
+      // Mutations compile through the standalone DML lowering (runtime
+      // mutation plan) — the legacy semantic.ts pipeline is group-only now.
+      // Keep this after compileSqlFromGelIR so gelIR compile errors retain
+      // precedence over plan validation errors, matching the legacy order.
+      ir = statement.kind === "insert" || statement.kind === "update" || statement.kind === "delete"
+        ? compileDmlToIR(schema, statement, { globals: context.globals })
+        : needsLegacyRuntimeIR(statement)
+          ? compileToIR(schema, statement, {
+              overlays: context.overlays,
+              globals: context.globals,
+              schemaModel: context.schemaModel,
+              schemaModelName: context.schemaModelName,
+            })
+          : traceIRFromGelIR(statement, gelIr);
     } catch (err) {
       // The legacy pipeline can't model some group statements the gelIR
       // pipeline lowers fully (e.g. chained group-rows bindings). When the
@@ -323,7 +330,7 @@ const compileSqlFromGelIR = (
 };
 
 const needsLegacyRuntimeIR = (statement: Statement): boolean => {
-  if (statement.kind === "insert" || statement.kind === "update" || statement.kind === "delete" || statement.kind === "group") {
+  if (statement.kind === "group") {
     return true;
   }
   // `SELECT (GROUP X BY Y) [FILTER … ORDER BY …]` — peelGroupExprFromSelectExpr
