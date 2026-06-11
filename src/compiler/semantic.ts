@@ -1,4 +1,4 @@
-import { AppError } from "../errors.js";
+import { AppError, tryResult } from "../errors.js";
 import { parseEdgeQL } from "../edgeql/parser.js";
 import { simpleTypeName } from "../edgeql/ast.js";
 import type { ClauseChain, ComputedExpr, FilterExpr, FreeObjectExpr, FunctionCallExpr, GroupByAtom, GroupByElement, OrderExpr, OrderExprChain, SelectStatement, ShapeElement, Statement, TypeExpr, WithBindingValue } from "../edgeql/ast.js";
@@ -3375,17 +3375,17 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
         const normalized = normalizeTypeName(name, activeModule);
         const def = schema.getGlobal(normalized) ?? schema.getGlobal(`default::${name}`) ?? schema.getGlobal(name);
         if (def?.exprText) {
-          try {
-            const parsed = parseEdgeQL(`select ${def.exprText.replace(/;\s*$/, "")}`);
-            const stmt = (Array.isArray(parsed) ? parsed[0] : parsed) as Statement;
+          const globalExprText = def.exprText;
+          const parsedGlobal = tryResult(() => parseEdgeQL(`select ${globalExprText.replace(/;\s*$/, "")}`));
+          // On parse failure fall through to the conservative bound below.
+          if (parsedGlobal.ok) {
+            const stmt = (Array.isArray(parsedGlobal.value) ? parsedGlobal.value[0] : parsedGlobal.value) as Statement;
             if (stmt.kind === "select_expr") {
               return inferAstCardinality(stmt.expr);
             }
             if (stmt.kind === "select") {
               return inferAstCardinality({ kind: "select", typeName: stmt.typeName, shape: stmt.shape, clauses: { filter: stmt.filter } } as FreeObjectExpr);
             }
-          } catch {
-            // Fall through to the conservative bound below if parsing fails.
           }
         }
         return "one";
@@ -6007,11 +6007,8 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
             }
             if (inner.kind !== "function_call") return undefined;
             const resolved = (() => {
-              try {
-                return resolveFunctionOrFail(inner.call.name, inner.call.args.length);
-              } catch {
-                return undefined;
-              }
+              const r = tryResult(() => resolveFunctionOrFail(inner.call.name, inner.call.args.length));
+              return r.ok ? r.value : undefined;
             })();
             if (!resolved) return undefined;
             const aggMap: Record<string, "sum" | "count" | "min" | "max" | "avg"> = {
@@ -6188,7 +6185,9 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
             };
           })();
           if (backlinkShape) {
-            try {
+            // Probe: on a query failure fall through to the generic
+            // select_expr path; engine bugs propagate.
+            const backlinkAttempt = tryResult((): boolean => {
               const sources = resolveBacklinkSources(qualifiedName, scopeModule, backlinkShape.link, backlinkShape.sourceType);
               const nestedSourceType = backlinkShape.sourceType
                 ? normalizeTypeName(backlinkShape.sourceType, scopeModule)
@@ -6229,14 +6228,18 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
                 shapeNames.add(shapeElement.name);
                 scopeChildren.push(nested.scopeTree);
                 hasBacklink = true;
-                continue;
+                return true;
               }
-            } catch {
-              // Fall through to the generic select_expr path.
+              return false;
+            });
+            if (backlinkAttempt.ok && backlinkAttempt.value) {
+              continue;
             }
           }
           if (subqueryShape) {
-            try {
+            // Probe: on a query failure fall through to the generic
+            // select_expr path; engine bugs propagate.
+            const subqueryAttempt = tryResult((): boolean => {
               const nestedPath = createPathId(elementPathId);
               const nested = compileSelectForType(
                 subqueryShape.innerType,
@@ -6277,9 +6280,10 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
               });
               shapeNames.add(shapeElement.name);
               scopeChildren.push(nested.scopeTree);
+              return true;
+            });
+            if (subqueryAttempt.ok && subqueryAttempt.value) {
               continue;
-            } catch {
-              // Fall through to the generic select_expr path.
             }
           }
           // Validate any nested ORDER BY: an ORDER BY expression must yield a
@@ -8847,13 +8851,15 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
 
         if (schemaAlias && !aliasSourceType && schemaAlias.exprText) {
           const aliasBody = schemaAlias.exprText.replace(/;\s*$/, "");
-          try {
+          // Probe: on a query failure fall through to the default error below.
+          const aliasAttempt = tryResult(() => {
             const parsedAlias = parseEdgeQL(`select ${aliasBody}`);
-            if (parsedAlias.kind === "select_expr") {
-              return compileExprToIREntry(parsedAlias.expr, currentItemBinding);
-            }
-          } catch {
-            // fall through to default error
+            return parsedAlias.kind === "select_expr"
+              ? compileExprToIREntry(parsedAlias.expr, currentItemBinding)
+              : undefined;
+          });
+          if (aliasAttempt.ok && aliasAttempt.value !== undefined) {
+            return aliasAttempt.value;
           }
         }
 
@@ -9565,32 +9571,11 @@ const isExclusivePropertyEqualityFilter = (
     if (field?.constraints?.some((c) => c.name === "std::exclusive" || c.name === "exclusive")) {
       return true;
     }
-    for (const baseName of t.extends ?? []) {
-      const baseType = (() => {
-        try {
-          return null;
-        } catch {
-          return null;
-        }
-      })();
-      void baseType;
-    }
     // The schema doesn't carry parent TypeDefs on the type itself in a single
-    // walkable form here, so prefer schema lookup via getType.
-    for (const baseName of t.extends ?? []) {
-      try {
-        // schema is captured in the enclosing closure where this helper is
-        // invoked; but isExclusivePropertyEqualityFilter is a top-level
-        // function. To avoid threading schema through, rely on the property
-        // being declared directly on typeDef or one of its already-known
-        // ancestors. Most exclusive constraints in the test corpus are
-        // declared directly on the subject type, so this still covers the
-        // common case.
-        void baseName;
-      } catch {
-        // ignore
-      }
-    }
+    // walkable form here (and isExclusivePropertyEqualityFilter is a top-level
+    // function without schema access), so the walk only sees typeDef itself.
+    // Most exclusive constraints in the test corpus are declared directly on
+    // the subject type, so this still covers the common case.
   }
   return false;
 };

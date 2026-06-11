@@ -1,4 +1,4 @@
-import { AppError } from "../errors.js";
+import { AppError, tryResult } from "../errors.js";
 import type { FilterExpr, FreeObjectExpr, InsertValue, SelectStatement, Statement, TypeExpr, WithBindingValue } from "../edgeql/ast.js";
 import type {
   DeleteIR,
@@ -365,7 +365,10 @@ export const compileDmlToIR = (
     if (fieldType !== "json") return values;
     return values.map((v) => {
       if (typeof v !== "string") return v;
-      try { return JSON.parse(v); } catch { return v; }
+      // captureAll: JSON.parse throws native SyntaxError (not an AppError) and
+      // "not valid JSON" is exactly the probed condition here.
+      const parsed = tryResult(() => JSON.parse(v) as unknown, { captureAll: true });
+      return parsed.ok ? parsed.value : v;
     });
   };
 
@@ -381,14 +384,15 @@ export const compileDmlToIR = (
     if (!coll || coll.kind !== "tuple" || !coll.elementNames || typeof scalar !== "string") {
       return scalar;
     }
-    try {
-      const parsed: unknown = JSON.parse(scalar);
-      if (Array.isArray(parsed)) {
-        const obj: Record<string, unknown> = {};
-        coll.elementNames.forEach((name, idx) => { obj[name] = parsed[idx]; });
-        return JSON.stringify(obj);
-      }
-    } catch { /* leave as-is */ }
+    // captureAll: JSON.parse throws native SyntaxError (not an AppError);
+    // non-JSON input just means "leave the scalar as-is".
+    const parseAttempt = tryResult(() => JSON.parse(scalar) as unknown, { captureAll: true });
+    if (parseAttempt.ok && Array.isArray(parseAttempt.value)) {
+      const parsed = parseAttempt.value;
+      const obj: Record<string, unknown> = {};
+      coll.elementNames.forEach((name, idx) => { obj[name] = parsed[idx]; });
+      return JSON.stringify(obj);
+    }
     return scalar;
   };
 
@@ -1484,12 +1488,9 @@ export const isValidScalarValue = (type: ScalarType, value: unknown): value is S
         return true;
       }
       if (typeof value === "string") {
-        try {
-          JSON.parse(value);
-          return true;
-        } catch {
-          return false;
-        }
+        // captureAll: JSON.parse throws native SyntaxError (not an AppError);
+        // the parse failure is the very validity answer being computed.
+        return tryResult(() => JSON.parse(value) as unknown, { captureAll: true }).ok;
       }
       if (Array.isArray(value)) {
         return true;

@@ -1,4 +1,4 @@
-import { AppError } from "../errors.js";
+import { AppError, tryResult } from "../errors.js";
 import { parseEdgeQL } from "../edgeql/parser.js";
 import { validateGroupByAtomCollisions } from "./semantic.js";
 import type {
@@ -949,12 +949,13 @@ const tryLowerComputedPropertyOnTypePath = (
     // subject so `.field` references inside the body resolve against the
     // current row, then lower through compileFreeObjectExpr.
     const text = expr.exprText.trim();
-    let parsed;
-    try {
-      parsed = parseEdgeQL(text.toLowerCase().startsWith("select ") ? text : `SELECT ${text}`);
-    } catch {
+    const parseAttempt = tryResult(() =>
+      parseEdgeQL(text.toLowerCase().startsWith("select ") ? text : `SELECT ${text}`),
+    );
+    if (!parseAttempt.ok) {
       return undefined;
     }
+    const parsed = parseAttempt.value;
     // Guard against direct self-reference recursion (`p := .p`): if the body
     // is itself `.<fieldName>` it would loop forever.
     if (ctx.computedExprResolutionStack?.has(`${typeDef.module}::${typeDef.name}.${fieldName}`)) {
@@ -986,12 +987,11 @@ const tryLowerComputedPropertyOnTypePath = (
     bindValue(innerCtx, "__current__", source);
     bindValue(innerCtx, "__subject__", source);
     const argText = expr.field ? `.${expr.link}.${expr.field}` : `.${expr.link}`;
-    let parsed;
-    try {
-      parsed = parseEdgeQL(`SELECT ${expr.functionName}(${argText})`);
-    } catch {
+    const parseAttempt = tryResult(() => parseEdgeQL(`SELECT ${expr.functionName}(${argText})`));
+    if (!parseAttempt.ok) {
       return undefined;
     }
+    const parsed = parseAttempt.value;
     if (parsed.kind === "select_expr") {
       return compileFreeObjectExpr(parsed.expr, innerCtx);
     }
@@ -1957,14 +1957,11 @@ const tryResolveSchemaAliasSet = (ctx: IRCompileContext, name: string): Set | un
   // FreeObjectExpr. Both shapes resolve through `compileFreeObjectExpr`.
   let ast: EdgeQLStatement | undefined;
   for (const candidate of [body, `SELECT ${body}`]) {
-    try {
-      const parsed = parseEdgeQL(candidate);
-      if (parsed.kind === "select" || parsed.kind === "select_expr") {
-        ast = parsed;
-        break;
-      }
-    } catch {
-      // try next candidate
+    const parsed = tryResult(() => parseEdgeQL(candidate));
+    if (!parsed.ok) continue; // query failure only — try next candidate
+    if (parsed.value.kind === "select" || parsed.value.kind === "select_expr") {
+      ast = parsed.value;
+      break;
     }
   }
   if (!ast) {
@@ -2141,7 +2138,8 @@ const tryBuildInlinedUDFBody = (
   );
   if (matches.length !== 1) return undefined;
   const fn = matches[0];
-  if (fn.body.kind !== "query") return undefined;
+  const fnBody = fn.body;
+  if (fnBody.kind !== "query") return undefined;
   // Variadic parameters still bail — those need slot-list reshaping the
   // inliner doesn't model yet.
   if (fn.params.some((p) => p.variadic)) return undefined;
@@ -2177,12 +2175,9 @@ const tryBuildInlinedUDFBody = (
     }
     if (!filled && param.default === undefined && !param.optional) return undefined;
   }
-  let parsed: EdgeQLStatement;
-  try {
-    parsed = parseEdgeQL(fn.body.query);
-  } catch {
-    return undefined;
-  }
+  const parseAttempt = tryResult(() => parseEdgeQL(fnBody.query));
+  if (!parseAttempt.ok) return undefined;
+  const parsed = parseAttempt.value;
   if (parsed.kind !== "select_expr") return undefined;
   const bodyExpr = unwrapTrivialSelectWrapper(parsed.expr);
   if (!bodyExpr) return undefined;
@@ -2212,22 +2207,16 @@ const tryBuildInlinedUDFBody = (
       // `{<str>x, y}` with empty x reduces to `{y}`).
       argExpr = { kind: "set_literal", values: [] };
     }
-    let argIR: Set;
-    try {
-      argIR = compileFreeObjectExpr(argExpr, ctx);
-    } catch {
-      return undefined;
-    }
+    const argAttempt = tryResult(() => compileFreeObjectExpr(argExpr, ctx));
+    if (!argAttempt.ok) return undefined;
+    const argIR: Set = argAttempt.value;
     const uniqueName = `__udf_inline__${shortName}__${param.name}__${inlineCallCounter++}`;
     bindValue(inlineCtx, uniqueName, argIR);
     substitutions.set(param.name, { kind: "binding_ref", name: uniqueName });
   }
   const substituted = substituteBindingRefsInFreeObjectExpr(bodyExpr, substitutions);
-  try {
-    return compileFreeObjectExpr(substituted, inlineCtx);
-  } catch {
-    return undefined;
-  }
+  const bodyAttempt = tryResult(() => compileFreeObjectExpr(substituted, inlineCtx));
+  return bodyAttempt.ok ? bodyAttempt.value : undefined;
 };
 
 let inlineCallCounter = 0;
@@ -6511,12 +6500,9 @@ export const rewriteAliasFilterEagerly = (
   }
   let aliasAst: EdgeQLStatement | undefined;
   for (const candidate of [body, `SELECT ${body}`]) {
-    try {
-      const parsed = parseEdgeQL(candidate);
-      if (parsed.kind === "select") { aliasAst = parsed; break; }
-    } catch {
-      // try next
-    }
+    const parsed = tryResult(() => parseEdgeQL(candidate));
+    if (!parsed.ok) continue; // query failure only — try next candidate
+    if (parsed.value.kind === "select") { aliasAst = parsed.value; break; }
   }
   if (!aliasAst || aliasAst.kind !== "select") return statement;
   const aliasBodyShape = aliasAst.shape;
@@ -6560,14 +6546,11 @@ const expandAliasInSelectStatement = (
   // Try parsing the body as-is first, then with `SELECT ` prepended.
   let aliasAst: EdgeQLStatement | undefined;
   for (const candidate of [body, `SELECT ${body}`]) {
-    try {
-      const parsed = parseEdgeQL(candidate);
-      if (parsed.kind === "select") {
-        aliasAst = parsed;
-        break;
-      }
-    } catch {
-      // try next candidate
+    const parsed = tryResult(() => parseEdgeQL(candidate));
+    if (!parsed.ok) continue; // query failure only — try next candidate
+    if (parsed.value.kind === "select") {
+      aliasAst = parsed.value;
+      break;
     }
   }
   if (!aliasAst) return statement;
@@ -7136,9 +7119,10 @@ const buildGroupStmtParts = (
   // non-lowerable GroupStmt (byAtoms cleared) so the SQL stage bails and the
   // engine falls back to the runtime grouper, which handles it.
   let subject: Set;
-  try {
-    subject = tupleBindingSubject ?? compileFreeObjectExpr(sourceAst, scoped);
-  } catch {
+  const subjectAttempt = tryResult(() => tupleBindingSubject ?? compileFreeObjectExpr(sourceAst, scoped));
+  if (subjectAttempt.ok) {
+    subject = subjectAttempt.value;
+  } else {
     subject = literalToSet(null);
     lowerable = false;
   }
@@ -7584,12 +7568,8 @@ const compileGroupExprSet = (
   });
   let probeAst: FreeObjectExpr = groupExpr.source;
   if (probeAst.kind === "shape_projection") probeAst = probeAst.expr;
-  let probe: Set | undefined;
-  try {
-    probe = compileFreeObjectExpr(probeAst, ctx);
-  } catch {
-    probe = undefined;
-  }
+  const probeAttempt = tryResult(() => compileFreeObjectExpr(probeAst, ctx));
+  const probe: Set | undefined = probeAttempt.ok ? probeAttempt.value : undefined;
   if (probe && probe.expr.kind === "pointer" && !probe.typeref.isScalar) {
     return compileEmbeddedGroup(groupExpr, trailingShape, ctx);
   }
