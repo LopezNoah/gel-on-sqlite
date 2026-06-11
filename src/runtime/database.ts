@@ -97,13 +97,13 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
     // `math::sin/cos/tan/cot` raise on non-finite input (Infinity); same idea.
     const requireFinite = (value: number | null, fname: string): number => {
       if (value === null || !Number.isFinite(value)) {
-        throw new Error(`input is out of range for ${fname}`);
+        throw new AppError("E_VALIDATION", `input is out of range for ${fname}`);
       }
       return value;
     };
     const requireUnitInterval = (value: number | null, fname: string): number => {
       if (value === null || !Number.isFinite(value) || value < -1 || value > 1) {
-        throw new Error(`input is out of range for ${fname}`);
+        throw new AppError("E_VALIDATION", `input is out of range for ${fname}`);
       }
       return value;
     };
@@ -117,7 +117,7 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
     // negative is undefined); SQLite returns NULL silently.
     const requirePositive = (value: number | null, fname: string): number => {
       if (value === null || !Number.isFinite(value) || value <= 0) {
-        throw new Error(`input is out of range for ${fname}`);
+        throw new AppError("E_VALIDATION", `input is out of range for ${fname}`);
       }
       return value;
     };
@@ -133,14 +133,14 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
       if (x === null) return null;
       const r = Math.exp(x);
       if (Number.isFinite(x) && !Number.isFinite(r)) {
-        throw new Error("value out of range: overflow");
+        throw new AppError("E_VALIDATION", "value out of range: overflow");
       }
       return r;
     });
     // `math::sqrt(-1)` errors — SQLite's sqrt() returns NULL for negatives.
     db.function("_gel_sqrt", (x: number | null) => {
       if (x === null) return null;
-      if (x < 0) throw new Error("input is out of range for math::sqrt");
+      if (x < 0) throw new AppError("E_VALIDATION", "input is out of range for math::sqrt");
       return Math.sqrt(x);
     });
     // `std::assert(cond, msg)` — raise on falsy cond with a custom or default
@@ -152,14 +152,14 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
       if (!truthy) {
         const msg = args.length > 1 && typeof args[1] === "string" && args[1]
           ? args[1] : "assertion failed";
-        throw new Error(String(msg));
+        throw new AppError("E_VALIDATION", String(msg));
       }
       return cond as number | string | null;
     });
     // `std::assert_exists(x)` — raise on null/empty.
     db.function("_gel_assert_exists", (value: unknown) => {
       if (value === null || value === undefined) {
-        throw new Error("assert_exists violation");
+        throw new AppError("E_VALIDATION", "assert_exists violation");
       }
       return value as number | string | null;
     });
@@ -219,7 +219,7 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
       if (arr.length > 1) {
         const msg = args.length > 1 && typeof args[1] === "string" && args[1]
           ? args[1] : "assert_single violation";
-        throw new Error(String(msg));
+        throw new AppError("E_VALIDATION", String(msg));
       }
       return arr.length === 0 ? null : (typeof arr[0] === "object" ? JSON.stringify(arr[0]) : arr[0]) as number | string | null;
     });
@@ -243,7 +243,7 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
       const arr = a ? parseJsonArg("std::array_set", a) : [];
       const normalized = idx < 0 ? arr.length + idx : idx;
       if (normalized < 0 || normalized >= arr.length) {
-        throw new Error(`array index ${idx} is out of bounds`);
+        throw new AppError("E_VALIDATION", `array index ${idx} is out of bounds`);
       }
       arr[normalized] = val;
       return JSON.stringify(arr);
@@ -256,7 +256,7 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
       const idx = Number(idxRaw);
       const arr = a ? parseJsonArg("std::array_insert", a) : [];
       if (idx > arr.length || idx < -arr.length) {
-        throw new Error(`array index ${idx} is out of bounds`);
+        throw new AppError("E_VALIDATION", `array index ${idx} is out of bounds`);
       }
       const normalized = idx < 0 ? arr.length + idx : idx;
       arr.splice(normalized, 0, val);
@@ -266,7 +266,7 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
     db.function("_gel_duration_get", (_dur: string | null, unit: string | null) => {
       const u = String(unit ?? "").toLowerCase();
       if (u !== "hours" && u !== "minutes" && u !== "seconds") {
-        throw new Error(`invalid unit for std::duration_get: '${u}'`);
+        throw new AppError("E_VALIDATION", `invalid unit for std::duration_get: '${u}'`);
       }
       // Reuse the runtime impl is non-trivial here — return NULL so callers
       // that don't expect an error see something rather than failing. Tests
@@ -474,7 +474,7 @@ const compileTriggerActionSQL = (
   const targetType = normalizeTypeName(action.targetType, typeDef.module ?? "default");
   const targetTable = typeToTable.get(targetType);
   if (!targetTable) {
-    throw new Error(`Unknown trigger target type '${targetType}' in ${qualifiedTypeName(typeDef)}.${action.kind}`);
+    throw new AppError("E_SEMANTIC", `Unknown trigger target type '${targetType}' in ${qualifiedTypeName(typeDef)}.${action.kind}`);
   }
 
   const entries = Object.entries(action.values);
@@ -494,13 +494,13 @@ const triggerExprToSQL = (expr: TriggerValueExpr, event: TriggerDef["event"]): s
 
   if (expr.kind === "new_field") {
     if (event === "delete") {
-      throw new Error("Cannot use __new__ in delete trigger action");
+      throw new AppError("E_SEMANTIC", "Cannot use __new__ in delete trigger action");
     }
     return `NEW.${quoteIdent(expr.field)}`;
   }
 
   if (event === "insert") {
-    throw new Error("Cannot use __old__ in insert trigger action");
+    throw new AppError("E_SEMANTIC", "Cannot use __old__ in insert trigger action");
   }
   return `OLD.${quoteIdent(expr.field)}`;
 };
@@ -515,7 +515,7 @@ const rewriteExprToSQL = (expr: MutationRewriteExpr, phase: "insert" | "update")
       return `NEW.${quoteIdent(expr.field)}`;
     case "old_field":
       if (phase === "insert") {
-        throw new Error("Cannot use __old__ in insert rewrite");
+        throw new AppError("E_SEMANTIC", "Cannot use __old__ in insert rewrite");
       }
       return `OLD.${quoteIdent(expr.field)}`;
     default:

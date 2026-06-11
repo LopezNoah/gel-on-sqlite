@@ -85,8 +85,8 @@ export const isQueryFailure = (err: unknown): err is AppError =>
 // (grep before adding a pattern — do not invent ones the engine never emits).
 // "assert_single/assert_exists violation" come from stdlib/engine assertion
 // builtins; they are cardinality failures regardless of which AppError code
-// the throw site happened to pick (assert_single surfaces as a plain Error,
-// i.e. E_RUNTIME, while assert_exists is thrown as E_SEMANTIC).
+// the throw site happened to pick (stdlib/UDF throw sites use E_VALIDATION,
+// engine-level ones surface as E_SEMANTIC or E_RUNTIME).
 const ASSERTION_VIOLATION = /assert_(?:single|exists) violation/i;
 
 // E_SEMANTIC name-resolution failures: `function "..." does not exist`,
@@ -118,7 +118,13 @@ export const toGelError = (err: unknown): EdgeDBError => {
       gelError = new EdgeQLSyntaxError(message);
       break;
     case "E_VALIDATION":
-      gelError = new InvalidValueError(message);
+      // assert_exists/assert_single raise CardinalityViolationError in real
+      // Gel even though the stdlib throw sites tag them E_VALIDATION.
+      if (ASSERTION_VIOLATION.test(message)) {
+        gelError = new CardinalityViolationError(message);
+      } else {
+        gelError = new InvalidValueError(message);
+      }
       break;
     case "E_UNSUPPORTED":
       gelError = new UnsupportedFeatureError(message);

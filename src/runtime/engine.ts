@@ -1,13 +1,6 @@
 import { getCompilerService, type CompilerCacheMeta } from "../compiler/service.js";
 import { validateParsedStatement } from "../compiler/ast_to_ir.js";
 import { AppError, asAppError, isQueryFailure, tryResult } from "../errors.js";
-
-// Native error classes that always indicate an engine bug rather than an
-// unsupported/unlowerable query. Compile-probe fallback sites swallow plain
-// `Error`s (the compiler signals "not supported by GEL IR lowering" that way)
-// but must never hide these.
-const isNativeBugError = (e: unknown): boolean =>
-  e instanceof TypeError || e instanceof RangeError || e instanceof ReferenceError;
 import { decorateErrorWithUnsupportedTag } from "../diagnostics/unsupported.js";
 import { parseEdgeQL, parseEdgeQLScript, type ParseEdgeQLOptions } from "../edgeql/parser.js";
 import { offsetToLineCol, tokenize, type Token } from "../edgeql/tokenizer.js";
@@ -8678,10 +8671,9 @@ const preEvaluateGroupBindings = (
       };
     } catch (e) {
       // Groups the IR pipeline can't compile/run keep their original
-      // binding and are handled downstream; never hide bugs. Must tolerate
-      // plain Errors: runCompiledGroup executes via the interpreter/stdlib
-      // (stdlib/functions.ts throws plain Errors for expected conditions).
-      if (isNativeBugError(e)) throw e;
+      // binding and are handled downstream; only query failures (tagged
+      // AppErrors) may be swallowed — anything else is an engine bug.
+      if (!isQueryFailure(e)) throw e;
       return binding;
     }
   });
@@ -9149,10 +9141,9 @@ const tryEvaluateScalarIteratorValues = (
     values = evaluateForIteratorValues(expr, schema, db, context);
   } catch (e) {
     // Probe: iterators the interpreter can't reduce here go through the
-    // normal pipeline instead; never hide bugs. Must tolerate plain Errors:
-    // evaluateForIteratorValues calls stdlib/functions.ts, which throws
-    // plain Errors for expected conditions (e.g. math domain errors).
-    if (isNativeBugError(e)) throw e;
+    // normal pipeline instead; only query failures (tagged AppErrors) may
+    // be swallowed — anything else is an engine bug.
+    if (!isQueryFailure(e)) throw e;
     return undefined;
   }
   for (const value of values) {
@@ -14323,10 +14314,9 @@ function countFunctionArgRows(
     return rows.length;
   } catch (e) {
     // Args the IR pipeline can't compile/run aren't countable here; the
-    // assertion check is skipped for them. Never hide bugs. Must tolerate
-    // plain Errors: runGelSelectSQL executes SQL whose UDFs (stdlib) and
-    // the SQLite driver itself throw plain Errors for expected conditions.
-    if (isNativeBugError(e)) throw e;
+    // assertion check is skipped for them. Only query failures (tagged
+    // AppErrors) may be swallowed — anything else is an engine bug.
+    if (!isQueryFailure(e)) throw e;
     return undefined;
   }
 }
