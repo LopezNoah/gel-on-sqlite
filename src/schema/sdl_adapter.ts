@@ -1,4 +1,4 @@
-import { AppError } from "../errors.js";
+import { AppError, tryResult } from "../errors.js";
 import type {
   AnnotationDef,
   CollectionTypeDef,
@@ -966,12 +966,11 @@ const aliasFilterFromParserFilter = (filter: unknown): AliasDeclaration["filter"
 const stripBalancedOuterParens = (source: string): string => {
   const trimmed = source.trim();
   if (!trimmed.startsWith("(") || !trimmed.endsWith(")")) return trimmed;
-  let tokens: Token[];
-  try {
-    tokens = tokenize(trimmed);
-  } catch {
-    return trimmed;
-  }
+  // Probe: untokenizable sources are returned untouched; downstream
+  // parsing reports the real error. Non-syntax errors propagate.
+  const tokenized = tryResult(() => tokenize(trimmed));
+  if (!tokenized.ok) return trimmed;
+  const tokens: readonly Token[] = tokenized.value;
   let depth = 0;
   for (let i = 0; i < tokens.length; i++) {
     if (tokens[i].kind === "lparen") {
@@ -995,12 +994,11 @@ const stripBalancedOuterParens = (source: string): string => {
 };
 
 const parseAliasFilter = (exprText: string): AliasDeclaration["filter"] => {
-  let tokens: Token[];
-  try {
-    tokens = tokenize(exprText);
-  } catch {
-    return undefined;
-  }
+  // Probe: an untokenizable alias body just has no recognizable filter;
+  // the full pipeline reports the real error. Non-syntax errors propagate.
+  const tokenized = tryResult(() => tokenize(exprText));
+  if (!tokenized.ok) return undefined;
+  const tokens: Token[] = tokenized.value;
   const stripped = stripAliasOuterParenTokens(tokens);
   const filterIndex = findTopLevelFilterTokenIndex(stripped);
   if (filterIndex < 0) return undefined;
@@ -1030,12 +1028,11 @@ const parseAliasFilter = (exprText: string): AliasDeclaration["filter"] => {
   // Otherwise, run the alias body through the full EdgeQL parser to obtain
   // a FilterExpr AST and translate it into the AliasDeclaration filter shape.
   const strippedSource = stripBalancedOuterParens(exprText);
-  let parsed;
-  try {
-    parsed = parseEdgeQL(strippedSource);
-  } catch {
-    return undefined;
-  }
+  // Probe: only simple SELECT-with-filter bodies are lowered here; other
+  // shapes (including unparsable ones) take other paths. Bugs propagate.
+  const parsedResult = tryResult(() => parseEdgeQL(strippedSource));
+  if (!parsedResult.ok) return undefined;
+  const parsed = parsedResult.value;
   if (parsed.kind !== "select") return undefined;
   return aliasFilterFromParserFilter(parsed.filter);
 };
@@ -1232,12 +1229,11 @@ const parseComputedValuePart = (text: string): ComputedValuePart => {
 // schema-level computed body (`num_watchers := count(.watchers)`). Uses the
 // EdgeQL parser to inspect structure — no regex.
 const detectCountOfLink = (exprText: string): string | undefined => {
-  let parsed;
-  try {
-    parsed = parseEdgeQL(`SELECT ${exprText}`);
-  } catch {
-    return undefined;
-  }
+  // Probe: "is this expression exactly count(.link)?" — unparsable means
+  // no; the caller's fallback paths report real errors. Bugs propagate.
+  const parsedResult = tryResult(() => parseEdgeQL(`SELECT ${exprText}`));
+  if (!parsedResult.ok) return undefined;
+  const parsed = parsedResult.value;
   // SELECT wraps the body in a `select_expr` with `.expr` set to the value.
   // Peel until we reach a `function_call`.
   const root = (parsed as { kind: string; expr?: unknown }).expr as { kind?: string } | undefined;
@@ -1315,11 +1311,10 @@ const parseComputedPropertyExpr = (text: string): Extract<ComputedDef, { kind: "
   // it through the full pipeline (tokenizer→parser→AST→IR→SQL). This handles
   // any expression beyond the curated literal/field/concat/call shapes above —
   // e.g. `(SELECT ident(.title))`, set-of-aggregates over backlinks, etc.
-  try {
-    parseEdgeQL(`SELECT ${text}`);
+  // Probe: fall through to unsupported() below if even parseEdgeQL can't
+  // read this. Non-syntax errors (engine bugs) propagate via tryResult.
+  if (tryResult(() => parseEdgeQL(`SELECT ${text}`)).ok) {
     return { kind: "edgeql_expr", exprText: text };
-  } catch {
-    // Fall through to unsupported() below if even parseEdgeQL can't read this.
   }
 
   return unsupported(`Unsupported computed property declaration expression '${text}'`);
@@ -1437,12 +1432,11 @@ const parseComputedSelectTypeLinkExpr = (
 };
 
 const parseLinkDefaultTargetValues = (text: string): string[] | undefined => {
-  let statement;
-  try {
-    statement = parseEdgeQL(stripOuterParens(text));
-  } catch {
-    return undefined;
-  }
+  // Probe: only `select T filter …` defaults are lowered here; anything
+  // else (including unparsable text) is not this shape. Bugs propagate.
+  const parsedResult = tryResult(() => parseEdgeQL(stripOuterParens(text)));
+  if (!parsedResult.ok) return undefined;
+  const statement = parsedResult.value;
   if (statement.kind !== "select" || !statement.filter) {
     return undefined;
   }

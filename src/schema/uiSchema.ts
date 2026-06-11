@@ -9,6 +9,7 @@ import type {
 } from "../types.js";
 import type { FreeObjectExpr, SelectExprStatement, Statement } from "../edgeql/ast.js";
 import { parseEdgeQL } from "../edgeql/parser.js";
+import { tryResult } from "../errors.js";
 import type { ComputedLinkPropertyExpr, DeclarativeSchema, FunctionDeclaration, LinkMember, LinkProperty, PropertyMember, TypeMember } from "./declarative.js";
 import { AnnotationRegistry, AnnotationResolver, AnnotationSet } from "./annos.js";
 import { SchemaSnapshot } from "./schema.js";
@@ -1299,11 +1300,10 @@ const parseFunctionExpr = (source: string, paramNames: Set<string>): FunctionExp
 };
 
 const parseFunctionStatement = (source: string): Statement | undefined => {
-  try {
-    return parseEdgeQL(source);
-  } catch {
-    return undefined;
-  }
+  // Probe: callers fall back to literal/expr handling when the body isn't
+  // a parsable statement. Non-syntax errors (engine bugs) propagate.
+  const parsed = tryResult(() => parseEdgeQL(source));
+  return parsed.ok ? parsed.value : undefined;
 };
 
 const isQueryStatement = (statement: Statement | undefined): boolean => {

@@ -1,7 +1,7 @@
 import type { DDLStatement, Statement } from "../edgeql/ast.js";
 import { parseEdgeQLScript, type ParseEdgeQLOptions } from "../edgeql/parser.js";
 import { tokenize, type Token } from "../edgeql/tokenizer.js";
-import { AppError } from "../errors.js";
+import { AppError, tryResult } from "../errors.js";
 
 // Exact module names that are owned by the system / stdlib and may not be
 // mutated by user-issued DDL. The match is exact: `std::Foo` and
@@ -318,15 +318,14 @@ export const validateScriptUserDDL = (
   parserOptions: ParseEdgeQLOptions = {},
   strict: boolean = false,
 ): void => {
-  let statements: Statement[];
-  try {
-    statements = parseEdgeQLScript(script, parserOptions);
-  } catch {
-    // Surface the parse error from the main execution path so error
-    // messages and positions stay consistent. The pre-validation pass is
-    // best-effort: if the script doesn't parse, downstream will report it.
-    return;
-  }
+  // Surface the parse error from the main execution path so error
+  // messages and positions stay consistent. The pre-validation pass is
+  // best-effort: if the script doesn't parse, downstream will report it.
+  // tryResult only captures query failures (E_SYNTAX, …) — engine bugs
+  // inside the parser still propagate.
+  const parsed = tryResult(() => parseEdgeQLScript(script, parserOptions));
+  if (!parsed.ok) return;
+  const statements: Statement[] = parsed.value;
   // Track `configure session set __internal_testmode := true` / `reset`
   // as we walk the script so subsequent DDL in the same script can
   // legitimately target otherwise-protected modules (test 29's setup
@@ -369,12 +368,11 @@ export interface ParsedCreateTypeHeader {
 export const parseCreateTypeHeader = (
   statement: string,
 ): ParsedCreateTypeHeader | null => {
-  let tokens: readonly Token[];
-  try {
-    tokens = tokenize(statement);
-  } catch {
-    return null;
-  }
+  // Probe: a statement that doesn't tokenize is simply not a CREATE TYPE
+  // header. tryResult rethrows non-syntax errors so tokenizer bugs surface.
+  const tokenized = tryResult(() => tokenize(statement));
+  if (!tokenized.ok) return null;
+  const tokens: readonly Token[] = tokenized.value;
 
   const isNameLike = (tok: Token | undefined): tok is Token =>
     !!tok && (tok.kind === "identifier" || tok.kind === "backtick_name");
@@ -456,12 +454,11 @@ export const parseCreateTypeHeader = (
 // the surrounding braces) rather than the prefix. Returns `undefined` when
 // no balanced trailing block exists.
 export const extractTrailingBraceBlock = (entry: string): string | undefined => {
-  let tokens: readonly Token[];
-  try {
-    tokens = tokenize(entry);
-  } catch {
-    return undefined;
-  }
+  // Probe: untokenizable entries have no trailing block by definition.
+  // tryResult rethrows non-syntax errors so tokenizer bugs surface.
+  const tokenized = tryResult(() => tokenize(entry));
+  if (!tokenized.ok) return undefined;
+  const tokens: readonly Token[] = tokenized.value;
   for (let i = tokens.length - 1; i >= 0; i -= 1) {
     const t = tokens[i]!;
     if (t.kind === "rbrace") {
@@ -494,12 +491,11 @@ export const extractTrailingBraceBlock = (entry: string): string | undefined => 
 };
 
 export const stripTrailingBraceBlock = (entry: string): string => {
-  let tokens: readonly Token[];
-  try {
-    tokens = tokenize(entry);
-  } catch {
-    return entry;
-  }
+  // Probe: untokenizable entries are returned unmodified; downstream
+  // parsing reports the real error. Non-syntax errors propagate.
+  const tokenized = tryResult(() => tokenize(entry));
+  if (!tokenized.ok) return entry;
+  const tokens: readonly Token[] = tokenized.value;
   for (let i = tokens.length - 1; i >= 0; i -= 1) {
     const t = tokens[i]!;
     if (t.kind === "rbrace") {
