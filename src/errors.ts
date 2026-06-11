@@ -1,3 +1,15 @@
+import {
+  AccessPolicyError,
+  CardinalityViolationError,
+  EdgeDBError,
+  EdgeQLSyntaxError,
+  ExecutionError,
+  InvalidReferenceError,
+  InvalidValueError,
+  QueryError,
+  UnsupportedFeatureError,
+} from "./schema/errors.js";
+
 export type ErrorCode =
   | "E_SYNTAX"
   | "E_SEMANTIC"
@@ -68,6 +80,77 @@ export const isQueryFailure = (err: unknown): err is AppError =>
     err.code === "E_SEMANTIC" ||
     err.code === "E_VALIDATION" ||
     err.code === "E_UNSUPPORTED");
+
+// Message heuristics below are verified against actual throw-site messages
+// (grep before adding a pattern — do not invent ones the engine never emits).
+// "assert_single/assert_exists violation" come from stdlib/engine assertion
+// builtins; they are cardinality failures regardless of which AppError code
+// the throw site happened to pick (assert_single surfaces as a plain Error,
+// i.e. E_RUNTIME, while assert_exists is thrown as E_SEMANTIC).
+const ASSERTION_VIOLATION = /assert_(?:single|exists) violation/i;
+
+// E_SEMANTIC name-resolution failures: `function "..." does not exist`,
+// `Unknown type '...'`, `Unknown link '...' on '...'`, `Unknown function`,
+// `object type '...' has no link or property '...'`.
+const UNRESOLVED_REFERENCE =
+  /does not exist|unknown (?:module|link|property|type|function)|has no link or property/i;
+
+// E_RUNTIME access-policy rejections: `Access policy violation on insert of …`.
+const ACCESS_POLICY_VIOLATION = /access policy violation/i;
+
+/**
+ * Map an arbitrary thrown value onto the Gel (EdgeDB) error taxonomy without
+ * rewriting throw sites. The returned instance carries the original message
+ * and keeps the source AppError on Error#cause. Values that are already Gel
+ * errors (e.g. from schema DDL code) pass through unchanged.
+ */
+export const toGelError = (err: unknown): EdgeDBError => {
+  if (err instanceof EdgeDBError) {
+    return err;
+  }
+
+  const appError = asAppError(err);
+  const message = appError.message;
+
+  let gelError: EdgeDBError;
+  switch (appError.code) {
+    case "E_SYNTAX":
+      gelError = new EdgeQLSyntaxError(message);
+      break;
+    case "E_VALIDATION":
+      gelError = new InvalidValueError(message);
+      break;
+    case "E_UNSUPPORTED":
+      gelError = new UnsupportedFeatureError(message);
+      break;
+    case "E_SEMANTIC":
+      if (ASSERTION_VIOLATION.test(message)) {
+        gelError = new CardinalityViolationError(message);
+      } else if (UNRESOLVED_REFERENCE.test(message)) {
+        gelError = new InvalidReferenceError(message);
+      } else {
+        gelError = new QueryError(message);
+      }
+      break;
+    case "E_RUNTIME":
+    case "E_SQL":
+      if (ASSERTION_VIOLATION.test(message)) {
+        gelError = new CardinalityViolationError(message);
+      } else if (ACCESS_POLICY_VIOLATION.test(message)) {
+        gelError = new AccessPolicyError(message);
+      } else {
+        gelError = new ExecutionError(message);
+      }
+      break;
+  }
+
+  gelError.cause = appError;
+  return gelError;
+};
+
+/** Render a Gel error's numeric code in the canonical 0xAABBCCDD hex form. */
+export const gelCodeToHex = (code: number): string =>
+  `0x${code.toString(16).toUpperCase().padStart(8, "0")}`;
 
 export type Result<T, E = AppError> =
   | { readonly ok: true; readonly value: T }

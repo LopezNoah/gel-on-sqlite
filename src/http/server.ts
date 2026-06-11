@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 
-import { asAppError } from "../errors.js";
+import { asAppError, gelCodeToHex, toGelError } from "../errors.js";
 import { executeQuery, type QueryExecutionTrace } from "../runtime/engine.js";
 import type { SchemaSnapshot } from "../schema/schema.js";
 import { renderDeclarativeSchemaFromSnapshot } from "../schema/uiSchema.js";
@@ -21,6 +21,31 @@ const schemaApplyRequestSchema = z.object({
 const schemaPlanRequestSchema = z.object({
   source: z.string().min(1),
 });
+
+/**
+ * Serialize a thrown value into the HTTP error envelope. Keeps the original
+ * AppError fields and adds the Gel error identity (class name + hex code)
+ * resolved via toGelError.
+ */
+const buildErrorResponse = (err: unknown) => {
+  const appError = asAppError(err);
+  const gelError = toGelError(appError);
+  return {
+    status: appError.code === "E_RUNTIME" ? 500 : 400,
+    body: {
+      ok: false as const,
+      error: {
+        code: appError.code,
+        message: appError.message,
+        hint: appError.hint,
+        line: appError.line,
+        column: appError.column,
+        type: gelError.name,
+        gelCode: gelCodeToHex(gelError.code),
+      },
+    },
+  };
+};
 
 const currentFilePath = fileURLToPath(import.meta.url);
 const currentDirPath = path.dirname(currentFilePath);
@@ -99,18 +124,8 @@ export const createHttpServer = (deps: {
       const result = deps.execute(parsed.data.query);
       res.json({ ok: true, data: result });
     } catch (err) {
-      const appError = asAppError(err);
-      const status = appError.code === "E_RUNTIME" ? 500 : 400;
-      res.status(status).json({
-        ok: false,
-        error: {
-          code: appError.code,
-          message: appError.message,
-          hint: appError.hint,
-          line: appError.line,
-          column: appError.column,
-        },
-      });
+      const { status, body } = buildErrorResponse(err);
+      res.status(status).json(body);
     }
   });
 
@@ -171,18 +186,8 @@ export const createHttpServer = (deps: {
         },
       });
     } catch (err) {
-      const appError = asAppError(err);
-      const status = appError.code === "E_RUNTIME" ? 500 : 400;
-      res.status(status).json({
-        ok: false,
-        error: {
-          code: appError.code,
-          message: appError.message,
-          hint: appError.hint,
-          line: appError.line,
-          column: appError.column,
-        },
-      });
+      const { status, body } = buildErrorResponse(err);
+      res.status(status).json(body);
     }
   });
 
@@ -221,18 +226,8 @@ export const createHttpServer = (deps: {
         },
       });
     } catch (err) {
-      const appError = asAppError(err);
-      const status = appError.code === "E_RUNTIME" ? 500 : 400;
-      res.status(status).json({
-        ok: false,
-        error: {
-          code: appError.code,
-          message: appError.message,
-          hint: appError.hint,
-          line: appError.line,
-          column: appError.column,
-        },
-      });
+      const { status, body } = buildErrorResponse(err);
+      res.status(status).json(body);
     }
   });
 
