@@ -1792,6 +1792,8 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
+    // Fixture corrected from upstream @test.xerror (never validated there):
+    // the query groups BY .b, so `grouping` is ["b"], not ["d"].
   it("test_edgeql_group_volatile_ptr_set_02 [xerror: Group by doesn't materialize volatile properly]", () => {
     assertQueryResult(
       h,
@@ -1807,7 +1809,7 @@ describe("TestEdgeQLGroup", () => {
       unorderedBag([
             {
               "name": "Alice",
-              "grouping": unorderedSet(["d"]),
+              "grouping": unorderedSet(["b"]),
               "elements": unorderedBag([
                 {
                   "name": "Alice",
@@ -1817,7 +1819,7 @@ describe("TestEdgeQLGroup", () => {
             },
             {
               "name": "Bob",
-              "grouping": unorderedSet(["d"]),
+              "grouping": unorderedSet(["b"]),
               "elements": unorderedBag([
                 {
                   "name": "Bob",
@@ -1827,7 +1829,7 @@ describe("TestEdgeQLGroup", () => {
             },
             {
               "name": "Carol",
-              "grouping": unorderedSet(["d"]),
+              "grouping": unorderedSet(["b"]),
               "elements": unorderedBag([
                 {
                   "name": "Carol",
@@ -1837,7 +1839,7 @@ describe("TestEdgeQLGroup", () => {
             },
             {
               "name": "Dave",
-              "grouping": unorderedSet(["d"]),
+              "grouping": unorderedSet(["b"]),
               "elements": unorderedBag([
                 {
                   "name": "Dave",
@@ -2001,6 +2003,11 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
+  // Fixture corrected from upstream @test.xerror (never validated there):
+  // the elements shape referenced `a`, which doesn't exist on cards::User
+  // (upstream's own expected output uses `name`), and the key d := .b.c is
+  // the constant 2, so ALL four users land in ONE group (grouping ["d"]).
+  // `name: (select .elements.name limit 1)` picks the first element.
   it("test_edgeql_group_volatile_ptr_set_05 [xerror: Group by doesn't materialize volatile properly]", () => {
     assertQueryResult(
       h,
@@ -2016,7 +2023,7 @@ describe("TestEdgeQLGroup", () => {
                 name: (select .elements.name limit 1),
                 grouping,
                 elements: {
-                    a,
+                    name,
                     b: {
                         c,
                         z := .d <= 1,
@@ -2036,12 +2043,6 @@ describe("TestEdgeQLGroup", () => {
                     "z": true,
                   },
                 },
-              ]),
-            },
-            {
-              "name": "Bob",
-              "grouping": unorderedSet(["d"]),
-              "elements": unorderedBag([
                 {
                   "name": "Bob",
                   "b": {
@@ -2049,12 +2050,6 @@ describe("TestEdgeQLGroup", () => {
                     "z": true,
                   },
                 },
-              ]),
-            },
-            {
-              "name": "Carol",
-              "grouping": unorderedSet(["d"]),
-              "elements": unorderedBag([
                 {
                   "name": "Carol",
                   "b": {
@@ -2062,12 +2057,6 @@ describe("TestEdgeQLGroup", () => {
                     "z": true,
                   },
                 },
-              ]),
-            },
-            {
-              "name": "Dave",
-              "grouping": unorderedSet(["d"]),
-              "elements": unorderedBag([
                 {
                   "name": "Dave",
                   "b": {
@@ -3674,6 +3663,8 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
+  // Fixture corrected from upstream @test.xerror (never validated there):
+  // the projection writes `z := .b <= 1`, so the element key is `z`, not `b`.
   it("test_edgeql_group_binding_volatile_06 [xerror: Group by doesn't materialize volatile properly]", () => {
     assertQueryResult(
       h,
@@ -3697,7 +3688,7 @@ describe("TestEdgeQLGroup", () => {
               "elements": unorderedBag([
                 {
                   "a": 1,
-                  "b": true,
+                  "z": true,
                 },
               ]),
             },
@@ -5313,6 +5304,10 @@ describe("TestEdgeQLGroup", () => {
     );
   });
 
+  // Fixture corrected from upstream @test.xerror (never validated there):
+  // the key d := .b.c is the constant 2, so ALL four users land in ONE group
+  // and `grouping` is ["d"] (upstream asserted ["name"] and four groups);
+  // the written shape is b: {c}, so no `z` appears in the elements.
   it("test_edgeql_group_binding_volatile_ptr_set_08 [xerror: Group by doesn't materialize volatile properly]", () => {
     assertQueryResult(
       h,
@@ -5337,52 +5332,30 @@ describe("TestEdgeQLGroup", () => {
       unorderedBag([
             {
               "name": "Alice",
-              "grouping": unorderedSet(["name"]),
+              "grouping": unorderedSet(["d"]),
               "elements": unorderedBag([
                 {
                   "name": "Alice",
                   "b": {
                     "c": 2,
-                    "z": true,
                   },
                 },
-              ]),
-            },
-            {
-              "name": "Bob",
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
                 {
                   "name": "Bob",
                   "b": {
                     "c": 2,
-                    "z": true,
                   },
                 },
-              ]),
-            },
-            {
-              "name": "Carol",
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
                 {
                   "name": "Carol",
                   "b": {
                     "c": 2,
-                    "z": true,
                   },
                 },
-              ]),
-            },
-            {
-              "name": "Dave",
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
                 {
                   "name": "Dave",
                   "b": {
                     "c": 2,
-                    "z": true,
                   },
                 },
               ]),

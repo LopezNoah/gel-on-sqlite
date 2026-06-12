@@ -58,14 +58,16 @@ import type {
   GroupElementsField,
   Pointer,
   PointerRef,
+  ExistsExpr,
   Tuple,
+  TupleElement,
   SelectExpr,
   ShapeElement,
   TypeRef,
   TypeRoot,
   Volatility,
 } from "../ir/gel_ir.js";
-import type { FieldDef, LinkDef, LinkPropertyDef, ScalarType, ScalarValue, TypeDef } from "../types.js";
+import type { FieldDef, FunctionDef, LinkDef, LinkPropertyDef, ScalarType, ScalarValue, TypeDef } from "../types.js";
 import { qualifiedTypeName, type SchemaSnapshot } from "../schema/schema.js";
 import type { GeneratedSchema, GeneratedSchemaType } from "../codegen/schema.js";
 import { resolveSchemaModelForCompile } from "../codegen/schema_loader.js";
@@ -122,6 +124,17 @@ const normalizeDateTimeLiteral = (literal: string): string | undefined => {
       toParse = `${trimmed.slice(0, lastSign)}${sign}${h1}${h2}:00`;
     }
   }
+  // Extract the sub-second fraction as TEXT before handing to `Date` — JS
+  // Date only keeps milliseconds, but Gel datetimes carry microseconds
+  // (`datetime_get(.., 'seconds')` and `<str>` round-trips depend on them).
+  // Timezone offsets are whole minutes, so shifting to UTC never alters the
+  // fraction digits.
+  let fracDigits = "";
+  const fracMatch = /\.(\d+)/.exec(toParse);
+  if (fracMatch) {
+    fracDigits = fracMatch[1];
+    toParse = toParse.slice(0, fracMatch.index) + toParse.slice(fracMatch.index + fracMatch[0].length);
+  }
   const date = new Date(toParse);
   if (Number.isNaN(date.getTime())) return undefined;
   const pad = (n: number, w = 2): string => String(n).padStart(w, "0");
@@ -134,17 +147,103 @@ const normalizeDateTimeLiteral = (literal: string): string | undefined => {
   const hh = pad(date.getUTCHours());
   const min = pad(date.getUTCMinutes());
   const ss = pad(date.getUTCSeconds());
-  const ms = date.getUTCMilliseconds();
-  // Trim trailing zeros from the millisecond fraction without using a regex.
-  let frac = "";
-  if (ms !== 0) {
-    let msStr = pad(ms, 3);
-    while (msStr.length > 1 && msStr.endsWith("0")) {
-      msStr = msStr.slice(0, -1);
-    }
-    frac = `.${msStr}`;
+  let frac = fracDigits.slice(0, 6);
+  while (frac.endsWith("0")) frac = frac.slice(0, -1);
+  return `${yyyy}-${mm}-${dd}T${hh}:${min}:${ss}${frac ? `.${frac}` : ""}+00:00`;
+};
+
+// Parse a Postgres-interval-style duration literal ('15:01:22.306916',
+// '24 hours', '123 months', '1 day 12:00:00', or ISO 'PT20H') into months /
+// days / microseconds components. Returns undefined when unparseable.
+const parseIntervalParts = (s: string): { months: number; days: number; us: number } | undefined => {
+  let months = 0; let days = 0; let us = 0;
+  const str = s.trim();
+  if (str === "") return undefined;
+  if (/^P/i.test(str)) {
+    const m = /^P(?:(-?\d+)Y)?(?:(-?\d+)M)?(?:(-?\d+)W)?(?:(-?\d+)D)?(?:T(?:(-?\d+)H)?(?:(-?\d+)M)?(?:(-?\d+(?:\.\d+)?)S)?)?$/i.exec(str);
+    if (!m) return undefined;
+    months = Number(m[1] ?? 0) * 12 + Number(m[2] ?? 0);
+    days = Number(m[3] ?? 0) * 7 + Number(m[4] ?? 0);
+    us = (Number(m[5] ?? 0) * 3600 + Number(m[6] ?? 0) * 60 + Number(m[7] ?? 0)) * 1e6;
+    return { months, days, us: Math.round(us) };
   }
-  return `${yyyy}-${mm}-${dd}T${hh}:${min}:${ss}${frac}+00:00`;
+  const UNIT_TO_US: Record<string, number> = {
+    us: 1, microsecond: 1, microseconds: 1,
+    ms: 1000, millisecond: 1000, milliseconds: 1000,
+    s: 1e6, sec: 1e6, secs: 1e6, second: 1e6, seconds: 1e6,
+    min: 6e7, mins: 6e7, minute: 6e7, minutes: 6e7,
+    h: 3.6e9, hr: 3.6e9, hrs: 3.6e9, hour: 3.6e9, hours: 3.6e9,
+  };
+  const UNIT_TO_DAYS: Record<string, number> = { day: 1, days: 1, d: 1, week: 7, weeks: 7 };
+  const UNIT_TO_MONTHS: Record<string, number> = {
+    mon: 1, mons: 1, month: 1, months: 1,
+    year: 12, years: 12, y: 12,
+    decade: 120, decades: 120, century: 1200, centuries: 1200,
+    millennium: 12000, millenniums: 12000, millennia: 12000,
+  };
+  const tokenRe = /(-?\d+(?:\.\d+)?)\s*([a-zA-Z]+)|([+-]?\d+):(\d+)(?::(\d+(?:\.\d+)?))?/g;
+  let matched = false;
+  let lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = tokenRe.exec(str)) !== null) {
+    // Reject inputs with garbage between tokens.
+    if (str.slice(lastIndex, m.index).trim() !== "") return undefined;
+    lastIndex = tokenRe.lastIndex;
+    matched = true;
+    if (m[3] !== undefined) {
+      const sign = m[3].startsWith("-") ? -1 : 1;
+      us += sign * (Math.abs(Number(m[3])) * 3600 + Number(m[4]) * 60 + Number(m[5] ?? 0)) * 1e6;
+      continue;
+    }
+    const qty = Number(m[1]);
+    const unit = m[2].toLowerCase();
+    if (unit in UNIT_TO_US) us += qty * UNIT_TO_US[unit];
+    else if (unit in UNIT_TO_DAYS) days += qty * UNIT_TO_DAYS[unit];
+    else if (unit in UNIT_TO_MONTHS) months += qty * UNIT_TO_MONTHS[unit];
+    else return undefined;
+  }
+  if (!matched || str.slice(lastIndex).trim() !== "") return undefined;
+  return { months, days, us: Math.round(us) };
+};
+
+// Format duration components in Gel's canonical ISO-ish form: 'PT24H',
+// 'P1300Y', 'P11M20D', 'PT1M22.306916S', zero → 'PT0S'. Exact durations
+// (std::duration) fold days/months into hours.
+const formatDurationParts = (parts: { months: number; days: number; us: number }, exact: boolean): string => {
+  let { months, days, us } = parts;
+  if (exact) {
+    us += (months * 30 + days) * 86400 * 1e6;
+    months = 0; days = 0;
+  }
+  const neg = us < 0 && months === 0 && days === 0;
+  let rest = Math.abs(us);
+  const h = Math.floor(rest / 3.6e9); rest -= h * 3.6e9;
+  const mi = Math.floor(rest / 6e7); rest -= mi * 6e7;
+  const sWhole = Math.floor(rest / 1e6); rest -= sWhole * 1e6;
+  let secStr = String(sWhole);
+  if (rest > 0) {
+    let frac = String(Math.round(rest)).padStart(6, "0");
+    while (frac.endsWith("0")) frac = frac.slice(0, -1);
+    secStr += `.${frac}`;
+  }
+  const y = Math.trunc(months / 12);
+  const mo = months - y * 12;
+  let out = "P";
+  if (y) out += `${y}Y`;
+  if (mo) out += `${mo}M`;
+  if (days) out += `${days}D`;
+  const timeParts: string[] = [];
+  if (h) timeParts.push(`${neg ? "-" : ""}${h}H`);
+  if (mi) timeParts.push(`${neg ? "-" : ""}${mi}M`);
+  if (sWhole || rest > 0) timeParts.push(`${neg ? "-" : ""}${secStr}S`);
+  if (timeParts.length > 0) out += `T${timeParts.join("")}`;
+  if (out === "P") out = "PT0S";
+  return out;
+};
+
+const normalizeDurationLiteral = (literal: string, exact: boolean): string | undefined => {
+  const parts = parseIntervalParts(literal);
+  return parts ? formatDurationParts(parts, exact) : undefined;
 };
 
 const scalarToStdName = (scalar: ScalarType): string => {
@@ -1007,6 +1106,207 @@ const tryLowerComputedPropertyOnTypePath = (
   return undefined;
 };
 
+// Field names a FOR body reads off the group's elements — `g.elements.name`
+// (path or field_access form), fields read through a WITH alias bound to
+// `g.elements` (`WITH U := g.elements SELECT U {name, x := .cost}`), and
+// leading-dot references inside such a shape. Used to augment the group
+// subject's projection so the SQL stage can read the fields off each
+// materialized element row.
+const collectForBodyElementFields = (body: unknown, varName: string): globalThis.Set<string> => {
+  const out = new globalThis.Set<string>();
+  const elementAliases = new globalThis.Set<string>();
+  const isElementsExpr = (n: unknown): boolean => {
+    if (!n || typeof n !== "object") return false;
+    const node = n as Record<string, unknown> & { kind?: string };
+    if ((node.kind === "select_expr" || node.kind === "select_expr_subquery" || node.kind === "subquery_expr") && node.expr) {
+      return isElementsExpr(node.expr);
+    }
+    if (node.kind === "path" && Array.isArray(node.steps) && node.steps.length === 2) {
+      const [head, step] = node.steps as Array<{ kind?: string; name?: string }>;
+      return head?.kind === "object_ref" && head.name === varName && step?.kind === "ptr" && step.name === "elements";
+    }
+    if (node.kind === "field_access" && node.field === "elements") {
+      const src = node.expr as { kind?: string; name?: string } | undefined;
+      return src?.kind === "binding_ref" && src.name === varName;
+    }
+    return false;
+  };
+  const collectLeadingDots = (n: unknown): void => {
+    if (!n || typeof n !== "object") return;
+    if (Array.isArray(n)) { n.forEach(collectLeadingDots); return; }
+    const node = n as Record<string, unknown> & { kind?: string; field?: string };
+    if (node.kind === "field_access" && typeof node.field === "string"
+        && (node.expr as { kind?: string } | undefined)?.kind === "current_item") {
+      out.add(node.field);
+    }
+    if (node.kind === "path" && Array.isArray(node.steps)) {
+      const head = (node.steps as Array<{ kind?: string; name?: string }>)[0];
+      if (head?.kind === "ptr" && typeof head.name === "string") out.add(head.name);
+    }
+    for (const value of Object.values(node)) collectLeadingDots(value);
+  };
+  const collectAliasShape = (shape: unknown): void => {
+    if (!Array.isArray(shape)) return;
+    for (const el of shape) {
+      if (el && typeof el === "object" && typeof (el as { name?: unknown }).name === "string"
+          && (el as { kind?: string }).kind === "field") {
+        out.add((el as { name: string }).name);
+      }
+    }
+    collectLeadingDots(shape);
+  };
+  // First pass: register every WITH alias bound to `g.elements` anywhere in
+  // the body — bindings can appear lexically after their uses in the AST
+  // (clauses serialize after the result expression).
+  const registerAliases = (n: unknown): void => {
+    if (!n || typeof n !== "object") return;
+    if (Array.isArray(n)) { n.forEach(registerAliases); return; }
+    const node = n as Record<string, unknown>;
+    for (const wbKey of ["with", "_withBindings"]) {
+      const wb = node[wbKey] ?? (node.clauses as Record<string, unknown> | undefined)?.[wbKey];
+      if (Array.isArray(wb)) {
+        for (const binding of wb) {
+          const b = binding as { name?: unknown; value?: unknown };
+          if (typeof b.name === "string" && isElementsExpr(b.value)) elementAliases.add(b.name);
+        }
+      }
+    }
+    for (const value of Object.values(node)) registerAliases(value);
+  };
+  const walk = (n: unknown): void => {
+    if (!n || typeof n !== "object") return;
+    if (Array.isArray(n)) { n.forEach(walk); return; }
+    const node = n as Record<string, unknown> & { kind?: string; field?: string };
+    // `g.elements.X` — path or field_access form; `U.X` via an alias.
+    if (node.kind === "path" && Array.isArray(node.steps)) {
+      const steps = node.steps as Array<{ kind?: string; name?: string }>;
+      if (steps[0]?.kind === "object_ref" && steps[0].name === varName
+          && steps[1]?.kind === "ptr" && steps[1].name === "elements"
+          && steps[2]?.kind === "ptr" && typeof steps[2].name === "string") {
+        out.add(steps[2].name);
+      }
+      if (steps[0]?.kind === "object_ref" && typeof steps[0].name === "string"
+          && elementAliases.has(steps[0].name)
+          && steps[1]?.kind === "ptr" && typeof steps[1].name === "string") {
+        out.add(steps[1].name);
+      }
+    }
+    if (node.kind === "field_access" && typeof node.field === "string") {
+      const src = node.expr as { kind?: string; name?: string } | undefined;
+      if (isElementsExpr(node.expr)) out.add(node.field);
+      if (src?.kind === "binding_ref" && typeof src.name === "string" && elementAliases.has(src.name)) {
+        out.add(node.field);
+      }
+    }
+    // A shape applied to an element alias: collect its plain fields and
+    // leading-dot references inside its computeds.
+    if (node.kind === "select" && typeof node.typeName === "string" && elementAliases.has(node.typeName)) {
+      collectAliasShape(node.shape);
+    }
+    if (node.kind === "shape_projection") {
+      const src = node.expr as { kind?: string; name?: string } | undefined;
+      if (src?.kind === "binding_ref" && typeof src.name === "string" && elementAliases.has(src.name)) {
+        collectAliasShape(node.shape);
+      }
+    }
+    for (const value of Object.values(node)) walk(value);
+  };
+  registerAliases(body);
+  walk(body);
+  return out;
+};
+
+// Field names a group's subject projection already carries (shape entries,
+// tuple element names — peeling select/for wrappers).
+const collectGroupSubjectFieldNames = (subject: Set): globalThis.Set<string> => {
+  const have = new globalThis.Set<string>();
+  let cursor: Set = subject;
+  for (;;) {
+    for (const shapeEl of cursor.shape ?? []) {
+      const elName = shapeEl.name
+        ?? (shapeEl.expr.expr.kind === "pointer" ? (shapeEl.expr.expr as Pointer).ptrref.shortName : undefined);
+      if (elName) have.add(elName);
+    }
+    if (cursor.expr.kind === "tuple") {
+      for (const tupleEl of (cursor.expr as Tuple).elements) {
+        if (tupleEl.name) have.add(tupleEl.name);
+      }
+    }
+    if (cursor.expr.kind === "select_expr") {
+      cursor = (cursor.expr as SelectExpr).result;
+    } else if (cursor.expr.kind === "for_expr") {
+      cursor = (cursor.expr as { body: Set }).body;
+    } else {
+      break;
+    }
+  }
+  return have;
+};
+
+// A path step over a group-rows set (or a partial group-row path) extends
+// to a group_row_field chain instead of a schema pointer — `g.elements`,
+// `g.key.x`, `g.elements.name` inside `FOR g IN (GROUP …)`. Returns
+// undefined when the source isn't group-rows-shaped (callers fall through
+// to regular pointer resolution). peelToGroupRows is declared later in the
+// file; both are only invoked at compile time, after module init.
+// A shape over a group-elements set (`U {name, …}` where U := g.elements) —
+// plain fields aren't schema pointers on the (anytype) base, so the generic
+// compile drops them. Re-add each as a group_row_field extension the SQL
+// stage reads off the element row's JSON. Mutates `compiledShape` in place.
+const augmentGroupRowFieldShape = (
+  base: Set,
+  astShape: EdgeQLShapeElement[] | undefined,
+  compiledShape: ShapeElement[],
+): void => {
+  if (base.expr.kind !== "group_row_field") return;
+  const present = new globalThis.Set(compiledShape.map((el) => el.name).filter(Boolean));
+  for (const astEl of astShape ?? []) {
+    if (astEl.kind !== "field" || typeof astEl.name !== "string" || present.has(astEl.name)) continue;
+    const fieldSet = tryExtendGroupRowFieldPath(base, astEl.name);
+    if (!fieldSet) continue;
+    compiledShape.push({
+      kind: "shape_element",
+      source: base,
+      expr: fieldSet,
+      name: astEl.name,
+      shapeOp: "assign",
+      shapeOrigin: "explicit",
+      required: false,
+      cardinality: "one",
+    } as ShapeElement);
+  }
+};
+
+const tryExtendGroupRowFieldPath = (out: Set, stepName: string, direction?: "outbound" | "inbound"): Set | undefined => {
+  if (stepName.startsWith("@")) return undefined;
+  // Backlink steps (`g.elements.<owner`) can't be read off the row JSON —
+  // record them with a `<` marker so the SQL stage bails (and the runtime
+  // FOR-group executor takes over) instead of silently dropping the step.
+  const recorded = direction === "inbound" ? `<${stepName}` : stepName;
+  // CLAUSED group selects (`(select (group …) order by … limit 1).elements`)
+  // keep the full claused set as the rows source so the SQL stage applies
+  // ORDER BY/LIMIT before flattening.
+  const grouped = peelToGroupRows(out) ?? peelToGroupRowsThroughClauses(out);
+  if (grouped) {
+    return {
+      ...out,
+      expr: { kind: "group_row_field", steps: [recorded], rows: grouped.rows } as GroupRowFieldExpr,
+      shape: [],
+      pathId: defaultPathId(`group_row_field:${recorded}`),
+      typeref: unknownTypeRef("std::anytype"),
+    };
+  }
+  if (out.expr.kind === "group_row_field") {
+    const inner = out.expr as GroupRowFieldExpr;
+    return {
+      ...out,
+      expr: { ...inner, steps: [...inner.steps, recorded] } as GroupRowFieldExpr,
+      pathId: defaultPathId(`group_row_field:${[...inner.steps, recorded].join(".")}`),
+    };
+  }
+  return undefined;
+};
+
 const compilePathSteps = (steps: EdgeQLPathStep[], ctx: IRCompileContext): Set => {
   if (steps.length === 0) {
     return literalToSet(null);
@@ -1025,6 +1325,11 @@ const compilePathSteps = (steps: EdgeQLPathStep[], ctx: IRCompileContext): Set =
     let out = current;
     for (const step of steps) {
       if (step.kind === "ptr") {
+        const groupStepSet = tryExtendGroupRowFieldPath(out, step.name, step.direction);
+        if (groupStepSet) {
+          out = groupStepSet;
+          continue;
+        }
         const ptrref = resolvePointerRef(ctx, out.typeref, step.name);
         if (!ptrref) {
           return { ...out, pathId: defaultPathId("path_steps") };
@@ -1075,6 +1380,14 @@ const compilePathSteps = (steps: EdgeQLPathStep[], ctx: IRCompileContext): Set =
       }
       if (step.name === "name" && out.expr.kind === "pointer" && (out.expr as Pointer).ptrref.shortName === "__type__") {
         out = synthesizeTypeNamePointerSet(out);
+        continue;
+      }
+      // Paths off a group-rows set (`g.elements`, `g.key.x` where g is a FOR
+      // iteration over a GROUP) aren't schema pointers — model them as
+      // group_row_field steps the SQL stage resolves against the row JSON.
+      const groupStepSet = tryExtendGroupRowFieldPath(out, step.name, step.direction);
+      if (groupStepSet) {
+        out = groupStepSet;
         continue;
       }
       let ptrref = resolvePointerRef(ctx, out.typeref, step.name);
@@ -1560,6 +1873,14 @@ const inferAstExprTypeName = (expr: FreeObjectExpr, ctx: IRCompileContext): stri
       }
       return undefined;
     }
+    case "field_access": {
+      // `Issue.time_estimate` parses as field_access over a `select Issue`
+      // head; resolve the head's type name and look the property up on it.
+      const inner = expr as unknown as { expr: FreeObjectExpr; field: string };
+      const sourceType = inferAstExprTypeName(inner.expr, ctx);
+      if (sourceType === undefined) return undefined;
+      return inferPropertyTypeName(ctx, sourceType, inner.field);
+    }
     case "binding_ref": {
       const enumType = lookupEnumScalar(ctx, expr.name);
       if (enumType) return enumType.qualifiedName;
@@ -1878,7 +2199,6 @@ const canApplyUnaryArith = (typeName: string): boolean => {
   return c === "numeric" || c === "duration";
 };
 
-const NUMERIC_INT_FAMILY = new Set(["std::int16", "std::int32", "std::int64"]);
 const NUMERIC_FLOAT_FAMILY = new Set(["std::float32", "std::float64"]);
 const NUMERIC_ARBITRARY_PRECISION = new Set(["std::bigint", "std::decimal"]);
 
@@ -2056,91 +2376,6 @@ const functionCallArgToFreeObjectExpr = (arg: FunctionCallArgExpr): FreeObjectEx
   return { kind: "literal", value: null };
 };
 
-// Substitute `binding_ref` nodes (by name) inside a FreeObjectExpr tree with
-// replacement expressions. Used to inline a UDF body at AST-build time:
-// `foo(x: int64) using (x * x)` called as `foo(N)` rewrites the parsed body
-// `binding_ref(x) * binding_ref(x)` to `<N> * <N>`. Returns the expr unchanged
-// when no parameter reference is present (or the kind isn't handled — in that
-// case the inliner skips body attachment and the call falls back to runtime).
-const substituteBindingRefsInFreeObjectExpr = (
-  expr: FreeObjectExpr,
-  substitutions: Map<string, FreeObjectExpr>,
-): FreeObjectExpr => {
-  const rec = (e: FreeObjectExpr): FreeObjectExpr => substituteBindingRefsInFreeObjectExpr(e, substitutions);
-  switch (expr.kind) {
-    case "binding_ref": {
-      const replacement = substitutions.get(expr.name);
-      return replacement ?? expr;
-    }
-    case "literal":
-    case "current_item":
-    case "enum_path":
-    case "backlink_path":
-      return expr;
-    case "set_expr":
-    case "tuple":
-    case "array_literal_expr":
-      return { ...expr, values: expr.values.map(rec) };
-    case "distinct":
-    case "cast":
-    case "exists":
-    case "not":
-    case "unary":
-    case "shape_projection":
-    case "field_access":
-    case "index_access":
-    case "slice_access":
-      return { ...expr, expr: rec(expr.expr) } as FreeObjectExpr;
-    case "compare":
-    case "in_expr":
-    case "math":
-    case "logical":
-    case "and":
-    case "or":
-    case "set_op":
-    case "coalesce":
-      return { ...expr, left: rec(expr.left), right: rec(expr.right) } as FreeObjectExpr;
-    case "concat":
-      return { ...expr, parts: expr.parts.map(rec) };
-    case "if_else":
-      return { ...expr, thenExpr: rec(expr.thenExpr), condition: rec(expr.condition), elseExpr: rec(expr.elseExpr) };
-    case "function_call":
-      return {
-        ...expr,
-        call: {
-          ...expr.call,
-          args: expr.call.args.map((arg) => {
-            if (!arg || typeof arg !== "object" || !("kind" in arg)) return arg;
-            if (arg.kind === "expr") {
-              return { ...arg, expr: rec(arg.expr) };
-            }
-            // The body AST can hold a parameter reference directly as a
-            // binding_ref-shaped FunctionCallArgExpr (not wrapped in `expr`).
-            // Substitute by name so nested `inner(x)` calls inside a UDF
-            // body pick up the inlined parameter binding.
-            const replacement = arg.kind === "binding_ref" ? substitutions.get(arg.name) : undefined;
-            if (replacement !== undefined) {
-              if (replacement.kind === "binding_ref") return { kind: "binding_ref", name: replacement.name };
-              if (replacement.kind === "literal") return { kind: "literal", value: replacement.value };
-              if (replacement.kind === "function_call") return { kind: "function_call", call: replacement.call };
-              return { kind: "expr", expr: replacement };
-            }
-            if (arg.kind === "function_call") {
-              const inner = rec({ kind: "function_call", call: arg.call });
-              if (inner.kind === "function_call") return { kind: "function_call", call: inner.call };
-              return { kind: "expr", expr: inner };
-            }
-            return arg;
-          }),
-        },
-      };
-    case "for_expr":
-      return { ...expr, iterator: rec(expr.iterator), body: rec(expr.body) };
-    default:
-      return expr;
-  }
-};
-
 // Unwrap nested `select_expr` / `select_expr_subquery` wrappers around a body
 // expression. UDF bodies parse as `select_expr { expr: <body> }`; the wrapper
 // has no effect on the value and gets in the way of inlining.
@@ -2155,12 +2390,171 @@ const unwrapTrivialSelectWrapper = (expr: FreeObjectExpr): FreeObjectExpr | unde
   }
 };
 
+// Implicit-cast edges mirroring the `ALLOW IMPLICIT` casts in EdgeDB's std
+// library (edb/lib/std/25-numoperators.edgeql). Used by UDF overload
+// resolution to rank candidates the way the Python compiler's polyres does.
+const IMPLICIT_CAST_EDGES: Record<string, string[]> = {
+  "std::int16": ["std::int32", "std::float32"],
+  "std::int32": ["std::int64"],
+  "std::int64": ["std::float64", "std::bigint", "std::decimal"],
+  "std::bigint": ["std::decimal"],
+  "std::float32": ["std::float64"],
+};
+
+// Shortest implicit-cast path length from `from` to `to` (BFS over the edge
+// table): 0 when equal, undefined when no implicit conversion exists.
+const implicitCastDistance = (from: string, to: string): number | undefined => {
+  if (from === to) return 0;
+  const seen = new globalThis.Set<string>([from]);
+  let frontier = [from];
+  let dist = 0;
+  while (frontier.length > 0) {
+    dist += 1;
+    const next: string[] = [];
+    for (const node of frontier) {
+      for (const edge of IMPLICIT_CAST_EDGES[node] ?? []) {
+        if (edge === to) return dist;
+        if (!seen.has(edge)) {
+          seen.add(edge);
+          next.push(edge);
+        }
+      }
+    }
+    frontier = next;
+  }
+  return undefined;
+};
+
+// Cast distance from an argument type to a parameter type. Scalar subtyping
+// is free — a schema scalar extending std::str binds a `str` param at
+// distance 0, matching polyres (`issubclass` short-circuits before the cast
+// search). Otherwise implicit casts (int64 → float64 etc.) count by path
+// length. Undefined means "cannot bind".
+const argToParamCastDistance = (
+  ctx: IRCompileContext,
+  argType: string,
+  paramType: string,
+): number | undefined => {
+  // Walk the arg type's extends-chain to collect it plus all its scalar
+  // ancestors; an exact hit anywhere along the chain is a distance-0 match.
+  const chain: string[] = [];
+  const seen = new globalThis.Set<string>();
+  let cursor: string | undefined = argType;
+  while (cursor !== undefined && !seen.has(cursor)) {
+    seen.add(cursor);
+    chain.push(cursor);
+    if (cursor === paramType) return 0;
+    const cur = cursor;
+    const decl = ctx.schema
+      ?.listScalarTypes()
+      .find((s) => `${s.module}::${s.name}` === cur);
+    cursor = decl?.baseTypeName !== undefined
+      ? normalizeScalarCastName(ctx, decl.baseTypeName)
+      : undefined;
+  }
+  for (const t of chain) {
+    const d = implicitCastDistance(t, paramType);
+    if (d !== undefined) return d;
+  }
+  return undefined;
+};
+
+// Try to bind the call-site argument types against one overload candidate's
+// params, returning the total implicit-cast distance, or undefined when the
+// candidate can't bind. Mirrors polyres.try_bind_call_args: a param with no
+// matching arg must have a DEFAULT — `optional` alone does NOT make it
+// fillable here. (That asymmetry with the single-overload inlining path below
+// is deliberate: it's what lets `opt_test(false, x)` pick the 2-param
+// overload over the 3-param `(tag, x, y: optional int64)` one, exactly as
+// the Python compiler does.)
+const scoreUDFOverloadCandidate = (
+  fn: FunctionDef,
+  positionalTypes: string[],
+  namedTypes: Map<string, string>,
+  ctx: IRCompileContext,
+): number | undefined => {
+  for (const name of namedTypes.keys()) {
+    if (!fn.params.some((p) => p.name === name)) return undefined;
+  }
+  let total = 0;
+  let cursor = 0;
+  for (const param of fn.params) {
+    const paramType = normalizeScalarCastName(ctx, param.type);
+    if (param.variadic) {
+      // The variadic slot absorbs every remaining positional arg; each one
+      // must individually bind to the element type.
+      while (cursor < positionalTypes.length) {
+        const d = argToParamCastDistance(ctx, positionalTypes[cursor], paramType);
+        if (d === undefined) return undefined;
+        total += d;
+        cursor += 1;
+      }
+      continue;
+    }
+    let argType: string | undefined;
+    if (!param.namedOnly && cursor < positionalTypes.length) {
+      argType = positionalTypes[cursor];
+      cursor += 1;
+    } else {
+      argType = namedTypes.get(param.name);
+    }
+    if (argType === undefined) {
+      if (param.default === undefined) return undefined;
+      continue;
+    }
+    const d = argToParamCastDistance(ctx, argType, paramType);
+    if (d === undefined) return undefined;
+    total += d;
+  }
+  // Surplus positional args with no variadic slot to absorb them.
+  if (cursor < positionalTypes.length) return undefined;
+  return total;
+};
+
+// Pick the unique best overload for a UDF call, modeled (simplified) on the
+// Python compiler's polyres.find_callable: every candidate must bind all
+// arguments, candidates are ranked by total implicit-cast distance (exact
+// matches beat castable ones), and anything other than a single clear winner
+// — ambiguity, an unbindable argument, or an argument whose type can't be
+// inferred from the AST — returns undefined so the caller bails instead of
+// guessing.
+const resolveUDFOverload = (
+  candidates: FunctionDef[],
+  args: FunctionCallArgExpr[],
+  ctx: IRCompileContext,
+): FunctionDef | undefined => {
+  const positionalTypes: string[] = [];
+  const namedTypes = new Map<string, string>();
+  for (const arg of args) {
+    const isNamed = arg && typeof arg === "object" && "kind" in arg && arg.kind === "named_arg";
+    const inferAttempt = tryResult(() =>
+      inferAstExprTypeName(functionCallArgToFreeObjectExpr(isNamed ? arg.arg : arg), ctx),
+    );
+    if (!inferAttempt.ok || inferAttempt.value === undefined) return undefined;
+    if (isNamed) namedTypes.set(arg.name, inferAttempt.value);
+    else positionalTypes.push(inferAttempt.value);
+  }
+  let best: FunctionDef[] = [];
+  let bestDistance = Infinity;
+  for (const fn of candidates) {
+    const distance = scoreUDFOverloadCandidate(fn, positionalTypes, namedTypes, ctx);
+    if (distance === undefined) continue;
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = [fn];
+    } else if (distance === bestDistance) {
+      best.push(fn);
+    }
+  }
+  return best.length === 1 ? best[0] : undefined;
+};
+
 // Attempt to build an inlined-body Set for a user-defined function call. The
 // body becomes the SQL compiler's expression to lower, with parameters
 // substituted by the call's argument expressions. Returns undefined when:
 //   - the function isn't a user-defined expr-body UDF in the current schema,
-//   - more than one overload matches (we don't have type info at AST→IR time
-//     to disambiguate; let the runtime path handle it), or
+//   - the call has multiple overloads and type-based resolution (see
+//     resolveUDFOverload above) can't pick a unique best one, or
 //   - the body uses AST kinds the substitution walker doesn't cover.
 const tryBuildInlinedUDFBody = (
   callName: string,
@@ -2176,13 +2570,11 @@ const tryBuildInlinedUDFBody = (
   const matches = ctx.schema.listFunctions().filter((fn) =>
     fn.module === moduleName && fn.name === shortName,
   );
-  if (matches.length !== 1) return undefined;
-  const fn = matches[0];
+  if (matches.length === 0) return undefined;
+  const fn = matches.length === 1 ? matches[0] : resolveUDFOverload(matches, args, ctx);
+  if (!fn) return undefined;
   const fnBody = fn.body;
   if (fnBody.kind !== "query") return undefined;
-  // Variadic parameters still bail — those need slot-list reshaping the
-  // inliner doesn't model yet.
-  if (fn.params.some((p) => p.variadic)) return undefined;
   // Split call-site args into positional and named. Named args (`a := X`)
   // bypass positional ordering and bind by parameter name; remaining
   // positional args fill the leading positional / namedOnly-excluded slots
@@ -2198,7 +2590,9 @@ const tryBuildInlinedUDFBody = (
     }
   }
   const positionalParams = fn.params.filter((p) => !p.namedOnly);
-  if (positionalArgs.length > positionalParams.length) return undefined;
+  // A variadic slot absorbs any surplus positional args.
+  const hasVariadic = fn.params.some((p) => p.variadic);
+  if (!hasVariadic && positionalArgs.length > positionalParams.length) return undefined;
   // Every named arg must match a declared parameter (named-only or not).
   for (const name of namedArgs.keys()) {
     if (!fn.params.some((p) => p.name === name)) return undefined;
@@ -2207,6 +2601,12 @@ const tryBuildInlinedUDFBody = (
   // (or must be OPTIONAL — defaultable to empty set).
   let positionalCursor = 0;
   for (const param of fn.params) {
+    // A variadic param is always satisfiable: zero leftover positional args
+    // simply pack into an empty array.
+    if (param.variadic) {
+      positionalCursor = positionalArgs.length;
+      continue;
+    }
     const isPositionalSlot = !param.namedOnly;
     const filled = (isPositionalSlot && positionalCursor < positionalArgs.length)
       || namedArgs.has(param.name);
@@ -2235,7 +2635,15 @@ const tryBuildInlinedUDFBody = (
   for (const param of fn.params) {
     let argExpr: FreeObjectExpr;
     const namedArg = namedArgs.get(param.name);
-    if (!param.namedOnly && positionalCursor < positionalArgs.length) {
+    if (param.variadic) {
+      // Pack all remaining positional args into an array literal — the body
+      // sees the variadic param as `array<T>`.
+      const packed = positionalArgs
+        .slice(positionalCursor)
+        .map((a) => functionCallArgToFreeObjectExpr(a));
+      positionalCursor = positionalArgs.length;
+      argExpr = { kind: "array_literal_expr", values: packed } as FreeObjectExpr;
+    } else if (!param.namedOnly && positionalCursor < positionalArgs.length) {
       argExpr = functionCallArgToFreeObjectExpr(positionalArgs[positionalCursor]);
       positionalCursor += 1;
     } else if (namedArg !== undefined) {
@@ -2255,9 +2663,37 @@ const tryBuildInlinedUDFBody = (
     bindValue(inlineCtx, uniqueName, argIR);
     substitutions.set(param.name, { kind: "binding_ref", name: uniqueName });
   }
-  const substituted = substituteBindingRefsInFreeObjectExpr(bodyExpr, substitutions);
+  // All substitutions are binding_ref → binding_ref renames (each argument
+  // is pre-bound to a unique name above), so a generic structural rename
+  // walker covers every AST context — select-statement filters, shape
+  // computeds, order-by, nested calls — without enumerating node kinds.
+  const renames = new Map<string, string>();
+  for (const [from, to] of substitutions) {
+    if (to.kind === "binding_ref") renames.set(from, to.name);
+  }
+  const substituted = renameBindingRefsDeep(bodyExpr, renames) as FreeObjectExpr;
   const bodyAttempt = tryResult(() => compileFreeObjectExpr(substituted, inlineCtx));
   return bodyAttempt.ok ? bodyAttempt.value : undefined;
+};
+
+// Deep structural clone that renames every `{kind:"binding_ref", name}` node
+// (in any position — filter values, function args, computed shapes, …) per
+// the rename map. Non-binding_ref nodes pass through with children rewritten.
+const renameBindingRefsDeep = (node: unknown, renames: Map<string, string>): unknown => {
+  if (Array.isArray(node)) return node.map((child) => renameBindingRefsDeep(child, renames));
+  if (node && typeof node === "object") {
+    const obj = node as Record<string, unknown>;
+    if (obj.kind === "binding_ref" && typeof obj.name === "string") {
+      const to = renames.get(obj.name);
+      return to !== undefined ? { ...obj, name: to } : obj;
+    }
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(obj)) {
+      out[key] = renameBindingRefsDeep(obj[key], renames);
+    }
+    return out;
+  }
+  return node;
 };
 
 let inlineCallCounter = 0;
@@ -2493,9 +2929,11 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
       const typeref = bound?.typeref ?? aliasSet?.typeref ?? resolveTypeRef(scoped, expr.typeName);
       let root = bound ?? aliasSet ?? setFromTypeRoot(typeref);
       if (expr.shape.length > 0) {
+        const compiledShape = compileShape(root, expr.shape, scoped);
+        augmentGroupRowFieldShape(root, expr.shape, compiledShape);
         root = {
           ...root,
-          shape: compileShape(root, expr.shape, scoped),
+          shape: compiledShape,
         };
       }
       const clauses = expr.clauses;
@@ -2841,11 +3279,11 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
       // steps the SQL stage resolves against the group row's JSON (or its
       // projection). Chained accesses extend the inner field's steps.
       if (!expr.field.startsWith("@")) {
-        const groupedSource = peelToGroupRows(source);
+        const groupedSource = peelToGroupRows(source) ?? peelToGroupRowsThroughClauses(source);
         if (groupedSource) {
           return {
             ...source,
-            expr: { kind: "group_row_field", steps: [expr.field] } as GroupRowFieldExpr,
+            expr: { kind: "group_row_field", steps: [expr.field], rows: groupedSource.rows } as GroupRowFieldExpr,
             shape: [],
             pathId: defaultPathId(`group_row_field:${expr.field}`),
             typeref: unknownTypeRef("std::anytype"),
@@ -2956,7 +3394,47 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
       // lower as the computed body's expression rather than a phantom
       // `std::anytype` pointer reference.
       const computedSet = tryLowerComputedPropertyOnTypePath(ctx, source, expr.field);
-      if (computedSet) return computedSet;
+      if (computedSet) {
+        // `(SELECT T FILTER …).computedP` — the substituted body alone
+        // loses the source's filtered iteration; wrap in a FOR over the
+        // source so the body evaluates once per (filtered) row.
+        const sourceHasClauses = ((): boolean => {
+          let cur: Set = source;
+          while (cur.expr.kind === "select_expr") {
+            const se = cur.expr as SelectExpr;
+            if (se.where || se.limit || se.offset || (se.orderBy && se.orderBy.length > 0)) return true;
+            cur = se.result;
+          }
+          return false;
+        })();
+        // Only wrap value-producing computeds — an object-set body may have
+        // further path steps applied, which the pointer-chain compiler
+        // can't walk through a for_expr.
+        const computedIsObjectSet = ((): boolean => {
+          let cur: Set = computedSet;
+          while (cur.expr.kind === "select_expr") cur = (cur.expr as SelectExpr).result;
+          return (cur.expr.kind === "type_root" || cur.expr.kind === "pointer") && !cur.typeref.isScalar;
+        })();
+        if (sourceHasClauses && !computedIsObjectSet) {
+          return {
+            kind: "set",
+            expr: {
+              kind: "for_expr",
+              iterator: source,
+              body: computedSet,
+              bindingKind: "with",
+              optional: false,
+            } as ForExpr,
+            pathId: computedSet.pathId,
+            typeref: computedSet.typeref,
+            shape: computedSet.shape ?? [],
+            isBinding: false,
+            isMaterializedRef: false,
+            isSchemaAlias: false,
+          };
+        }
+        return computedSet;
+      }
       // A shape attached to `source` may define a *new* computed pointer
       // (e.g. `Person {ok := .name = .tag}`) which the type's schema doesn't
       // declare. Surface that shape element so `P.ok` resolves to its body.
@@ -2996,7 +3474,16 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
           while (cur.expr.kind === "select_expr") cur = (cur.expr as SelectExpr).result;
           return (cur.expr.kind === "type_root" || cur.expr.kind === "pointer") && !cur.typeref.isScalar;
         })();
-        if (sourceHasClauses && !computedIsObjectPath) {
+        // A group-row chain computed (`z := g.elements.name`) is independent
+        // of the subject rows, so returning the body alone would drop the
+        // subject's cardinality (`count((Award {z}).z)` multiplies by the
+        // Award count) — keep the FOR wrap for those too.
+        const computedIsGroupRowChain = ((): boolean => {
+          let cur: Set = shapedElement.expr;
+          while (cur.expr.kind === "select_expr") cur = (cur.expr as SelectExpr).result;
+          return cur.expr.kind === "group_row_field";
+        })();
+        if ((sourceHasClauses || computedIsGroupRowChain) && !computedIsObjectPath) {
           return {
             kind: "set",
             expr: {
@@ -3393,13 +3880,13 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
       // compiler against the virtual key/grouping/elements members.
       const grouped = peelToGroupRows(base);
       if (grouped) {
-        const parsed = parseGroupRowProjection(expr.shape, grouped.groupRows.projection);
+        const parsed = parseProjectionWithComputedFallback(expr.shape, grouped.groupRows.projection, grouped.rows, ctx);
         // An `elements: {…}` re-projection reads fields off the materialized
         // element rows — when the already-compiled subject doesn't project
         // one of them, rebuild the group from its AST parts with the subject
         // augmented. Only then: a rebuild recompiles in THIS scope, which
         // loses bindings when the group's WITH lives on an inner subquery.
-        const neededElementFields = (parsed.projection ?? [])
+        const neededElementFields = [...parsed.needs].concat((parsed.projection ?? [])
           .flatMap((p) => {
             if (p.kind === "elements_shape") {
               return p.fields.map(elementFieldSubjectName);
@@ -3415,7 +3902,7 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
             }
             return [];
           })
-          .filter((fieldName) => fieldName.length > 0);
+          .filter((fieldName) => fieldName.length > 0));
         const have = new globalThis.Set<string>();
         {
           let cursor: Set = grouped.groupRows.group.subject;
@@ -3441,7 +3928,49 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
         }
         const astParts = grouped.groupRows.astParts as GroupAstParts | undefined;
         if (astParts && neededElementFields.some((fieldName) => fieldName !== "id" && !have.has(fieldName))) {
-          return buildGroupRowsSet(astParts, expr.shape, ctx);
+          // Rebuilding from the AST recompiles in THIS scope — when the
+          // group's WITH bindings live on an inner subquery (`X := (WITH B
+          // := DETACHED User … GROUP B …)`) that fails; augment the
+          // already-compiled subject's shape instead (added fields stay
+          // hidden — they exist only for the computed reads).
+          const rebuilt = tryResult(() => buildGroupRowsSet(astParts, expr.shape, ctx));
+          // The rebuild can "succeed" with an UNLOWERABLE group when the
+          // original WITH bindings are out of scope (its subject compile
+          // failed quietly) — only accept a rebuild that stayed lowerable.
+          const rebuiltLowerable = rebuilt.ok
+            && (rebuilt.value.expr as GroupRowsExpr).group.byAtoms !== undefined
+            && !(rebuilt.value.expr as GroupRowsExpr).unlowerable;
+          if (rebuilt.ok && rebuiltLowerable) {
+            return rebuilt.value;
+          }
+          const missing = neededElementFields.filter((fieldName) => fieldName !== "id" && !have.has(fieldName));
+          const augmented = augmentCompiledGroupSubject(grouped.groupRows.group.subject, missing, ctx);
+          if (augmented) {
+            // The added fields stay VISIBLE on the materialized rows — the
+            // computed projections read them off the elements JSON, which is
+            // built after hidden-field stripping.
+            const group = {
+              ...grouped.groupRows.group,
+              subject: augmented,
+              expr: augmented,
+            };
+            const reParsed = parseProjectionWithComputedFallback(
+              expr.shape,
+              grouped.groupRows.projection,
+              grouped.rows,
+              ctx,
+            );
+            return {
+              ...grouped.rows,
+              expr: {
+                ...grouped.groupRows,
+                group,
+                projection: reParsed.projection,
+                astShape: expr.shape,
+                unlowerable: grouped.groupRows.unlowerable || reParsed.unlowerable || undefined,
+              } as GroupRowsExpr,
+            };
+          }
         }
         // A projection that re-reads element fields (`elements: {…, z := .b
         // <= 1}`) must see them on the materialized rows — un-hide any it
@@ -3468,6 +3997,7 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
         };
       }
       const projectedShape = compileShape(base, expr.shape, ctx);
+      augmentGroupRowFieldShape(base, expr.shape, projectedShape);
       return {
         ...base,
         shape: projectedShape,
@@ -3646,12 +4176,28 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
         return literalToSet(null);
       };
       const args = expr.call.args.map(compileCallArg);
+      // Preserve named-arg names: `to_duration(hours := 20)` must reach the
+      // SQL lowering keyed as "hours", not by its positional index — the
+      // stdlib templates dispatch on parameter names. Positional args keep
+      // their numeric keys (orderedCallArgs sorts numerics first).
+      const argKeys = expr.call.args.map((arg, index) =>
+        arg && typeof arg === "object" && "kind" in arg && arg.kind === "named_arg"
+          ? arg.name
+          : String(index));
       // Inline expr-body UDFs at AST→IR time so the SQL compiler can lower
       // the call as if the body were written inline (substituting parameter
       // references with the actual argument expressions). Falls back to a
       // body-less function_call IR when the function isn't a known UDF or
       // the body shape isn't supported — the runtime path picks that up.
       const inlinedBody = tryBuildInlinedUDFBody(expr.call.name, expr.call.args, ctx);
+      // Object-returning UDFs: substitute the inlined body Set directly so
+      // every downstream consumer (pointer chains `foo(1).a`, shapes,
+      // EXISTS, DML wrappers) sees an ordinary object set — the
+      // function_call envelope is only understood by the scalar value
+      // lowering.
+      if (inlinedBody && !inlinedBody.typeref.isScalar && inlinedBody.typeref.inSchema) {
+        return inlinedBody;
+      }
       // Use the inferred return type so downstream type-check operations
       // (`X IS float64`, `INTROSPECT TYPEOF X`) can resolve common stdlib
       // function results instead of seeing `std::anytype`. Falls back to
@@ -3676,7 +4222,7 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
         expr: {
           kind: "function_call",
           functionName: expr.call.name,
-          args: Object.fromEntries(args.map((arg, index) => [String(index), mkCallArg(arg)])),
+          args: Object.fromEntries(args.map((arg, index) => [argKeys[index], mkCallArg(arg)])),
           volatility: "stable",
           typeref: callTyperef,
           preservesUpperCardinality: false,
@@ -3959,6 +4505,72 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
         && expr.offset === undefined
       ) {
         const iterator = compileFreeObjectExpr(expr.iterator, ctx);
+        // A TYPED backlink off group-rows elements
+        // (`X.elements.<friends[is User]`) rewrites to the equivalent
+        // correlated membership select — `select User filter .friends.id in
+        // X.elements.id` — which the SQL stage already lowers (json_each
+        // rows on the RHS of IN).
+        {
+          let elemCursor: Set = iterator;
+          while (elemCursor.expr.kind === "select_expr") {
+            elemCursor = (elemCursor.expr as SelectExpr).result;
+          }
+          const elemField = elemCursor.expr.kind === "group_row_field" ? elemCursor.expr as GroupRowFieldExpr : undefined;
+          if (elemField && elemField.steps[0] === "elements" && elemField.steps.length === 1 && expr.body.sourceType) {
+            const targetTyperef = resolveTypeRef(ctx, expr.body.sourceType);
+            const linkPtr = targetTyperef && !targetTyperef.id.startsWith("unknown:")
+              ? resolvePointerRef(ctx, targetTyperef, expr.body.link)
+              : undefined;
+            if (targetTyperef && linkPtr && !linkPtr.outTarget.isScalar) {
+              const root = setFromTypeRoot(targetTyperef);
+              const linkSet = extendPathSet(root, linkPtr);
+              const idPtr = resolvePointerRef(ctx, linkPtr.outTarget, "id");
+              const lhs = idPtr ? extendPathSet(linkSet, idPtr) : undefined;
+              const rhs = tryExtendGroupRowFieldPath(iterator, "id");
+              if (lhs && rhs) {
+                const where: Set = {
+                  kind: "set",
+                  expr: {
+                    kind: "operator_call",
+                    operator: "in",
+                    args: { "0": mkCallArg(lhs), "1": mkCallArg(rhs) },
+                    returning: unknownTypeRef("std::bool"),
+                    volatility: "stable",
+                  } as OperatorCall,
+                  pathId: defaultPathId("group_backlink_in"),
+                  typeref: unknownTypeRef("std::bool"),
+                  shape: [],
+                  isBinding: false,
+                  isMaterializedRef: false,
+                  isSchemaAlias: false,
+                };
+                return {
+                  kind: "set",
+                  expr: {
+                    kind: "select_expr",
+                    result: root,
+                    where,
+                    implicitWrapper: false,
+                  } as SelectExpr,
+                  pathId: defaultPathId(`group_backlink:${expr.body.link}`),
+                  typeref: targetTyperef,
+                  shape: [],
+                  isBinding: false,
+                  isMaterializedRef: false,
+                  isSchemaAlias: false,
+                };
+              }
+            }
+          }
+        }
+        // Untyped backlinks off group-rows elements (`g.elements.<owner`)
+        // can't be read off the row JSON — record a marked group_row_field
+        // step so the SQL stage bails and the runtime FOR-group executor
+        // runs it.
+        const groupBacklink = tryExtendGroupRowFieldPath(iterator, expr.body.link, "inbound");
+        if (groupBacklink) {
+          return groupBacklink;
+        }
         const ptrref = resolveBacklinkPointerRef(ctx, iterator.typeref, expr.body.link, expr.body.sourceType);
         if (ptrref) {
           const out = extendPathSetDirectional(iterator, ptrref, "inbound");
@@ -3973,7 +4585,25 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
             : out;
         }
       }
-      const rawIterator = compileFreeObjectExpr(expr.iterator, ctx);
+      let rawIterator = compileFreeObjectExpr(expr.iterator, ctx);
+      // `FOR g IN (GROUP …)` whose body reads element fields the subject
+      // doesn't project (`g.elements.name` over a bare `GROUP Card`):
+      // rebuild the group with those fields added to the subject so the SQL
+      // stage can read them off each element row.
+      {
+        const grouped = peelToGroupRows(rawIterator);
+        const astParts = grouped?.groupRows.astParts as GroupAstParts | undefined;
+        if (grouped && astParts) {
+          const needed = collectForBodyElementFields(expr.body, expr.variable);
+          const have = collectGroupSubjectFieldNames(grouped.groupRows.group.subject);
+          const missing = [...needed].filter((name) => name !== "id" && !have.has(name));
+          if (missing.length > 0) {
+            const astShape = grouped.groupRows.astShape as EdgeQLShapeElement[] | undefined;
+            const rebuilt = tryResult(() => buildGroupRowsSet(astParts, astShape, ctx, missing));
+            if (rebuilt.ok) rawIterator = rebuilt.value;
+          }
+        }
+      }
       // Namespace the iterator's pathId so the body can distinguish references
       // to the iteration binding (e.g. `C`) from fresh references to the same
       // type (e.g. `Card`) — without this, both produce identical pathIds and
@@ -4063,6 +4693,26 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
         }
       }
 
+      // Duration literals fold to Gel's canonical ISO form ('PT24H',
+      // 'P11M20D') — equality, ordering, and result serialization all
+      // operate on the canonical text.
+      if (expr.castType === "duration" || expr.castType === "relative_duration"
+          || expr.castType === "date_duration"
+          || expr.castType === "cal::relative_duration" || expr.castType === "cal::date_duration") {
+        const innerSet = compileFreeObjectExpr(innerExpr, ctx);
+        const literal = tryExtractStringConstant(innerSet);
+        if (literal !== undefined) {
+          const exact = expr.castType === "duration";
+          const normalized = normalizeDurationLiteral(literal, exact);
+          if (normalized !== undefined) {
+            const typeName = expr.castType === "duration"
+              ? "std::duration"
+              : expr.castType.includes("date_duration") ? "cal::date_duration" : "cal::relative_duration";
+            return { ...enumLiteralSet(normalized), typeref: unknownTypeRef(typeName) };
+          }
+        }
+      }
+
       const inner = compileFreeObjectExpr(innerExpr, ctx);
       const toType = resolveTypeRef(ctx, expr.castType);
       return {
@@ -4131,7 +4781,12 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
     }
 
     case "select_expr": {
-      return compileFreeObjectExpr(expr.expr, ctx);
+      // `WITH z := (...) <expr>` written inside a computed — the bindings
+      // ride on the wrapper's clauses.
+      const innerCtx = (expr as { clauses?: { _withBindings?: WithBinding[] } }).clauses?._withBindings
+        ? withBindings(ctx, (expr as { clauses?: { _withBindings?: WithBinding[] } }).clauses?._withBindings)
+        : ctx;
+      return compileFreeObjectExpr(expr.expr, innerCtx);
     }
 
     case "array_literal_expr": {
@@ -6154,8 +6809,17 @@ const compileShape = (
         continue;
       }
       const computedCtx = childScope(ctx);
-      bindValue(computedCtx, "__subject__", subject);
-      bindValue(computedCtx, "__current__", subject);
+      // Carry prior SIBLING computeds (no backing pointer) on the current
+      // item so a later computed can read them (`b := (…), d := .b.d`) —
+      // field_access falls back to the shape lookup when pointer resolution
+      // fails. Only pointer-less computeds: real pointers must keep
+      // resolving through the schema, not the projected shape.
+      const siblingComputeds = out.filter((prior) =>
+        prior.name !== undefined && prior.targetPtr === undefined && prior.shapeOrigin === "explicit"
+        && prior.expr.expr.kind !== "pointer");
+      const shapedSubject = siblingComputeds.length > 0 ? { ...subject, shape: siblingComputeds } : subject;
+      bindValue(computedCtx, "__subject__", shapedSubject);
+      bindValue(computedCtx, "__current__", shapedSubject);
       const compiledExpr = compileFreeObjectExpr(el.expr, computedCtx);
       // Computed shape elements without an explicit `multi`/`single` mod
       // used to default to `at_most_one`, which made `owner_of := X.<owner`
@@ -6208,8 +6872,29 @@ const compileShape = (
           return carriedName === el.name;
         });
         if (carried) {
+          // The written sub-shape (`b: {c}`) selects which fields of the
+          // carried value stay visible — record it on the adopted expr so
+          // the SQL stage filters tuple fields accordingly.
+          const subShape = el.shape && el.shape.length > 0 && carried.expr.expr.kind === "tuple"
+            ? el.shape
+                .filter((sub): sub is Extract<EdgeQLShapeElement, { name: string }> =>
+                  "name" in sub && typeof sub.name === "string" && sub.kind === "field")
+                .map((sub): ShapeElement => ({
+                  kind: "shape_element",
+                  source: carried.expr,
+                  expr: carried.expr,
+                  name: sub.name,
+                  shapeOp: "assign",
+                  shapeOrigin: "explicit",
+                  required: false,
+                  cardinality: "one",
+                } as ShapeElement))
+            : undefined;
           out.push({
             ...carried,
+            expr: subShape && subShape.length === (el.shape ?? []).length
+              ? { ...carried.expr, shape: subShape }
+              : carried.expr,
             shapeOp: el.operation,
             shapeOrigin: resolveShapeOrigin(el),
             name: el.name,
@@ -6953,7 +7638,7 @@ const compileSelectStatement = (rawStatement: SelectStatement, ctx: IRCompileCon
     bindValue(scoped, "__current__", shapedSubject);
     bindValue(scoped, "__subject__", shapedSubject);
   }
-  const compileOrderEntry = (entry: { field?: string; expr?: FreeObjectExpr; direction: "asc" | "desc"; nullsPosition?: "first" | "last"; then?: any }): SortExpr => {
+  const compileOrderEntry = (entry: OrderExpr): SortExpr => {
     // The parser stamps `field = "__expr__"` when ORDER BY carries an
     // arbitrary expression (`ORDER BY count(...)`), with the real expr
     // hanging off `entry.expr`. Falling back to resolvePointerRef on the
@@ -6987,7 +7672,7 @@ const compileSelectStatement = (rawStatement: SelectStatement, ctx: IRCompileCon
   const orderBy: SortExpr[] | undefined = (() => {
     if (!statement.orderBy) return undefined;
     const out: SortExpr[] = [];
-    let cursor: any = statement.orderBy;
+    let cursor: OrderExpr | undefined = statement.orderBy;
     while (cursor) {
       out.push(compileOrderEntry(cursor));
       cursor = cursor.then;
@@ -7161,10 +7846,191 @@ const compileForStatement = (statement: ForStatement, ctx: IRCompileContext): Se
 type GroupStatementAst = Extract<EdgeQLStatement, { kind: "group" }>;
 type GroupAstParts = Pick<GroupStatementAst, "source" | "using" | "by"> & { pos?: GroupStatementAst["pos"] };
 
+// A USING expression that references a WITH binding or the subject itself
+// (`using z := N <= 1` where N is volatile-once, `using l := C.len` where C
+// is the grouped set) needs whole-set / materialize-once semantics the
+// per-row computed projection can't express; those stay on the runtime
+// grouper's per-row evaluator.
+const containsBindingRef = (node: unknown, seen = new globalThis.Set<unknown>()): boolean => {
+  if (!node || typeof node !== "object" || seen.has(node)) return false;
+  seen.add(node);
+  if ((node as { kind?: unknown }).kind === "binding_ref") return true;
+  if (Array.isArray(node)) return node.some((item) => containsBindingRef(item, seen));
+  return Object.values(node).some((value) => containsBindingRef(value, seen));
+};
+
+// Add schema fields to an ALREADY-COMPILED group subject's shape (peeling
+// no-op select wrappers down to the type root) — used when an AST rebuild
+// isn't possible because the group's WITH bindings live on an inner scope.
+const augmentCompiledGroupSubject = (
+  subject: Set,
+  fields: string[],
+  ctx: IRCompileContext,
+): Set | undefined => {
+  if (subject.expr.kind === "select_expr") {
+    const wrapper = subject.expr as SelectExpr;
+    const inner = augmentCompiledGroupSubject(wrapper.result, fields, ctx);
+    return inner ? { ...subject, expr: { ...wrapper, result: inner } } : undefined;
+  }
+  if (subject.expr.kind !== "type_root") return undefined;
+  const have = new globalThis.Set(
+    (subject.shape ?? []).map((el) => el.name
+      ?? (el.expr.expr.kind === "pointer" ? (el.expr.expr as Pointer).ptrref.shortName : undefined)),
+  );
+  const additions: ShapeElement[] = [];
+  for (const field of fields) {
+    if (have.has(field)) continue;
+    const ptrref = resolvePointerRef(ctx, subject.typeref, field);
+    if (!ptrref || !ptrref.outTarget.isScalar) return undefined;
+    additions.push({
+      kind: "shape_element",
+      source: subject,
+      expr: extendPathSet(subject, ptrref),
+      name: field,
+      shapeOp: "assign",
+      shapeOrigin: "explicit",
+      required: false,
+      cardinality: ptrref.outCardinality ?? "at_most_one",
+    } as ShapeElement);
+  }
+  return additions.length > 0 ? { ...subject, shape: [...(subject.shape ?? []), ...additions] } : subject;
+};
+
+// Deep-rewrite paths rooted at the group SUBJECT's binding name into
+// leading-dot form (`B.avatar.name` → `.avatar.name` when the subject is
+// `GROUP B`): per-row reads, not whole-set references. Bare `B` references
+// (no trailing steps) are left alone — those ARE whole-set.
+const rewriteSubjectBindingPathsToCurrentItem = (node: unknown, subjectName: string): unknown => {
+  if (Array.isArray(node)) return node.map((item) => rewriteSubjectBindingPathsToCurrentItem(item, subjectName));
+  if (!node || typeof node !== "object") return node;
+  const obj = node as Record<string, unknown> & { kind?: string };
+  if (obj.kind === "path" && Array.isArray(obj.steps)) {
+    const steps = obj.steps as Array<{ kind?: string; name?: string }>;
+    if (steps.length > 1 && steps[0]?.kind === "object_ref" && steps[0].name === subjectName) {
+      return { ...obj, head: undefined, steps: steps.slice(1).map((step) => rewriteSubjectBindingPathsToCurrentItem(step, subjectName)) };
+    }
+  }
+  if (obj.kind === "field_access") {
+    const src = obj.expr as { kind?: string; name?: string; steps?: Array<{ kind?: string; name?: string }> } | undefined;
+    const isBareSubjectRef = (src?.kind === "binding_ref" && src.name === subjectName)
+      || (src?.kind === "path" && Array.isArray(src.steps) && src.steps.length === 1
+          && src.steps[0]?.kind === "object_ref" && src.steps[0].name === subjectName);
+    if (isBareSubjectRef) {
+      return { ...obj, expr: { kind: "current_item" } };
+    }
+    const innerRewritten = rewriteSubjectBindingPathsToCurrentItem(obj.expr, subjectName);
+    return { ...obj, expr: innerRewritten };
+  }
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(obj)) {
+    out[key] = rewriteSubjectBindingPathsToCurrentItem(obj[key], subjectName);
+  }
+  return out;
+};
+
+// `group <scalar-set> USING k := <expr> BY k` — the elements are scalar or
+// tuple VALUES, so there's no shape to attach the USING computeds to.
+// Desugar the subject into `FOR el IN <src> UNION ({__element__ := el,
+// k := <expr(el)>, …})` (a named IR tuple per element): the generic GROUP
+// lowering then reads keys off each row's fields and re-reads the raw
+// element from GROUP_ELEMENT_VALUE_FIELD for display. Returns undefined
+// when the source isn't a value set or a USING expression doesn't compile.
+const GROUP_ELEMENT_VALUE_FIELD = "__element__";
+const tryBuildScalarGroupSubject = (
+  statement: GroupAstParts,
+  sourceAst: GroupAstParts["source"],
+  ctx: IRCompileContext,
+  fieldAtoms: string[] = [],
+): Set | undefined => {
+  const attempt = tryResult(() => compileFreeObjectExpr(sourceAst, ctx));
+  if (!attempt.ok) return undefined;
+  const src = attempt.value;
+  let cursor: Set = src;
+  while (cursor.expr.kind === "select_expr") {
+    cursor = (cursor.expr as SelectExpr).result;
+  }
+  const kind = cursor.expr.kind;
+  // group_rows subjects (an outer GROUP over an inner one) iterate one row
+  // per inner group; their USING keys read fields off the row JSON.
+  const valueLike = kind.endsWith("_constant")
+    || kind === "function_call" || kind === "operator_call"
+    || kind === "index_expr" || kind === "type_cast" || kind === "array"
+    || kind === "group_rows" || kind === "group_row_field";
+  if (!valueLike) return undefined;
+
+  const iterScopeTag = `for:__group_element__:${ctx.nextScopeId++}`;
+  const iterator: Set = {
+    ...src,
+    pathId: {
+      ...src.pathId,
+      namespace: [...(src.pathId?.namespace ?? []), iterScopeTag],
+    },
+  };
+  const loopCtx = childScope(ctx);
+  bindValue(loopCtx, "__current__", iterator);
+  const elements: TupleElement[] = [{ name: GROUP_ELEMENT_VALUE_FIELD, val: iterator }];
+  for (const usingBinding of statement.using ?? []) {
+    if (containsBindingRef(usingBinding.expr) && !resolveBinding(loopCtx, usingNameOfBindingRef(usingBinding.expr) ?? "")) {
+      return undefined;
+    }
+    const compiled = tryResult(() => compileFreeObjectExpr(usingBinding.expr, loopCtx));
+    if (!compiled.ok) return undefined;
+    elements.push({ name: usingBinding.alias, val: compiled.value });
+    // Chained aliases (`USING x := …, y := x`) resolve against the prior
+    // computed.
+    bindValue(loopCtx, usingBinding.alias, compiled.value);
+  }
+  // Field-ref BY atoms over element rows (`group <rows>.elements by .cost`)
+  // read the current element's field.
+  for (const atom of fieldAtoms) {
+    if (elements.some((el) => el.name === atom)) continue;
+    const compiled = tryResult(() => compileFreeObjectExpr(
+      { kind: "field_access", expr: { kind: "current_item" }, field: atom, optional: false } as FreeObjectExpr,
+      loopCtx,
+    ));
+    if (!compiled.ok) return undefined;
+    elements.push({ name: atom, val: compiled.value });
+  }
+  const tupleSet: Set = {
+    kind: "set",
+    expr: { kind: "tuple", named: true, elements } as Tuple,
+    pathId: defaultPathId("group_scalar_subject"),
+    typeref: unknownTypeRef("std::tuple"),
+    shape: [],
+    isBinding: false,
+    isMaterializedRef: false,
+    isSchemaAlias: false,
+  };
+  return {
+    kind: "set",
+    expr: {
+      kind: "for_expr",
+      iterator,
+      body: tupleSet,
+      bindingKind: "with",
+      optional: false,
+    } as ForExpr,
+    pathId: defaultPathId("for:__group_element__"),
+    typeref: tupleSet.typeref,
+    shape: [],
+    isBinding: false,
+    isMaterializedRef: false,
+    isSchemaAlias: false,
+  };
+};
+
+// The name a bare `binding_ref` USING expression points at — chained USING
+// aliases (`USING x := …, y := x`) are allowed in the scalar-subject desugar
+// because the prior alias is bound in the loop scope.
+const usingNameOfBindingRef = (expr: unknown): string | undefined =>
+  (expr as { kind?: string; name?: string })?.kind === "binding_ref"
+    ? (expr as { name?: string }).name
+    : undefined;
+
 const buildGroupStmtParts = (
   statement: GroupAstParts,
   scoped: IRCompileContext,
-): Pick<GroupStmt, "byAtoms" | "groupingSets" | "hiddenByFields"> & { subject: Set } => {
+): Pick<GroupStmt, "byAtoms" | "groupingSets" | "hiddenByFields" | "elementValueField"> & { subject: Set } => {
   let lowerable = true;
 
   // --- Expand BY into the atom-name union + grouping sets. ---
@@ -7237,20 +8103,27 @@ const buildGroupStmtParts = (
     return { kind: "select_expr", expr, clauses: {} };
   };
 
-  // A USING expression that references a WITH binding or the subject itself
-  // (`using z := N <= 1` where N is volatile-once, `using l := C.len` where C
-  // is the grouped set) needs whole-set / materialize-once semantics the
-  // per-row computed projection can't express; those stay on the runtime
-  // grouper's per-row evaluator.
-  const containsBindingRef = (node: unknown, seen = new globalThis.Set<unknown>()): boolean => {
-    if (!node || typeof node !== "object" || seen.has(node)) return false;
-    seen.add(node);
-    if ((node as { kind?: unknown }).kind === "binding_ref") return true;
-    if (Array.isArray(node)) return node.some((item) => containsBindingRef(item, seen));
-    return Object.values(node).some((value) => containsBindingRef(value, seen));
-  };
-
   let sourceAst = statement.source;
+  // Peel no-op parenthesized wrappers (`group (select X {…}) using …`) so
+  // the USING fold below can attach its computed fields to the inner shape.
+  // Wrapper WITH bindings stay visible by folding them into the scope.
+  while (sourceAst.kind === "select_expr_subquery") {
+    const wrapper = sourceAst as unknown as {
+      expr?: GroupAstParts["source"];
+      filter?: unknown; orderBy?: unknown; limit?: unknown; offset?: unknown;
+      clauses?: { _withBindings?: WithBinding[] };
+      _withBindings?: WithBinding[];
+    };
+    const inner = wrapper.expr;
+    if (!inner || (inner.kind !== "select" && inner.kind !== "shape_projection")) break;
+    if (wrapper.filter !== undefined || wrapper.orderBy !== undefined
+        || wrapper.limit !== undefined || wrapper.offset !== undefined) break;
+    const wb = wrapper._withBindings ?? wrapper.clauses?._withBindings;
+    if (wb && wb.length > 0) {
+      scoped = withBindings(scoped, wb);
+    }
+    sourceAst = inner;
+  }
   const hiddenByFields: string[] = [];
   if (sourceAst.kind === "shape_projection" || sourceAst.kind === "select") {
     const shape = [...(sourceAst.shape ?? [])];
@@ -7274,11 +8147,29 @@ const buildGroupStmtParts = (
         computed = prior;
       }
       if (!computed) {
-        if (containsBindingRef(usingBinding.expr)) {
+        // Paths through the SUBJECT's own binding name (`USING category :=
+        // B.avatar.name` where the subject is `GROUP B`) are per-row reads —
+        // rewrite them to leading-dot form so they don't trip the whole-set
+        // binding-ref bail below.
+        let usingExpr = usingBinding.expr;
+        // The subject's name itself (binding OR type name): paths through it
+        // inside USING are per-row reads of the subject element.
+        const subjectBindingName = sourceAst.kind === "select"
+          ? sourceAst.typeName
+          : sourceAst.kind === "shape_projection" && sourceAst.expr.kind === "binding_ref"
+            ? sourceAst.expr.name
+            : undefined;
+        if (subjectBindingName && containsBindingRef(usingExpr)) {
+          const rewritten = rewriteSubjectBindingPathsToCurrentItem(usingExpr, subjectBindingName);
+          if (rewritten && !containsBindingRef(rewritten)) {
+            usingExpr = rewritten as typeof usingExpr;
+          }
+        }
+        if (containsBindingRef(usingExpr)) {
           lowerable = false;
           continue;
         }
-        computed = usingExprToComputed(usingBinding.expr);
+        computed = usingExprToComputed(usingExpr);
       }
       usingComputeds.set(usingBinding.alias, computed);
       if (present.has(usingBinding.alias)) continue;
@@ -7303,10 +8194,44 @@ const buildGroupStmtParts = (
     if (shape.length !== (sourceAst.shape ?? []).length) {
       sourceAst = { ...sourceAst, shape };
     }
-  } else if ((statement.using ?? []).length > 0) {
-    // USING over an unshaped / wrapped source has nowhere to attach its
-    // computed fields; the presence check below would pass vacuously.
-    lowerable = false;
+  }
+
+  // Scalar/tuple-element subjects with USING keys desugar to a FOR over the
+  // source carrying the raw element + USING fields per row (see
+  // tryBuildScalarGroupSubject). Field-ref BY atoms can't resolve against a
+  // value row, so those bail.
+  let scalarElementSubject: Set | undefined;
+  if (sourceAst.kind !== "shape_projection" && sourceAst.kind !== "select"
+      && ((statement.using ?? []).length > 0 || fieldAtoms.length > 0)) {
+    // A single-row named-tuple source (a free object) takes the
+    // tuple-extension path below instead — its USING aliases become extra
+    // tuple fields.
+    const probe = tryResult(() => compileFreeObjectExpr(sourceAst, scoped));
+    let probeIsTuple = false;
+    let probeIsValueLike = false;
+    if (probe.ok) {
+      let probeCursor: Set = probe.value;
+      while (probeCursor.expr.kind === "select_expr") {
+        probeCursor = (probeCursor.expr as SelectExpr).result;
+      }
+      probeIsTuple = probeCursor.expr.kind === "tuple" && (probeCursor.expr as Tuple).named;
+      probeIsValueLike = probeCursor.expr.kind === "group_row_field"
+        || probeCursor.expr.kind === "group_rows"
+        || probeCursor.expr.kind === "function_call"
+        || probeCursor.expr.kind === "operator_call"
+        || probeCursor.expr.kind === "index_expr"
+        || probeCursor.expr.kind === "type_cast"
+        || probeCursor.expr.kind === "array"
+        || probeCursor.expr.kind.endsWith("_constant");
+    }
+    if (!probeIsTuple && ((statement.using ?? []).length > 0 || probeIsValueLike)) {
+      scalarElementSubject = tryBuildScalarGroupSubject(statement, sourceAst, scoped, fieldAtoms);
+      if (!scalarElementSubject) {
+        // USING over an unshaped / wrapped source has nowhere to attach its
+        // computed fields; the presence check below would pass vacuously.
+        lowerable = false;
+      }
+    }
   }
 
   // A typed-select over a free-object binding (`group X { a, b }` where
@@ -7343,7 +8268,7 @@ const buildGroupStmtParts = (
   // non-lowerable GroupStmt (byAtoms cleared) so the SQL stage bails and the
   // engine falls back to the runtime grouper, which handles it.
   let subject: Set;
-  const subjectAttempt = tryResult(() => tupleBindingSubject ?? compileFreeObjectExpr(sourceAst, scoped));
+  const subjectAttempt = tryResult(() => tupleBindingSubject ?? scalarElementSubject ?? compileFreeObjectExpr(sourceAst, scoped));
   if (subjectAttempt.ok) {
     subject = subjectAttempt.value;
   } else {
@@ -7373,6 +8298,20 @@ const buildGroupStmtParts = (
     if (kind === "operator_call") {
       return (val.expr as OperatorCall).operator !== "union";
     }
+    // `b := (for n in {9} union (…))` — a FOR over a single-element iterator
+    // yields exactly one row, so the field is still single.
+    if (kind === "for_expr") {
+      let iterCursor = (val.expr as ForExpr).iterator;
+      while (iterCursor.expr.kind === "select_expr") {
+        iterCursor = (iterCursor.expr as SelectExpr).result;
+      }
+      const iterKind = iterCursor.expr.kind;
+      if (iterKind.endsWith("_constant") || iterKind === "type_cast") return true;
+      if (iterKind === "operator_call" && (iterCursor.expr as OperatorCall).operator === "union") {
+        return Object.keys((iterCursor.expr as OperatorCall).args).length === 1;
+      }
+      return false;
+    }
     return false;
   };
   let subjectTuple: Tuple | undefined;
@@ -7381,10 +8320,42 @@ const buildGroupStmtParts = (
     while (cursor.expr.kind === "select_expr") {
       cursor = (cursor.expr as SelectExpr).result;
     }
+    // A multi field (`b := {2, 3, 4}`) doesn't break the one-row contract:
+    // a free object is still ONE element whose field holds the whole set —
+    // the SQL stage aggregates union-valued fields into JSON arrays.
+    const isTupleElementValue = (val: Set): boolean =>
+      isSingleTupleElement(val)
+      || (val.expr.kind === "operator_call" && (val.expr as OperatorCall).operator === "union");
     if (cursor.expr.kind === "tuple"
       && (cursor.expr as Tuple).named
-      && (cursor.expr as Tuple).elements.every((el) => el.name && isSingleTupleElement(el.val))) {
+      && (cursor.expr as Tuple).elements.every((el) => el.name && isTupleElementValue(el.val))) {
       subjectTuple = cursor.expr as Tuple;
+    }
+    // USING aliases over a tuple subject become extra (hidden) tuple fields,
+    // compiled with the tuple as the current item so `.c.d` / `.b.d` peel
+    // into the tuple's nested values.
+    if (subjectTuple && (statement.using ?? []).length > 0) {
+      const usingCtx = childScope(scoped);
+      bindValue(usingCtx, "__current__", subject);
+      bindValue(usingCtx, "__subject__", subject);
+      const extendedElements = [...subjectTuple.elements];
+      const fieldNames = new globalThis.Set(extendedElements.map((el) => el.name));
+      let extendOk = true;
+      for (const usingBinding of statement.using ?? []) {
+        if (fieldNames.has(usingBinding.alias)) continue;
+        const compiledUsing = tryResult(() => compileFreeObjectExpr(usingBinding.expr, usingCtx));
+        if (!compiledUsing.ok) { extendOk = false; break; }
+        extendedElements.push({ name: usingBinding.alias, val: compiledUsing.value });
+        bindValue(usingCtx, usingBinding.alias, compiledUsing.value);
+        fieldNames.add(usingBinding.alias);
+        if (!hiddenByFields.includes(usingBinding.alias)) hiddenByFields.push(usingBinding.alias);
+      }
+      if (extendOk) {
+        subjectTuple = { ...subjectTuple, elements: extendedElements };
+        subject = { ...subject, expr: subjectTuple, shape: [] };
+      } else {
+        lowerable = false;
+      }
     }
     if (cursor.expr.kind !== "for_expr" && cursor.expr.kind !== "type_root"
       && cursor.expr.kind !== "group_rows" && !subjectTuple) {
@@ -7458,6 +8429,7 @@ const buildGroupStmtParts = (
     byAtoms: lowerable ? atomOrder : undefined,
     groupingSets: lowerable ? groupingSets : undefined,
     hiddenByFields: lowerable && hiddenByFields.length > 0 ? hiddenByFields : undefined,
+    elementValueField: lowerable && scalarElementSubject ? GROUP_ELEMENT_VALUE_FIELD : undefined,
   };
 };
 
@@ -7472,6 +8444,7 @@ const makeGroupStmt = (parts: GroupAstParts, scoped: IRCompileContext): GroupStm
     byAtoms: core.byAtoms,
     groupingSets: core.groupingSets,
     hiddenByFields: core.hiddenByFields,
+    elementValueField: core.elementValueField,
     ...statementBase(scoped),
     span: parts.pos ?? { line: 1, column: 1 },
   } as GroupStmt;
@@ -7645,7 +8618,7 @@ const parseGroupRowProjection = (
 // The subject field an elements-projection entry reads (`z := .b <= 1`
 // reads `b`; everything else reads its own name).
 const elementFieldSubjectName = (field: GroupElementsField): string =>
-  field.kind === "compare" ? (field.steps[0] ?? "") : field.name;
+  field.kind === "compare" || field.kind === "count_path" ? (field.steps[0] ?? "") : field.name;
 
 // Parse an `elements: {…}` (or nested object) sub-shape into
 // GroupElementsField entries: plain fields, literal comparisons
@@ -7687,9 +8660,38 @@ const parseElementsFields = (
         continue;
       }
     }
+    // `n := count(.elements)` — count of an array-valued field of the
+    // element row (each element of a group-of-groups is itself a group row).
+    if (sub.kind === "computed") {
+      let computedInner: unknown = sub.expr;
+      while ((computedInner as { kind?: string })?.kind === "select_expr") {
+        computedInner = (computedInner as { expr?: unknown }).expr;
+      }
+      const call = (computedInner as { kind?: string; call?: { name?: string; args?: unknown[] } });
+      if (call?.kind === "function_call" && (call.call?.name === "count" || call.call?.name === "std::count")
+          && Array.isArray(call.call?.args) && call.call.args.length === 1) {
+        const arg = call.call.args[0] as { kind?: string; expr?: unknown };
+        const steps = pathSteps(arg?.kind === "expr" ? arg.expr : arg);
+        if (steps && steps.length > 0) {
+          fields.push({ name: sub.name, kind: "count_path", steps });
+          continue;
+        }
+      }
+    }
     return null;
   }
   return fields;
+};
+
+// Like peelToGroupRows, but unwraps CLAUSED select layers too — `rows` stays
+// the FULL claused set so consumers apply ORDER BY/LIMIT before flattening.
+const peelToGroupRowsThroughClauses = (set: Set): { rows: Set; groupRows: GroupRowsExpr } | undefined => {
+  let cursor: Set = set;
+  while (cursor.expr.kind === "select_expr") {
+    cursor = (cursor.expr as SelectExpr).result;
+  }
+  if (cursor.expr.kind !== "group_rows") return undefined;
+  return { rows: set, groupRows: cursor.expr as GroupRowsExpr };
 };
 
 // Peel no-op select_expr wrappers (`select (select GR)`) down to a
@@ -7709,13 +8711,132 @@ const peelToGroupRows = (set: Set): { rows: Set; groupRows: GroupRowsExpr } | un
 // shape. An `elements: {…}` projection re-reads fields off the materialized
 // element rows, so any field it names is added to the subject's projection
 // (visible, not hidden — the re-projection selects the exact subset anyway).
+// A bare (projection-less) group-rows set — used as the current-item binding
+// when compiling computed projections, so `.key.x` / inner `group .elements`
+// references peel to group rows.
+const buildGroupRowsBaseSet = (
+  parts: GroupAstParts,
+  ctx: IRCompileContext,
+  extraElementFields: string[] = [],
+): Set => {
+  const scoped = childScope(ctx);
+  const group = makeGroupStmt(parts, scoped);
+  void extraElementFields;
+  return {
+    kind: "set",
+    expr: { kind: "group_rows", group, astParts: parts } as GroupRowsExpr,
+    pathId: defaultPathId("group_rows"),
+    typeref: unknownTypeRef("std::FreeObject"),
+    shape: [],
+    isBinding: false,
+    isMaterializedRef: false,
+    isSchemaAlias: false,
+  };
+};
+
+// Field names a computed projection reads off group elements — any
+// group_row_field with steps [elements, X, …] anywhere in its compiled IR.
+const collectComputedElementNeeds = (node: unknown, out: globalThis.Set<string>, seen = new globalThis.Set<unknown>()): void => {
+  if (!node || typeof node !== "object" || seen.has(node)) return;
+  seen.add(node);
+  if (Array.isArray(node)) { node.forEach((item) => collectComputedElementNeeds(item, out, seen)); return; }
+  const obj = node as { kind?: unknown; steps?: unknown };
+  if (obj.kind === "group_row_field" && Array.isArray(obj.steps)
+      && obj.steps[0] === "elements" && typeof obj.steps[1] === "string") {
+    out.add(obj.steps[1]);
+  }
+  for (const value of Object.values(node)) collectComputedElementNeeds(value, out, seen);
+};
+
+// Parse a trailing projection, compiling entries outside the static model
+// (`groups := (for z in (group .elements …) union (…))`) as IR values with
+// the group row bound as the current item. Static entries keep their
+// specialized lowerings; `needs` reports element fields the computed values
+// read (for subject augmentation).
+const parseProjectionWithComputedFallback = (
+  trailingShape: EdgeQLShapeElement[] | undefined,
+  priorProjection: GroupRowProjection[] | undefined,
+  baseRows: Set,
+  ctx: IRCompileContext,
+): { projection?: GroupRowProjection[]; unlowerable?: boolean; needs: globalThis.Set<string> } => {
+  const needs = new globalThis.Set<string>();
+  const parsed = parseGroupRowProjection(trailingShape, priorProjection);
+  if (!parsed.unlowerable || !trailingShape || !trailingShape.some((el) => el.kind === "computed")) {
+    return { ...parsed, needs };
+  }
+  const computedCtx = childScope(ctx);
+  bindValue(computedCtx, "__current__", baseRows);
+  bindValue(computedCtx, "__subject__", baseRows);
+  const merged: GroupRowProjection[] = [];
+  for (const el of trailingShape) {
+    const single = parseGroupRowProjection([el], priorProjection);
+    if (!single.unlowerable && single.projection) {
+      merged.push(...single.projection);
+      continue;
+    }
+    if (el.kind === "computed" && typeof el.name === "string") {
+      const compiled = tryResult(() => compileFreeObjectExpr(el.expr, computedCtx));
+      if (compiled.ok) {
+        let value = compiled.value;
+        // A tuple referencing an INNER group binding (`select (even :=
+        // z.key.x, …)` where z := (group .elements …)) iterates z
+        // element-wise — rewrite to the equivalent FOR.
+        let tupleCursor: Set = value;
+        while (tupleCursor.expr.kind === "select_expr") {
+          tupleCursor = (tupleCursor.expr as SelectExpr).result;
+        }
+        if (tupleCursor.expr.kind === "tuple") {
+          const innerRows = new globalThis.Set<Set>();
+          const findInnerRows = (node: unknown, seen = new globalThis.Set<unknown>()): void => {
+            if (!node || typeof node !== "object" || seen.has(node)) return;
+            seen.add(node);
+            if (Array.isArray(node)) { node.forEach((item) => findInnerRows(item, seen)); return; }
+            const obj = node as { kind?: unknown; rows?: Set };
+            if (obj.kind === "group_row_field" && obj.rows && obj.rows !== baseRows) {
+              innerRows.add(obj.rows);
+            }
+            for (const v of Object.values(node)) findInnerRows(v, seen);
+          };
+          findInnerRows(tupleCursor.expr);
+          if (innerRows.size === 1) {
+            const iterator = [...innerRows][0];
+            value = {
+              kind: "set",
+              expr: { kind: "for_expr", iterator, body: value, bindingKind: "with", optional: false } as ForExpr,
+              pathId: defaultPathId("group_inner_iteration"),
+              typeref: value.typeref,
+              shape: [],
+              isBinding: false,
+              isMaterializedRef: false,
+              isSchemaAlias: false,
+            };
+          }
+        }
+        merged.push({ name: el.name, kind: "computed_set", value });
+        collectComputedElementNeeds(value, needs);
+        continue;
+      }
+    }
+    return { unlowerable: true, needs };
+  }
+  return { projection: merged, needs };
+};
+
 const buildGroupRowsSet = (
   parts: GroupAstParts,
   trailingShape: EdgeQLShapeElement[] | undefined,
   ctx: IRCompileContext,
   extraElementFields: string[] = [],
 ): Set => {
-  const parsed = parseGroupRowProjection(trailingShape);
+  let parsed: { projection?: GroupRowProjection[]; unlowerable?: boolean } = parseGroupRowProjection(trailingShape);
+  if (parsed.unlowerable && trailingShape && trailingShape.some((el) => el.kind === "computed")) {
+    const baseRows = buildGroupRowsBaseSet(parts, ctx, extraElementFields);
+    const withComputed = parseProjectionWithComputedFallback(trailingShape, undefined, baseRows, ctx);
+    if (!withComputed.unlowerable) {
+      parsed = withComputed;
+      extraElementFields = [...extraElementFields, ...withComputed.needs];
+    }
+  }
   const elementFields = extraElementFields.concat((parsed.projection ?? [])
     .flatMap((p) => {
       if (p.kind === "elements_shape") {
