@@ -1,4 +1,5 @@
 import { AppError, tryResult } from "../errors.js";
+import { parseEdgeQL } from "../edgeql/parser.js";
 import type { FilterExpr, FreeObjectExpr, InsertValue, SelectStatement, Statement, TypeExpr, WithBindingValue } from "../edgeql/ast.js";
 import type {
   DeleteIR,
@@ -37,6 +38,14 @@ import { checkScopeTreeViolations } from "./scope_tree_check.js";
 // cardinality for debug-dump value and drops the rest.
 
 export type DmlStatement = Extract<Statement, { kind: "insert" | "update" | "delete" }>;
+
+// Sentinel plan value for an insert/update scalar assignment whose value can't
+// be resolved statically (function calls, subqueries, paths into WITH
+// bindings, FOR bodies, …). The runtime mutation executor replaces it with the
+// column's SQL-lowered expression from the gelIR insert artifact
+// (GelIRSQLArtifact.insertColumns), so arbitrary EdgeQL expressions still
+// lower fully to SQL.
+export const PENDING_INSERT_SQL_EXPR_VALUE = "__gel_pending_insert_sql_expr__";
 
 export interface DmlCompileContext {
   globals?: Record<string, ScalarValue>;
@@ -310,6 +319,24 @@ export const compileDmlToIR = (
     return value as ScalarValue;
   };
 
+  // Resolve a with-binding to a scalar when statically possible; otherwise
+  // defer the assignment to the SQL artifact. Any failure leaves the
+  // in-progress resolution set dirty, so clear it before returning the
+  // deferred sentinel.
+  const resolveBindingScalarOrDefer = (name: string): ScalarValue => {
+    if (!withBindings.has(name)) {
+      // Not a WITH binding at all (e.g. FOR iterator variable, `__default__`)
+      // — only the SQL lowering can resolve it.
+      return PENDING_INSERT_SQL_EXPR_VALUE;
+    }
+    const attempt = tryResult(() => resolveWithBindingScalar(name));
+    if (attempt.ok) {
+      return attempt.value;
+    }
+    resolvingBindingValues.clear();
+    return PENDING_INSERT_SQL_EXPR_VALUE;
+  };
+
   const resolveInsertScalarValue = (value: InsertValue): ScalarValue => {
     if (typeof value !== "object" || value === null || !("kind" in value)) {
       return value as ScalarValue;
@@ -320,17 +347,26 @@ export const compileDmlToIR = (
         return expr.value;
       }
       if (expr.kind === "binding_ref") {
-        return resolveWithBindingScalar(expr.name);
+        return resolveBindingScalarOrDefer(expr.name);
       }
       if (expr.kind === "cast") {
         return resolveFreeObjectScalar(expr.expr);
       }
       if (expr.kind === "concat") {
-        return expr.parts.map((part) => String(resolveFreeObjectScalar(part) ?? "")).join("");
+        const parts = expr.parts.map((part) => resolveFreeObjectScalar(part));
+        if (parts.some((part) => part === PENDING_INSERT_SQL_EXPR_VALUE)) {
+          return PENDING_INSERT_SQL_EXPR_VALUE;
+        }
+        return parts.map((part) => String(part ?? "")).join("");
       }
       if (expr.kind === "math") {
-        const left = Number(resolveFreeObjectScalar(expr.left));
-        const right = Number(resolveFreeObjectScalar(expr.right));
+        const leftValue = resolveFreeObjectScalar(expr.left);
+        const rightValue = resolveFreeObjectScalar(expr.right);
+        if (leftValue === PENDING_INSERT_SQL_EXPR_VALUE || rightValue === PENDING_INSERT_SQL_EXPR_VALUE) {
+          return PENDING_INSERT_SQL_EXPR_VALUE;
+        }
+        const left = Number(leftValue);
+        const right = Number(rightValue);
         if (expr.op === "+") return left + right;
         if (expr.op === "-") return left - right;
         if (expr.op === "*") return left * right;
@@ -338,12 +374,14 @@ export const compileDmlToIR = (
         if (expr.op === "//") return Math.trunc(left / right);
         if (expr.op === "%") return left % right;
       }
-      return fail(`Expected scalar value in insert assignment, got ${expr.kind}`);
+      // Anything else (function calls, paths, subqueries, field access, …)
+      // lowers through the gelIR SQL artifact instead.
+      return PENDING_INSERT_SQL_EXPR_VALUE;
     };
 
     switch (value.kind) {
       case "binding_ref":
-        return resolveWithBindingScalar(value.name);
+        return resolveBindingScalarOrDefer(value.name);
       case "expr":
         return resolveFreeObjectScalar(value.expr);
       case "array_literal":
@@ -351,7 +389,7 @@ export const compileDmlToIR = (
       case "tuple_literal":
         return JSON.stringify(value.values);
       default:
-        return fail(`Expected scalar value in insert assignment, got ${value.kind}`);
+        return PENDING_INSERT_SQL_EXPR_VALUE;
     }
   };
 
@@ -405,7 +443,7 @@ export const compileDmlToIR = (
     }
 
     if (value.kind === "binding_ref") {
-      return [resolveWithBindingScalar(value.name)];
+      return [resolveBindingScalarOrDefer(value.name)];
     }
 
     if (value.kind === "array_literal") {
@@ -416,7 +454,9 @@ export const compileDmlToIR = (
       return [JSON.stringify(value.values)];
     }
 
-    return fail(`Expected set-compatible value in insert assignment, got ${value.kind}`);
+    // Non-static multi assignment (subquery, function call, …) — defer the
+    // whole field to the SQL artifact.
+    return [PENDING_INSERT_SQL_EXPR_VALUE];
   };
 
   const resolveShapeSourceObjectType = (expr: FreeObjectExpr): TypeDef | undefined => {
@@ -699,7 +739,31 @@ export const compileDmlToIR = (
   };
   const typeDef = resolvedRootType.typeDef;
   const table = tableNameForType(qualifiedTypeName(typeDef));
-  const userFields = typeDef.fields.filter((field) => field.name !== "id");
+  // SDL-loaded snapshots flatten inherited members into each subtype, but
+  // runtime-DDL types (`CREATE TYPE Bar EXTENDING Named`) keep them on the
+  // base — walk the extends chain so inherited pointers resolve either way.
+  const collectInheritedFields = (root: TypeDef): TypeDef["fields"] => {
+    const seen = new Set<string>();
+    const collected: TypeDef["fields"] = [];
+    const visit = (def: TypeDef | undefined, guard: Set<string>): void => {
+      if (!def) return;
+      const key = qualifiedTypeName(def);
+      if (guard.has(key)) return;
+      guard.add(key);
+      for (const field of def.fields) {
+        if (seen.has(field.name)) continue;
+        seen.add(field.name);
+        collected.push(field);
+      }
+      for (const baseName of def.extends ?? []) {
+        visit(schema.getType(baseName.includes("::") ? baseName : `${def.module ?? "default"}::${baseName}`), guard);
+      }
+    };
+    visit(root, new Set());
+    return collected;
+  };
+  const allFields = (typeDef.extends ?? []).length > 0 ? collectInheritedFields(typeDef) : typeDef.fields;
+  const userFields = allFields.filter((field) => field.name !== "id");
   const knownFields = new Set(["id", ...userFields.map((f) => f.name)]);
   const fieldByName = new Map([
     ["id", { name: "id", type: "uuid" as const, required: true }],
@@ -877,10 +941,15 @@ export const compileDmlToIR = (
 
       if (knownFields.has(field)) {
         const fieldDef = requireValue(fieldByName.get(field), `Unknown field '${field}' on '${statement.typeName}'`);
-        const scalar = fieldDef.multi
-          ? JSON.stringify(encodeMultiSetForStorage(resolveInsertSetValues(value), fieldDef.type))
+        const setValues = fieldDef.multi ? resolveInsertSetValues(value) : undefined;
+        const scalar = setValues
+          ? (setValues.includes(PENDING_INSERT_SQL_EXPR_VALUE)
+              ? PENDING_INSERT_SQL_EXPR_VALUE
+              : JSON.stringify(encodeMultiSetForStorage(setValues, fieldDef.type)))
           : encodeNamedTupleForStorage(resolveInsertScalarValue(value), fieldDef);
-        validateFieldValue(field, scalar);
+        if (scalar !== PENDING_INSERT_SQL_EXPR_VALUE) {
+          validateFieldValue(field, scalar);
+        }
         scalarValues[field] = scalar;
         continue;
       }
@@ -915,7 +984,19 @@ export const compileDmlToIR = (
           continue;
         }
         if (field.hasDefault) {
-          scalarValues[field.name] = pendingGeneratedValueForField(field.name);
+          // Defaults the engine can re-evaluate (literals, function calls,
+          // `__source__.…` expressions) get the rewrite sentinel so the
+          // engine's default application replaces them — typed placeholders
+          // (0/false/…) would be indistinguishable from real values there.
+          // Anything else (e.g. `SELECT count(T)` snapshot defaults) keeps
+          // the legacy typed placeholder.
+          const engineEvaluable = field.defaultExpr !== undefined
+            || (field.defaultExprText ?? "").includes("__source__");
+          scalarValues[field.name] = field.multi
+            ? "[]"
+            : engineEvaluable
+              ? "__gel_pending_insert_rewrite__"
+              : pendingGeneratedValueForField(field.name);
           continue;
         }
         fail(`missing value for required property '${field.name}' of object type '${qualifiedTypeName(typeDef)}'`);
@@ -1054,10 +1135,15 @@ export const compileDmlToIR = (
           continue;
         }
         const fieldDef = requireValue(fieldByName.get(field), `Unknown field '${field}' on '${statement.typeName}'`);
-        const scalar = fieldDef.multi
-          ? JSON.stringify(encodeMultiSetForStorage(resolveInsertSetValues(value), fieldDef.type))
+        const setValues = fieldDef.multi ? resolveInsertSetValues(value) : undefined;
+        const scalar = setValues
+          ? (setValues.includes(PENDING_INSERT_SQL_EXPR_VALUE)
+              ? PENDING_INSERT_SQL_EXPR_VALUE
+              : JSON.stringify(encodeMultiSetForStorage(setValues, fieldDef.type)))
           : encodeNamedTupleForStorage(resolveInsertScalarValue(value), fieldDef);
-        validateFieldValue(field, scalar);
+        if (scalar !== PENDING_INSERT_SQL_EXPR_VALUE) {
+          validateFieldValue(field, scalar);
+        }
         scalarValues[field] = scalar;
         continue;
       }
@@ -1139,6 +1225,108 @@ export const compileDmlToIR = (
       volatility: "modifying",
     },
   };
+};
+
+/* ---------------------------------- */
+/* __default__ rewriting              */
+/* ---------------------------------- */
+
+// `INSERT T { p := __default__ … }` — `__default__` denotes the assigned
+// pointer's declared default. Literal defaults substitute in place (so
+// `__default__ + 3` stays a computable expression); a bare `__default__`
+// assignment is dropped so the regular default machinery applies (covers
+// function-call and subquery defaults). Defaults that are themselves DML
+// reject the reference, matching upstream. Applied recursively so nested
+// INSERTs inside value expressions get the same treatment.
+const isDunderDefaultRef = (node: unknown): boolean =>
+  typeof node === "object" && node !== null
+  && ((node as { kind?: unknown }).kind === "binding_ref" || (node as { kind?: unknown }).kind === "global_ref")
+  && (node as { name?: unknown }).name === "__default__";
+
+const containsDunderDefaultRef = (node: unknown): boolean => {
+  if (isDunderDefaultRef(node)) return true;
+  if (Array.isArray(node)) return node.some(containsDunderDefaultRef);
+  if (typeof node !== "object" || node === null) return false;
+  return Object.values(node).some(containsDunderDefaultRef);
+};
+
+const substituteDunderDefaultRef = (node: unknown, literal: ScalarValue): unknown => {
+  if (isDunderDefaultRef(node)) return { kind: "literal", value: literal };
+  if (Array.isArray(node)) return node.map((item) => substituteDunderDefaultRef(item, literal));
+  if (typeof node !== "object" || node === null) return node;
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(node)) out[key] = substituteDunderDefaultRef(value, literal);
+  return out;
+};
+
+export const rewriteDunderDefaults = <T>(schema: SchemaSnapshot, node: T): T => {
+  if (!containsDunderDefaultRef(node)) return node;
+  const failDunder = (): never => {
+    throw new AppError("E_SEMANTIC", "__default__ cannot be used in this expression", 1, 1);
+  };
+  const rewriteInsertValues = (stmt: Record<string, unknown>): Record<string, unknown> => {
+    const typeName = stmt.typeName as string;
+    const qualified = typeName.includes("::") ? typeName : `default::${typeName}`;
+    const typeDef = schema.getType(qualified);
+    const values = { ...(stmt.values as Record<string, unknown>) };
+    for (const [field, value] of Object.entries(values)) {
+      if (!containsDunderDefaultRef(value)) continue;
+      const bare = isDunderDefaultRef(value)
+        || (typeof value === "object" && value !== null
+            && (value as { kind?: unknown }).kind === "expr"
+            && isDunderDefaultRef((value as { expr?: unknown }).expr));
+      const fieldDef = typeDef?.fields.find((f) => f.name === field);
+      const linkDef = (typeDef?.links ?? []).find((l) => l.name === field);
+      if (fieldDef) {
+        if (!fieldDef.hasDefault) failDunder();
+        if (fieldDef.defaultExpr?.kind === "literal") {
+          values[field] = bare
+            ? fieldDef.defaultExpr.value
+            : substituteDunderDefaultRef(value, fieldDef.defaultExpr.value);
+          continue;
+        }
+        if (bare) {
+          // A default that reads sibling values (`__source__.…`) isn't a
+          // standalone expression `__default__` can re-emit here.
+          if ((fieldDef.defaultExprText ?? "").includes("__source__")) failDunder();
+          delete values[field];
+          continue;
+        }
+        failDunder();
+      }
+      if (linkDef) {
+        if (!linkDef.hasDefault) failDunder();
+        const defaultIsDml = ((): boolean => {
+          const text = (linkDef.defaultExprText ?? "").trim();
+          if (!text) return false;
+          // Probe: parse the schema default's expression text to classify it;
+          // unparsable text is simply "not a DML default".
+          const parsed = tryResult(() => parseEdgeQL(text.replace(/^\(\s*/, "").replace(/\s*\)$/, "")));
+          if (!parsed.ok) return false;
+          const stmt = Array.isArray(parsed.value) ? parsed.value[0] : parsed.value;
+          return stmt?.kind === "insert" || stmt?.kind === "update" || stmt?.kind === "delete";
+        })();
+        if (defaultIsDml || !bare) failDunder();
+        delete values[field];
+        continue;
+      }
+      failDunder();
+    }
+    return { ...stmt, values };
+  };
+  const walk = (cur: unknown): unknown => {
+    if (Array.isArray(cur)) return cur.map(walk);
+    if (typeof cur !== "object" || cur === null) return cur;
+    const n = cur as Record<string, unknown> & { kind?: unknown };
+    // Bottom-up: nested INSERTs consume their own __default__ refs first, so
+    // an enclosing insert never mistakes them for refs to its own pointers.
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(n)) out[key] = walk(value);
+    return out.kind === "insert" && typeof out.typeName === "string" && out.values && typeof out.values === "object"
+      ? rewriteInsertValues(out)
+      : out;
+  };
+  return walk(node) as T;
 };
 
 /* ---------------------------------- */
@@ -1320,11 +1508,13 @@ const buildInsertLinkDefaults = (
     const targetQualified = normalizeLinkTargetNames(link.targetType, typeDef.module ?? "default")[0]
       ?? `${typeDef.module ?? "default"}::${link.targetType}`;
     const targetType = schema.getType(targetQualified);
-    const lookupColumn = targetType?.fields.some((field) => field.name === "val")
-      ? "val"
-      : targetType?.fields.some((field) => field.name === "name")
-        ? "name"
-        : undefined;
+    const parsedFilter = link.defaultTargetFilter;
+    const lookupColumn = parsedFilter?.column
+      ?? (targetType?.fields.some((field) => field.name === "val")
+        ? "val"
+        : targetType?.fields.some((field) => field.name === "name")
+          ? "name"
+          : undefined);
 
     const usesLinkTable = Boolean(link.multi) || (link.properties?.length ?? 0) > 0;
     const properties = (link.properties ?? []).map(linkPropertyIR);
@@ -1333,7 +1523,7 @@ const buildInsertLinkDefaults = (
       linkName: link.name,
       ownerTable,
       targetTable: tableNameForType(targetQualified),
-      defaultTargetValues: [...(link.defaultTargetValues ?? [])],
+      defaultTargetValues: parsedFilter ? [...parsedFilter.values] : [...(link.defaultTargetValues ?? [])],
       lookupColumn,
     };
     if (usesLinkTable) {

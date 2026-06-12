@@ -1825,6 +1825,12 @@ const inferPropertyTypeName = (ctx: IRCompileContext, typeName: string, fieldNam
   const field = typeDef.fields.find((f) => f.name === fieldName);
   if (!field) return undefined;
   if (field.enumTypeName) return field.enumTypeName;
+  // Collection-typed properties (`array<str>`, tuples) store their values as
+  // JSON, so `field.type` is the *storage* scalar ("json"), not the logical
+  // element type. Reporting std::json here makes `.tag_array = ['a']` fail
+  // the '=' compatibility check with a false mismatch — bail instead; callers
+  // treat undefined as "uninferable" and skip the check.
+  if (field.collection) return undefined;
   return BUILTIN_SCALAR_NAMES[field.type] ?? `std::${field.type}`;
 };
 
@@ -1880,6 +1886,13 @@ const inferAstExprTypeName = (expr: FreeObjectExpr, ctx: IRCompileContext): stri
       const sourceType = inferAstExprTypeName(inner.expr, ctx);
       if (sourceType === undefined) return undefined;
       return inferPropertyTypeName(ctx, sourceType, inner.field);
+    }
+    case "current_item": {
+      // `.x` inside a shape computed: the subject's bound Set carries the
+      // object type the leading dot refers to.
+      const subject = resolveBinding(ctx, "__current__") ?? resolveBinding(ctx, "__subject__");
+      const name = subject?.typeref?.nameHint;
+      return name !== undefined && name !== "std::anyscalar" ? name : undefined;
     }
     case "binding_ref": {
       const enumType = lookupEnumScalar(ctx, expr.name);
@@ -2137,13 +2150,24 @@ const inferAstExprTypeName = (expr: FreeObjectExpr, ctx: IRCompileContext): stri
         return first;
       }
       if (shortName === "random") return "std::float64";
+      if (shortName === "to_json") return "std::json";
       if (shortName === "array_get" || shortName === "array_unpack") {
         // Element-type extraction: `array<T>` → `T`. The parser already
         // canonicalises array type names to that exact form, so a prefix /
-        // suffix match is sufficient and avoids a regex.
+        // suffix match is sufficient and avoids a regex. Cast-derived names
+        // may arrive module-qualified (`default::array<Issue>`) — strip the
+        // prefix before matching.
         if (!first) return undefined;
-        if (first.startsWith("array<") && first.endsWith(">")) {
-          return first.slice("array<".length, -1);
+        // Strip only a module prefix BEFORE the generic bracket
+        // (`default::array<Issue>` → `array<Issue>`), never a `::` inside
+        // the type args (`array<std::tuple>` must stay intact).
+        const ltIdx = first.indexOf("<");
+        const modIdx = first.indexOf("::");
+        const bareFirst = modIdx >= 0 && (ltIdx < 0 || modIdx < ltIdx)
+          ? first.slice(modIdx + 2)
+          : first;
+        if (bareFirst.startsWith("array<") && bareFirst.endsWith(">")) {
+          return bareFirst.slice("array<".length, -1);
         }
         return undefined;
       }
@@ -2444,8 +2468,8 @@ const argToParamCastDistance = (
     seen.add(cursor);
     chain.push(cursor);
     if (cursor === paramType) return 0;
-    const cur = cursor;
-    const decl = ctx.schema
+    const cur: string = cursor;
+    const decl: { baseTypeName?: string } | undefined = ctx.schema
       ?.listScalarTypes()
       .find((s) => `${s.module}::${s.name}` === cur);
     cursor = decl?.baseTypeName !== undefined
@@ -2631,6 +2655,13 @@ const tryBuildInlinedUDFBody = (
   // Cartesian product (9 rows) instead of co-iteration (3 rows).
   const inlineCtx = childScope(ctx);
   const substitutions = new Map<string, FreeObjectExpr>();
+  // Required (non-OPTIONAL, non-SET OF) params propagate emptiness: in
+  // EdgeQL, `f(x)` with required `x: int64` and an empty argument yields the
+  // empty set — the body never runs — even when the body is `x ?? -1`.
+  // Bindings alone can't express that (the `??` would see the empty binding
+  // and fire), so such params collect an EXISTS guard wrapped around the
+  // whole body below. Args that are trivially non-empty skip the guard.
+  const requiredGuardNames: string[] = [];
   positionalCursor = 0;
   for (const param of fn.params) {
     let argExpr: FreeObjectExpr;
@@ -2662,6 +2693,18 @@ const tryBuildInlinedUDFBody = (
     const uniqueName = `__udf_inline__${shortName}__${param.name}__${inlineCallCounter++}`;
     bindValue(inlineCtx, uniqueName, argIR);
     substitutions.set(param.name, { kind: "binding_ref", name: uniqueName });
+    const argNonEmpty = astExprDefinitelyNonEmpty(argExpr, ctx);
+    if (argNonEmpty) {
+      // Propagate the fact through nested inlining: when the substituted body
+      // itself calls a UDF with this binding as an argument (`foo(x) using
+      // (inner(x) + …)`), the nested call only sees a binding_ref — record
+      // the bound Set so the nested guard decision can recover non-emptiness
+      // instead of wrapping the inner body in a de-correlating EXISTS guard.
+      definitelyNonEmptyBindingSets.add(argIR);
+    }
+    if (!param.optional && !param.setOf && !param.variadic && !argNonEmpty) {
+      requiredGuardNames.push(uniqueName);
+    }
   }
   // All substitutions are binding_ref → binding_ref renames (each argument
   // is pre-bound to a unique name above), so a generic structural rename
@@ -2671,9 +2714,76 @@ const tryBuildInlinedUDFBody = (
   for (const [from, to] of substitutions) {
     if (to.kind === "binding_ref") renames.set(from, to.name);
   }
-  const substituted = renameBindingRefsDeep(bodyExpr, renames) as FreeObjectExpr;
+  let substituted = renameBindingRefsDeep(bodyExpr, renames) as FreeObjectExpr;
+  // Required-param emptiness guards: `(SELECT body FILTER EXISTS arg)` per
+  // possibly-empty required argument (see requiredGuardNames above). FILTER
+  // drops rows (rather than producing a NULL like an IF/ELSE with an empty
+  // ELSE branch would), which is exactly the empty-set propagation EdgeQL
+  // gives required params in both top-level and shape-computed positions.
+  for (const guardName of requiredGuardNames) {
+    substituted = {
+      kind: "select_expr_subquery",
+      expr: substituted,
+      filter: { kind: "exists", expr: { kind: "binding_ref", name: guardName } },
+    } as FreeObjectExpr;
+  }
   const bodyAttempt = tryResult(() => compileFreeObjectExpr(substituted, inlineCtx));
   return bodyAttempt.ok ? bodyAttempt.value : undefined;
+};
+
+// IR Sets known to be non-empty at their binding site — populated when a UDF
+// inline binds an argument whose AST was provably non-empty, so nested
+// inlined calls receiving the binding can skip the EXISTS guard (see
+// astExprDefinitelyNonEmpty's binding_ref case). WeakSet keyed by object
+// identity: resolveBinding returns the exact Set bound by bindValue.
+const definitelyNonEmptyBindingSets = new WeakSet<Set>();
+
+// Conservative "this argument expression can never be the empty set" check
+// used to skip the required-param EXISTS guard for trivially non-empty args
+// (literals, tuple/array constructors, non-empty set constructors, casts of
+// the same, FOR-iterator references, and the shape-computed subject `.`).
+const astExprDefinitelyNonEmpty = (expr: FreeObjectExpr, ctx: IRCompileContext): boolean => {
+  switch (expr.kind) {
+    case "literal":
+      return (expr as { value: unknown }).value !== null;
+    case "tuple":
+    case "array_literal_expr":
+      return true;
+    case "set_literal":
+      return (expr as { values: unknown[] }).values.length > 0
+        && (expr as { values: unknown[] }).values.every((v) => v !== null);
+    case "set_expr":
+      return (expr as { values: FreeObjectExpr[] }).values.some((v) => astExprDefinitelyNonEmpty(v, ctx));
+    case "cast":
+      return astExprDefinitelyNonEmpty((expr as { expr: FreeObjectExpr }).expr, ctx);
+    case "binding_ref": {
+      // A FOR-iterator variable is bound to exactly one element per
+      // iteration, so it can never be empty inside the loop body. Crucially,
+      // wrapping the inlined body in `FILTER EXISTS <iterator>` would
+      // DE-CORRELATE the iterator from the enclosing co-iteration scope, so
+      // the guard must be skipped here, not merely "may be skipped".
+      // Iterator bindings are recognised by the `for:<name>:<scope>` pathId
+      // namespace tag stamped where the for_expr binds its variable; the
+      // name match guards against derived bindings (`with z := x.prop`)
+      // that merely inherit the iterator's namespace but may be empty.
+      const name = (expr as { name: string }).name;
+      const bound = resolveBinding(ctx, name);
+      if (!bound) return false;
+      // A binding recorded non-empty at its own binding site (nested UDF
+      // inline argument whose AST was provably non-empty).
+      if (definitelyNonEmptyBindingSets.has(bound)) return true;
+      const namespace = bound.pathId?.namespace;
+      return namespace !== undefined
+        && namespace.some((tag) => tag.startsWith(`for:${name}:`));
+    }
+    case "current_item":
+      // The bare leading-dot subject of a shape computed: the row being
+      // projected always exists, so `.` itself is non-empty (a field access
+      // off it, `.x`, parses as field_access and stays guarded).
+      return true;
+    default:
+      return false;
+  }
 };
 
 // Deep structural clone that renames every `{kind:"binding_ref", name}` node
@@ -2690,6 +2800,20 @@ const renameBindingRefsDeep = (node: unknown, renames: Map<string, string>): unk
     const out: Record<string, unknown> = {};
     for (const key of Object.keys(obj)) {
       out[key] = renameBindingRefsDeep(obj[key], renames);
+    }
+    // Field access on a parameter (`x.name` for param `x`) parses as a path
+    // whose head / leading object_ref step carries the param name, not a
+    // binding_ref — rewrite those name slots too. Params shadow type names
+    // inside the body, so an unconditional rename is correct.
+    if (out.kind === "path" && typeof out.head === "string" && renames.has(out.head)) {
+      out.head = renames.get(out.head);
+    }
+    if (out.kind === "path_chain" && Array.isArray(out.parts)
+        && typeof out.parts[0] === "string" && renames.has(out.parts[0])) {
+      out.parts = [renames.get(out.parts[0]), ...(out.parts as unknown[]).slice(1)];
+    }
+    if (out.kind === "object_ref" && typeof out.name === "string" && renames.has(out.name)) {
+      out.name = renames.get(out.name);
     }
     return out;
   }
@@ -3655,6 +3779,10 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
         const sourceCat = typeCategory(sourceTypeName);
         if (sourceCat !== "str" && sourceCat !== "bytes" && sourceCat !== "json"
             && sourceTypeName !== "std::anytype" && sourceTypeName !== "std::anyscalar"
+            // Bare `std::tuple` is the un-parameterised placeholder a partial
+            // path on a tuple-valued subject infers to (`filter .1`) — tuple
+            // element access is legal there.
+            && sourceTypeName !== "std::tuple"
             && !sourceTypeName.startsWith("array<") && !sourceTypeName.startsWith("tuple<")) {
           failSemantic(`index indirection cannot be applied to '${sourceTypeName}'`);
         }
@@ -3804,17 +3932,21 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
         }
       }
       const parts = expr.parts.map((part) => compileFreeObjectExpr(part, ctx));
+      // `++` over arrays yields an array, not a str — the result decoder
+      // keys str-specific handling off the statement typeref, so stamping
+      // std::str on an array concat would decode `[1,2,3,4]` as the string.
+      const concatResultType = definedTypes.find(isArrayType) ?? "std::str";
       return {
         kind: "set",
         expr: {
           kind: "operator_call",
           operator: "++",
           args: Object.fromEntries(parts.map((part, index) => [String(index), mkCallArg(part)])),
-          returning: unknownTypeRef("std::str"),
+          returning: unknownTypeRef(concatResultType),
           volatility: "immutable",
         } as OperatorCall,
         pathId: defaultPathId("concat"),
-        typeref: unknownTypeRef("std::str"),
+        typeref: unknownTypeRef(concatResultType),
         shape: [],
         isBinding: false,
         isMaterializedRef: false,
@@ -4214,6 +4346,8 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
         : undefined;
       const callTyperef = inferredObjectType
         ? typeRefFromTypeDef(ctx, inferredObjectType)
+        : inferredReturnTypeName && isUniversalObjectRefName(inferredReturnTypeName)
+        ? universalObjectTypeRef(ctx, inferredReturnTypeName)
         : inferredReturnTypeName
         ? unknownTypeRef(inferredReturnTypeName)
         : unknownTypeRef("std::anytype");

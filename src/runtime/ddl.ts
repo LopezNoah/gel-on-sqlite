@@ -363,6 +363,7 @@ export interface ParsedCreateTypeHeader {
   rawName: string;
   extendsList: string[] | undefined;
   bodyText: string;
+  isAbstract?: boolean;
 }
 
 export const parseCreateTypeHeader = (
@@ -396,9 +397,17 @@ export const parseCreateTypeHeader = (
   };
 
   if (tokens[0]?.kind !== "kw_create") return null;
-  if (tokens[1]?.lower !== "type") return null;
+  // `CREATE [ABSTRACT] TYPE …` — abstract types register too (subtypes copy
+  // their members forward; the abstract flag itself is carried by the caller).
+  let typeKw = 1;
+  let isAbstract = false;
+  if (tokens[typeKw]?.lower === "abstract") {
+    isAbstract = true;
+    typeKw += 1;
+  }
+  if (tokens[typeKw]?.lower !== "type") return null;
 
-  const nameParsed = consumeQualifiedName(2);
+  const nameParsed = consumeQualifiedName(typeKw + 1);
   if (!nameParsed) return null;
   let i = nameParsed.next;
 
@@ -448,7 +457,7 @@ export const parseCreateTypeHeader = (
   while (tokens[i]?.kind === "semi" || tokens[i]?.kind === "eof") i += 1;
   if (i < tokens.length) return null;
 
-  return { rawName: nameParsed.name, extendsList, bodyText };
+  return { rawName: nameParsed.name, extendsList, bodyText, isAbstract };
 };
 
 // Strip a trailing `{ … }` block (e.g. inline link-property declarations)

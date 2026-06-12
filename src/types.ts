@@ -338,6 +338,9 @@ export interface FieldDef {
   required?: boolean;
   hasDefault?: boolean;
   defaultExpr?: FieldDefaultExpr;
+  // Raw text of the declared default — kept for defaults that don't fit the
+  // literal/function-call IR (e.g. `default := __source__.a + 1`).
+  defaultExprText?: string;
   readonly?: boolean;
   multi?: boolean;
   collection?: CollectionTypeDef;
@@ -385,6 +388,12 @@ export interface LinkDef {
   readonly?: boolean;
   onTargetDelete?: OnTargetDeleteAction;
   defaultTargetValues?: string[];
+  // Filter column + scalar values of a `select T filter .col = <v>` default,
+  // for non-string lookups the legacy defaultTargetValues can't carry.
+  defaultTargetFilter?: { column: string; values: ScalarValue[] };
+  // Raw text of the link's `default := ...` expression (when declared). Used
+  // to classify the default (e.g. DML defaults reject `__default__` refs).
+  defaultExprText?: string;
   properties?: LinkPropertyDef[];
   computedProperties?: ComputedLinkPropertyDef[];
   annotations?: AnnotationDef[];

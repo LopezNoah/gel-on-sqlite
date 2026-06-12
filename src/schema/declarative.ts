@@ -33,6 +33,7 @@ export interface PropertyMember {
   required: boolean;
   hasDefault?: boolean;
   defaultExpr?: FieldDefaultExpr;
+  defaultExprText?: string;
   readonly?: boolean;
   computed?: boolean;
   expr?: string;
@@ -83,6 +84,8 @@ export interface LinkMember {
   readonly?: boolean;
   onTargetDelete?: OnTargetDeleteAction;
   defaultTargetValues?: string[];
+  defaultTargetFilter?: { column: string; values: ScalarValue[] };
+  defaultExprText?: string;
   multi: boolean;
   overloaded: boolean;
   annotations: AnnotationDef[];

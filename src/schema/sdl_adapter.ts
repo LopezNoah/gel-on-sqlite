@@ -1454,6 +1454,31 @@ const parseLinkDefaultTargetValues = (text: string): string[] | undefined => {
   return undefined;
 };
 
+// Generalization of parseLinkDefaultTargetValues: capture the filter column
+// and scalar value(s) of a `select T filter .col = <scalar>` link default, so
+// non-string lookups (`filter T.a = 4`) also resolve.
+const parseLinkDefaultFilter = (text: string): { column: string; values: ScalarValue[] } | undefined => {
+  const parsedResult = tryResult(() => parseEdgeQL(stripOuterParens(text)));
+  if (!parsedResult.ok) return undefined;
+  const statement = parsedResult.value;
+  if (statement.kind !== "select" || !statement.filter) {
+    return undefined;
+  }
+  const filter = statement.filter;
+  const isScalar = (v: unknown): v is ScalarValue =>
+    v === null || typeof v === "string" || typeof v === "number" || typeof v === "boolean";
+  if (filter.kind === "predicate" && filter.op === "=" && filter.target.kind === "field" && isScalar(filter.value)) {
+    return { column: filter.target.field, values: [filter.value] };
+  }
+  if (filter.kind === "in_predicate" && filter.op === "in" && filter.target.kind === "field" && filter.values.kind === "set_literal") {
+    const values = filter.values.values.filter(isScalar);
+    if (values.length === filter.values.values.length) {
+      return { column: filter.target.field, values };
+    }
+  }
+  return undefined;
+};
+
 const convertComputedDeclarationToMember = (
   node: PropertyDeclarationNode | LinkDeclarationNode,
 ): TypeMember => {
@@ -1822,6 +1847,7 @@ const convertPropertyMember = (
     overloaded: node.overloaded,
     hasDefault,
     defaultExpr: body?.default ? parseFieldDefaultExpr(body.default.text) : undefined,
+    defaultExprText: body?.default?.text,
     readonly: body?.readonly ?? false,
     collection,
     annotations: (body?.annotations ?? []).map((annotation) => convertAnnotation(moduleName, annotation)),
@@ -1876,6 +1902,8 @@ const convertLinkMember = (
     overloaded: node.overloaded,
     hasDefault: body?.default !== null && body?.default !== undefined,
     defaultTargetValues: body?.default ? parseLinkDefaultTargetValues(body.default.text) : undefined,
+    defaultTargetFilter: body?.default ? parseLinkDefaultFilter(body.default.text) : undefined,
+    defaultExprText: body?.default?.text,
     readonly: body?.readonly ?? false,
     onTargetDelete: body?.onTargetDelete ? parseOnTargetDeleteAction(body.onTargetDelete) : undefined,
     annotations: (body?.annotations ?? []).map((annotation) => convertAnnotation(moduleName, annotation)),
@@ -1916,6 +1944,8 @@ const convertInferredLinkMember = (
     overloaded: node.overloaded,
     hasDefault: body?.default !== null && body?.default !== undefined,
     defaultTargetValues: body?.default ? parseLinkDefaultTargetValues(body.default.text) : undefined,
+    defaultTargetFilter: body?.default ? parseLinkDefaultFilter(body.default.text) : undefined,
+    defaultExprText: body?.default?.text,
     readonly: body?.readonly ?? false,
     annotations: (body?.annotations ?? []).map((annotation) => convertAnnotation(moduleName, annotation)),
     properties: [],

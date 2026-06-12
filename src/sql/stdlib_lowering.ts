@@ -107,6 +107,17 @@ const STDLIB_SQL_TEMPLATES = new Map<string, StdlibSqlTemplate>([
   ["std::datetime_of_transaction", () => "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"],
   ["std::datetime_of_statement", () => "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"],
   ["std::to_str", (argSql) => argSql[0] ? `CAST(${argSql[0]} AS TEXT)` : null],
+  // `to_json(s)` parses the string as JSON; SQLite's json() validates and
+  // minifies, raising on malformed input like EdgeQL does.
+  ["std::to_json", (argSql) => argSql[0] ? `json(${argSql[0]})` : null],
+  // `json_get(j, p1, p2, …)` walks the path and yields the element as json
+  // (empty set — NULL — when missing). Path segments are arbitrary exprs, so
+  // build the json_extract path string by concatenation.
+  ["std::json_get", (argSql) => {
+    if (!argSql[0] || argSql.length < 2 || argSql.slice(1).some((a) => !a)) return null;
+    const path = argSql.slice(1).map((a) => ` || '."' || ${a} || '"'`).join("");
+    return `json_extract(${argSql[0]}, '$'${path})`;
+  }],
   ["std::len", (argSql) => argSql[0] ? `length(COALESCE(CAST(${argSql[0]} AS TEXT), ''))` : null],
   ["std::count", (argSql) => argSql[0] ? `count(${argSql[0]})` : null],
   ["std::max", (argSql) => argSql[0] ? `max(${argSql[0]})` : null],
