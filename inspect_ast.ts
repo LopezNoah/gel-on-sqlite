@@ -11,7 +11,7 @@ for (const q of queries) {
   try {
     const ast = parseEdgeQL(q);
     console.log(JSON.stringify(ast, null, 2));
-  } catch (e: any) {
-    console.log("Parse error:", e.message);
+  } catch (e) {
+    console.log("Parse error:", (e as Error).message);
   }
 }

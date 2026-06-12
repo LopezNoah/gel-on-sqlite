@@ -57,7 +57,7 @@ const traceQuery = (db: SQLiteDatabase, schema: SchemaSnapshot, query: string): 
   const origPrepare = db.prepare.bind(db);
   db.prepare = (sql: string) => {
     const stmt = origPrepare(sql);
-    const verb = sql.trim().split(/\s+/)[0]!.toUpperCase();
+    const verb = (sql.trim().split(/\s+/)[0] ?? "").toUpperCase();
     const rec = (params: unknown[]): void => { log.push(`[${verb}] ${inline(sql, params)}`); };
     const run = stmt.run.bind(stmt);
     const all = stmt.all.bind(stmt);

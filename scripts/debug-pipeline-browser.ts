@@ -60,7 +60,7 @@ const parseArgs = (args: string[]): CliOptions => {
   };
 
   for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i]!;
+    const arg = args[i] as string;
     if (arg === "--help" || arg === "-h") {
       printUsage();
       process.exit(0);
@@ -876,7 +876,7 @@ const escapeHtml = (value: string): string => value.replace(/[&<>"]/g, (ch) => (
   "<": "&lt;",
   ">": "&gt;",
   "\"": "&quot;",
-}[ch]!));
+}[ch] ?? ch));
 
 const printUsage = (): void => {
   process.stderr.write(`Usage:\n`);

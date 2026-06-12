@@ -16,13 +16,13 @@ const queries = [
 for (const q of queries) {
   console.log("\n==== Query:", q);
   try {
-    const ast: any = parseEdgeQL(q);
+    const ast = parseEdgeQL(q);
     const stmt = Array.isArray(ast) ? ast[0] : ast;
     const expanded = expandSchemaAliasesInStatement(stmt, schema);
     const ir = compileASTToGelIR(expanded, { schema });
     console.log("Compiled OK");
     console.log(JSON.stringify(ir, null, 2).slice(0, 2000));
-  } catch (e: any) {
-    console.log("Error:", e.message);
+  } catch (e) {
+    console.log("Error:", (e as Error).message);
   }
 }

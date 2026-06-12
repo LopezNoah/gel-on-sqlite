@@ -57,7 +57,7 @@ const parseArgs = (args: string[]): CliOptions => {
   const queryParts: string[] = [];
 
   for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i]!;
+    const arg = args[i] as string;
     if (arg === "--help" || arg === "-h") {
       printUsage();
       process.exit(0);

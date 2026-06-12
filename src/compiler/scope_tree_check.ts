@@ -12,7 +12,6 @@ import type {
   DeleteStatement,
   SelectExprStatement,
   SelectStatement,
-  WithBinding,
 } from "../edgeql/ast.js";
 import type { SchemaSnapshot } from "../schema/schema.js";
 import { qualifiedTypeName } from "../schema/schema.js";
@@ -179,8 +178,6 @@ const subjectPathHasLink = (
     const member = collectMember(schema, currentType, step);
     if (!member) return true; // unknown step — conservatively assume link
     if (member.kind === "link") {
-      const target = member.def.targetType?.split("|")[0]?.trim();
-      currentType = target ? resolveTypeDef(schema, target) : undefined;
       return true;
     }
     // Property — keep walking, currentType becomes undefined (scalar)
@@ -362,7 +359,7 @@ const visitMutation = (
   mut: UpdateStatement | InsertStatement | DeleteStatement,
   outerSubj: SubjectContext | undefined,
   outerDmlRoot: string | undefined,
-  outerStmt: Pick<Statement, "pos">,
+  _outerStmt: Pick<Statement, "pos">,
 ): void => {
   if (mut.kind === "update" || mut.kind === "delete") {
     // bad_06 case: an inner DML whose subject refers to the outer DML's
@@ -463,7 +460,7 @@ const subjectContextFor = (
 
 const validateSelectExpr = (statement: SelectExprStatement, schema: SchemaSnapshot | undefined): void => {
   let subjectExpr: FreeObjectExpr | undefined = statement.expr;
-  let clauseExprs: FreeObjectExpr[] = [];
+  const clauseExprs: FreeObjectExpr[] = [];
   let shape: EdgeQLShapeElement[] = [];
 
   // Unwrap a single select_expr_subquery wrapper into subject + clauses.

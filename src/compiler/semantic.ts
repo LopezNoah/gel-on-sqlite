@@ -578,11 +578,6 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     return typeof value === "string" ? value : fail(message);
   };
 
-  type FieldEqPredicate = Extract<FilterExpr, { kind: "predicate" }> & {
-    op: "=";
-    target: { kind: "field"; field: string };
-  };
-
   const moduleNames = new Set(schema.listTypes().map((typeDef) => typeDef.module ?? "default"));
   const resolveModuleName = (name: string): string => {
     if (moduleNames.has(name)) {
@@ -3838,10 +3833,6 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
     if (isExclusiveFieldOf(fieldName, typeDef)) return "unique";
     return "duplicate";
   };
-
-  // True if at least one element multiplicity is non-unique. Used as the
-  // outer-mult escalation rule for tuples / arrays / set unions etc.
-  const anyDup = (mults: AstMultiplicity[]): boolean => mults.some((m) => m === "duplicate" || m === "unknown");
 
   // Multiplicity for an EdgeQL `{a, b, c, …}` / `a UNION b` UNION. Mirrors the
   // Python rule: all-empty ⇒ EMPTY; any DUPLICATE arm ⇒ DUPLICATE; for object
@@ -9353,13 +9344,6 @@ export const compileToIR = (schema: SchemaSnapshot, statement: Statement, contex
       return acc;
     };
     const innerBindingMap = collectInnerBindings(forBodyExpr);
-    const resolveInnerBindingToExpr = (name: string, depth = 0): FreeObjectExpr | undefined => {
-      if (depth > 8) return undefined;
-      const inner = innerBindingMap.get(name);
-      if (!inner) return resolveBindingToExpr(name);
-      if (inner.kind === "binding_ref") return resolveInnerBindingToExpr(inner.name, depth + 1);
-      return inner;
-    };
 
     const forBodyMult = forBodyExpr ? inferAstMultiplicity(forBodyExpr) : "unique";
 

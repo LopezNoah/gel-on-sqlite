@@ -57,11 +57,30 @@ function canonical(value: unknown): string {
 // uses unorderedSet/unorderedBag wrappers — sorting array elements where the
 // template expects unordered matching. Returns a value whose canonical form is
 // directly comparable with the expected side.
+// Port of the Python harness's default float comparison: assert_data_shape
+// compares every float shape with math.isclose(rel_tol=1e-04, abs_tol=1e-15).
+// Integer-valued pairs keep exact int semantics (Python int shapes compare
+// with ==).
+const DEFAULT_REL_TOL = 1e-4;
+const DEFAULT_ABS_TOL = 1e-15;
+function numbersClose(actual: number, expected: number): boolean {
+  if (Number.isInteger(actual) && Number.isInteger(expected)) {
+    return actual === expected;
+  }
+  return Math.abs(actual - expected)
+    <= Math.max(DEFAULT_REL_TOL * Math.max(Math.abs(actual), Math.abs(expected)), DEFAULT_ABS_TOL);
+}
+
 function normalizeAgainstTemplate(actual: unknown, expected: unknown): unknown {
   // Mirror expectLike's scalar-type placeholders: any value of the matching
   // runtime type in actual matches.
   if (expected === "str" && typeof actual === "string") {
     return "str";
+  }
+  // Snap float-close actuals onto the template value (Python isclose default).
+  if (typeof expected === "number" && typeof actual === "number"
+      && numbersClose(actual, expected)) {
+    return expected;
   }
   if ((expected === "int" || expected === "float" || expected === "decimal")
       && typeof actual === "number") {
@@ -134,6 +153,45 @@ function templateContainsUnordered(value: unknown): boolean {
   return false;
 }
 
+export type AssertOptions = { absTol?: number };
+
+// Mirror of Python's assert_query_result(..., abs_tol=...): numeric leaves
+// compare within the tolerance instead of exactly. Sets/bags of numbers are
+// matched by sorting both sides numerically and pairing in order.
+function expectLikeTol(actual: unknown, expected: unknown, absTol: number): void {
+  if (isUnorderedBag(expected) || isUnorderedSet(expected)) {
+    expect(Array.isArray(actual)).toBe(true);
+    const actualArray = [...(actual as unknown[])];
+    const expectedItems = [...(expected as UnorderedBag | UnorderedSet).items];
+    expect(actualArray.length).toBe(expectedItems.length);
+    const allNumbers = (xs: unknown[]) => xs.every((x) => typeof x === "number");
+    if (allNumbers(actualArray) && allNumbers(expectedItems)) {
+      (actualArray as number[]).sort((a, b) => a - b);
+      (expectedItems as number[]).sort((a, b) => a - b);
+    }
+    for (let i = 0; i < expectedItems.length; i++) {
+      expectLikeTol(actualArray[i], expectedItems[i], absTol);
+    }
+    return;
+  }
+  if (Array.isArray(expected)) {
+    expect(Array.isArray(actual)).toBe(true);
+    const actualArray = actual as unknown[];
+    expect(actualArray.length).toBe(expected.length);
+    for (let i = 0; i < expected.length; i++) {
+      expectLikeTol(actualArray[i], expected[i], absTol);
+    }
+    return;
+  }
+  if (typeof expected === "number" && typeof actual === "number") {
+    if (Math.abs(actual - expected) > absTol) {
+      expect(actual).toEqual(expected);
+    }
+    return;
+  }
+  expectLike(actual, expected);
+}
+
 export function expectLike(actual: unknown, expected: unknown): void {
   if (isUnorderedBag(expected)) {
     expect(Array.isArray(actual)).toBe(true);
@@ -172,7 +230,15 @@ export function expectLike(actual: unknown, expected: unknown): void {
   if (isUnorderedSet(expected)) {
     expect(Array.isArray(actual)).toBe(true);
     const expectedSet = new Set(expected.items.map(canonical));
-    const actualSet = new Set((actual as unknown[]).map(canonical));
+    // Normalize each actual item against the best-matching template so
+    // float-closeness and placeholder semantics apply inside sets too.
+    const actualSet = new Set((actual as unknown[]).map((item) => {
+      for (const tmpl of expected.items) {
+        const candidate = canonical(normalizeAgainstTemplate(item, tmpl));
+        if (expectedSet.has(candidate)) return candidate;
+      }
+      return canonical(item);
+    }));
     expect(actualSet).toEqual(expectedSet);
     return;
   }
@@ -208,17 +274,30 @@ export function expectLike(actual: unknown, expected: unknown): void {
   if (expected === "bool" && typeof actual === "boolean") {
     return;
   }
+  if (typeof expected === "number" && typeof actual === "number"
+      && numbersClose(actual, expected)) {
+    return;
+  }
 
   expect(actual).toEqual(expected);
 }
 
-export function assertQueryResult(h: QueryHarness, query: string, expected: unknown): void {
+export function assertQueryResult(
+  h: QueryHarness,
+  query: string,
+  expected: unknown,
+  options?: AssertOptions,
+): void {
   const result = h.query(query);
   const normalized =
     result && typeof result === "object" && "rows" in (result as unknown as Record<string, unknown>)
       ? (result as { rows: unknown }).rows
       : result;
 
+  if (options?.absTol !== undefined) {
+    expectLikeTol(normalized, expected, options.absTol);
+    return;
+  }
   expectLike(normalized, expected);
 }
 

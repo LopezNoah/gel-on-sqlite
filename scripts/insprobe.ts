@@ -25,6 +25,6 @@ for (const q of [
   "select cards::Card { name } filter .element != 'Fire'",
   "select cards::User { name, deck: { name } }",
 ]) {
-  const t: any = executeQueryWithTrace(db, schema, q, {});
+  const t = executeQueryWithTrace(db, schema, q, {});
   console.log(q, "=>", JSON.stringify(t.traces?.[0]?.result?.rows ?? t.result?.rows));
 }

@@ -470,11 +470,6 @@ const ASCII_NON_LETTER = new Set<number>();
 for (const ch of " \t\n\r\f\v(){}[],;.:?+-*/%<>=!|&^~@#$\"'`\\") {
   ASCII_NON_LETTER.add(ch.charCodeAt(0));
 }
-const isExtendedIdentStartCC = (cc: number): boolean =>
-  isAlphaCC(cc) || (cc > 0x7f && !ASCII_NON_LETTER.has(cc));
-const isExtendedIdentPartCC = (cc: number): boolean =>
-  isIdentPartCC(cc) || (cc > 0x7f && !ASCII_NON_LETTER.has(cc));
-
 // Internal implementation; returns both the token list and the lineStarts table
 // the parser needs for offset → line/column resolution. Public `tokenize` and
 // `tokenizeWithStarts` are thin wrappers below.
@@ -669,14 +664,12 @@ const tokenizeImpl = (input: string): TokenizeResult => {
           return;
         }
         const escaped = scanEscapeValue(tokenOffset);
-        // For byte strings, restrict \xHH to ASCII range (matches the
-        // upstream check). For regular strings, \xHH must produce a byte
-        // ≤ 0x7F; higher bytes need \u/\U.
+        // Byte strings accept \xHH for the full 00-FF range (upstream's
+        // bytes unquoter parses any u8) — only raw non-ASCII source
+        // characters are rejected, above. For regular strings, \xHH must
+        // produce a byte ≤ 0x7F; higher bytes need \u/\U.
         if (escaped.length > 0) {
           const cp = escaped.codePointAt(0);
-          if (kind === "bytes_string" && cp !== undefined && cp > 0x7f) {
-            syntaxError(`invalid escape '\\x${cp.toString(16).padStart(2, "0").toUpperCase()}' in byte string literal: non-ASCII byte`, tokenOffset);
-          }
           if (kind === "string" && cp !== undefined && cp > 0x7f && input.charCodeAt(i - 3) === 120) {
             syntaxError(`invalid \\x escape in string literal: produces non-ASCII byte`, tokenOffset);
           }

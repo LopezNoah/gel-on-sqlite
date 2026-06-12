@@ -152,9 +152,9 @@ const runBench = (
     samples.push(t);
   }
   samples.sort((a, b) => a - b);
-  const median = samples[Math.floor(samples.length / 2)]!;
+  const median = samples[Math.floor(samples.length / 2)] ?? 0;
   const mean = samples.reduce((a, b) => a + b, 0) / samples.length;
-  const min = samples[0]!;
+  const min = samples[0] ?? 0;
   return {
     label,
     median,
@@ -189,7 +189,7 @@ const loadTestCorpus = (): string[] => {
     const src = readFileSync(join(testsDir, f), "utf8");
     let m: RegExpExecArray | null;
     while ((m = re.exec(src)) !== null) {
-      const q = m[1]!.trim();
+      const q = (m[1] ?? "").trim();
       // Skip ones with ${...} interpolations (they'd fail to parse).
       if (q.includes("${")) continue;
       if (q.length < 5) continue;

@@ -20514,12 +20514,14 @@ describe("TestEdgeQLFunctions", () => {
       h,
       `SELECT math::exp(-1);`,
       unorderedSet([0.36787944117144233])
-    );
+    ,
+      { absTol: 1e-5 });
     assertQueryResult(
       h,
       `SELECT math::exp(-2.0);`,
       unorderedSet([0.1353352832366127])
-    );
+    ,
+      { absTol: 1e-5 });
     expect(() => {
       h.query(
         `SELECT math::exp(1000);`
@@ -21184,7 +21186,8 @@ describe("TestEdgeQLFunctions", () => {
       h,
       `SELECT math::pi();`,
       unorderedSet([3.141592653589793])
-    );
+    ,
+      { absTol: 0.0000000005 });
   });
 
   it("test_edgeql_functions_math_acos_01", () => {
@@ -21192,27 +21195,32 @@ describe("TestEdgeQLFunctions", () => {
       h,
       `SELECT math::acos(-1);`,
       unorderedSet([3.141592653589793])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::acos(-math::sqrt(2) / 2);`,
       unorderedSet([2.356194490192345])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::acos(-0.0);`,
       unorderedSet([1.5707963267948966])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::acos(0.0);`,
       unorderedSet([1.5707963267948966])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::acos(math::sqrt(2) / 2);`,
       unorderedSet([0.7853981633974483])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `WITH x := math::acos(1) SELECT (x, <str>x);`,
@@ -21272,12 +21280,14 @@ describe("TestEdgeQLFunctions", () => {
       h,
       `SELECT math::asin(-1);`,
       unorderedSet([-1.5707963267948966])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::asin(-math::sqrt(2) / 2);`,
       unorderedSet([-0.7853981633974483])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `WITH x := math::asin(-0.0) SELECT (x, <str>x);`,
@@ -21296,12 +21306,14 @@ describe("TestEdgeQLFunctions", () => {
       h,
       `SELECT math::asin(math::sqrt(2) / 2);`,
       unorderedSet([0.7853981633974483])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::asin(1);`,
       unorderedSet([1.5707963267948966])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT <str>math::asin(<float64>"NaN");`,
@@ -21354,27 +21366,32 @@ describe("TestEdgeQLFunctions", () => {
       h,
       `SELECT math::atan(<float64>"-inf");`,
       unorderedSet([-1.5707963267948966])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::atan(-1000000000);`,
       unorderedSet([-1.5707963267948966])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::atan(-math::sqrt(3));`,
       unorderedSet([-1.0471975511965976])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::atan(-1);`,
       unorderedSet([-0.7853981633974483])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::atan(-1 / math::sqrt(3));`,
       unorderedSet([-0.5235987755982988])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `WITH x := math::atan(-0.0) SELECT (x, <str>x);`,
@@ -21393,27 +21410,32 @@ describe("TestEdgeQLFunctions", () => {
       h,
       `SELECT math::atan(1 / math::sqrt(3));`,
       unorderedSet([0.5235987755982988])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::atan(1);`,
       unorderedSet([0.7853981633974483])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::atan(math::sqrt(3));`,
       unorderedSet([1.0471975511965976])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::atan(1000000000);`,
       unorderedSet([1.5707963267948966])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::atan(<float64>"inf");`,
       unorderedSet([1.5707963267948966])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT <str>math::atan(<float64>"NaN");`,
@@ -21426,27 +21448,32 @@ describe("TestEdgeQLFunctions", () => {
       h,
       `SELECT math::atan2(-0.0, -1);`,
       unorderedSet([-3.141592653589793])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::atan2(-2, -2);`,
       unorderedSet([-2.356194490192345])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::atan2(-3, -0.0);`,
       unorderedSet([-1.5707963267948966])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::atan2(-4, 0.0);`,
       unorderedSet([-1.5707963267948966])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::atan2(-5, 5);`,
       unorderedSet([-0.7853981633974483])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `WITH x := math::atan2(-0.0, 6) SELECT (x, <str>x);`,
@@ -21465,32 +21492,38 @@ describe("TestEdgeQLFunctions", () => {
       h,
       `SELECT math::atan2(8, 8);`,
       unorderedSet([0.7853981633974483])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::atan2(9, 0.0);`,
       unorderedSet([1.5707963267948966])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::atan2(10, -0.0);`,
       unorderedSet([1.5707963267948966])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::atan2(11, -11);`,
       unorderedSet([2.356194490192345])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::atan2(0.0, -12);`,
       unorderedSet([3.141592653589793])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::atan2(-0.0, -0.0);`,
       unorderedSet([-3.141592653589793])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `WITH x := math::atan2(-0.0, 0.0) SELECT (x, <str>x);`,
@@ -21509,32 +21542,38 @@ describe("TestEdgeQLFunctions", () => {
       h,
       `SELECT math::atan2(0.0, -0.0);`,
       unorderedSet([3.141592653589793])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::atan2(-0.0, -<float64>"inf");`,
       unorderedSet([-3.141592653589793])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::atan2(-<float64>"inf", -<float64>"inf");`,
       unorderedSet([-2.356194490192345])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::atan2(-<float64>"inf", -0.0);`,
       unorderedSet([-1.5707963267948966])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::atan2(-<float64>"inf", 0.0);`,
       unorderedSet([-1.5707963267948966])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::atan2(-<float64>"inf", <float64>"inf");`,
       unorderedSet([-0.7853981633974483])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `
@@ -21559,27 +21598,32 @@ describe("TestEdgeQLFunctions", () => {
       h,
       `SELECT math::atan2(<float64>"inf", <float64>"inf");`,
       unorderedSet([0.7853981633974483])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::atan2(<float64>"inf", 0.0);`,
       unorderedSet([1.5707963267948966])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::atan2(<float64>"inf", -0.0);`,
       unorderedSet([1.5707963267948966])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::atan2(<float64>"inf", -<float64>"inf");`,
       unorderedSet([2.356194490192345])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::atan2(0.0, -<float64>"inf");`,
       unorderedSet([3.141592653589793])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT <str>math::atan2(<float64>"NaN", 1);`,
@@ -21602,92 +21646,110 @@ describe("TestEdgeQLFunctions", () => {
       h,
       `SELECT math::cos(-math::pi() * 2);`,
       unorderedSet([1.0])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::cos(-math::pi() * 7 / 4);`,
       unorderedSet([0.7071067811865476])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::cos(-math::pi() * 3 / 2);`,
       unorderedSet([0.0])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::cos(-math::pi() * 5 / 4);`,
       unorderedSet([-0.7071067811865476])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::cos(-math::pi());`,
       unorderedSet([-1.0])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::cos(-math::pi() * 3 / 4);`,
       unorderedSet([-0.7071067811865476])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::cos(-math::pi() / 2);`,
       unorderedSet([0.0])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::cos(-math::pi() / 4);`,
       unorderedSet([0.7071067811865476])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::cos(-0.0);`,
       unorderedSet([1.0])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::cos(0.0);`,
       unorderedSet([1.0])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::cos(math::pi() / 4);`,
       unorderedSet([0.7071067811865476])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::cos(math::pi() / 2);`,
       unorderedSet([0.0])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::cos(math::pi() * 3 / 4);`,
       unorderedSet([-0.7071067811865476])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::cos(math::pi());`,
       unorderedSet([-1.0])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::cos(math::pi() * 5 / 4);`,
       unorderedSet([-0.7071067811865476])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::cos(math::pi() * 3 / 2);`,
       unorderedSet([0.0])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::cos(math::pi() * 7 / 4);`,
       unorderedSet([0.7071067811865476])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::cos(math::pi() * 2);`,
       unorderedSet([1.0])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT <str>math::cos(<float64>"NaN");`,
@@ -21720,32 +21782,38 @@ describe("TestEdgeQLFunctions", () => {
       h,
       `SELECT math::cot(-math::pi() * 7 / 4);`,
       unorderedSet([1.0])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::cot(-math::pi() * 3 / 2);`,
       unorderedSet([0.0])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::cot(-math::pi() * 5 / 4);`,
       unorderedSet([-1.0])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::cot(-math::pi() * 3 / 4);`,
       unorderedSet([1.0])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::cot(-math::pi() / 2);`,
       unorderedSet([0.0])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::cot(-math::pi() / 4);`,
       unorderedSet([-1.0])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT <str>math::cot(-0.0);`,
@@ -21760,32 +21828,38 @@ describe("TestEdgeQLFunctions", () => {
       h,
       `SELECT math::cot(math::pi() / 4);`,
       unorderedSet([1.0])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::cot(math::pi() / 2);`,
       unorderedSet([0.0])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::cot(math::pi() * 3 / 4);`,
       unorderedSet([-1.0])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::cot(math::pi() * 5 / 4);`,
       unorderedSet([1.0])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::cot(math::pi() * 3 / 2);`,
       unorderedSet([0.0])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::cot(math::pi() * 7 / 4);`,
       unorderedSet([-1.0])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT <str>math::cot(<float64>"NaN");`,
@@ -21818,42 +21892,50 @@ describe("TestEdgeQLFunctions", () => {
       h,
       `SELECT math::sin(-math::pi() * 2);`,
       unorderedSet([0.0])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::sin(-math::pi() * 7 / 4);`,
       unorderedSet([0.7071067811865476])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::sin(-math::pi() * 3 / 2);`,
       unorderedSet([1.0])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::sin(-math::pi() * 5 / 4);`,
       unorderedSet([0.7071067811865476])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::sin(-math::pi());`,
       unorderedSet([0.0])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::sin(-math::pi() * 3 / 4);`,
       unorderedSet([-0.7071067811865476])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::sin(-math::pi() / 2);`,
       unorderedSet([-1.0])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::sin(-math::pi() / 4);`,
       unorderedSet([-0.7071067811865476])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `WITH x := math::sin(-0.0) SELECT (x, <str>x);`,
@@ -21872,42 +21954,50 @@ describe("TestEdgeQLFunctions", () => {
       h,
       `SELECT math::sin(math::pi() / 4);`,
       unorderedSet([0.7071067811865476])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::sin(math::pi() / 2);`,
       unorderedSet([1.0])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::sin(math::pi() * 3 / 4);`,
       unorderedSet([0.7071067811865476])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::sin(math::pi());`,
       unorderedSet([0.0])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::sin(math::pi() * 5 / 4);`,
       unorderedSet([-0.7071067811865476])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::sin(math::pi() * 3 / 2);`,
       unorderedSet([-1.0])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::sin(math::pi() * 7 / 4);`,
       unorderedSet([-0.7071067811865476])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::sin(math::pi() * 2);`,
       unorderedSet([0.0])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT <str>math::sin(<float64>"NaN");`,
@@ -21940,32 +22030,38 @@ describe("TestEdgeQLFunctions", () => {
       h,
       `SELECT math::tan(-math::pi() * 2);`,
       unorderedSet([0.0])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::tan(-math::pi() * 7 / 4);`,
       unorderedSet([1.0])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::tan(-math::pi() * 5 / 4);`,
       unorderedSet([-1.0])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::tan(-math::pi());`,
       unorderedSet([0.0])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::tan(-math::pi() * 3 / 4);`,
       unorderedSet([1.0])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::tan(-math::pi() / 4);`,
       unorderedSet([-1.0])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `WITH x := math::tan(-0.0) SELECT (x, <str>x);`,
@@ -21984,32 +22080,38 @@ describe("TestEdgeQLFunctions", () => {
       h,
       `SELECT math::tan(math::pi() / 4);`,
       unorderedSet([1.0])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::tan(math::pi() * 3 / 4);`,
       unorderedSet([-1.0])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::tan(math::pi());`,
       unorderedSet([0.0])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::tan(math::pi() * 5 / 4);`,
       unorderedSet([1.0])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::tan(math::pi() * 7 / 4);`,
       unorderedSet([-1.0])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT math::tan(math::pi() * 2);`,
       unorderedSet([0.0])
-    );
+    ,
+      { absTol: 0.0000000005 });
     assertQueryResult(
       h,
       `SELECT <str>math::tan(<float64>"NaN");`,
