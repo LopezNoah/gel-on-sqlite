@@ -1,5 +1,6 @@
 import { getCompilerService, type CompilerCacheMeta } from "../compiler/service.js";
 import { validateParsedStatement } from "../compiler/ast_to_ir.js";
+import { PENDING_INSERT_SQL_EXPR_VALUE, rewriteDunderDefaults } from "../compiler/dml_lowering.js";
 import { AppError, asAppError, isQueryFailure, tryResult } from "../errors.js";
 import { decorateErrorWithUnsupportedTag } from "../diagnostics/unsupported.js";
 import { parseEdgeQL, parseEdgeQLScript, type ParseEdgeQLOptions } from "../edgeql/parser.js";
@@ -740,7 +741,7 @@ const parseMemberHeader = (entry: string): MemberHeader | undefined => {
 const registerDynamicTypeDDL = (schema: SchemaSnapshot, statement: string, defaultModule = "default"): boolean => {
   const header = parseCreateTypeHeader(statement.trim());
   if (!header) return false;
-  const { rawName, extendsList: extendsRaw, bodyText } = header;
+  const { rawName, extendsList: extendsRaw, bodyText, isAbstract } = header;
   const { module, name } = dynamicQualifiedNameParts(rawName, defaultModule);
   const fields: FieldDef[] = [];
   const links: NonNullable<TypeDef["links"]> = [];
@@ -832,6 +833,7 @@ const registerDynamicTypeDDL = (schema: SchemaSnapshot, statement: string, defau
   schema.addType({
     module,
     name,
+    abstract: isAbstract || undefined,
     fields,
     links: links.length ? links : undefined,
     computeds: computeds.length ? computeds : undefined,
@@ -5867,6 +5869,119 @@ type DmlChainEnv = Map<string, ObjectSet>;
 const qualifyChainType = (name: string, defaultModule: string): string =>
   name.includes("::") ? name : `${defaultModule}::${name}`;
 
+// References to already-executed chain bindings (`x.name`, `note := new`)
+// can't resolve in a standalone compile — rewrite them to by-id SELECTs over
+// the captured object sets so every value still lowers to SQL.
+const chainByIdSelect = (bound: ObjectSet): Record<string, unknown> => ({
+  kind: "select",
+  typeName: bound.typeName,
+  shape: [{ kind: "field", name: "id" }],
+  clauses: {
+    filter: {
+      kind: "in_predicate",
+      target: { kind: "field", field: "id" },
+      op: "in",
+      values: { kind: "set_literal", values: bound.ids },
+    },
+  },
+});
+
+// Forward outer (non-DML) WITH bindings onto every mutation statement nested
+// inside a binding value / expression, so the mutation can resolve them when
+// it compiles standalone (`WITH x := "!", y := (WITH name := x ++ …,
+// INSERT …)` — the inner INSERT needs `x`). Inner statements' own bindings
+// come later in the list, so they shadow same-named outer ones.
+const attachWithToNestedMutations = <T>(node: T, extras: WithBinding[]): T => {
+  if (extras.length === 0) return node;
+  const walk = (cur: unknown): unknown => {
+    if (Array.isArray(cur)) return cur.map(walk);
+    if (cur === null || typeof cur !== "object") return cur;
+    const n = cur as Record<string, unknown> & { kind?: string; statement?: unknown };
+    if ((n.kind === "mutation_expr" || n.kind === "subquery_statement") && n.statement && typeof n.statement === "object") {
+      const st = n.statement as { with?: WithBinding[] };
+      return { ...n, statement: { ...st, with: [...extras, ...(st.with ?? [])] } };
+    }
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(n)) {
+      out[key] = walk(value);
+    }
+    return out;
+  };
+  return walk(node) as T;
+};
+
+// Evaluate a scalar WITH-binding expression exactly once through a one-off
+// SQL SELECT (with the given sibling bindings in scope). Returns a literal /
+// empty-set binding value, or undefined when the expression doesn't evaluate
+// to a single scalar (callers leave the original binding in place).
+const evaluateScalarBindingViaSQL = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  expr: FreeObjectExpr,
+  withBindings: WithBinding[],
+  context: SecurityContext,
+  pos: { line: number; column: number },
+): WithBindingValue | undefined => {
+  const stmtAst = {
+    kind: "select_expr",
+    expr,
+    with: withBindings.length > 0 ? [...withBindings] : undefined,
+    pos,
+  } as unknown as Statement;
+  // captureAll: any compile/run failure just means "leave the binding for
+  // the downstream compile to handle".
+  const attempt = tryResult(() => {
+    const compiled = getCompilerService().compile(schema, stmtAst, { globals: context.globals, target: resolvedRuntimeTarget(context, db) });
+    if (compiled.sql.loweringMode !== "single_statement" || compiled.sql.sql.length === 0) return undefined;
+    return runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
+  }, { captureAll: true });
+  if (!attempt.ok || attempt.value === undefined) return undefined;
+  const rows = attempt.value;
+  if (rows.length === 0) return { kind: "set_literal", values: [] } as WithBindingValue;
+  if (rows.length === 1 && (rows[0] === null || typeof rows[0] === "string" || typeof rows[0] === "number" || typeof rows[0] === "boolean")) {
+    return { kind: "literal", value: rows[0] as ScalarValue } as WithBindingValue;
+  }
+  return undefined;
+};
+
+const rewriteEnvRefsInNode = (node: unknown, env: DmlChainEnv): unknown => {
+  const envObjectSet = (name: unknown): ObjectSet | undefined => {
+    if (typeof name !== "string") return undefined;
+    const bound = env.get(name);
+    return bound && bound.typeName !== "" ? bound : undefined;
+  };
+  const rewrite = (current: unknown): unknown => {
+    if (Array.isArray(current)) return current.map(rewrite);
+    if (current === null || typeof current !== "object") return current;
+    const n = current as Record<string, unknown> & { kind?: string };
+    if (n.kind === "path") {
+      const bound = envObjectSet(n.head);
+      if (bound) {
+        const ptrSteps = ((n.steps as Array<{ kind?: string; name?: string }> | undefined) ?? [])
+          .filter((step) => step.kind === "ptr" && typeof step.name === "string");
+        const steps = ptrSteps.length > 0 ? ptrSteps : (typeof n.tail === "string" ? [{ kind: "ptr", name: n.tail }] : []);
+        let expr: unknown = { kind: "select_expr_subquery", expr: chainByIdSelect(bound) };
+        for (const step of steps) {
+          expr = { kind: "field_access", expr, field: step.name, optional: false };
+        }
+        return expr;
+      }
+    }
+    if (n.kind === "binding_ref") {
+      const bound = envObjectSet(n.name);
+      if (bound) {
+        return chainByIdSelect(bound);
+      }
+    }
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(n)) {
+      out[key] = rewrite(value);
+    }
+    return out;
+  };
+  return rewrite(node);
+};
+
 // One link hop over a set of source ids → the target id-set and its type.
 // Handles inline single links (`parent` → `parent_id` column), multi links
 // (link table), and computed backlinks (`children := .<parent`, `parent :=
@@ -5998,6 +6113,44 @@ const resolveObjectSet = (
     }
     case "subquery_statement":
       return executeDmlChainStatement(db, schema, n.statement as Statement, env, current, context, defaultModule);
+    case "mutation_expr":
+      return executeDmlChainStatement(db, schema, n.statement as Statement, env, current, context, defaultModule);
+    case "coalesce": {
+      // Upsert-by-coalesce: `(SELECT …) ?? (INSERT …)` — the right side (and
+      // its mutation) only runs when the left side is empty.
+      const left = resolveObjectSet(db, schema, n.left, env, current, context, defaultModule);
+      if (left.ids.length > 0) return left;
+      return resolveObjectSet(db, schema, n.right, env, current, context, defaultModule);
+    }
+    case "for_expr": {
+      // `FOR v IN {…} UNION (INSERT …)` bound in WITH — run the body once per
+      // scalar iterator value with `v` bound as a literal.
+      const iterator = n.iterator as { kind?: string; values?: unknown[] } | undefined;
+      const variable = n.variable as string | undefined;
+      const body = n.body as { kind?: string; statement?: Statement } | undefined;
+      if (iterator?.kind !== "set_literal" || !variable || body?.kind !== "mutation_expr" || !body.statement) {
+        return { typeName: current?.typeName ?? "", ids: [] };
+      }
+      let typeName = "";
+      const ids: string[] = [];
+      for (const iterValue of iterator.values ?? []) {
+        if (iterValue !== null && !isScalarValue(iterValue)) {
+          return { typeName: current?.typeName ?? "", ids: [] };
+        }
+        const stmt = body.statement as Statement & { with?: WithBinding[] };
+        const bound = {
+          ...stmt,
+          with: [
+            { name: variable, value: { kind: "literal", value: iterValue as ScalarValue } },
+            ...(stmt.with ?? []),
+          ],
+        } as Statement;
+        const result = executeDmlChainStatement(db, schema, bound, env, current, context, defaultModule);
+        if (result.typeName) typeName = result.typeName;
+        ids.push(...result.ids);
+      }
+      return { typeName, ids };
+    }
     case "binding_ref": {
       const bound = env.get(n.name as string);
       if (bound) return bound;
@@ -6027,6 +6180,19 @@ const resolveObjectSet = (
       return cur;
     }
     case "select_expr_subquery": {
+      // `(WITH name := …, INSERT …)` — the subquery's WITH bindings live on
+      // its clauses, not on the wrapped statement. Merge them onto the
+      // mutation so its values can resolve them when it executes.
+      {
+        const innerBindings = (n.clauses as { _withBindings?: WithBinding[] } | undefined)?._withBindings;
+        const innerExpr = n.expr as { kind?: string; statement?: Statement } | undefined;
+        if (innerBindings && innerBindings.length > 0 && innerExpr?.kind === "mutation_expr" && innerExpr.statement) {
+          const stmt = innerExpr.statement as Statement & { with?: WithBinding[] };
+          // Inner bindings come last so they shadow same-named outer ones.
+          const merged = { ...stmt, with: [...(stmt.with ?? []), ...innerBindings] } as Statement;
+          return executeDmlChainStatement(db, schema, merged, env, current, context, defaultModule);
+        }
+      }
       let result = resolveObjectSet(db, schema, n.expr, env, current, context, defaultModule);
       // `SELECT _ := X FILTER _ != Y` / `_ = Y` — element-wise set difference /
       // intersection against another object set. The alias (`_`) on one side
@@ -6086,10 +6252,13 @@ const executeDmlChainStatement = (
   const runtimeTarget = resolvedRuntimeTarget(context, db);
 
   if (stmt.kind === "insert") {
-    const compiled = compilerService.compile(schema, stmt, { globals: context.globals, target: runtimeTarget });
+    const rewritten = env.size > 0
+      ? ({ ...stmt, values: rewriteEnvRefsInNode(stmt.values, env) } as typeof stmt)
+      : stmt;
+    const compiled = compilerService.compile(schema, rewritten, { globals: context.globals, target: runtimeTarget });
     const subjectType = typeDefForTable(schema, (compiled.ir as { table?: string }).table ?? "");
     if (!subjectType) return { typeName: "", ids: [] };
-    const writeResult = runWriteWithAccessPolicies(db, schema, stmt, compiled.ir, compiled.sql, subjectType, context);
+    const writeResult = runWriteWithAccessPolicies(db, schema, rewritten, compiled.ir, compiled.sql, subjectType, context);
     return {
       typeName: qualifiedTypeName(subjectType),
       ids: (writeResult.rows ?? []).map((r) => (r as { id?: unknown }).id).filter((id): id is string => typeof id === "string"),
@@ -6162,13 +6331,44 @@ const executeDmlChainStatement = (
 // (a binding is a DML subquery, or the subject/a SET value references a
 // binding). Returns the statement when it should run through the chain
 // executor, else null.
+// A DML statement bound in WITH can hide behind expression wrappers
+// (`x := (WITH … INSERT …)` parses as subquery_expr → select_expr_subquery →
+// mutation_expr). Detect it through those fences.
+const bindingValueContainsMutation = (value: WithBindingValue): boolean => {
+  if (value.kind === "subquery_statement") return true;
+  if (value.kind !== "subquery_expr") return false;
+  const walk = (expr: FreeObjectExpr | undefined): boolean => {
+    if (!expr) return false;
+    if (expr.kind === "mutation_expr") return true;
+    if (expr.kind === "select_expr_subquery" || expr.kind === "distinct" || expr.kind === "shape_projection") {
+      return walk((expr as { expr: FreeObjectExpr }).expr);
+    }
+    if (expr.kind === "coalesce") {
+      const pair = expr as unknown as { left?: FreeObjectExpr; right?: FreeObjectExpr };
+      return walk(pair.left) || walk(pair.right);
+    }
+    if (expr.kind === "set_expr") {
+      return (expr as { values: FreeObjectExpr[] }).values.some((v) => walk(v));
+    }
+    if (expr.kind === "for_expr") {
+      return walk((expr as unknown as { body?: FreeObjectExpr }).body);
+    }
+    if (expr.kind === "function_call") {
+      const call = (expr as { call?: { args?: Array<{ kind?: string; expr?: FreeObjectExpr }> } }).call;
+      return (call?.args ?? []).some((arg) => arg.kind === "expr" && walk(arg.expr));
+    }
+    return false;
+  };
+  return walk(value.expr);
+};
+
 const isWithDmlChain = (ast: Statement): ast is UpdateStatement | DeleteStatement | InsertStatement => {
   if (ast.kind !== "update" && ast.kind !== "delete" && ast.kind !== "insert") return false;
   const withBindings = (ast as { with?: WithBinding[] }).with ?? [];
   if (withBindings.length === 0) return false;
   // Only engage when a binding is a DML subquery or the subject names a
   // binding — plain scalar/SELECT WITH bindings keep their existing path.
-  const hasDmlBinding = withBindings.some((b) => b.value.kind === "subquery_statement");
+  const hasDmlBinding = withBindings.some((b) => bindingValueContainsMutation(b.value));
   const subjectIsBinding = withBindings.some((b) => b.name === (ast as { typeName?: string }).typeName);
   return hasDmlBinding || subjectIsBinding;
 };
@@ -6179,14 +6379,7 @@ const executeWithDmlChain = (
   ast: UpdateStatement | DeleteStatement | InsertStatement,
   context: SecurityContext,
 ): QueryExecutionTrace => {
-  const defaultModule = (ast as { withModule?: string }).withModule ?? "default";
-  const env: DmlChainEnv = new Map();
-  // Evaluate WITH bindings in declaration order; DML bindings execute (and
-  // mutate) as they're evaluated.
-  for (const binding of (ast as { with?: WithBinding[] }).with ?? []) {
-    env.set(binding.name, resolveObjectSet(db, schema, binding.value, env, undefined, context, defaultModule));
-  }
-  const result = executeDmlChainStatement(db, schema, ast, env, undefined, context, defaultModule);
+  const result = runDmlChain(db, schema, ast, context);
   const emptyArtifact: SQLArtifact = { sql: "", params: [], loweringMode: "single_statement" };
   return {
     ast,
@@ -6197,6 +6390,235 @@ const executeWithDmlChain = (
     overlays: [],
     result: { kind: ast.kind as QueryResult["kind"], changes: result.ids.length },
   };
+};
+
+// Core of the WITH-DML chain executor: evaluate the bindings, run the final
+// statement, and return the affected rows as an id-set.
+const runDmlChain = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  ast: UpdateStatement | DeleteStatement | InsertStatement,
+  context: SecurityContext,
+): ObjectSet => {
+  const defaultModule = (ast as { withModule?: string }).withModule ?? "default";
+  const env: DmlChainEnv = new Map();
+  // Evaluate WITH bindings in declaration order; DML bindings execute (and
+  // mutate) as they're evaluated. Scalar/non-DML bindings declared earlier are
+  // forwarded onto each DML binding's statement so its values can resolve
+  // them when it compiles standalone (`WITH x := "!", y := (WITH name := x ++
+  // …, INSERT …)` — the inner INSERT needs `x`).
+  const passthroughWith: WithBinding[] = [];
+  const replacedBindings = new Map<string, WithBinding>();
+  // A scalar binding that reads from an executed DML binding (`y := x.name ++
+  // <str>random()`) must be computed exactly once and shared by every
+  // reference (EdgeQL materializes WITH bindings). Evaluate it through a
+  // one-off SQL SELECT with the env references rewritten to by-id selects,
+  // then forward the captured value as a literal binding.
+  const tryEvaluateScalarBinding = (expr: FreeObjectExpr): WithBindingValue | undefined =>
+    evaluateScalarBindingViaSQL(db, schema, expr, passthroughWith, context, ast.pos);
+  for (const binding of (ast as { with?: WithBinding[] }).with ?? []) {
+    if (bindingValueContainsMutation(binding.value)) {
+      env.set(binding.name, resolveObjectSet(db, schema, attachWithToNestedMutations(binding.value, passthroughWith), env, undefined, context, defaultModule));
+      continue;
+    }
+    env.set(binding.name, resolveObjectSet(db, schema, binding.value, env, undefined, context, defaultModule));
+    if (binding.value.kind === "subquery_expr") {
+      const rewrittenExpr = rewriteEnvRefsInNode(binding.value.expr, env) as FreeObjectExpr;
+      if (JSON.stringify(rewrittenExpr) !== JSON.stringify(binding.value.expr)) {
+        const evaluated = tryEvaluateScalarBinding(rewrittenExpr);
+        if (evaluated !== undefined) {
+          const replacement = { name: binding.name, value: evaluated } as WithBinding;
+          passthroughWith.push(replacement);
+          replacedBindings.set(binding.name, replacement);
+          continue;
+        }
+      }
+    }
+    passthroughWith.push(binding);
+  }
+  // The final statement compiles standalone — bindings that were captured to
+  // literals above must shadow their originals there too.
+  const finalAst = replacedBindings.size > 0
+    ? ({
+        ...ast,
+        with: ((ast as { with?: WithBinding[] }).with ?? []).map((binding) => replacedBindings.get(binding.name) ?? binding),
+      } as typeof ast)
+    : ast;
+  return executeDmlChainStatement(db, schema, finalAst, env, undefined, context, defaultModule);
+};
+
+// Mutations nested inside DML value expressions (`INSERT A { x := (INSERT C
+// { x := 2 }).x }`): execute the inner mutation first and substitute a by-id
+// SELECT, so the enclosing statement's values lower to plain SQL. Top-level
+// link targets of kind "insert" are untouched — the write path executes those
+// natively.
+const preExecuteMutationExprsInDmlValues = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  ast: Statement,
+  context: SecurityContext,
+): Statement => {
+  if (ast.kind !== "insert" && ast.kind !== "update") return ast;
+  const values = (ast as { values?: Record<string, unknown> }).values;
+  if (!values) return ast;
+  const containsMutationExpr = (node: unknown): boolean => {
+    if (Array.isArray(node)) return node.some(containsMutationExpr);
+    if (node === null || typeof node !== "object") return false;
+    if ((node as { kind?: unknown }).kind === "mutation_expr") return true;
+    return Object.values(node).some(containsMutationExpr);
+  };
+  if (!containsMutationExpr(values)) return ast;
+  const defaultModule = (ast as { withModule?: string }).withModule ?? "default";
+  const env: DmlChainEnv = new Map();
+  // The outer statement's scalar bindings are shared between the enclosing
+  // statement and the nested mutations — a volatile binding (`x :=
+  // <str>random()`) must capture ONE value for both. Evaluate each scalar
+  // binding once and substitute the literal everywhere.
+  const outerWith: WithBinding[] = [];
+  let withChanged = false;
+  for (const binding of (ast as { with?: WithBinding[] }).with ?? []) {
+    if (binding.value.kind === "subquery_expr" && !bindingValueContainsMutation(binding.value)) {
+      const evaluated = evaluateScalarBindingViaSQL(db, schema, binding.value.expr, outerWith, context, ast.pos);
+      if (evaluated !== undefined) {
+        outerWith.push({ name: binding.name, value: evaluated } as WithBinding);
+        withChanged = true;
+        continue;
+      }
+    }
+    outerWith.push(binding);
+  }
+  const runNested = (stmt: Statement & { with?: WithBinding[] }, extraWith: WithBinding[]): unknown => {
+    const mergedWith = [...outerWith, ...extraWith, ...(stmt.with ?? [])];
+    const merged = mergedWith.length > 0 ? ({ ...stmt, with: mergedWith } as Statement) : (stmt as Statement);
+    const resolved = executeDmlChainStatement(db, schema, merged, env, undefined, context, defaultModule);
+    return { kind: "select_expr_subquery", expr: chainByIdSelect(resolved) };
+  };
+  const walk = (node: unknown): unknown => {
+    if (Array.isArray(node)) return node.map(walk);
+    if (node === null || typeof node !== "object") return node;
+    const n = node as Record<string, unknown> & { kind?: string; statement?: Statement };
+    // `(WITH y := …, INSERT …)` — the subquery's WITH bindings live on its
+    // clauses, not the wrapped statement; merge them on before executing.
+    if (n.kind === "select_expr_subquery") {
+      const innerBindings = (n.clauses as { _withBindings?: WithBinding[] } | undefined)?._withBindings ?? [];
+      const innerExpr = n.expr as { kind?: string; statement?: Statement } | undefined;
+      if (innerExpr?.kind === "mutation_expr" && innerExpr.statement) {
+        return runNested(innerExpr.statement as Statement & { with?: WithBinding[] }, innerBindings);
+      }
+    }
+    if (n.kind === "mutation_expr" && n.statement) {
+      return runNested(n.statement as Statement & { with?: WithBinding[] }, []);
+    }
+    // A shape projection over a mutation (`x := (INSERT X {…}){ @a := 2 }`)
+    // assigns link properties — the native link-assignment machinery handles
+    // the nested insert itself, so leave the subtree untouched.
+    if (n.kind === "shape_projection") {
+      return n;
+    }
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(n)) out[key] = walk(value);
+    return out;
+  };
+  // A whole-value mutation (`note := (WITH … INSERT Note {…})`) replaces the
+  // assignment with a plain by-id select so the link machinery resolves it
+  // natively; mutations nested deeper in an expression substitute in place.
+  const rewriteValue = (value: unknown): unknown => {
+    if (value !== null && typeof value === "object" && (value as { kind?: string }).kind === "expr") {
+      let inner = (value as { expr?: unknown }).expr as (Record<string, unknown> & { kind?: string }) | undefined;
+      let innerBindings: WithBinding[] = [];
+      if (inner?.kind === "select_expr_subquery") {
+        innerBindings = (inner.clauses as { _withBindings?: WithBinding[] } | undefined)?._withBindings ?? [];
+        inner = inner.expr as Record<string, unknown> & { kind?: string };
+      }
+      if (inner?.kind === "mutation_expr" && inner.statement) {
+        const replaced = runNested(inner.statement as Statement & { with?: WithBinding[] }, innerBindings) as { expr: unknown };
+        return replaced.expr;
+      }
+    }
+    return walk(value);
+  };
+  const newValues: Record<string, unknown> = {};
+  for (const [field, value] of Object.entries(values)) {
+    newValues[field] = rewriteValue(value);
+  }
+  return {
+    ...ast,
+    values: newValues,
+    ...(withChanged ? { with: outerWith } : null),
+  } as Statement;
+};
+
+// SELECT statements (incl. free-object selects) whose WITH bindings or
+// free-object entries contain DML: execute the mutations up front (in
+// declaration order, honoring upsert-by-coalesce), then rewrite each executed
+// binding/entry to a by-id SELECT so the remaining statement lowers to SQL
+// like any other read.
+const preExecuteDmlBindings = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  ast: Statement,
+  context: SecurityContext,
+): Statement => {
+  if (ast.kind !== "select" && ast.kind !== "select_expr" && ast.kind !== "select_free" && ast.kind !== "for") return ast;
+  const withBindings = (ast as { with?: WithBinding[] }).with ?? [];
+  const entries = ast.kind === "select_free"
+    ? ((ast as unknown as { entries?: Array<{ name: string; expr: FreeObjectExpr }> }).entries ?? [])
+    : [];
+  const entryHasMutation = (expr: FreeObjectExpr): boolean =>
+    bindingValueContainsMutation({ kind: "subquery_expr", expr } as WithBindingValue);
+  const hasDmlBinding = withBindings.some((binding) => bindingValueContainsMutation(binding.value));
+  const hasDmlEntry = entries.some((entry) => entryHasMutation(entry.expr));
+  if (!hasDmlBinding && !hasDmlEntry) return ast;
+
+  const defaultModule = (ast as { withModule?: string }).withModule ?? "default";
+  const env: DmlChainEnv = new Map();
+  const newWith: WithBinding[] = [];
+  const passthrough: WithBinding[] = [];
+  for (const binding of withBindings) {
+    if (!bindingValueContainsMutation(binding.value)) {
+      newWith.push(binding);
+      passthrough.push(binding);
+      continue;
+    }
+    const resolved = resolveObjectSet(
+      db,
+      schema,
+      attachWithToNestedMutations(binding.value, passthrough),
+      env,
+      undefined,
+      context,
+      defaultModule,
+    );
+    env.set(binding.name, resolved);
+    const select = chainByIdSelect(resolved) as { typeName: string; shape: ShapeElement[]; clauses: unknown };
+    newWith.push({
+      name: binding.name,
+      value: { kind: "subquery", query: { typeName: select.typeName, shape: select.shape, clauses: select.clauses } },
+    } as WithBinding);
+  }
+
+  const rewriteEntryExpr = (expr: FreeObjectExpr): FreeObjectExpr => {
+    if (entryHasMutation(expr)) {
+      const resolved = resolveObjectSet(
+        db,
+        schema,
+        attachWithToNestedMutations({ kind: "subquery_expr", expr } as WithBindingValue, passthrough),
+        env,
+        undefined,
+        context,
+        defaultModule,
+      );
+      return { kind: "select_expr_subquery", expr: chainByIdSelect(resolved) } as unknown as FreeObjectExpr;
+    }
+    return rewriteEnvRefsInNode(expr, env) as FreeObjectExpr;
+  };
+
+  const out = { ...ast, with: newWith.length > 0 ? newWith : undefined } as Statement;
+  if (ast.kind === "select_free") {
+    (out as unknown as { entries: Array<{ name: string; expr: FreeObjectExpr }> }).entries =
+      entries.map((entry) => ({ ...entry, expr: rewriteEntryExpr(entry.expr) }));
+  }
+  return out;
 };
 
 // `SELECT (UPDATE/INSERT/DELETE …) { shape }` — a DML statement used as the
@@ -6230,7 +6652,17 @@ const executeSelectOverMutation = (
   runtimeTarget: RuntimeTarget,
   compilerService: ReturnType<typeof getCompilerService>,
 ): QueryExecutionTrace => {
-  const { mutation, shape, orderBy } = parts;
+  const { shape, orderBy } = parts;
+  // The outer SELECT's WITH bindings are in scope for the mutation's values —
+  // merge them on (the mutation's own bindings shadow same-named outer ones).
+  const outerWith = (ast as { with?: WithBinding[] }).with ?? [];
+  const mutation = outerWith.length > 0
+    ? ({
+        ...parts.mutation,
+        with: [...outerWith, ...((parts.mutation as { with?: WithBinding[] }).with ?? [])],
+        withModule: (parts.mutation as { withModule?: string }).withModule ?? (ast as { withModule?: string }).withModule,
+      } as typeof parts.mutation)
+    : parts.mutation;
   const typeName = mutation.typeName;
   const idShapeElement: ShapeElement = {
     kind: "field",
@@ -6279,11 +6711,17 @@ const executeSelectOverMutation = (
   }
   let lastCompiled: ReturnType<typeof compilerService.compile> | undefined;
   if (mutation.kind === "insert") {
-    lastCompiled = compilerService.compile(schema, mutation, { globals: context.globals, target: runtimeTarget });
-    const writeResult = runWriteWithAccessPolicies(db, schema, mutation, lastCompiled.ir, lastCompiled.sql, subjectType, context);
-    affectedIds = (writeResult.rows ?? [])
-      .map((row) => (row && typeof row === "object" ? (row as { id?: unknown }).id : undefined))
-      .filter((id): id is string => typeof id === "string");
+    if (isWithDmlChain(mutation)) {
+      // DML bindings (or a binding-named subject) — run through the chain
+      // executor so the bindings execute once and resolve by id.
+      affectedIds = runDmlChain(db, schema, mutation, context).ids;
+    } else {
+      lastCompiled = compilerService.compile(schema, mutation, { globals: context.globals, target: runtimeTarget });
+      const writeResult = runWriteWithAccessPolicies(db, schema, mutation, lastCompiled.ir, lastCompiled.sql, subjectType, context);
+      affectedIds = (writeResult.rows ?? [])
+        .map((row) => (row && typeof row === "object" ? (row as { id?: unknown }).id : undefined))
+        .filter((id): id is string => typeof id === "string");
+    }
   } else {
     for (const id of affectedIds) {
       const perId = {
@@ -6410,6 +6848,13 @@ const executeQueryWithTraceImpl = (
     // to SQL, so pre-evaluate it into literal rows; the outer statement then
     // projects over those rows. A no-op for statements with no group binding.
     ast = preEvaluateGroupBindings(db, schema, ast, context);
+    // `__default__` references resolve against the assigned pointer's
+    // declared default before anything compiles.
+    ast = rewriteDunderDefaults(schema, ast);
+    // DML inside WITH bindings / free-object entries executes up front; the
+    // statement then compiles as a plain read over the captured ids.
+    ast = preExecuteDmlBindings(db, schema, ast, context);
+    ast = preExecuteMutationExprsInDmlValues(db, schema, ast, context);
     const selectOverMutation = detectSelectOverMutation(ast);
     if (selectOverMutation) {
       return executeSelectOverMutation(db, schema, query, ast, selectOverMutation, context, runtimeTarget, compilerService);
@@ -6727,8 +7172,18 @@ export const executeQueryUnitWithTrace = (
       }
     }
     for (let stmtIdx = 0; stmtIdx < expanded.length; stmtIdx += 1) {
-      const ast = expanded[stmtIdx];
-      if (ast.kind === "for" && ast.body.kind === "insert") {
+      let rawUnitAst = expanded[stmtIdx];
+      // DML bound in a FOR's WITH executes once for the whole statement —
+      // rewrite those bindings to by-id selects before the per-value desugar
+      // clones the body.
+      if (rawUnitAst.kind === "for" && ((rawUnitAst as { with?: WithBinding[] }).with ?? []).some((binding) => bindingValueContainsMutation(binding.value))) {
+        rawUnitAst = preExecuteDmlBindings(db, schema, rawUnitAst, context) as typeof rawUnitAst;
+        expanded[stmtIdx] = rawUnitAst;
+      }
+      let ast = rawUnitAst;
+      if (rawUnitAst.kind === "for" && rawUnitAst.body.kind === "insert") {
+        const forAst = rawUnitAst;
+        const forBody = rawUnitAst.body;
         // AST-level desugar of `FOR x IN <iter> UNION (INSERT T { … })`:
         // when the iterator yields a flat set of scalar values we can emit
         // one cleanly-lowered INSERT per value with `binding_ref(x)` in the
@@ -6739,33 +7194,64 @@ export const executeQueryUnitWithTrace = (
         // function calls, paren-wrapped expressions, …) get evaluated via
         // `evaluateForIteratorValues`, which already knows how to lower
         // those shapes through the IR/SQL pipeline.
-        const iterValues: unknown[] | undefined = ast.iteratorExpr.kind === "set_literal"
-          ? ast.iteratorExpr.values
-          : tryEvaluateScalarIteratorValues(ast.iteratorExpr, schema, db, context);
+        const sqlIteratorValues = (): unknown[] | undefined => {
+          // Iterators referencing the FOR's WITH bindings (`raw_data := …,
+          // FOR item IN json_array_unpack(raw_data)`) — evaluate the set via
+          // a one-off SQL SELECT with those bindings in scope.
+          const stmtAst = {
+            kind: "select_expr",
+            expr: forAst.iteratorExpr,
+            with: forAst.with,
+            withModule: forAst.withModule,
+            pos: forAst.pos,
+          } as unknown as Statement;
+          // captureAll: an iterator the SQL stage can't lower simply isn't
+          // desugarable here.
+          const attempt = tryResult(() => {
+            const compiled = compilerService.compile(schema, stmtAst, { globals: context.globals, target: runtimeTarget });
+            if (compiled.sql.loweringMode !== "single_statement" || compiled.sql.sql.length === 0) return undefined;
+            return runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
+          }, { captureAll: true });
+          if (!attempt.ok || attempt.value === undefined) return undefined;
+          const rows = attempt.value.map((row) =>
+            row !== null && typeof row === "object" ? JSON.stringify(row) : row);
+          return rows.every((row) => row === null || isScalarValue(row)) ? rows : undefined;
+        };
+        const iterValues: unknown[] | undefined = forAst.iteratorExpr.kind === "set_literal"
+          ? forAst.iteratorExpr.values
+          : (tryEvaluateScalarIteratorValues(forAst.iteratorExpr, schema, db, context) ?? sqlIteratorValues());
         if (iterValues !== undefined) {
-          const effectiveValues: (ScalarValue | null)[] = iterValues.length === 0 && ast.optional
+          const effectiveValues: (ScalarValue | null)[] = iterValues.length === 0 && forAst.optional
             ? [null]
             : (iterValues as (ScalarValue | null)[]);
           const children: InsertStatement[] = [];
           for (const value of effectiveValues) {
             const insertValues: Record<string, InsertValue> = {};
-            for (const [key, v] of Object.entries(ast.body.values)) {
+            for (const [key, v] of Object.entries(forBody.values)) {
               if (typeof v === "object" && v !== null && "kind" in v
                 && (v as { kind?: unknown }).kind === "binding_ref"
-                && (v as { name?: unknown }).name === ast.variable) {
+                && (v as { name?: unknown }).name === forAst.variable) {
                 insertValues[key] = value as InsertValue;
               } else {
                 insertValues[key] = v;
               }
             }
+            const forStatementWith = ((forAst as { with?: WithBinding[] }).with ?? [])
+              .filter((binding) => binding.name !== forAst.variable);
+            // The variable binding precedes the body's own bindings — they may
+            // reference it, and ast_to_ir resolves bindings in declaration
+            // order.
             children.push({
-              ...ast.body,
+              ...forBody,
               with: value !== null && isScalarValue(value)
                 ? [
-                    ...(ast.body.with ?? []).filter((binding) => binding.name !== ast.variable),
-                    { name: ast.variable, value: { kind: "literal", value } },
+                    ...forStatementWith,
+                    { name: forAst.variable, value: { kind: "literal", value } },
+                    ...(forBody.with ?? []).filter((binding) => binding.name !== forAst.variable),
                   ]
-                : ast.body.with,
+                : (forStatementWith.length > 0
+                    ? [...forStatementWith, ...(forBody.with ?? [])]
+                    : forBody.with),
               values: insertValues,
             });
           }
@@ -6808,6 +7294,20 @@ export const executeQueryUnitWithTrace = (
       preValidateStatementAst(schema, ast);
       const statementType = statementTypeOf(ast);
       enforceBuiltinPermissions(context, statementType, ast.pos.line, ast.pos.column);
+      // `__default__` references resolve against the assigned pointer's
+      // declared default before anything compiles.
+      ast = rewriteDunderDefaults(schema, ast);
+      ast = preExecuteMutationExprsInDmlValues(db, schema, ast, context);
+      // WITH-bound DML subquery chains (`WITH x := (INSERT …) INSERT … x.name …`)
+      // — same handling as the single-query path: execute the bindings in
+      // order and resolve references against the captured id-sets.
+      if (isWithDmlChain(ast)) {
+        traces.push(executeWithDmlChain(db, schema, ast, context));
+        continue;
+      }
+      // DML inside WITH bindings / free-object entries executes up front; the
+      // statement then compiles as a plain read over the captured ids.
+      ast = preExecuteDmlBindings(db, schema, ast, context);
       // Fully-constant subscripts (`select "abc"[1]`, `select [1,2,3][0:9]`)
       // are evaluated directly — see tryEvalConstantSubscriptStatement.
       {
@@ -9281,7 +9781,9 @@ const runGelSelectSQL = (
 // column already holds raw JSON text and must be preserved verbatim.
 const gelStatementScalarResultIsStr = (statement: GelIRStatement): boolean => {
   const typeref = unwrapGelSelectResultSet(statement.expr).typeref;
-  if (!typeref || !typeref.isScalar) return false;
+  if (!typeref) return false;
+  // Inference-derived typerefs (`unknown:std::str`) don't set isScalar —
+  // match on the qualified name alone; nothing non-scalar is named std::str.
   return qualifiedGelTypeName(typeref) === "std::str";
 };
 
@@ -9308,12 +9810,17 @@ const materializeGelSQLRows = (
   // Scalar select: Gel SQL projects a single `value` column. Parse JSON-shaped
   // strings while preserving plain numeric strings produced by text casts.
   if (keys.length === 1 && Object.prototype.hasOwnProperty.call(row, "value")) {
-    if (options.scalarResultIsStr && typeof row.value === "string" && row.value.startsWith("\"")) {
-      try {
-        return JSON.parse(row.value);
-      } catch {
-        return row.value;
+    if (options.scalarResultIsStr && typeof row.value === "string") {
+      if (row.value.startsWith("\"")) {
+        try {
+          return JSON.parse(row.value);
+        } catch {
+          return row.value;
+        }
       }
+      // The statement's static type is std::str — keep JSON-looking plain
+      // text (`'false'`, `'[1]'`) verbatim instead of JSON.parsing it.
+      return row.value;
     }
     return normalizeGelSQLValue(row.value);
   }
@@ -10630,6 +11137,50 @@ const runWriteWithAccessPolicies = (
 
       const defaultExpr = field.defaultExpr;
       if (!defaultExpr) {
+        // Expression defaults that don't fit the literal/function-call IR
+        // (`default := __source__.a + 1`) — evaluate the declared text via a
+        // one-off SQL SELECT with `__source__.<f>` references substituted by
+        // the row's assigned values.
+        const text = field.defaultExprText;
+        // Restricted to `__source__`-referencing defaults: other expression
+        // defaults (e.g. `SELECT count(T)`) must see the pre-statement
+        // snapshot, which a per-row re-evaluation here would violate.
+        if (text && text.includes("__source__")) {
+          const substituteSourceRefs = (node: unknown): unknown => {
+            if (Array.isArray(node)) return node.map(substituteSourceRefs);
+            if (node === null || typeof node !== "object") return node;
+            const n = node as Record<string, unknown> & { kind?: string };
+            if (n.kind === "field_access"
+                && typeof n.field === "string"
+                && n.expr && typeof n.expr === "object"
+                && ((n.expr as { kind?: string }).kind === "global_ref" || (n.expr as { kind?: string }).kind === "binding_ref")
+                && (n.expr as { name?: string }).name === "__source__") {
+              const sourceValue = values[n.field];
+              if (sourceValue === undefined
+                  || sourceValue === PENDING_INSERT_REWRITE_VALUE
+                  || sourceValue === PENDING_INLINE_LINK_VALUE
+                  || sourceValue === PENDING_INSERT_SQL_EXPR_VALUE) {
+                throw new AppError("E_UNSUPPORTED", `__source__.${n.field} is not statically known`);
+              }
+              return { kind: "literal", value: sourceValue };
+            }
+            const out: Record<string, unknown> = {};
+            for (const [key, value] of Object.entries(n)) out[key] = substituteSourceRefs(value);
+            return out;
+          };
+          // captureAll: a default we can't evaluate just stays pending (the
+          // column is omitted, matching "no computable default").
+          const attempt = tryResult(() => {
+            const parsed = parseEdgeQL(`SELECT (${text})`);
+            const stmt = substituteSourceRefs(Array.isArray(parsed) ? parsed[0] : parsed) as Statement;
+            const compiled = getCompilerService().compile(schema, stmt, { globals: context.globals, target: resolvedRuntimeTarget(context, db) });
+            if (compiled.sql.loweringMode !== "single_statement" || compiled.sql.sql.length === 0) return undefined;
+            return runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
+          }, { captureAll: true });
+          if (attempt.ok && attempt.value !== undefined && attempt.value.length === 1 && isScalarValue(attempt.value[0])) {
+            values[field.name] = attempt.value[0] as ScalarValue;
+          }
+        }
         continue;
       }
 
@@ -10770,13 +11321,39 @@ const runWriteWithAccessPolicies = (
         return true;
       });
 
+      // Assignments the plan deferred to SQL (function calls, subqueries,
+      // paths into WITH bindings, …) splice in the gelIR artifact's compiled
+      // column expression — each carries its own parameter slice.
+      const sqlExprByColumn = new Map((sqlArtifact.insertColumns ?? []).map((entry) => [entry.column, entry]));
+
       if (normalizedEntries.length === 0) {
         sqlArtifact.sql = `INSERT INTO ${quoteIdent(ir.table)} DEFAULT VALUES`;
         sqlArtifact.params = [];
       } else {
-        const columns = normalizedEntries.map(([column]) => column);
-        const params = normalizedEntries.map(([, value]) => (typeof value === "boolean" ? (value ? 1 : 0) : value));
-        sqlArtifact.sql = `INSERT INTO ${quoteIdent(ir.table)} (${columns.map((column) => quoteIdent(column)).join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`;
+        const columns: string[] = [];
+        const valueExprs: string[] = [];
+        const params: ScalarValue[] = [];
+        for (const [column, value] of normalizedEntries) {
+          if (value === PENDING_INSERT_SQL_EXPR_VALUE) {
+            const compiled = sqlExprByColumn.get(column);
+            if (!compiled) {
+              throw new AppError(
+                "E_UNSUPPORTED",
+                `INSERT assignment for '${column}' requires SQL lowering; runtime fallback disabled`,
+                ast.pos.line,
+                ast.pos.column,
+              );
+            }
+            columns.push(column);
+            valueExprs.push(compiled.sql);
+            params.push(...compiled.params);
+            continue;
+          }
+          columns.push(column);
+          valueExprs.push("?");
+          params.push(typeof value === "boolean" ? (value ? 1 : 0) : value);
+        }
+        sqlArtifact.sql = `INSERT INTO ${quoteIdent(ir.table)} (${columns.map((column) => quoteIdent(column)).join(", ")}) VALUES (${valueExprs.join(", ")})`;
         sqlArtifact.params = params;
       }
 
@@ -10787,8 +11364,25 @@ const runWriteWithAccessPolicies = (
         if (conflictField) {
           const resolveBinding = makeBindingResolver(ast, context, ast.pos.line, ast.pos.column);
           const rawValue = ast.values[conflictField];
-          if (rawValue !== undefined) {
-            const conflictValue = scalarFromInsertValue(rawValue, resolveBinding, ast.pos.line, ast.pos.column);
+          // Non-static conflict values (empty-set bindings, subqueries) skip
+          // the static pre-check; the UNIQUE catch below still honors the
+          // UNLESS CONFLICT suppression if the write actually conflicts.
+          const staticConflictValue = rawValue !== undefined
+            ? tryResult(() => scalarFromInsertValue(rawValue, resolveBinding, ast.pos.line, ast.pos.column))
+            : undefined;
+          // SQL-deferred conflict values (function calls, json paths, …):
+          // evaluate the column's compiled expression once to recover the
+          // value the insert is about to write.
+          const sqlConflictValue = !staticConflictValue?.ok && rawValue !== undefined
+            ? tryResult(() => {
+                const compiledColumn = sqlExprByColumn.get(conflictField);
+                if (!compiledColumn) return undefined;
+                const row = db.prepare(`SELECT ${compiledColumn.sql} AS ${quoteIdent("v")}`).all(...compiledColumn.params)[0] as { v?: unknown } | undefined;
+                return row && isScalarValue(row.v) ? row.v : undefined;
+              }, { captureAll: true })
+            : undefined;
+          if (staticConflictValue?.ok || sqlConflictValue?.ok === true && sqlConflictValue.value !== undefined) {
+            const conflictValue = staticConflictValue?.ok ? staticConflictValue.value : sqlConflictValue?.ok ? sqlConflictValue.value as ScalarValue : null;
             const existingId = findConflictRowId(db, ir.table, conflictField, conflictValue);
             if (existingId) {
               if (ast.conflict.else?.kind === "update") {
@@ -10801,24 +11395,56 @@ const runWriteWithAccessPolicies = (
                   params.push(existingId);
                   const writeResult = db.prepare(sql).run(...params);
                   db.prepare(dmlUsesSavepoint ? "RELEASE gel_dml" : "COMMIT").run();
-                  return { changes: writeResult.changes };
+                  return { changes: writeResult.changes, rows: [{ id: existingId }] };
                 }
               }
 
               db.prepare(dmlUsesSavepoint ? "RELEASE gel_dml" : "COMMIT").run();
-              return { changes: 0 };
+              // ELSE <expr> yields the conflicting row; plain UNLESS CONFLICT
+              // yields the empty set.
+              return ast.conflict.else ? { changes: 0, rows: [{ id: existingId }] } : { changes: 0 };
             }
           }
         }
       }
 
-      const writeResult = db.prepare(sqlArtifact.sql).run(...sqlArtifact.params);
+      let writeResult: { changes: number };
+      try {
+        writeResult = db.prepare(sqlArtifact.sql).run(...sqlArtifact.params);
+      } catch (writeErr) {
+        // UNLESS CONFLICT (without ELSE) suppresses conflicts the static
+        // pre-check above couldn't resolve — the UNIQUE failure IS the
+        // conflict, so the insert quietly does nothing.
+        if (ast.kind === "insert" && ast.conflict && !ast.conflict.else
+            && String((writeErr as Error).message ?? writeErr).includes("UNIQUE constraint failed")) {
+          db.prepare(dmlUsesSavepoint ? "RELEASE gel_dml" : "COMMIT").run();
+          return { changes: 0 };
+        }
+        // A SQL-lowered assignment that evaluates to the empty set inserts
+        // NULL; the schema's NOT NULL constraint then fires. Surface it with
+        // EdgeQL's required-pointer wording instead of SQLite's.
+        const match = /NOT NULL constraint failed: [^.]+\.(\S+)/.exec(String((writeErr as Error).message ?? writeErr));
+        if (match) {
+          const column = match[1];
+          const linkName = column.endsWith("_id") ? column.slice(0, -3) : undefined;
+          const isLink = linkName !== undefined && (subjectType.links ?? []).some((link) => link.name === linkName);
+          throw new AppError(
+            "E_VALIDATION",
+            `missing value for required ${isLink ? "link" : "property"} '${isLink ? linkName : column}' of object type '${qualifiedTypeName(subjectType)}'`,
+            ast.pos.line,
+            ast.pos.column,
+          );
+        }
+        throw writeErr;
+      }
 
+      let insertedId: string | undefined;
       if (ast.kind === "insert") {
         const inserted = db
           .prepare(`SELECT ${quoteIdent("id")} AS ${quoteIdent("id")} FROM ${quoteIdent(ir.table)} ORDER BY rowid DESC LIMIT 1`)
           .all()[0] as { id?: unknown } | undefined;
         if (typeof inserted?.id === "string") {
+          insertedId = inserted.id;
           const postInsertIR = {
             ...ir,
             linkAssignments: ir.linkAssignments?.filter((assignment) => assignment.storage !== "inline"),
@@ -10828,7 +11454,7 @@ const runWriteWithAccessPolicies = (
       }
 
       db.prepare(dmlUsesSavepoint ? "RELEASE gel_dml" : "COMMIT").run();
-      return { changes: writeResult.changes };
+      return { changes: writeResult.changes, rows: insertedId !== undefined ? [{ id: insertedId }] : undefined };
     }
 
     if (ir.kind === "update") {
@@ -11016,6 +11642,31 @@ const resolveInsertTargets = (
 
   if (value.kind === "binding_ref") {
     const withValue = (ast.with ?? []).find((binding) => binding.name === value.name)?.value;
+    // Expression bindings (`sub := <Subordinate>{}`, `sub := (SELECT … ++ …)`)
+    // — evaluate the expression once via SQL and link the returned objects.
+    if (withValue && withValue.kind === "subquery_expr") {
+      const stmtAst = {
+        kind: "select_expr",
+        expr: withValue.expr,
+        with: (ast.with ?? []).filter((binding) => binding.name !== value.name),
+        pos: ast.pos,
+      } as unknown as Statement;
+      // captureAll: bindings that don't evaluate to object rows just yield no
+      // link targets.
+      const attempt = tryResult(() => {
+        const compiled = getCompilerService().compile(schema, stmtAst, { globals: context.globals, target: resolvedRuntimeTarget(context, db) });
+        if (compiled.sql.loweringMode !== "single_statement" || compiled.sql.sql.length === 0) return undefined;
+        return runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
+      }, { captureAll: true });
+      if (attempt.ok && attempt.value !== undefined) {
+        return attempt.value
+          .map((row) => (row && typeof row === "object" && typeof (row as { id?: unknown }).id === "string"
+            ? { id: (row as { id: string }).id, properties: {} }
+            : undefined))
+          .filter((entry): entry is LinkTargetAssignment => !!entry);
+      }
+      return [];
+    }
     if (withValue && withValue.kind === "subquery") {
       const rows = executeSelectExprRows(db, schema, withValue.query as Extract<InsertValue, { kind: "select" }>, context);
       return rows

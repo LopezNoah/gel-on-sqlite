@@ -36,6 +36,8 @@ const BASE_SQL_NATIVE_STDLIB_LOWERING = new Set<string>([
   "std::datetime_of_transaction",
   "std::datetime_of_statement",
   "std::to_str",
+  "std::to_json",
+  "std::json_get",
   "std::len",
   "std::count",
   "std::max",

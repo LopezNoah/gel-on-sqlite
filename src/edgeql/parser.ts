@@ -2490,6 +2490,15 @@ class Parser {
     }
     const name = this.expectName("Expected parameter name").lexeme;
     this.expect("colon", "Expected ':' after parameter name");
+    // Post-colon typemods — EdgeQL's canonical spelling (`b: OPTIONAL str`,
+    // `a: SET OF str`). Fold them into the flags rather than letting them
+    // leak into the type text, where downstream consumers (DDL function
+    // ingestion, UDF inlining) would lose the OPTIONAL/SET OF semantics.
+    while (true) {
+      if (this.matchKeywordLexeme("optional")) { optional = true; continue; }
+      if (this.atSetOf()) { this.consume(); this.consume(); setOf = true; continue; }
+      break;
+    }
     const typeText = this.captureTypeExprText();
     let defaultExpr: string | undefined;
     if (this.peek().kind === "equals") {
