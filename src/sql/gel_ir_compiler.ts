@@ -81,6 +81,10 @@ export interface GelIRCompileOptions {
   // SQL compiler matches by typeref id and path namespace here when resolving
   // path references. Most-recent (innermost) scopes take precedence.
   outerScopes?: ReadonlyArray<{ alias: string; typeref: TypeRef; namespace?: string[] }>;
+  // Current row sources that are not bare type roots (for example a set-union
+  // source) are matched by path id so `.name` in FILTER/ORDER BY reads the
+  // row currently being shaped instead of recompiling the full source set.
+  sourcePathAliases?: ReadonlyArray<{ pathKey: string; alias: string }>;
   // When a multi-scalar pointer is being iterated via `json_each(col) je`,
   // the helper binds the iteration's pathId(s) to the SQL expression that
   // evaluates the json_each value column (`je."value"`). compileValueSetSQL
@@ -353,6 +357,15 @@ export const compileGelIRToSQL = (
 
   const sourceAlias = compiledSource.alias;
   const sourceSql = compiledSource.sql;
+  const sourceScopedOptions: GelIRCompileOptions = sourceSet
+    ? {
+        ...options,
+        sourcePathAliases: [
+          ...(options.sourcePathAliases ?? []),
+          { pathKey: pathIdKey(sourceSet), alias: sourceAlias },
+        ],
+      }
+    : options;
 
   const projections = [
     `${sourceAlias}.${quoteIdent("id")} AS ${quoteIdent("id")}`,
@@ -361,7 +374,7 @@ export const compileGelIRToSQL = (
 
   const sourceShape = sourceSet?.shape ?? [];
   for (const element of sourceShape) {
-    const projection = compileShapeProjection(element, sourceAlias, params, options, target, 0);
+    const projection = compileShapeProjection(element, sourceAlias, params, sourceScopedOptions, target, 0);
     if (projection) {
       projections.push(projection);
     }
@@ -392,16 +405,21 @@ export const compileGelIRToSQL = (
     // nested set producers (`array_unpack(.tag_array)`, json_each over a
     // multi scalar pointer) can correlate to the outer row's alias rather
     // than falling back to a fresh table scan with an unbound placeholder.
-    // We only expose it when the source set is a bare type_root (the
-    // simplest case where path sharing is unambiguous); chain sources route
-    // through rewriteFilterAgainstChainSource above.
-    const whereOptions: GelIRCompileOptions = sourceSet?.expr.kind === "type_root"
+    // Bare type_root sources also participate in outer-scope path sharing;
+    // non-root row sources are bound by path id through sourcePathAliases.
+    const whereOptions: GelIRCompileOptions = sourceSet
       ? {
           ...options,
-          outerScopes: [
-            ...(options.outerScopes ?? []),
-            { alias: sourceAlias, typeref: (sourceSet.expr as TypeRoot).typeref, namespace: sourceSet.pathId?.namespace ?? [] },
+          sourcePathAliases: [
+            ...(options.sourcePathAliases ?? []),
+            { pathKey: pathIdKey(sourceSet), alias: sourceAlias },
           ],
+          outerScopes: sourceSet.expr.kind === "type_root"
+            ? [
+                ...(options.outerScopes ?? []),
+                { alias: sourceAlias, typeref: (sourceSet.expr as TypeRoot).typeref, namespace: sourceSet.pathId?.namespace ?? [] },
+              ]
+            : options.outerScopes,
         }
       : options;
     let whereSql = compileWhereClause(rewritten, sourceAlias, params, target, whereOptions);
@@ -422,16 +440,21 @@ export const compileGelIRToSQL = (
 
   const orderByToApply = statement.orderBy ?? selectOrderBy;
   if (orderByToApply && orderByToApply.length > 0) {
-    // ORDER BY references against the iteration source (e.g.
-    // `ORDER BY count(Item.tag_set1)`) also need the outer-scope
-    // correlation so set producers correlate to the outer row.
-    const orderOptions: GelIRCompileOptions = sourceSet?.expr.kind === "type_root"
+    // ORDER BY references against the iteration source also need the same
+    // current-source binding as FILTER so set producers correlate to the row.
+    const orderOptions: GelIRCompileOptions = sourceSet
       ? {
           ...options,
-          outerScopes: [
-            ...(options.outerScopes ?? []),
-            { alias: sourceAlias, typeref: (sourceSet.expr as TypeRoot).typeref, namespace: sourceSet.pathId?.namespace ?? [] },
+          sourcePathAliases: [
+            ...(options.sourcePathAliases ?? []),
+            { pathKey: pathIdKey(sourceSet), alias: sourceAlias },
           ],
+          outerScopes: sourceSet.expr.kind === "type_root"
+            ? [
+                ...(options.outerScopes ?? []),
+                { alias: sourceAlias, typeref: (sourceSet.expr as TypeRoot).typeref, namespace: sourceSet.pathId?.namespace ?? [] },
+              ]
+            : options.outerScopes,
         }
       : options;
     const orders = orderByToApply.map((order) => {
@@ -5129,6 +5152,13 @@ const pickOuterScopeAliasForExpr = (set: Set, options: GelIRCompileOptions): str
     options,
   );
   return match ? match.alias : null;
+};
+
+const pickSourcePathAlias = (set: Set, options: GelIRCompileOptions): string | null => {
+  if (!options.sourcePathAliases || options.sourcePathAliases.length === 0) return null;
+  const key = pathIdKey(set);
+  const match = [...options.sourcePathAliases].reverse().find((scope) => scope.pathKey === key);
+  return match?.alias ?? null;
 };
 
 const innermostTypeRootSet = (set: Set): Set | null => {
@@ -10852,6 +10882,20 @@ const compileValueSetSQL = (
       const alias = linkPropertyAlias ?? sourceAlias;
       return `${alias}.${quoteIdent(col)}`;
     }
+    const currentSourceAlias = pickSourcePathAlias(pointer.source, options);
+    if (currentSourceAlias) {
+      if (pointer.ptrref.isIdPointer || pointer.ptrref.shortName === "id") {
+        return `${currentSourceAlias}.${quoteIdent("id")}`;
+      }
+      if (!pointer.ptrref.outTarget.isScalar) {
+        const isSingleLink = pointer.ptrref.outCardinality === "one"
+          || pointer.ptrref.outCardinality === "at_most_one";
+        return pointer.direction === "outbound" && isSingleLink
+          ? `${currentSourceAlias}.${quoteIdent(`${pointer.ptrref.shortName}_id`)}`
+          : null;
+      }
+      return `${currentSourceAlias}.${quoteIdent(col)}`;
+    }
     // Pointer off a row-set source that isn't anchored on the caller's alias
     // (`user.id` / `x.name` where the source is `array_unpack(<array<T>>[])`):
     // compile the source rows directly and, for non-id leaves, join the
@@ -11949,7 +11993,7 @@ const compileFunctionCallSQL = (
           if (se.where || se.limit || se.offset || (se.orderBy && se.orderBy.length > 0)) return false;
           ptrSource = se.result;
         }
-        return ptrSource.expr.kind === "type_root";
+        return ptrSource.expr.kind === "type_root" || pickSourcePathAlias(ptrSource, options) !== null;
       };
       if (!hasClauses && countPtrAnchorsRow()) {
         const arr = compilePointerArrayExpr(

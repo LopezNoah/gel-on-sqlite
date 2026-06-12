@@ -6422,13 +6422,6 @@ const compileShape = (
       });
     }
 
-    // Links are only included by deep splat (`**`). The single asterisk (`*`)
-    // restricts itself to scalar properties so a polymorphic root like
-    // `Named { *, [is Issue].* }` doesn't end up traversing Issue's link
-    // tables — Python/Gel's documented behaviour for splats.
-    if (depth <= 1) {
-      return expanded;
-    }
     for (const link of resolvedLinks ?? typeDef.links ?? []) {
       if (link.name.startsWith("__") && link.name.endsWith("__")) {
         continue;
@@ -6437,6 +6430,11 @@ const compileShape = (
         continue;
       }
       if (link.splatStrategy === "Explicit") {
+        continue;
+      }
+      // Plain `*` only includes links the schema explicitly opted into via
+      // `splat_strategy := 'Implicit'`; `**` includes all implicit links.
+      if (depth <= 1 && link.splatStrategy !== "Implicit") {
         continue;
       }
       const linkTarget = resolveTypeRef(ctx, link.targetType);
