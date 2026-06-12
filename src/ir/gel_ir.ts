@@ -269,6 +269,11 @@ export interface GroupStmt extends Statement {
   // group keys (BY fields not in the written shape, USING aliases). Stripped
   // from the displayed `elements` so the output shape stays as written.
   hiddenByFields?: string[];
+  // Scalar/tuple-element subjects (`group enumerate(...) using k := .0 by k`)
+  // desugar into a FOR whose body is a named tuple carrying the raw element
+  // under this field plus each USING alias; the SQL stage reads `elements`
+  // back from this field instead of stripping hidden ones.
+  elementValueField?: string;
 }
 
 export interface ConfigStmt extends Statement {
@@ -621,6 +626,10 @@ export interface GroupRowsExpr extends Base {
 export interface GroupRowFieldExpr extends Base {
   kind: "group_row_field";
   steps: string[];
+  // The group-rows set this path reads from (when known) — lets consumers
+  // distinguish refs to an INNER group binding from refs to the enclosing
+  // group row (`select (even := z.key.x, …)` iterates z element-wise).
+  rows?: Set;
 }
 
 export type GroupRowProjection =
@@ -642,7 +651,12 @@ export type GroupRowProjection =
   // grouping-set names as a sorted array (a stable per-set identifier)
   | { name: string; kind: "sorted_grouping" }
   // `minCost := min(.elements.cost)` — an aggregate over an element field
-  | { name: string; kind: "element_agg"; fn: "min" | "max" | "sum" | "avg"; steps: string[] };
+  | { name: string; kind: "element_agg"; fn: "min" | "max" | "sum" | "avg"; steps: string[] }
+  // Anything outside the static model (`groups := (for z in (group .elements
+  // …) union (…))`) — a compiled IR value evaluated per group row with the
+  // row bound as the active group-row scope. Multi values aggregate into a
+  // JSON array.
+  | { name: string; kind: "computed_set"; value: Set };
 
 export type GroupElementsField =
   // plain field passthrough (`name`)
@@ -650,7 +664,10 @@ export type GroupElementsField =
   // `z := .b <= 1` — an element field path compared against a literal
   | { name: string; kind: "compare"; steps: string[]; op: "=" | "!=" | "<" | "<=" | ">" | ">="; rhs: string | number | boolean }
   // `b: {c, z := .d <= 1}` — re-project a nested object field (recursive)
-  | { name: string; kind: "object_shape"; fields: GroupElementsField[] };
+  | { name: string; kind: "object_shape"; fields: GroupElementsField[] }
+  // `n := count(.elements)` — count of an array-valued element field (used
+  // when the elements are themselves group rows)
+  | { name: string; kind: "count_path"; steps: string[] };
 
 // `(GROUP <link> BY <key>)` in expression / shape position. Unlike a top-level
 // GROUP (which runs in the runtime grouper), this lowers directly to a
