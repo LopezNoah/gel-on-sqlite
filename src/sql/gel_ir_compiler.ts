@@ -3685,6 +3685,13 @@ const compileScalarSelectSQLInner = (
   const valueSql = compileValueSetSQL(sourceSet, "g0", params, target, options);
   if (!valueSql) return null;
   if (sources.size === 0) {
+    // Invariant: this branch emits SELECTs with no FROM, so the value must
+    // not read the local anchor alias (self-contained subqueries that bind
+    // their own g0 are fine; see referencesUnboundAlias).
+    if (referencesUnboundAlias(valueSql, "g0", options)) {
+      params.length = preValueCheckpoint;
+      return null;
+    }
     if (innerWheres.length > 0 || appliedOuterWheres.length > 0) return null;
     // A source-free value with FILTERs whose roots all resolve to enclosing
     // scopes (`SELECT 'yes' FILTER Issue.status.name = 'Open'` inside a

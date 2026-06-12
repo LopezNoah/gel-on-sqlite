@@ -1,15 +1,22 @@
 import { canLowerStdlibFunctionToSql, type RuntimeTarget } from "../runtime/target.js";
 
-export type StdlibSqlTemplate = (args: string[]) => string | null;
+export type StdlibSqlTemplate = (args: string[], argTypes?: (string | undefined)[]) => string | null;
 
-const normalizeDateTimeSQLInput = (dateExpr: string): string =>
-  `replace(replace(CAST(${dateExpr} AS TEXT), 'T', ' '), 'Z', '')`;
+// EdgeQL's bit_* family is overloaded per integer type and wraps results to
+// the operand's width. The width comes from the first argument's static type
+// hint; unknown/unresolved types default to 64-bit (the int64 overload).
+const bitWidthOf = (typeHint: string | undefined): number => {
+  if (typeHint && typeHint.endsWith("int16")) return 16;
+  if (typeHint && typeHint.endsWith("int32")) return 32;
+  return 64;
+};
 
 const STDLIB_SQL_TEMPLATES = new Map<string, StdlibSqlTemplate>([
   ["math::abs", (argSql) => argSql[0] ? `abs(${argSql[0]})` : null],
   ["math::ceil", (argSql) => argSql[0] ? `ceil(${argSql[0]})` : null],
   ["math::floor", (argSql) => argSql[0] ? `floor(${argSql[0]})` : null],
   ["math::exp", (argSql) => argSql[0] ? `_gel_exp(${argSql[0]})` : null],
+  ["math::sqrt", (argSql) => argSql[0] ? `_gel_sqrt(${argSql[0]})` : null],
   ["math::ln", (argSql) => argSql[0] ? `_gel_ln(${argSql[0]})` : null],
   ["math::lg", (argSql) => argSql[0] ? `_gel_lg(${argSql[0]})` : null],
   ["math::log", (argSql) => argSql[0] && argSql[1] ? `_gel_log(${argSql[0]}, ${argSql[1]})` : null],
@@ -79,6 +86,23 @@ const STDLIB_SQL_TEMPLATES = new Map<string, StdlibSqlTemplate>([
     const lookup = `json_extract(${argSql[0]}, '$[' || (${idx}) || ']')`;
     return argSql[2] ? `IFNULL(${lookup}, ${argSql[2]})` : lookup;
   }],
+  // Bitwise functions. AND/OR/NOT sign-extend cleanly from any width to
+  // 64-bit (the ops are homomorphic under sign extension), so SQLite's
+  // native operators suffice. XOR has no SQLite operator and the shifts /
+  // popcount are width-sensitive — those go through `_gel_bit_*` UDFs.
+  ["std::bit_and", (argSql) => argSql[0] && argSql[1] ? `(${argSql[0]} & ${argSql[1]})` : null],
+  ["std::bit_or", (argSql) => argSql[0] && argSql[1] ? `(${argSql[0]} | ${argSql[1]})` : null],
+  ["std::bit_not", (argSql) => argSql[0] ? `(~(${argSql[0]}))` : null],
+  ["std::bit_xor", (argSql) => argSql[0] && argSql[1] ? `_gel_bit_xor(${argSql[0]}, ${argSql[1]})` : null],
+  ["std::bit_lshift", (argSql, argTypes) => argSql[0] && argSql[1]
+    ? `_gel_bit_lshift(${argSql[0]}, ${argSql[1]}, ${bitWidthOf(argTypes?.[0])})`
+    : null],
+  ["std::bit_rshift", (argSql, argTypes) => argSql[0] && argSql[1]
+    ? `_gel_bit_rshift(${argSql[0]}, ${argSql[1]}, ${bitWidthOf(argTypes?.[0])})`
+    : null],
+  ["std::bit_count", (argSql, argTypes) => argSql[0]
+    ? `_gel_bit_count(${argSql[0]}, ${bitWidthOf(argTypes?.[0])})`
+    : null],
   ["std::datetime_current", () => "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"],
   ["std::datetime_of_transaction", () => "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"],
   ["std::datetime_of_statement", () => "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"],
@@ -89,11 +113,62 @@ const STDLIB_SQL_TEMPLATES = new Map<string, StdlibSqlTemplate>([
   ["std::min", (argSql) => argSql[0] ? `min(${argSql[0]})` : null],
   ["std::str_lower", (argSql) => argSql[0] ? `lower(COALESCE(CAST(${argSql[0]} AS TEXT), ''))` : null],
   ["std::str_upper", (argSql) => argSql[0] ? `upper(COALESCE(CAST(${argSql[0]} AS TEXT), ''))` : null],
-  // SQLite's round() rounds half-to-even at the boundary, matching EdgeQL.
-  ["std::round", (argSql) => {
+  // str_trim family: SQLite's trim(x, y) trims any character in y from both
+  // ends (ltrim/rtrim for one side), matching EdgeQL's optional `trim` arg.
+  ["std::str_trim", (argSql) => argSql[0]
+    ? (argSql[1] ? `trim(${argSql[0]}, ${argSql[1]})` : `trim(${argSql[0]})`)
+    : null],
+  ["std::str_trim_start", (argSql) => argSql[0]
+    ? (argSql[1] ? `ltrim(${argSql[0]}, ${argSql[1]})` : `ltrim(${argSql[0]})`)
+    : null],
+  ["std::str_trim_end", (argSql) => argSql[0]
+    ? (argSql[1] ? `rtrim(${argSql[0]}, ${argSql[1]})` : `rtrim(${argSql[0]})`)
+    : null],
+  ["std::str_pad_start", (argSql) => argSql[0] && argSql[1]
+    ? `_gel_str_pad_start(${argSql[0]}, ${argSql[1]}${argSql[2] ? `, ${argSql[2]}` : ""})`
+    : null],
+  ["std::str_pad_end", (argSql) => argSql[0] && argSql[1]
+    ? `_gel_str_pad_end(${argSql[0]}, ${argSql[1]}${argSql[2] ? `, ${argSql[2]}` : ""})`
+    : null],
+  ["std::str_repeat", (argSql) => argSql[0] && argSql[1] ? `_gel_str_repeat(${argSql[0]}, ${argSql[1]})` : null],
+  ["std::str_reverse", (argSql) => argSql[0] ? `_gel_str_reverse(${argSql[0]})` : null],
+  ["std::str_split", (argSql) => argSql[0] && argSql[1] ? `_gel_str_split(${argSql[0]}, ${argSql[1]})` : null],
+  ["std::str_replace", (argSql) => argSql[0] && argSql[1] && argSql[2]
+    ? `replace(${argSql[0]}, ${argSql[1]}, ${argSql[2]})`
+    : null],
+  ["std::array_replace", (argSql) => argSql[0] && argSql[1] && argSql[2]
+    ? `_gel_array_replace(${argSql[0]}, ${argSql[1]}, ${argSql[2]})`
+    : null],
+  ["std::to_int16", (argSql) => argSql[0] ? `_gel_to_int16(${argSql[0]}${argSql[1] ? `, ${argSql[1]}` : ""})` : null],
+  ["std::to_int32", (argSql) => argSql[0] ? `_gel_to_int32(${argSql[0]}${argSql[1] ? `, ${argSql[1]}` : ""})` : null],
+  ["std::to_int64", (argSql) => argSql[0] ? `_gel_to_int64(${argSql[0]}${argSql[1] ? `, ${argSql[1]}` : ""})` : null],
+  ["std::to_float32", (argSql) => argSql[0] ? `_gel_to_float32(${argSql[0]}${argSql[1] ? `, ${argSql[1]}` : ""})` : null],
+  ["std::to_float64", (argSql) => argSql[0] ? `_gel_to_float64(${argSql[0]}${argSql[1] ? `, ${argSql[1]}` : ""})` : null],
+  ["std::to_bigint", (argSql) => argSql[0] ? `_gel_to_bigint(${argSql[0]}${argSql[1] ? `, ${argSql[1]}` : ""})` : null],
+  ["std::to_decimal", (argSql) => argSql[0] ? `_gel_to_decimal(${argSql[0]}${argSql[1] ? `, ${argSql[1]}` : ""})` : null],
+  // Range predicates/accessors — ranges are JSON objects produced by
+  // `_gel_range` (constructed in compileFunctionCallSQL, which knows the
+  // bound types). Boolean results are JSON-encoded by the caller.
+  ["std::overlaps", (argSql) => argSql[0] && argSql[1] ? `_gel_range_overlaps(${argSql[0]}, ${argSql[1]})` : null],
+  ["std::adjacent", (argSql) => argSql[0] && argSql[1] ? `_gel_range_adjacent(${argSql[0]}, ${argSql[1]})` : null],
+  ["std::strictly_below", (argSql) => argSql[0] && argSql[1] ? `_gel_range_strictly_below(${argSql[0]}, ${argSql[1]})` : null],
+  ["std::strictly_above", (argSql) => argSql[0] && argSql[1] ? `_gel_range_strictly_above(${argSql[0]}, ${argSql[1]})` : null],
+  ["std::bounded_above", (argSql) => argSql[0] && argSql[1] ? `_gel_range_bounded_above(${argSql[0]}, ${argSql[1]})` : null],
+  ["std::bounded_below", (argSql) => argSql[0] && argSql[1] ? `_gel_range_bounded_below(${argSql[0]}, ${argSql[1]})` : null],
+  ["std::range_is_empty", (argSql) => argSql[0] ? `_gel_range_is_empty(${argSql[0]})` : null],
+  ["std::range_is_inclusive_lower", (argSql) => argSql[0] ? `_gel_range_is_inclusive_lower(${argSql[0]})` : null],
+  ["std::range_is_inclusive_upper", (argSql) => argSql[0] ? `_gel_range_is_inclusive_upper(${argSql[0]})` : null],
+  ["std::range_get_lower", (argSql) => argSql[0] ? `_gel_range_get_lower(${argSql[0]})` : null],
+  ["std::range_get_upper", (argSql) => argSql[0] ? `_gel_range_get_upper(${argSql[0]})` : null],
+  ["std::multirange", (argSql) => argSql[0] ? `_gel_multirange(${argSql[0]})` : null],
+  // EdgeQL round: float64 is half-to-even, decimal/bigint half-away-from-zero
+  // (Postgres float8 vs numeric). The mode comes from the arg's static type.
+  ["std::round", (argSql, argTypes) => {
     if (!argSql[0]) return null;
-    if (argSql[1]) return `round(${argSql[0]}, ${argSql[1]})`;
-    return `round(${argSql[0]})`;
+    const t = argTypes?.[0] ?? "";
+    const mode = t.endsWith("decimal") || t.endsWith("bigint") ? "'away'" : "'even'";
+    if (argSql[1]) return `_gel_round(${argSql[0]}, ${argSql[1]}, ${mode})`;
+    return `_gel_round(${argSql[0]}, 0, ${mode})`;
   }],
   // `find(haystack, needle)` returns 0-based position or -1 if not found.
   // SQLite's instr returns 1-based, 0 if not found — translate accordingly.
@@ -114,31 +189,33 @@ const STDLIB_SQL_TEMPLATES = new Map<string, StdlibSqlTemplate>([
     if (!argSql[0] || !argSql[1]) return null;
     return `(WITH __aj(__arr) AS (VALUES (${argSql[0]})) SELECT COALESCE(group_concat(value, ${argSql[1]}), '') FROM __aj, json_each(__aj.__arr))`;
   }],
-  ["std::datetime_get", (argSql) => {
-    if (!argSql[0] || !argSql[1]) {
-      return null;
-    }
-    const firstExpr = `LOWER(CAST(${argSql[0]} AS TEXT))`;
-    const secondExpr = `LOWER(CAST(${argSql[1]} AS TEXT))`;
-    const partExpr = `CASE WHEN ${firstExpr} IN ('year', 'month', 'day', 'hour', 'minute', 'second', 'epochseconds') THEN ${firstExpr} ELSE ${secondExpr} END`;
-    const dateExpr = normalizeDateTimeSQLInput(`CASE WHEN ${firstExpr} IN ('year', 'month', 'day', 'hour', 'minute', 'second', 'epochseconds') THEN ${argSql[1]} ELSE ${argSql[0]} END`);
-    return `CASE ${partExpr} WHEN 'year' THEN CAST(strftime('%Y', ${dateExpr}) AS INTEGER) WHEN 'month' THEN CAST(strftime('%m', ${dateExpr}) AS INTEGER) WHEN 'day' THEN CAST(strftime('%d', ${dateExpr}) AS INTEGER) WHEN 'hour' THEN CAST(strftime('%H', ${dateExpr}) AS INTEGER) WHEN 'minute' THEN CAST(strftime('%M', ${dateExpr}) AS INTEGER) WHEN 'second' THEN CAST(strftime('%S', ${dateExpr}) AS INTEGER) WHEN 'epochseconds' THEN CAST(strftime('%s', ${dateExpr}) AS INTEGER) ELSE NULL END`;
-  }],
-  ["std::datetime_truncate", (argSql) => {
-    if (!argSql[0] || !argSql[1]) {
-      return null;
-    }
-    const firstExpr = `LOWER(CAST(${argSql[0]} AS TEXT))`;
-    const secondExpr = `LOWER(CAST(${argSql[1]} AS TEXT))`;
-    const partExpr = `CASE WHEN ${firstExpr} IN ('year', 'month', 'day', 'hour', 'minute', 'second') THEN ${firstExpr} ELSE ${secondExpr} END`;
-    const dateExpr = normalizeDateTimeSQLInput(`CASE WHEN ${firstExpr} IN ('year', 'month', 'day', 'hour', 'minute', 'second') THEN ${argSql[1]} ELSE ${argSql[0]} END`);
-    return `CASE ${partExpr} WHEN 'year' THEN strftime('%Y-01-01T00:00:00.000Z', ${dateExpr}) WHEN 'month' THEN strftime('%Y-%m-01T00:00:00.000Z', ${dateExpr}) WHEN 'day' THEN strftime('%Y-%m-%dT00:00:00.000Z', ${dateExpr}) WHEN 'hour' THEN strftime('%Y-%m-%dT%H:00:00.000Z', ${dateExpr}) WHEN 'minute' THEN strftime('%Y-%m-%dT%H:%M:00.000Z', ${dateExpr}) WHEN 'second' THEN strftime('%Y-%m-%dT%H:%M:%S.000Z', ${dateExpr}) ELSE strftime('%Y-%m-%dT%H:%M:%fZ', ${dateExpr}) END`;
-  }],
+  ["std::datetime_get", (argSql) => argSql[0] && argSql[1]
+    ? `_gel_datetime_get(${argSql[0]}, ${argSql[1]})`
+    : null],
+  ["std::datetime_truncate", (argSql) => argSql[0] && argSql[1]
+    ? `_gel_datetime_truncate(${argSql[0]}, ${argSql[1]})`
+    : null],
+  ["cal::time_get", (argSql) => argSql[0] && argSql[1]
+    ? `_gel_time_get(${argSql[0]}, ${argSql[1]})`
+    : null],
+  ["cal::date_get", (argSql) => argSql[0] && argSql[1]
+    ? `_gel_date_get(${argSql[0]}, ${argSql[1]})`
+    : null],
+  ["std::duration_truncate", (argSql) => argSql[0] && argSql[1]
+    ? `_gel_duration_truncate(${argSql[0]}, ${argSql[1]})`
+    : null],
+  ["std::duration_to_seconds", (argSql) => argSql[0]
+    ? `_gel_duration_to_seconds(${argSql[0]})`
+    : null],
 ]);
 
 const UNREGISTERED_BUT_SUPPORTED = new Set<string>([
   "std::datetime_get",
   "std::datetime_truncate",
+  "cal::time_get",
+  "cal::date_get",
+  "std::duration_truncate",
+  "std::duration_to_seconds",
   "std::re_test",
   "std::re_match",
   "std::re_replace",
@@ -151,6 +228,7 @@ export const lowerStdlibFunctionSql = (
   target: RuntimeTarget,
   functionName: string,
   args: string[],
+  argTypes?: (string | undefined)[],
 ): string | null => {
   // Unqualified names (e.g. `len`, `count`) reach us when the AST→IR
   // pass doesn't qualify the function. Try the standard module prefixes
@@ -162,7 +240,7 @@ export const lowerStdlibFunctionSql = (
     if (!canLowerStdlibFunctionSql(target, candidate)) continue;
     const template = STDLIB_SQL_TEMPLATES.get(candidate);
     if (template) {
-      const result = template(args);
+      const result = template(args, argTypes);
       if (result) return result;
     }
   }

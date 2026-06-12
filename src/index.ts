@@ -133,5 +133,5 @@ const app = createHttpServer({
 
 const port = Number(process.env.PORT ?? 4000);
 app.listen(port, () => {
-  console.log(`sqlite-spec-rebuild listening on ${port}`);
+  console.error(`sqlite-spec-rebuild listening on ${port}`);
 });

@@ -11,9 +11,9 @@ const read = (f: string) => fs.readFileSync(path.join(dir, f), "utf8");
 const strip = (s: string) => s.replace(/#[^\n]*/g, "");
 const decl = parseDeclarativeSchema(`module default {\n${strip(read("cards.esdl"))}\n}`, { legacySyntaxCompat: true });
 const schema = schemaSnapshotFromDeclarative(decl);
-const ast: any = parseEdgeQL(process.argv[2] ?? "select 1");
+const ast = parseEdgeQL(process.argv[2] ?? "select 1");
 const stmt = Array.isArray(ast) ? ast[0] : ast;
-const compiled: any = getCompilerService().compile(schema, stmt, {} as any);
+const compiled = getCompilerService().compile(schema, stmt, {});
 const g = compiled.gelIr;
 const subject = g?.subject ?? g?.expr;
 for (const el of subject?.shape ?? []) {

@@ -32,32 +32,32 @@ executeScript(db, schema, `SET MODULE cards;\n` + read("cards_setup.edgeql"), un
 
 if (!rowsOnly) {
   try {
-    const ast: any = parseEdgeQL(q);
+    const ast = parseEdgeQL(q);
     const stmt = Array.isArray(ast) ? ast[0] : ast;
-    const compiled = getCompilerService().compile(schema, stmt, {} as any);
+    const compiled = getCompilerService().compile(schema, stmt, {});
     console.log("LOWERING:", compiled.sql.loweringMode);
     console.log("SQL:\n" + (compiled.sql.sql || "(empty — runtime fallback)"));
     console.log("PARAMS:", JSON.stringify(compiled.sql.params ?? null));
-    console.log("IR KIND:", compiled.ir?.kind, "| GELIR KIND:", (compiled as any).gelIr?.kind);
-  } catch (e: any) {
-    console.log("COMPILE ERR:", e.message);
+    console.log("IR KIND:", compiled.ir?.kind, "| GELIR KIND:", compiled.gelIr?.kind);
+  } catch (e) {
+    console.log("COMPILE ERR:", (e as Error).message);
   }
 }
 
 try {
-  const t: any = executeQueryWithTrace(db, schema, q, {});
+  const t = executeQueryWithTrace(db, schema, q, {});
   const trace = t.traces?.[0] ?? t;
   console.log("ROWS:", JSON.stringify(trace.result?.rows, null, 1)?.slice(0, 3000));
-} catch (e: any) {
-  console.log("RUN ERR:", e.message);
+} catch (e) {
+  console.log("RUN ERR:", (e as Error).message);
 }
 
 if (process.argv.includes("--twice")) {
   try {
-    const t2: any = executeQueryWithTrace(db, schema, q, {});
+    const t2 = executeQueryWithTrace(db, schema, q, {});
     const trace2 = t2.traces?.[0] ?? t2;
     console.log("ROWS2:", JSON.stringify(trace2.result?.rows)?.slice(0, 200));
-  } catch (e: any) {
-    console.log("RUN2 ERR:", e.message);
+  } catch (e) {
+    console.log("RUN2 ERR:", (e as Error).message);
   }
 }

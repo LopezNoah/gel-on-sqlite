@@ -89,7 +89,7 @@ const bench = (name: string, input: string, op: () => unknown, targetMs = 1500, 
   const perOpUs = totalNs / iters / 1_000;
   const opsPerSec = (iters / totalNs) * 1_000_000_000;
 
-  let tokenCount = 0;
+  let tokenCount: number;
   try {
     tokenCount = tokenize(input).length;
   } catch {

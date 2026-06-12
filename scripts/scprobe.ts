@@ -15,7 +15,7 @@ const { db } = openSQLite();
 materializeSchema(db, schema);
 executeScript(db, schema, read("cards_setup.edgeql"), undefined, { defaultModule: "default" });
 const q = process.argv[2] ?? "select 1";
-const t: any = executeQueryWithTrace(db, schema, q, {});
+const t = executeQueryWithTrace(db, schema, q, {});
 const trace = t.traces?.[0] ?? t;
 console.log("SQL:", (trace.sql?.sql ?? "").slice(0, 1200));
 console.log("ROWS:", JSON.stringify(trace.result?.rows, null, 1)?.slice(0, Number(process.env.ROWS_MAX ?? 2000)));

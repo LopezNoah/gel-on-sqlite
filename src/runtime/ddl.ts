@@ -375,7 +375,10 @@ export const parseCreateTypeHeader = (
   const tokens: readonly Token[] = tokenized.value;
 
   const isNameLike = (tok: Token | undefined): tok is Token =>
-    !!tok && (tok.kind === "identifier" || tok.kind === "backtick_name");
+    !!tok &&
+    (tok.kind === "identifier" ||
+      tok.kind === "backtick_name" ||
+      tok.kind === "kw_unreserved");
   const stripBackticks = (lexeme: string): string =>
     lexeme.startsWith("`") && lexeme.endsWith("`") ? lexeme.slice(1, -1) : lexeme;
   const consumeQualifiedName = (start: number): { name: string; next: number } | null => {
