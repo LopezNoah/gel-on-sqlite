@@ -1275,8 +1275,45 @@ const collectExclusiveGroups = (schema: SchemaSnapshot): ExclusiveGroup[] => {
   return [...groups.values()];
 };
 
+// Drop any exclusivity triggers/indexes/tables that no longer correspond to a
+// live constraint group (after an `ALTER TYPE … DROP CONSTRAINT`). Without
+// this, the additive `CREATE … IF NOT EXISTS` machinery would keep enforcing a
+// dropped constraint. `liveGroupIds` holds the sanitized owner-key ids of the
+// groups that should remain.
+const dropStaleExclusivityArtifacts = (db: SQLiteDatabase, liveGroupIds: Set<string>): void => {
+  const isLiveShared = (name: string): boolean =>
+    [...liveGroupIds].some((id) => name.startsWith(`__gel_excl__${id}__col__`));
+  // Only our own exclusivity artifacts: shared tables/indexes are prefixed
+  // `__gel_excl__`, and the per-table mirror triggers contain `__excl_ins__` /
+  // `__excl_upd__` / `__excl_del__`. This deliberately excludes the same-table
+  // UNIQUE indexes SQLite auto-creates for plain unique constraints (which
+  // can't be dropped directly).
+  const objects = db
+    .prepare(
+      "SELECT type, name FROM sqlite_master WHERE name LIKE '__gel_excl__%' "
+      + "OR name LIKE '%__excl_ins__%' OR name LIKE '%__excl_upd__%' OR name LIKE '%__excl_del__%'",
+    )
+    .all() as Array<{ type: string; name: string }>;
+  for (const obj of objects) {
+    // Mirror triggers are named `<tbl>__excl_(ins|upd|del)__<groupId>`;
+    // shared tables and their indexes embed `__gel_excl__<groupId>__col__`.
+    const groupIdMatch = /__excl_(?:ins|upd|del)__(.+)$/.exec(obj.name);
+    const live = groupIdMatch ? liveGroupIds.has(groupIdMatch[1]) : isLiveShared(obj.name);
+    if (live) continue;
+    if (obj.type === "trigger") db.prepare(`DROP TRIGGER IF EXISTS ${quoteIdent(obj.name)}`).run();
+    else if (obj.type === "index") db.prepare(`DROP INDEX IF EXISTS ${quoteIdent(obj.name)}`).run();
+    else if (obj.type === "table") db.prepare(`DROP TABLE IF EXISTS ${quoteIdent(obj.name)}`).run();
+  }
+};
+
 const materializeExclusivity = (db: SQLiteDatabase, schema: SchemaSnapshot): void => {
   const groups = collectExclusiveGroups(schema);
+  const liveGroupIds = new Set(
+    groups
+      .filter((g) => g.tables.length > 0 && !(g.tables.length === 1 && !g.lower && !g.exceptField && !g.multi))
+      .map((g) => g.ownerKey.replaceAll(/[^A-Za-z0-9_]/g, "_")),
+  );
+  dropStaleExclusivityArtifacts(db, liveGroupIds);
   for (const group of groups) {
     if (group.tables.length === 0) continue;
     // Multi-property exclusivity is never covered by a same-table index (the
@@ -1342,6 +1379,28 @@ const materializeExclusivity = (db: SQLiteDatabase, schema: SchemaSnapshot): voi
           `AFTER DELETE ON ${quoteIdent(tbl)} BEGIN ` +
           `DELETE FROM ${quoteIdent(sharedTable)} WHERE ${quoteIdent("src")} = OLD.${quoteIdent("id")}; END`,
       ).run();
+
+      // Backfill the shared table from rows that already exist (the triggers
+      // only fire on future writes). When the constraint was (re)created over
+      // data that already violates it — e.g. `ALTER TYPE … CREATE CONSTRAINT`
+      // after duplicates were inserted while it was dropped — the UNIQUE index
+      // trips here; surface it as EdgeQL's exclusivity error rather than the
+      // raw SQLite message. Rows already mirrored (src present) are skipped so
+      // re-materialize over unchanged data is idempotent.
+      const exSelect = group.exceptField ? `, t.${quoteIdent(group.exceptField)}` : "";
+      try {
+        db.prepare(
+          `INSERT INTO ${quoteIdent(sharedTable)} (${quoteIdent("src")}, ${quoteIdent("v")}${exCols}) ` +
+            `SELECT t.${quoteIdent("id")}, t.${col}${exSelect} FROM ${quoteIdent(tbl)} AS t ` +
+            `WHERE t.${col} IS NOT NULL AND t.${quoteIdent("id")} NOT IN (SELECT ${quoteIdent("src")} FROM ${quoteIdent(sharedTable)})`,
+        ).run();
+      } catch (err) {
+        const msg = String((err as Error).message ?? err);
+        if (/UNIQUE constraint failed/.test(msg)) {
+          throw new AppError("E_VALIDATION", `${group.field} violates exclusivity constraint`, 1, 1);
+        }
+        throw err;
+      }
     }
   }
 };
