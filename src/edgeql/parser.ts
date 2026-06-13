@@ -6372,6 +6372,16 @@ class Parser {
   }
 
   private parseInsertAssignment(): { field: string; value: InsertValue } {
+    // `@linkprop := value` — a link property assigned inside a nested INSERT
+    // shape (`INSERT Sub { name := …, @comment := … }` used as a link value).
+    // Store it with the `@` prefix so the link-assignment machinery can attach
+    // it to the enclosing link, mirroring the SELECT-shape `@comment` form.
+    if (this.peek().kind === "at") {
+      this.consume();
+      const prop = this.expectLinkPropertyName("Expected link property name after '@'");
+      this.expect("assign", "Expected ':=' after link property name");
+      return { field: `@${prop}`, value: this.parseInsertAssignmentValue() };
+    }
     const field = this.expectName("Expected field name").lexeme;
     // `INSERT Person { name }` — a bare shape field with no value. Mutations
     // (INSERT/UPDATE) require every shape element to assign a value with `:=`
