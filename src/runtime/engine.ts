@@ -1041,6 +1041,38 @@ const collectDynamicExclusiveConstraints = (innerBody: string): ConstraintDef[] 
   return out.length > 0 ? out : undefined;
 };
 
+// Extract the `[SET] default := <expr>` text from a property/link `{ … }`
+// inner body (e.g. `set default := .f` → ".f"). Returns undefined when there's
+// no default declaration. Token-offset based so string/expression bodies slice
+// cleanly.
+const extractInlineDefaultText = (innerBody: string): string | undefined => {
+  for (const rawEntry of splitTopLevelScriptStatements(innerBody)) {
+    const entry = rawEntry.trim();
+    const tokenized = tryResult(() => tokenize(entry));
+    if (!tokenized.ok) continue;
+    const tokens: readonly Token[] = tokenized.value;
+    let i = 0;
+    if (tokens[i]?.kind === "kw_set") i += 1;
+    if (tokens[i]?.lower !== "default") continue;
+    i += 1;
+    if (tokens[i]?.kind !== "assign") continue;
+    i += 1;
+    if (i >= tokens.length || tokens[i].kind === "eof") return undefined;
+    const startOffset = tokens[i].offset;
+    let endOffset = entry.length;
+    for (let j = tokens.length - 1; j >= i; j -= 1) {
+      if (tokens[j].kind === "eof" || tokens[j].kind === "semi") continue;
+      endOffset = tokens[j].offset + tokens[j].lexeme.length;
+      break;
+    }
+    // For a trailing string token the lexeme excludes its quotes; extend to the
+    // entry end so the closing quote isn't clipped.
+    const text = entry.slice(startOffset).trim().replace(/;\s*$/, "");
+    return text.length > 0 ? text : entry.slice(startOffset, endOffset).trim();
+  }
+  return undefined;
+};
+
 // Extract single-field references from a type-level constraint `on` expression
 // (e.g. `(.name)` → ["name"]). Tuple constraints over multiple fields are not
 // enforced by the runtime, so they yield no refs and are dropped.
@@ -1472,6 +1504,7 @@ const registerDynamicTypeDDL = (schema: SchemaSnapshot, statement: string, defau
     if (member.kind === "property") {
       const scalar = dynamicScalarFromType(member.targetType);
       const constraints = innerBody ? collectDynamicExclusiveConstraints(innerBody) : undefined;
+      const defaultText = innerBody ? extractInlineDefaultText(innerBody) : undefined;
       fields.push({
         name: member.name,
         type: scalar.type,
@@ -1479,6 +1512,9 @@ const registerDynamicTypeDDL = (schema: SchemaSnapshot, statement: string, defau
         multi: member.modifiers.multi,
         collection: scalar.collection,
         constraints,
+        hasDefault: defaultText !== undefined || undefined,
+        defaultExprText: defaultText,
+        defaultExpr: defaultText !== undefined ? literalDefaultFromText(defaultText) : undefined,
       });
       continue;
     }
@@ -13270,6 +13306,101 @@ const extractOverlays = (ir: IRStatement): OverlayIR[] => {
 const PENDING_INLINE_LINK_VALUE = "__gel_pending_inline_link__";
 const PENDING_INSERT_REWRITE_VALUE = "__gel_pending_insert_rewrite__";
 
+// Render a scalar as an EdgeQL literal for substitution into a default
+// expression (`.f` → the row's actual value).
+const scalarToEdgeQLLiteral = (value: unknown): string | undefined => {
+  if (value === null || value === undefined) return undefined;
+  if (typeof value === "number") return String(value);
+  if (typeof value === "boolean") return value ? "true" : "false";
+  if (typeof value === "string") return `'${value.replaceAll("\\", "\\\\").replaceAll("'", "\\'")}'`;
+  return undefined;
+};
+
+// Resolve property defaults that reference sibling properties of the same row.
+// EdgeQL evaluates such defaults against the inserted object, so they must run
+// after the row exists. We read the written row, then iteratively evaluate each
+// defaulted property whose `.sibling` references are all already known — given
+// values or previously-resolved defaults — substituting each `.name` with the
+// row's literal value and evaluating the expression via a one-off SQL SELECT.
+// Resolved values are written back with an UPDATE. (test_edgeql_insert_default_07/08)
+const resolveSiblingReferencingDefaults = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  subjectType: TypeDef,
+  table: string,
+  rowId: string,
+  ast: InsertStatement,
+  context: SecurityContext,
+): void => {
+  // Candidate fields: have a sibling-referencing default and were NOT given an
+  // explicit value in this INSERT (those keep the user value).
+  const givenFields = new Set(Object.keys(ast.values ?? {}));
+  const candidates = subjectType.fields.filter((f) =>
+    f.hasDefault
+    && !givenFields.has(f.name)
+    && typeof f.defaultExprText === "string"
+    && /(?:^|[^A-Za-z0-9_.])\.[A-Za-z_]/.test(f.defaultExprText),
+  );
+  if (candidates.length === 0) return;
+
+  const rows = db
+    .prepare(`SELECT * FROM ${quoteIdent(table)} WHERE ${quoteIdent("id")} = ? LIMIT 1`)
+    .all(rowId) as Array<Record<string, unknown>>;
+  const row = rows[0];
+  if (!row) return;
+
+  // Known = columns whose value is settled. Start with everything currently in
+  // the row (given values + SQL-computed values + NULLs); candidates are
+  // re-resolved below. A column counts as "resolved" once we've evaluated it.
+  const resolved = new Set<string>(givenFields);
+  const pending = new Map(candidates.map((f) => [f.name, f] as const));
+  const updates: Record<string, ScalarValue> = {};
+
+  const referencedFields = (text: string): string[] =>
+    [...text.matchAll(/\.([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]);
+
+  let progressed = true;
+  while (pending.size > 0 && progressed) {
+    progressed = false;
+    for (const [name, field] of [...pending]) {
+      const refs = referencedFields(field.defaultExprText!);
+      // All referenced siblings must be resolvable: either a non-candidate
+      // column (its current row value is final) or an already-resolved candidate.
+      const ready = refs.every((r) => !pending.has(r) || resolved.has(r));
+      if (!ready) continue;
+      // Substitute each `.name` with the (current or freshly-resolved) value.
+      let exprText = field.defaultExprText!;
+      let substitutable = true;
+      exprText = exprText.replaceAll(/\.([A-Za-z_][A-Za-z0-9_]*)/g, (_m, ref: string) => {
+        const value = ref in updates ? updates[ref] : row[ref];
+        const lit = scalarToEdgeQLLiteral(value);
+        if (lit === undefined) { substitutable = false; return _m; }
+        return lit;
+      });
+      if (!substitutable) { pending.delete(name); continue; }
+      const attempt = tryResult(() => {
+        const parsed = parseEdgeQL(`SELECT (${exprText})`);
+        const stmt = (Array.isArray(parsed) ? parsed[0] : parsed) as Statement;
+        const compiled = getCompilerService().compile(schema, stmt, { globals: context.globals, target: resolvedRuntimeTarget(context, db) });
+        if (compiled.sql.loweringMode !== "single_statement" || compiled.sql.sql.length === 0) return undefined;
+        return runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
+      }, { captureAll: true });
+      if (attempt.ok && attempt.value !== undefined && attempt.value.length === 1 && isScalarValue(attempt.value[0])) {
+        updates[name] = attempt.value[0] as ScalarValue;
+        resolved.add(name);
+      }
+      pending.delete(name);
+      progressed = true;
+    }
+  }
+
+  const cols = Object.keys(updates);
+  if (cols.length === 0) return;
+  const setClause = cols.map((c) => `${quoteIdent(c)} = ?`).join(", ");
+  db.prepare(`UPDATE ${quoteIdent(table)} SET ${setClause} WHERE ${quoteIdent("id")} = ?`)
+    .run(...cols.map((c) => updates[c]), rowId);
+};
+
 // Allocate the next value for a named sequence (a user scalar type extending
 // `sequence`). Values persist in a counter table so they keep climbing across
 // statements and never reuse a value after deletes — matching Gel's sequence
@@ -14437,6 +14568,14 @@ const runWriteWithAccessPolicies = (
             linkAssignments: ir.linkAssignments?.filter((assignment) => assignment.storage !== "inline"),
           };
           applyInsertLinkAssignments(db, schema, postInsertIR, ast, inserted.id, context);
+        }
+        // Property defaults that reference sibling properties (`default := .f`,
+        // `default := 'a=' ++ .b`) can't be resolved before the row exists —
+        // the referenced values may themselves be SQL-computed (`f := random()`)
+        // or other defaults. Resolve them against the written row now, in
+        // dependency order, then patch the row (test_edgeql_insert_default_07/08).
+        if (typeof inserted?.id === "string") {
+          resolveSiblingReferencingDefaults(db, schema, subjectType, ir.table, inserted.id, ast, context);
         }
       }
 
