@@ -3457,6 +3457,25 @@ class Parser {
         }
       }
     }
+    // `select { foo := 1 } { obj := (INSERT …) }` — a shape applied to a free
+    // object whose computed contains DML. EdgeQL rejects mutations in a
+    // (non-trivial) shape's computed expression; surface that specific error
+    // rather than the generic "Unexpected tokens" the trailing `{` would hit.
+    if (this.peek().kind === "lbrace") {
+      let depth = 0;
+      for (let i = this.index; i < this.tokens.length; i += 1) {
+        const tok = this.tokens[i];
+        if (tok.kind === "lbrace") depth += 1;
+        else if (tok.kind === "rbrace") { depth -= 1; if (depth === 0) break; }
+        else if (depth >= 1 && (tok.kind === "kw_insert" || tok.kind === "kw_update" || tok.kind === "kw_delete")) {
+          throw new AppError(
+            "E_SEMANTIC",
+            "mutations are invalid in a shape's computed expression",
+            ...this.posPair(tok),
+          );
+        }
+      }
+    }
     this.expect("eof", "Unexpected tokens after statement");
 
     return {
