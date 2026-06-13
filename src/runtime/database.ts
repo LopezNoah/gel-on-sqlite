@@ -1139,6 +1139,7 @@ interface ExclusiveGroup {
   tables: string[]; // participating type tables
   exceptField?: string; // `except (.flag)` — rows where flag is true are exempt
   lower?: boolean; // `on (str_lower(__subject__))` — index lower(value)
+  multi?: boolean; // multi-property: column holds a JSON array; each element must be unique
 }
 
 const constraintIsExclusive = (c: { name?: string }): boolean =>
@@ -1181,12 +1182,12 @@ const collectExclusiveGroups = (schema: SchemaSnapshot): ExclusiveGroup[] => {
     keyOwner: TypeDef,
     field: string,
     member: TypeDef,
-    opts: { exceptField?: string; lower?: boolean },
+    opts: { exceptField?: string; lower?: boolean; multi?: boolean },
   ): void => {
     const key = `${qualifiedTypeName(keyOwner)}|${field}`;
     let group = groups.get(key);
     if (!group) {
-      group = { ownerKey: key, field, tables: [], exceptField: opts.exceptField, lower: opts.lower };
+      group = { ownerKey: key, field, tables: [], exceptField: opts.exceptField, lower: opts.lower, multi: opts.multi };
       groups.set(key, group);
     }
     const tbl = tableName(member);
@@ -1198,7 +1199,7 @@ const collectExclusiveGroups = (schema: SchemaSnapshot): ExclusiveGroup[] => {
 
     // ── Field-level `constraint exclusive` (incl. `on (str_lower(...))`) ──
     for (const field of typeDef.fields) {
-      if (field.name === "id" || field.multi) continue;
+      if (field.name === "id") continue;
       const constraints = (field as { constraints?: Array<{ name: string; delegated?: boolean; onExpr?: string; exceptExpr?: string }> }).constraints ?? [];
       const excl = constraints.find(constraintIsExclusive);
       if (!excl) continue;
@@ -1214,6 +1215,10 @@ const collectExclusiveGroups = (schema: SchemaSnapshot): ExclusiveGroup[] => {
       addParticipant(owner, field.name, typeDef, {
         exceptField: exceptFieldFrom(excl.exceptExpr),
         lower: isLowerExpr(excl.onExpr),
+        // A `multi property` with `constraint exclusive` requires every element
+        // (across the whole type hierarchy) to be unique. The column stores a
+        // JSON array, so the shared-table mirror must expand its elements.
+        multi: field.multi === true,
       });
     }
 
@@ -1274,6 +1279,13 @@ const materializeExclusivity = (db: SQLiteDatabase, schema: SchemaSnapshot): voi
   const groups = collectExclusiveGroups(schema);
   for (const group of groups) {
     if (group.tables.length === 0) continue;
+    // Multi-property exclusivity is never covered by a same-table index (the
+    // column stores a JSON array), so it always needs the shared-table machinery
+    // — even for a single participating table.
+    if (group.multi) {
+      materializeMultiExclusivity(db, group);
+      continue;
+    }
     // A single-table group with a plain value constraint is already fully
     // enforced by the same-table UNIQUE index created in materializeSchema, so
     // skip the shared-table/trigger machinery (it would only add overhead and
@@ -1331,6 +1343,54 @@ const materializeExclusivity = (db: SQLiteDatabase, schema: SchemaSnapshot): voi
           `DELETE FROM ${quoteIdent(sharedTable)} WHERE ${quoteIdent("src")} = OLD.${quoteIdent("id")}; END`,
       ).run();
     }
+  }
+};
+
+// Multi-property exclusivity. A `multi property p { constraint exclusive }`
+// stores its values as a JSON array in the same-table column `p`. Each element
+// must be globally unique across the whole type hierarchy that shares the
+// constraint. We mirror every element into a shared table keyed by
+// `(src, v)` and enforce a UNIQUE index on `v` — so two rows (in any
+// participating type) holding the same element collide. The triggers use
+// `json_each` to expand/sync the array on insert/update/delete.
+const materializeMultiExclusivity = (db: SQLiteDatabase, group: ExclusiveGroup): void => {
+  const groupId = group.ownerKey.replaceAll(/[^A-Za-z0-9_]/g, "_");
+  const sharedTable = `__gel_excl__${groupId}__col__${group.field}`;
+  const col = quoteIdent(group.field);
+  db.prepare(
+    `CREATE TABLE IF NOT EXISTS ${quoteIdent(sharedTable)} (` +
+      `${quoteIdent("src")} TEXT, ${quoteIdent("v")} TEXT, ` +
+      `PRIMARY KEY (${quoteIdent("src")}, ${quoteIdent("v")}))`,
+  ).run();
+  // UNIQUE index name carries `__excl__<prop>` so error translation recovers
+  // the property name from SQLite's "UNIQUE constraint failed" text.
+  db.prepare(
+    `CREATE UNIQUE INDEX IF NOT EXISTS ${quoteIdent(`${sharedTable}__excl__${group.field}`)} ON ${quoteIdent(sharedTable)} (${quoteIdent("v")})`,
+  ).run();
+  // Expand a JSON array column into (src, value) rows. `json_each` over a NULL
+  // or empty array yields no rows, so nothing is mirrored when the prop is unset.
+  const insertElems = (idExpr: string): string =>
+    `INSERT INTO ${quoteIdent(sharedTable)} (${quoteIdent("src")}, ${quoteIdent("v")}) ` +
+    `SELECT ${idExpr}, je.value FROM json_each(NEW.${col}) AS je WHERE NEW.${col} IS NOT NULL;`;
+  for (const tbl of group.tables) {
+    db.prepare(
+      `CREATE TRIGGER IF NOT EXISTS ${quoteIdent(triggerName(tbl, `excl_ins__${groupId}`))} ` +
+        `AFTER INSERT ON ${quoteIdent(tbl)} BEGIN ` +
+        insertElems(`NEW.${quoteIdent("id")}`) +
+        ` END`,
+    ).run();
+    db.prepare(
+      `CREATE TRIGGER IF NOT EXISTS ${quoteIdent(triggerName(tbl, `excl_upd__${groupId}`))} ` +
+        `AFTER UPDATE ON ${quoteIdent(tbl)} BEGIN ` +
+        `DELETE FROM ${quoteIdent(sharedTable)} WHERE ${quoteIdent("src")} = NEW.${quoteIdent("id")}; ` +
+        insertElems(`NEW.${quoteIdent("id")}`) +
+        ` END`,
+    ).run();
+    db.prepare(
+      `CREATE TRIGGER IF NOT EXISTS ${quoteIdent(triggerName(tbl, `excl_del__${groupId}`))} ` +
+        `AFTER DELETE ON ${quoteIdent(tbl)} BEGIN ` +
+        `DELETE FROM ${quoteIdent(sharedTable)} WHERE ${quoteIdent("src")} = OLD.${quoteIdent("id")}; END`,
+    ).run();
   }
 };
 

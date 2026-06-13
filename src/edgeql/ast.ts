@@ -720,6 +720,9 @@ export interface SelectFreeStatement {
   entries: Array<{
     name: string;
     expr: FreeObjectExpr;
+    // Optional `single`/`multi` qualifier (`select { single x := … }`). When
+    // `one`, the entry's expression must be provably single-or-empty.
+    cardinality?: "one" | "many";
   }>;
   pos: SourcePos;
 }
