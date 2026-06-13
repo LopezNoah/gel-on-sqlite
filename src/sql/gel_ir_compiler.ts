@@ -383,6 +383,17 @@ export const compileGelIRToSQL = (
           ...(options.sourcePathAliases ?? []),
           { pathKey: pathIdKey(sourceSet), alias: sourceAlias },
         ],
+        // Register the iteration source's type root as an outer scope so a
+        // computed shape element whose body references the subject row
+        // (`c := foo(.b).a` — `.b` is the subject's property, substituted into
+        // an inlined UDF body) lowers as a CORRELATED subquery anchored on
+        // `sourceAlias` rather than a fresh, unbound table scan.
+        outerScopes: sourceSet.expr.kind === "type_root"
+          ? [
+              ...(options.outerScopes ?? []),
+              { alias: sourceAlias, typeref: (sourceSet.expr as TypeRoot).typeref, namespace: sourceSet.pathId?.namespace ?? [] },
+            ]
+          : options.outerScopes,
       }
     : options;
 
@@ -9250,6 +9261,76 @@ const compileShapeProjection = (
         return `COALESCE((SELECT json_group_array(${quoteIdent("value")}) FROM (${setSql})), '[]') AS ${quoteIdent(alias)}`;
       }
       return `(SELECT ${quoteIdent("value")} FROM (${setSql}) LIMIT 1) AS ${quoteIdent(alias)}`;
+    }
+  }
+  // Computed shape field that projects a scalar leaf off the OBJECT a UDF /
+  // assert_* call returns: `c := foo(.b).a`, `a := foo(.bar).a`. The inlined
+  // UDF body (or an `assert_exists((select T …))`) leaves the leaf pointer's
+  // source bottoming out at an object-returning `function_call` rather than a
+  // plain type_root chain, so the projected-column shortcut below can't see a
+  // backing column and the element would be silently dropped. Lower it as a
+  // correlated subquery over the body's object rows, projecting the leaf
+  // column. Scoped narrowly to a single scalar leaf over an object-returning
+  // call so scalar-returning function computeds (`title5 := ident(.title)`)
+  // keep their existing, working lowering.
+  const leafOverObjectCall = ((): Pointer | null => {
+    if (shapeExpr.result.expr.kind !== "pointer") return null;
+    const leaf = shapeExpr.result.expr as Pointer;
+    if (!leaf.ptrref.outTarget.isScalar || leaf.ptrref.isLinkProperty) return null;
+    let cur: Set = leaf.source;
+    for (let guard = 0; guard < 64; guard += 1) {
+      const e = cur.expr;
+      if (e.kind === "select_expr") { cur = (e as SelectExpr).result; continue; }
+      if (e.kind === "function_call") {
+        return cur.typeref && !cur.typeref.isScalar ? leaf : null;
+      }
+      return null;
+    }
+    return null;
+  })();
+  if (leafOverObjectCall) {
+    const leaf = leafOverObjectCall;
+    const alias = shapeAliasForElement(shape, shapeExpr.result, depth);
+    const isMany = shape.cardinality === "many" || shape.cardinality === "at_least_one";
+    // Peel select_expr fences and object-passthrough calls (assert_exists /
+    // assert_single around a SELECT, inlined UDF bodies) down to the
+    // object-producing set. The assert_exists guard injects a redundant
+    // `exists(arg)` WHERE on the OUTER wrapper — skip that and any clause-free
+    // fence, but stop at a select_expr that carries the body's real
+    // FILTER / LIMIT / OFFSET / ORDER BY so compileSelectSource applies them.
+    let objSource = leaf.source;
+    for (let guard = 0; guard < 64; guard += 1) {
+      if (objSource.expr.kind === "select_expr") {
+        const se = objSource.expr as SelectExpr;
+        const hasRealClauses =
+          (se.where !== undefined && se.where.expr.kind !== "exists_expr")
+          || se.limit !== undefined
+          || se.offset !== undefined
+          || (se.orderBy !== undefined && se.orderBy.length > 0);
+        if (hasRealClauses) break;
+        objSource = se.result;
+        continue;
+      }
+      const unwrapped = unwrapObjectPassthrough(objSource);
+      if (unwrapped) { objSource = unwrapped; continue; }
+      break;
+    }
+    const scratch: ScalarValue[] = [];
+    const leafCol = columnForPointer(leaf);
+    // Give the inner object source a distinct alias: a correlated body
+    // (`assert_exists(select Bar filter .a = x)` with `x := .b`) references the
+    // subject row's `.b`, which must resolve to the enclosing scope's alias
+    // rather than colliding with the inner type's default `g0`.
+    const innerAlias = `sfn${depth}`;
+    const compiled = compileSelectSource(objSource, undefined, undefined, options, scratch, target, innerAlias, [leafCol]);
+    if (compiled) {
+      params.push(...scratch);
+      const colExpr = `${compiled.alias}.${quoteIdent(leafCol)}`;
+      const value = shapeScalarColumnValue(colExpr, leaf.ptrref.outTarget);
+      if (isMany) {
+        return `COALESCE((SELECT json_group_array(${value}) FROM ${compiled.sql}), '[]') AS ${quoteIdent(alias)}`;
+      }
+      return `(SELECT ${value} FROM ${compiled.sql} LIMIT 1) AS ${quoteIdent(alias)}`;
     }
   }
   const projectedColumn = (elementIsManyViaChain || elementRootsAtForeignType) ? null : compileProjectedSourceColumnRef(shapeExpr.result);
