@@ -3991,6 +3991,20 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
     }
 
     case "free_object_constructor": {
+      // A free object written as an *expression* (e.g. bound in WITH or nested)
+      // is not a trivial top-level exposed free object, so inline DML in its
+      // fields is rejected — same rule as a shape's computed expression. The
+      // allowed `select { obj := (INSERT …) }` form is compiled separately via
+      // `compileSelectFreeStatement`, never through this expression branch.
+      for (const entry of expr.entries) {
+        if (exprDefinesInlineMutation(entry.expr)) {
+          throw new AppError(
+            "E_SEMANTIC",
+            "mutations are invalid in a shape's computed expression",
+            1, 1,
+          );
+        }
+      }
       const elements = expr.entries.map((entry) => ({ name: entry.name, val: compileFreeObjectExpr(entry.expr, ctx) }));
       return {
         kind: "set",
@@ -4124,6 +4138,19 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
 
     case "shape_projection": {
       validateShapeProjectionLinkPropContext(expr);
+      // A shape applied to an arbitrary expression (e.g. `(for … union T) {
+      // c := (INSERT …) }`) is a non-DML view: inline DML in a computed is
+      // rejected. Check before compiling the (possibly unrelated-failing)
+      // subject expression so the right error surfaces.
+      for (const el of expr.shape as EdgeQLShapeElement[]) {
+        if (el.kind === "computed" && !el.name.startsWith("@") && exprDefinesInlineMutation(el.expr)) {
+          throw new AppError(
+            "E_SEMANTIC",
+            "mutations are invalid in a shape's computed expression",
+            1, 1,
+          );
+        }
+      }
       // `(GROUP … ) { key: {…}, elements: {…} }` — the trailing shape projects
       // the group result's virtual `key`/`grouping`/`elements`, which aren't
       // real pointers, so compile the group with the shape rather than running
@@ -6081,12 +6108,40 @@ const shouldEnforceShapeMember = (
   return true;
 };
 
+// Does a computed shape element's expression define a mutation
+// (INSERT/UPDATE/DELETE) inside the view it constructs? EdgeQL forbids DML in
+// a shape's computed expression — the mutation must be factored into a
+// top-level WITH binding instead (where it becomes a `binding_ref`, not an
+// inline `mutation_expr`). Inline DML always surfaces as a `mutation_expr`
+// node, so a deep scan for one suffices. This helper is only consulted from
+// SELECT / free-object shape compilation, never from INSERT/UPDATE *value*
+// shapes (which use the distinct `InsertValue` AST), so it never rejects
+// legitimate nested DML.
+const exprDefinesInlineMutation = (node: unknown): boolean => {
+  if (Array.isArray(node)) return node.some(exprDefinesInlineMutation);
+  if (node === null || typeof node !== "object") return false;
+  if ((node as { kind?: unknown }).kind === "mutation_expr") return true;
+  return Object.values(node as Record<string, unknown>).some(exprDefinesInlineMutation);
+};
+
 const validateComputedShapeElement = (
   el: Extract<EdgeQLShapeElement, { kind: "computed" }>,
   subject: Set,
   ctx: IRCompileContext,
 ): void => {
   if (el.name.startsWith("@")) return;
+  // DML is not allowed inside a shape's computed expression in a non-DML
+  // (SELECT / free-object) context. EdgeQL requires factoring the mutation
+  // into a top-level WITH binding. `validateComputedShapeElement` is only
+  // reached from SELECT/free-object shape compilation, never from INSERT or
+  // UPDATE value shapes, so this never rejects legitimate nested DML.
+  if (exprDefinesInlineMutation(el.expr)) {
+    throw new AppError(
+      "E_SEMANTIC",
+      "mutations are invalid in a shape's computed expression",
+      1, 1,
+    );
+  }
   const subjectTypeId = subject.typeref.id;
   const inherited = findInheritedFieldOwner(ctx, subjectTypeId, el.name);
   const inferredType = inferComputedExprType(el.expr, ctx, subject.typeref);
