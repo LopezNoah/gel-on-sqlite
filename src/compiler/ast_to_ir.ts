@@ -530,6 +530,70 @@ const parseTupleStructuredTypeRef = (ctx: IRCompileContext, name: string): TypeR
   };
 };
 
+// Coerce an inlined UDF argument Set so its tuple values carry the element
+// NAMES declared by the parameter's type. A call like `foo((1,))` where `foo`
+// declares `x: tuple<a: int64>` passes a POSITIONAL tuple, but inside the body
+// `x` is a NAMED tuple — its result must serialize as `{"a": 1}` and `.a` must
+// resolve to the element. The call-site argument compiles to a tuple with
+// `named: false` / element name `"0"`; here we rewrite each tuple value reached
+// through the set-shaped wrappers (UNION operands, SELECT/FOR bodies) to be
+// `named: true` with the declared element names. Returns the (possibly
+// rewritten) Set; a no-op when the declared type isn't a named tuple or the
+// argument doesn't structurally contain a same-arity tuple to rename.
+const coerceArgToNamedTupleType = (
+  ctx: IRCompileContext,
+  argIR: Set,
+  declaredType: string,
+): Set => {
+  const declaredRef = parseTupleStructuredTypeRef(ctx, declaredType);
+  if (!declaredRef || declaredRef.collection !== "tuple") return argIR;
+  const declaredSubtypes = declaredRef.subtypes ?? [];
+  const elementNames = declaredSubtypes.map((st) => st.elementName);
+  // Only a tuple with at least one explicitly-named slot needs renaming.
+  if (!elementNames.some((n) => n !== undefined)) return argIR;
+
+  const rewriteTuple = (tuple: Tuple): Tuple => {
+    if (tuple.elements.length !== elementNames.length) return tuple;
+    return {
+      ...tuple,
+      named: true,
+      elements: tuple.elements.map((el, i) => ({
+        ...el,
+        name: elementNames[i] ?? el.name ?? String(i),
+      })),
+    };
+  };
+
+  // Recurse through the set-shaped wrappers a tuple-valued argument can sit
+  // behind: UNION of tuples (`{(1,), (2,)}`), SELECT/FOR wrappers, etc. The
+  // walk only rewrites `tuple` exprs and rebuilds the spine around them.
+  const rewrite = (set: Set): Set => {
+    const e = set.expr;
+    if (e.kind === "tuple") {
+      return { ...set, expr: rewriteTuple(e as Tuple) };
+    }
+    if (e.kind === "operator_call" && (e as OperatorCall).operator === "union") {
+      const op = e as OperatorCall;
+      const newArgs: Record<string, CallArg> = {};
+      for (const [k, arg] of Object.entries(op.args)) {
+        newArgs[k] = { ...arg, expr: rewrite(arg.expr) };
+      }
+      return { ...set, expr: { ...op, args: newArgs } };
+    }
+    if (e.kind === "select_expr") {
+      const sel = e as SelectExpr;
+      return { ...set, expr: { ...sel, result: rewrite(sel.result) } };
+    }
+    if (e.kind === "for_expr") {
+      const fr = e as unknown as { body: Set };
+      return { ...set, expr: { ...(e as object), body: rewrite(fr.body) } as typeof e };
+    }
+    return set;
+  };
+
+  return rewrite(argIR);
+};
+
 const isUniversalObjectRefName = (name: string): boolean => {
   const last = name.includes("::") ? name.split("::").at(-1) : name;
   return last === "Object" || last === "BaseObject";
@@ -1351,6 +1415,18 @@ const tryExtendGroupRowFieldPath = (out: Set, stepName: string, direction?: "out
 // SELECT wrapper or a FOR body (`SELECT (a := …)`), so peel those first.
 // resolvePointerRef has no pointer for a `std::tuple` type, so without this the
 // `.field` step is dropped and the entire tuple leaks through.
+// A tuple-valued union is "correlated" when it is a FOR iterator binding:
+// `for X in {(2,2),(10,10)} select (X.0, X.1)` projects the SAME union twice
+// and the two projections must align per iteration. Distributing `.N` over the
+// union operands would de-correlate them, so such unions keep the opaque
+// index_expr form (which the SQL co-iteration pass resolves correctly).
+// A UDF param/result union (`x.a` in a body where `x` is bound to a multi-set
+// argument, or `foo({…}).0`) carries no `for:` tag and IS safe to distribute —
+// each operand is one independent call value. Recognised by the `for:<name>:`
+// pathId namespace tag the for_expr stamps on its iterator binding.
+const isCorrelatedTupleUnion = (source: Set): boolean =>
+  (source.pathId?.namespace ?? []).some((tag) => tag.startsWith("for:"));
+
 const resolveNamedTupleElement = (source: Set, field: string): Set | undefined => {
   if (field.startsWith("@")) return undefined;
   let cursor: Set = source;
@@ -1359,12 +1435,33 @@ const resolveNamedTupleElement = (source: Set, field: string): Set | undefined =
       cursor = (cursor.expr as SelectExpr).result;
     } else if (cursor.expr.kind === "for_expr") {
       cursor = (cursor.expr as { body: Set }).body;
+    } else if (cursor.expr.kind === "function_call" && (cursor.expr as IRFunctionCall).body) {
+      // `foo(…).a` where `foo` is an inlined tuple-returning UDF: the call
+      // envelope wraps the substituted body Set — peel into it so the field
+      // projection resolves against the body's tuple.
+      cursor = (cursor.expr as IRFunctionCall).body as Set;
     } else {
       break;
     }
   }
   if (cursor.expr.kind === "tuple" && (cursor.expr as Tuple).named) {
     return (cursor.expr as Tuple).elements.find((e) => e.name === field)?.val;
+  }
+  // `.field` over a UNION of named tuples (`{(a:=1), (a:=2)}.a`, which arises
+  // when a UDF param `x: tuple<a: int64>` is bound to a multi-set argument and
+  // the body projects `x.a`): distribute the projection over each operand so
+  // the union carries the element values, not whole tuples.
+  if (!isCorrelatedTupleUnion(source)
+      && cursor.expr.kind === "operator_call" && (cursor.expr as OperatorCall).operator === "union") {
+    const op = cursor.expr as OperatorCall;
+    const newArgs: Record<string, CallArg> = {};
+    for (const [k, arg] of Object.entries(op.args)) {
+      const projected = resolveNamedTupleElement(arg.expr, field);
+      if (!projected) return undefined;
+      newArgs[k] = { ...arg, expr: projected };
+    }
+    const first = Object.values(newArgs)[0]?.expr;
+    return { ...cursor, expr: { ...op, args: newArgs }, typeref: first?.typeref ?? cursor.typeref };
   }
   return undefined;
 };
@@ -1411,10 +1508,32 @@ const collectSetTypeRoots = (set: Set, out: globalThis.Set<string>): void => {
 const resolveConstTupleIndexElement = (source: Set, index: number): Set | undefined => {
   if (!Number.isInteger(index) || index < 0) return undefined;
   let cursor: Set = source;
-  while (cursor.expr.kind === "select_expr") {
-    const se = cursor.expr as SelectExpr;
-    if (se.where || se.limit || se.offset || (se.orderBy && se.orderBy.length > 0)) return undefined;
-    cursor = se.result;
+  for (;;) {
+    if (cursor.expr.kind === "select_expr") {
+      const se = cursor.expr as SelectExpr;
+      if (se.where || se.limit || se.offset || (se.orderBy && se.orderBy.length > 0)) return undefined;
+      cursor = se.result;
+    } else if (cursor.expr.kind === "function_call" && (cursor.expr as IRFunctionCall).body) {
+      // `foo(…).0` where `foo` is an inlined tuple-returning UDF: peel into the
+      // substituted body Set so the index resolves against the body's tuple.
+      cursor = (cursor.expr as IRFunctionCall).body as Set;
+    } else {
+      break;
+    }
+  }
+  // `.N` over a UNION of tuples (`{(1,), (2,)}.0`): distribute the projection
+  // over each operand so the union carries element N, not whole tuples.
+  if (!isCorrelatedTupleUnion(source)
+      && cursor.expr.kind === "operator_call" && (cursor.expr as OperatorCall).operator === "union") {
+    const op = cursor.expr as OperatorCall;
+    const newArgs: Record<string, CallArg> = {};
+    for (const [k, arg] of Object.entries(op.args)) {
+      const projected = resolveConstTupleIndexElement(arg.expr, index);
+      if (!projected) return undefined;
+      newArgs[k] = { ...arg, expr: projected };
+    }
+    const first = Object.values(newArgs)[0]?.expr;
+    return { ...cursor, expr: { ...op, args: newArgs }, typeref: first?.typeref ?? cursor.typeref };
   }
   if (cursor.expr.kind !== "tuple") return undefined;
   const elements = (cursor.expr as Tuple).elements;
@@ -2869,7 +2988,11 @@ const tryBuildInlinedUDFBody = (
     }
     const argAttempt = tryResult(() => compileFreeObjectExpr(argExpr, ctx));
     if (!argAttempt.ok) return undefined;
-    const argIR: Set = argAttempt.value;
+    // A param declared as a NAMED tuple (`x: tuple<a: int64>`) makes the body
+    // see `x` as a named tuple even when the call passes a positional `(1,)`.
+    // Rewrite the bound argument's tuple values to carry the declared element
+    // names so the result serializes by name (`{"a": 1}`) and `.a` resolves.
+    const argIR: Set = coerceArgToNamedTupleType(ctx, argAttempt.value, param.type);
     const uniqueName = `__udf_inline__${shortName}__${param.name}__${inlineCallCounter++}`;
     bindValue(inlineCtx, uniqueName, argIR);
     substitutions.set(param.name, { kind: "binding_ref", name: uniqueName });
@@ -3617,21 +3740,12 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
       // pointer resolution fabricates an `anytype`-targeted link and the SQL
       // stage scans a nonexistent table.
       if (!expr.field.startsWith("@")) {
-        let tupleCursor: Set = source;
-        for (;;) {
-          if (tupleCursor.expr.kind === "select_expr") {
-            tupleCursor = (tupleCursor.expr as SelectExpr).result;
-          } else if (tupleCursor.expr.kind === "for_expr") {
-            tupleCursor = (tupleCursor.expr as { body: Set }).body;
-          } else {
-            break;
-          }
-        }
-        if (tupleCursor.expr.kind === "tuple" && (tupleCursor.expr as Tuple).named) {
-          const tupleEl = (tupleCursor.expr as Tuple).elements.find((e) => e.name === expr.field);
-          if (tupleEl) {
-            return tupleEl.val;
-          }
+        // Resolve `.field` against a named tuple value. resolveNamedTupleElement
+        // peels SELECT/FOR wrappers and inlined-UDF call bodies, and distributes
+        // over a UNION of named tuples (`foo({…}).a` over a multi-set arg).
+        const tupleEl = resolveNamedTupleElement(source, expr.field);
+        if (tupleEl) {
+          return tupleEl;
         }
       }
 
