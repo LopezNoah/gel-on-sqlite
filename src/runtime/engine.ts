@@ -6983,12 +6983,69 @@ const preExecuteMutationExprsInDmlValues = (
     if (inserts === undefined) return undefined;
     const ids: string[] = [];
     let typeName = "";
+    // Per-iteration `@prop := …` assignments inside a FOR-INSERT link value
+    // (`subordinates := (FOR x IN {…} INSERT Subordinate { @comment := x.1 })`)
+    // belong to the enclosing link. After expansion the `@`-fields carry a
+    // concrete value for each iteration; hoist them out (so the inner insert
+    // compiles against the target type only) and pair each with the inserted
+    // id so the by-id selects re-attach them as link properties.
+    const perTargetLinkProps: Array<{ id: string; props: Record<string, ScalarValue> }> = [];
+    let anyLinkProps = false;
     for (const ins of inserts) {
+      const insVals = (ins as { values?: Record<string, unknown> }).values;
+      const hoisted: Record<string, ScalarValue> = {};
+      if (insVals) {
+        for (const key of Object.keys(insVals)) {
+          if (!key.startsWith("@")) continue;
+          const raw = insVals[key];
+          const body = (raw !== null && typeof raw === "object" && (raw as { kind?: string }).kind === "expr")
+            ? (raw as { expr: unknown }).expr
+            : raw;
+          const lit = (body !== null && typeof body === "object" && (body as { kind?: string }).kind === "literal")
+            ? (body as { value: unknown }).value
+            : body;
+          const scalar = coerceUnknownToScalar(lit);
+          if (scalar !== undefined) {
+            hoisted[key] = scalar;
+            anyLinkProps = true;
+          }
+          delete insVals[key];
+        }
+      }
       const resolved = executeDmlChainStatement(db, schema, ins as Statement, env, undefined, context, defaultModule);
       if (resolved.typeName) typeName = resolved.typeName;
       ids.push(...resolved.ids);
+      for (const id of resolved.ids) perTargetLinkProps.push({ id, props: hoisted });
     }
-    return chainByIdSelect({ typeName, ids });
+    if (!anyLinkProps) {
+      return chainByIdSelect({ typeName, ids });
+    }
+    // Build a set of per-target by-id selects, each carrying its captured
+    // link-property literals as `@`-shape computeds. The `kind: "select"`
+    // resolution path reads those `@`-columns off the rows — the same path
+    // that handles `subordinates := (SELECT Sub { @comment := … })`.
+    return {
+      kind: "set",
+      values: perTargetLinkProps.map(({ id, props }) => ({
+        kind: "select",
+        typeName,
+        shape: Object.entries(props).map(([name, value]) => ({
+          kind: "computed",
+          name,
+          expr: { kind: "literal", value },
+          operation: "assign",
+          origin: "explicit",
+        })),
+        clauses: {
+          filter: {
+            kind: "in_predicate",
+            target: { kind: "field", field: "id" },
+            op: "in",
+            values: { kind: "set_literal", values: [id] },
+          },
+        },
+      })),
+    };
   };
 
   const rewriteValue = (value: unknown): unknown => {
@@ -7865,6 +7922,23 @@ const expandForInsertStatements = (
     return out;
   }
 
+  // Tuple-set iterator: `FOR x IN {('a','1'), ('b','2')} INSERT … { c := x.0,
+  // @p := x.1 }`. Each iteration binds the tuple element accesses (`x.0`,
+  // `x.1`) to literals from one tuple. The scalar path below can't handle these
+  // (tuples aren't scalar values), so evaluate each tuple's elements and
+  // substitute the loop variable's index accesses directly.
+  const tupleIterRows = evaluateForTupleIteratorRows(forAst.iteratorExpr, schema, db, context);
+  if (tupleIterRows !== undefined) {
+    const out: InsertStatement[] = [];
+    for (const tuple of tupleIterRows) {
+      const substituted = substituteTupleIndexRefs(body, forAst.variable, tuple) as ForStatement["body"];
+      const expanded = expandBodyToInserts(substituted, schema, db, context, [...accumWith, ...forStatementWith]);
+      if (expanded === undefined) return undefined;
+      out.push(...expanded);
+    }
+    return out;
+  }
+
   // Scalar iterator: one iteration per value, binding the variable as a WITH
   // literal. `evaluateForIteratorValues` materialises set literals, concats,
   // function calls, and SQL-lowerable selects.
@@ -8036,6 +8110,68 @@ const substituteBindingRefFields = (node: unknown, varName: string, row: Record<
   }
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(n)) out[k] = substituteBindingRefFields(v, varName, row);
+  return out;
+};
+
+// A FOR iterator written as a set of tuple literals (`{('a','1'), ('b','2')}`).
+// Returns one scalar-element array per tuple, or undefined when the iterator
+// isn't a set of (constant-foldable) tuples — leaving the scalar/object paths
+// to handle it.
+const evaluateForTupleIteratorRows = (
+  iteratorExpr: ForStatement["iteratorExpr"],
+  schema: SchemaSnapshot,
+  db: SQLiteDatabase,
+  context: SecurityContext,
+): ScalarValue[][] | undefined => {
+  const n = iteratorExpr as { kind?: string; values?: unknown[] };
+  if (n.kind !== "set_expr" || !Array.isArray(n.values) || n.values.length === 0) return undefined;
+  const peelExpr = (node: unknown): unknown =>
+    (node !== null && typeof node === "object" && (node as { kind?: string }).kind === "expr")
+      ? (node as { expr: unknown }).expr
+      : node;
+  const rows: ScalarValue[][] = [];
+  for (const raw of n.values) {
+    const el = peelExpr(raw) as { kind?: string; values?: unknown[] };
+    if (el?.kind !== "tuple" || !Array.isArray(el.values)) return undefined;
+    const elements: ScalarValue[] = [];
+    for (const member of el.values) {
+      const body = peelExpr(member) as { kind?: string; value?: unknown };
+      if (body?.kind === "literal") {
+        const scalar = coerceUnknownToScalar(body.value);
+        if (scalar === undefined) return undefined;
+        elements.push(scalar);
+        continue;
+      }
+      // Non-literal tuple member (`(x, a ++ "c")`) — evaluate via SQL.
+      const evaluated = evaluateScalarBindingViaSQL(db, schema, member as never, [], context, { line: 1, column: 1 });
+      if (evaluated === undefined || evaluated.kind !== "literal") return undefined;
+      const scalar = coerceUnknownToScalar((evaluated as { value: unknown }).value);
+      if (scalar === undefined) return undefined;
+      elements.push(scalar);
+    }
+    rows.push(elements);
+  }
+  return rows;
+};
+
+// Substitute the loop variable's tuple-element accesses (`x.0`, `x.1` —
+// `index_access` over a `binding_ref`/`path`) with literals from one tuple.
+const substituteTupleIndexRefs = (node: unknown, varName: string, tuple: ScalarValue[]): unknown => {
+  if (Array.isArray(node)) return node.map((item) => substituteTupleIndexRefs(item, varName, tuple));
+  if (node === null || typeof node !== "object") return node;
+  const n = node as Record<string, unknown> & { kind?: string };
+  if (n.kind === "index_access"
+    && typeof n.index === "number"
+    && (n.expr as { kind?: string; name?: string })?.kind === "binding_ref"
+    && (n.expr as { name?: string }).name === varName) {
+    return { kind: "literal", value: tuple[n.index as number] ?? null };
+  }
+  // `x.0` parsed as a path with a numeric tail step.
+  if (n.kind === "path" && n.head === varName && typeof n.tail === "string" && /^\d+$/.test(n.tail)) {
+    return { kind: "literal", value: tuple[Number(n.tail)] ?? null };
+  }
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(n)) out[k] = substituteTupleIndexRefs(v, varName, tuple);
   return out;
 };
 
