@@ -65,6 +65,12 @@ export interface FunctionParamDef {
   variadic?: boolean;
   namedOnly?: boolean;
   default?: ScalarValue;
+  // Raw EdgeQL text of the parameter default expression, preserved verbatim
+  // so the UDF inliner can substitute non-scalar defaults (array/tuple
+  // literals like `[9]` or `(9,)`) that `evaluateDefaultExprToScalar` can't
+  // reduce to a ScalarValue. `default` carries the scalar reduction when one
+  // exists; `defaultExpr` is the fallback for everything else.
+  defaultExpr?: string;
 }
 
 export type FunctionExprDef =
