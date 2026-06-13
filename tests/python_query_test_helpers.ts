@@ -267,6 +267,12 @@ export function expectLike(actual: unknown, expected: unknown): void {
   if (expected === "str" && typeof actual === "string") {
     return;
   }
+  // `'UUID'` is upstream's sentinel for "any UUID string" — matches either the
+  // canonical dashed form or the dashless 32-hex form this engine emits.
+  if (expected === "UUID" && typeof actual === "string"
+      && /^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$/i.test(actual)) {
+    return;
+  }
   if ((expected === "int" || expected === "float" || expected === "decimal")
       && typeof actual === "number") {
     return;
