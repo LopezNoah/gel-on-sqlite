@@ -15,6 +15,8 @@ import type { ShapeElement as GelIRShapeElement, Set as GelIRSet, Statement as G
 import type { GroupIR, InsertIR, InsertLinkDefaultIR, InsertLinkPropertyIR, IRStatement, OverlayIR, SelectIR, UpdateIR, UpdateLinkAssignmentIR } from "../ir/model.js";
 import type { AccessPolicyCondition, AccessPolicyDef, ComputedLinkPropertyExpr, ConstraintDef, FieldDef, FieldDefaultExpr, FunctionDef, FunctionExprDef, FunctionVolatility, LinkPropertyDef, ScalarType, ScalarValue, TypeDef } from "../types.js";
 import { fieldSequenceName, normalizeLinkTargetNames, qualifiedTypeName } from "../schema/schema.js";
+import { parseDeclarativeSchema } from "../schema/sdl_adapter.js";
+import { schemaSnapshotFromDeclarative } from "../schema/uiSchema.js";
 import { tableNameForType } from "../codegen/sql.js";
 import { populateSchemaIntrospection } from "../schema/schema_introspection.js";
 import { materializeSchema, type SQLiteDatabase } from "../runtime/database.js";
@@ -1328,6 +1330,46 @@ const applyAlterTypeDDL = (schema: SchemaSnapshot, statement: string, defaultMod
 
   if (mutated) schema.addType(typeDef);
   return mutated;
+};
+
+// Validate bare-SDL type declarations (`type Hello { … }`, as opposed to the
+// imperative `create type`) for illegal default expressions: a property
+// `default :=` may not reference a multi property or any link of the same type
+// (test_edgeql_insert_default_09). Bare SDL otherwise isn't executable here, so
+// this purely surfaces the schema-validation diagnostics EdgeQL raises.
+const validateBareSdlDefaults = (script: string): void => {
+  const looksLikeBareSdl = splitTopLevelScriptStatements(script).some((stmt) => {
+    const t = stmt.trim();
+    return /^(?:abstract\s+)?type\s+[A-Za-z_]/i.test(t) && t.includes("{");
+  });
+  if (!looksLikeBareSdl) return;
+
+  // Parse the whole script as a declarative module. tryResult swallows parse
+  // failures (the statement may not be valid bare SDL — then there's nothing to
+  // validate and the normal pipeline reports the real error).
+  const parsed = tryResult(() => {
+    const decl = parseDeclarativeSchema(`module default {\n${script}\n}`, { legacySyntaxCompat: true });
+    return schemaSnapshotFromDeclarative(decl);
+  }, { captureAll: true });
+  if (!parsed.ok || parsed.value === undefined) return;
+  const sdlSchema = parsed.value;
+
+  for (const typeDef of sdlSchema.listTypes()) {
+    const multiProps = new Set(typeDef.fields.filter((f) => f.multi).map((f) => f.name));
+    const linkNames = new Set((typeDef.links ?? []).map((l) => l.name));
+    for (const field of typeDef.fields) {
+      if (!field.hasDefault || !field.defaultExprText) continue;
+      const refs = [...field.defaultExprText.matchAll(/\.([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]);
+      // A reference to a link (single or multi) is rejected first — the
+      // canonical message names links even when wrapped in `count(.world)`.
+      if (refs.some((r) => linkNames.has(r))) {
+        throw new AppError("E_SEMANTIC", "default expression cannot refer to links", 1, 1);
+      }
+      if (refs.some((r) => multiProps.has(r))) {
+        throw new AppError("E_SEMANTIC", "default expression cannot refer to multi properties", 1, 1);
+      }
+    }
+  }
 };
 
 const registerDynamicTypeDDL = (schema: SchemaSnapshot, statement: string, defaultModule = "default"): boolean => {
@@ -6563,6 +6605,7 @@ export const executeScript = (
   // registered by `maybeRegisterDynamicDDLScript` before per-statement
   // validation in `executeQueryUnitWithTrace` ever sees it.
   validateScriptUserDDL(script, parserOptions, securityContext.strictUserDDL ?? false);
+  validateBareSdlDefaults(script);
   maybeRegisterDynamicDDLScript(db, schema, script);
   if (maybeHandleAliasDDLScript(schema, script)) {
     // Alias state changed; refresh the schema::* introspection rows so
