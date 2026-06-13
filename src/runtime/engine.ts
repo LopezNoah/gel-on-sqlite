@@ -12283,6 +12283,18 @@ const exclusiveChecksFor = (
   collectTypeConstraints(typeDef, false);
   for (const anc of ancestors) collectTypeConstraints(anc, true);
 
+  // The implicit `id` PRIMARY KEY is exclusive on every type. It only matters
+  // under `allow_user_specified_id` (otherwise ids are server-generated and
+  // never clash) — included so `UNLESS CONFLICT ON (.id)` / bare UNLESS
+  // CONFLICT can suppress an explicit-id duplicate (test explicit_id_05).
+  checks.push({
+    fields: ["id"],
+    columns: ["id"],
+    lower: false,
+    tables: [tableNameForType(qualifiedTypeName(typeDef))],
+    fromParent: false,
+  });
+
   if (targetFields === undefined) return checks;
   const want = [...targetFields].sort().join(" ");
   return checks.filter((c) => [...c.fields].sort().join(" ") === want);
@@ -12840,7 +12852,8 @@ const runWriteWithAccessPolicies = (
       // false positives.
       const ddlTracked = subjectType.ddlSynthesized
         || (subjectType.extends ?? []).some((b) => schema.getType(b)?.ddlSynthesized);
-      if (!ddlTracked && ast.kind === "insert" && ast.conflict?.onField !== undefined && ast.conflict.onFields === undefined) {
+      if (!ddlTracked && ast.kind === "insert" && ast.conflict?.onField !== undefined
+          && ast.conflict.onFields === undefined && ast.conflict.onField !== "id") {
         const onProp = ast.conflict.onField;
         const fieldDef = subjectType.fields.find((f) => f.name === onProp);
         if (!fieldDef) {
