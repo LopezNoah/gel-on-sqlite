@@ -1158,7 +1158,49 @@ class Parser {
             }
           }
         }
+        // `SET GLOBAL <name> := <expr>` assigns a session global. Parse the
+        // name and assigned expression into a configure-shaped node flagged
+        // as a session global so the engine can evaluate and store the value
+        // (everything else — SET ALIAS / SET TYPE — stays a passthrough no-op).
+        if (this.peekNext().lower === "global") {
+          this.consume(); // 'set'
+          this.consume(); // 'global'
+          const name = this.parseQualifiedName("Expected global name after 'set global'");
+          this.expect("assign", "Expected ':=' in 'set global' statement");
+          const value = this.parseFreeObjectExpr();
+          while (this.peek().kind === "semi") this.consume();
+          this.expect("eof", "Unexpected tokens after 'set global' statement");
+          return {
+            kind: "configure",
+            scope: "session",
+            operation: "set",
+            target: name,
+            value,
+            isSessionGlobal: true,
+            pos: this.posOf(token),
+          };
+        }
         return this.parsePassthroughStatement(token);
+      }
+      // `RESET GLOBAL <name>` clears a session global back to its empty/default
+      // state. Like SET GLOBAL it lowers to a configure-shaped session-global
+      // node the engine interprets.
+      if (this.isKeywordLikeToken(token)
+        && token.lower === "reset"
+        && this.peekNext().lower === "global") {
+        this.consume(); // 'reset'
+        this.consume(); // 'global'
+        const name = this.parseQualifiedName("Expected global name after 'reset global'");
+        while (this.peek().kind === "semi") this.consume();
+        this.expect("eof", "Unexpected tokens after 'reset global' statement");
+        return {
+          kind: "configure",
+          scope: "session",
+          operation: "reset",
+          target: name,
+          isSessionGlobal: true,
+          pos: this.posOf(token),
+        };
       }
       if (this.isKeywordLikeToken(token) && TOP_LEVEL_PASSTHROUGH_LEXEMES.has(token.lower)) {
         return this.parsePassthroughStatement(token);

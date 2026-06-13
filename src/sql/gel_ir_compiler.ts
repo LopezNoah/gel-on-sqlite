@@ -218,7 +218,7 @@ export const compileGelIRToSQL = (
   // Same rule for strict binary operators (`=`, `<`, `+`, etc.) whose cross
   // product with an empty operand is also empty: SQL would otherwise
   // materialize a single NULL/false row.
-  if (sourceSet && (isTopLevelEmptySetMarker(sourceSet) || selectYieldsEmptyByStrictOperand(sourceSet))) {
+  if (sourceSet && (isTopLevelEmptySetMarker(sourceSet, options) || selectYieldsEmptyByStrictOperand(sourceSet, options))) {
     return {
       sql: `SELECT NULL AS ${quoteIdent("value")} WHERE 0`,
       params,
@@ -3732,7 +3732,11 @@ const compileScalarSelectSQLInner = (
       } else {
         const v = compileValueSetSQL(args[i].expr, alias, params, target, options);
         if (!v) { ok = false; break; }
-        froms.push(`(SELECT (${v}) AS ${quoteIdent("value")}) ${alias}`);
+        // An unset settable global is the empty set: its single-row arg
+        // subquery must yield zero rows so the CROSS JOIN (and thus the whole
+        // element-wise result) is empty, matching strict empty-set semantics.
+        const emptyGuard = isTopLevelEmptySetMarker(args[i].expr, options) ? " WHERE 0" : "";
+        froms.push(`(SELECT (${v}) AS ${quoteIdent("value")}${emptyGuard}) ${alias}`);
       }
       pieces.push(`${alias}.${quoteIdent("value")}`);
     }
@@ -13555,11 +13559,27 @@ const extractScalarConstant = (set: Set): ScalarValue | undefined => {
 // ast_to_ir.ts: a `string_constant` with `value: null`, optionally wrapped
 // in one or more `type_cast` layers (e.g. `<Issue>{}` casts the sentinel).
 // Real string literals never carry `null` here.
-const isTopLevelEmptySetMarker = (set: Set): boolean => {
+// A reference to a settable global that currently holds no value (never `set`,
+// or `reset`) is the empty set. We detect this by checking the compile-time
+// `globalValues`: an *absent* key means unset (→ empty). A present value (even
+// null) is treated as a real value. Computed and `set` globals always have an
+// entry, so this only fires for unset settable globals.
+const isUnsetGlobalExpr = (expr: Expr, options?: GelIRCompileOptions): boolean => {
+  if (!options || expr.kind !== "global_expr") return false;
+  const name = (expr as { name: string }).name;
+  const values = options.globalValues;
+  if (!values) return true;
+  return values[name] === undefined
+    && values[`global::${name}`] === undefined
+    && values[`default::${name}`] === undefined;
+};
+
+const isTopLevelEmptySetMarker = (set: Set, options?: GelIRCompileOptions): boolean => {
   let expr: Expr = set.expr;
   while (expr.kind === "type_cast") {
     expr = (expr as TypeCast).expr.expr;
   }
+  if (isUnsetGlobalExpr(expr, options)) return true;
   return expr.kind === "string_constant" && (expr as BaseConstant).value === null;
 };
 
@@ -13596,11 +13616,14 @@ const NON_STRICT_STDLIB = new Set([
   // not an empty result.
   "range", "multirange",
 ]);
-const selectYieldsEmptyByStrictOperand = (set: Set): boolean => {
+const selectYieldsEmptyByStrictOperand = (set: Set, options?: GelIRCompileOptions): boolean => {
   let expr: Expr = set.expr;
   while (expr.kind === "type_cast") {
     expr = (expr as TypeCast).expr.expr;
   }
+  // A bare reference to an unset settable global is itself empty (covers an
+  // inlined function whose body is just `global a`).
+  if (isUnsetGlobalExpr(expr, options)) return true;
   if (expr.kind === "operator_call") {
     const op = (expr as OperatorCall).operator;
     if (op === "not") {
@@ -13608,7 +13631,7 @@ const selectYieldsEmptyByStrictOperand = (set: Set): boolean => {
       const onlyArg = args[0]?.expr;
       // `NOT EXISTS X` is always defined (true when X empty), not empty-propagating.
       if (onlyArg && onlyArg.expr.kind === "exists_expr") return false;
-      return Boolean(onlyArg && isTopLevelEmptySetMarker(onlyArg));
+      return Boolean(onlyArg && isTopLevelEmptySetMarker(onlyArg, options));
     }
     if (!STRICT_BINARY_OPS.has(op)) return false;
     const args = orderedCallArgs((expr as OperatorCall).args);
@@ -13616,7 +13639,7 @@ const selectYieldsEmptyByStrictOperand = (set: Set): boolean => {
     // `x * x + 2 * x + 1` with empty `x` should yield empty even though the
     // outer `+`'s direct args are themselves `operator_call`s, not raw empty
     // markers.
-    return args.some((arg) => isTopLevelEmptySetMarker(arg.expr) || selectYieldsEmptyByStrictOperand(arg.expr));
+    return args.some((arg) => isTopLevelEmptySetMarker(arg.expr, options) || selectYieldsEmptyByStrictOperand(arg.expr, options));
   }
   if (expr.kind === "function_call") {
     const call = expr as FunctionCall;
@@ -13625,23 +13648,23 @@ const selectYieldsEmptyByStrictOperand = (set: Set): boolean => {
     // remain defined when some arg is empty (e.g. `{<str>x, y}` with empty
     // `x` still yields `{y}`). Skip the per-arg shortcut here.
     if (call.body) {
-      return selectYieldsEmptyByStrictOperand(call.body);
+      return selectYieldsEmptyByStrictOperand(call.body, options);
     }
     const shortName = (call.functionName ?? "").split("::").pop() ?? "";
     if (NON_STRICT_STDLIB.has(shortName)) return false;
     const args = orderedCallArgs(call.args);
-    return args.some((arg) => isTopLevelEmptySetMarker(arg.expr) || selectYieldsEmptyByStrictOperand(arg.expr));
+    return args.some((arg) => isTopLevelEmptySetMarker(arg.expr, options) || selectYieldsEmptyByStrictOperand(arg.expr, options));
   }
   // Array and tuple literals are constructed from the cross-product of their
   // element sets — an empty element means zero rows. `[<int64>{}]` and
   // `(<int64>{}, 1)` both yield empty.
   if (expr.kind === "array") {
     const elements = (expr as ArrayExpr).elements;
-    return elements.some((el) => isTopLevelEmptySetMarker(el) || selectYieldsEmptyByStrictOperand(el));
+    return elements.some((el) => isTopLevelEmptySetMarker(el, options) || selectYieldsEmptyByStrictOperand(el, options));
   }
   if (expr.kind === "tuple") {
     const elements = (expr as Tuple).elements;
-    return elements.some((el) => isTopLevelEmptySetMarker(el.val) || selectYieldsEmptyByStrictOperand(el.val));
+    return elements.some((el) => isTopLevelEmptySetMarker(el.val, options) || selectYieldsEmptyByStrictOperand(el.val, options));
   }
   return false;
 };

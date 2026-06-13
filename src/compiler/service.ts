@@ -489,7 +489,31 @@ const fingerprintSchema = (schema: SchemaSnapshot): string => {
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
 
-  return stableJson(types);
+  // Functions participate in the cache key: an inlined UDF's body is spliced
+  // into the compiled SQL, so two schemas that share types but define a
+  // different `foo` (e.g. across tests that each `CREATE FUNCTION foo …`) must
+  // not collide on the same cached artifact. Include signature + body.
+  const functions = schema
+    .listFunctions()
+    .map((fn) => ({
+      module: fn.module,
+      name: fn.name,
+      params: fn.params.map((p) => ({ name: p.name, type: p.type, optional: Boolean(p.optional), variadic: Boolean(p.variadic), setOf: Boolean(p.setOf), default: p.default })),
+      returnType: fn.returnType,
+      returnOptional: Boolean(fn.returnOptional),
+      returnSetOf: Boolean(fn.returnSetOf),
+      body: fn.body,
+    }))
+    .sort((a, b) => `${a.module}::${a.name}`.localeCompare(`${b.module}::${b.name}`));
+
+  // Globals likewise: a computed global's default text (or its very existence
+  // as a settable global) affects how `global x` lowers.
+  const globals = schema
+    .listGlobals()
+    .map((g) => ({ module: g.module, name: g.name, exprText: g.exprText }))
+    .sort((a, b) => `${a.module}::${a.name}`.localeCompare(`${b.module}::${b.name}`));
+
+  return stableJson({ types, functions, globals });
 };
 
 const stableJson = (value: unknown): string => JSON.stringify(sortValue(value));
