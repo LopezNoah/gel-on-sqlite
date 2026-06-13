@@ -13,7 +13,7 @@ import { executeStdlibFunction, resolveStdlibFunction, type RuntimeFunctionArg }
 import { assertTargetSqlCompatibility, type RuntimeTarget } from "./target.js";
 import type { ShapeElement as GelIRShapeElement, Set as GelIRSet, Statement as GelIRStatement, TypeRef as GelIRTypeRef } from "../ir/gel_ir.js";
 import type { GroupIR, InsertIR, InsertLinkDefaultIR, InsertLinkPropertyIR, IRStatement, OverlayIR, SelectIR, UpdateIR, UpdateLinkAssignmentIR } from "../ir/model.js";
-import type { AccessPolicyCondition, AccessPolicyDef, ComputedLinkPropertyExpr, ConstraintDef, FieldDef, FunctionDef, FunctionExprDef, LinkPropertyDef, ScalarType, ScalarValue, TypeDef } from "../types.js";
+import type { AccessPolicyCondition, AccessPolicyDef, ComputedLinkPropertyExpr, ConstraintDef, FieldDef, FunctionDef, FunctionExprDef, FunctionVolatility, LinkPropertyDef, ScalarType, ScalarValue, TypeDef } from "../types.js";
 import { normalizeLinkTargetNames, qualifiedTypeName } from "../schema/schema.js";
 import { tableNameForType } from "../codegen/sql.js";
 import { populateSchemaIntrospection } from "../schema/schema_introspection.js";
@@ -676,6 +676,17 @@ const applyParsedFunctionDDL = (schema: SchemaSnapshot, ast: DDLStatement, defau
     };
   });
   const bodyQuery = ast.functionDecl.body.query.trim();
+  // Normalize the parsed `SET volatility := ...` category (e.g. the trailing
+  // `schema::Volatility.Modifying` segment) onto the function definition.
+  // Modifying functions enforce singleton-cardinality on their arguments.
+  let volatility: FunctionVolatility | undefined;
+  switch ((ast.functionDecl.volatility ?? "").toLowerCase()) {
+    case "immutable": volatility = "Immutable"; break;
+    case "stable": volatility = "Stable"; break;
+    case "volatile": volatility = "Volatile"; break;
+    case "modifying": volatility = "Modifying"; break;
+    default: volatility = undefined;
+  }
   schema.addFunction({
     module,
     name,
@@ -683,6 +694,7 @@ const applyParsedFunctionDDL = (schema: SchemaSnapshot, ast: DDLStatement, defau
     returnType: normalizeDynamicTypeName(ast.functionDecl.returnType, defaultModule),
     returnOptional: ast.functionDecl.returnOptional,
     returnSetOf: ast.functionDecl.returnSetOf,
+    volatility,
     body: {
       kind: "query",
       language: "edgeql",

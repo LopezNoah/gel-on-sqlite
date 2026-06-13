@@ -2844,6 +2844,29 @@ const tryBuildInlinedUDFBody = (
       // `{<str>x, y}` with empty x reduces to `{y}`).
       argExpr = { kind: "set_literal", values: [] };
     }
+    // Modifying functions force each argument to be evaluated exactly once,
+    // so a non-singleton argument is a compile error (upstream EdgeDB). A
+    // required (non-OPTIONAL, non-SET OF) param rejects a provably-empty
+    // argument; ANY param rejects a provably multi-element argument. SET OF
+    // params take the whole set, so they're exempt from both checks.
+    if (fn.volatility === "Modifying" && !param.setOf && !param.variadic) {
+      if (astExprDefinitelyMulti(argExpr, ctx)) {
+        throw new AppError(
+          "E_SEMANTIC",
+          "possibly more than one element passed into modifying function",
+          1,
+          1,
+        );
+      }
+      if (!param.optional && astExprDefinitelyEmpty(argExpr)) {
+        throw new AppError(
+          "E_SEMANTIC",
+          "possibly an empty set passed as non-optional argument into modifying function",
+          1,
+          1,
+        );
+      }
+    }
     const argAttempt = tryResult(() => compileFreeObjectExpr(argExpr, ctx));
     if (!argAttempt.ok) return undefined;
     const argIR: Set = argAttempt.value;
@@ -2938,6 +2961,44 @@ const astExprDefinitelyNonEmpty = (expr: FreeObjectExpr, ctx: IRCompileContext):
       // projected always exists, so `.` itself is non-empty (a field access
       // off it, `.x`, parses as field_access and stays guarded).
       return true;
+    default:
+      return false;
+  }
+};
+
+// Conservative "this argument expression can definitely be the EMPTY set"
+// check used to reject empty args passed to a required parameter of a
+// Modifying function. Only fires for shapes we can statically prove empty —
+// an explicit empty set literal `{}` or a cast of one (`<int64>{}`). Anything
+// we can't prove returns false (the call is allowed through).
+const astExprDefinitelyEmpty = (expr: FreeObjectExpr): boolean => {
+  switch (expr.kind) {
+    case "set_literal":
+      return (expr as { values: unknown[] }).values.length === 0;
+    case "set_expr":
+      return (expr as { values: FreeObjectExpr[] }).values.length === 0;
+    case "cast":
+      return astExprDefinitelyEmpty((expr as { expr: FreeObjectExpr }).expr);
+    default:
+      return false;
+  }
+};
+
+// Conservative "this argument expression definitely contains MORE THAN ONE
+// element" check used to reject multi-element args passed to any parameter of
+// a Modifying function. Fires only for statically multi set constructors
+// (`{1, 2, 3}`) — or casts thereof — where every element is itself a proven
+// singleton, so the set has > 1 element with certainty.
+const astExprDefinitelyMulti = (expr: FreeObjectExpr, ctx: IRCompileContext): boolean => {
+  switch (expr.kind) {
+    case "set_expr": {
+      const values = (expr as { values: FreeObjectExpr[] }).values;
+      return values.length > 1 && values.every((v) => astExprDefinitelyNonEmpty(v, ctx));
+    }
+    case "set_literal":
+      return (expr as { values: unknown[] }).values.length > 1;
+    case "cast":
+      return astExprDefinitelyMulti((expr as { expr: FreeObjectExpr }).expr, ctx);
     default:
       return false;
   }

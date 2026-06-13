@@ -2327,7 +2327,11 @@ class Parser {
       this.expect("assign", "Expected ':=' in DDL definition");
       value = this.parseFreeObjectExpr();
     } else if (action === "create" && objectKind === "function") {
-      functionDecl = this.parseCreateFunctionTail(setCommands);
+      const volatilityOut: { value?: string } = {};
+      functionDecl = this.parseCreateFunctionTail(setCommands, volatilityOut);
+      if (functionDecl && volatilityOut.value !== undefined) {
+        functionDecl.volatility = volatilityOut.value;
+      }
     } else if (action === "alter" && objectKind === "function") {
       // Capture top-level SET commands inside `ALTER FUNCTION ... { ... }` —
       // we still discard the rest of the body, but the validator needs the
@@ -2361,7 +2365,7 @@ class Parser {
     };
   }
 
-  private parseCreateFunctionTail(setCommandsOut?: string[]): FunctionDecl {
+  private parseCreateFunctionTail(setCommandsOut?: string[], volatilityOut?: { value?: string }): FunctionDecl {
     const lparen = this.expect("lparen", "Expected '(' after function name");
     const params: FunctionParamDecl[] = [];
     const seenParamNames = new Map<string, Token>();
@@ -2454,7 +2458,7 @@ class Parser {
     }
     const returnType = this.captureTypeExprText();
 
-    const body = this.parseFunctionBody(setCommandsOut);
+    const body = this.parseFunctionBody(setCommandsOut, volatilityOut);
     return { params, returnType, returnOptional, returnSetOf, body };
   }
 
@@ -2587,7 +2591,7 @@ class Parser {
     return this.sliceSource(startOffset, endTok.offset).trim();
   }
 
-  private parseFunctionBody(setCommandsOut?: string[]): FunctionDecl["body"] {
+  private parseFunctionBody(setCommandsOut?: string[], volatilityOut?: { value?: string }): FunctionDecl["body"] {
     // Brace-wrapped form: a sequence of commands separated by semicolons.
     // Upstream restricts the allowed commands and how often they may appear.
     if (this.peek().kind === "lbrace") {
@@ -2626,7 +2630,33 @@ class Parser {
           && this.peekNext()
           && (this.isNameToken(this.peekNext()) || this.isKeywordLikeToken(this.peekNext()))
         ) {
-          setCommandsOut.push(this.peekNext().lexeme);
+          const fieldTok = this.peekNext();
+          setCommandsOut.push(fieldTok.lexeme);
+          // `SET volatility := schema::Volatility.Modifying` — capture the
+          // category so the runtime can attach it to the function. We scan
+          // ahead (without consuming; `skipCommand` does that) and take the
+          // final name-like segment of the value (e.g. "Modifying").
+          if (volatilityOut && fieldTok.lexeme.toLowerCase() === "volatility") {
+            let i = 2; // skip `set` and the field name
+            let depth = 0;
+            let lastName: string | undefined;
+            while (true) {
+              const t = this.peekNth(i);
+              const k = t.kind;
+              if (k === "eof") break;
+              if (k === "lbrace" || k === "lparen" || k === "lbracket") depth += 1;
+              else if (k === "rbrace" || k === "rparen" || k === "rbracket") {
+                if (depth === 0) break;
+                depth -= 1;
+              } else if (k === "semi" && depth === 0) {
+                break;
+              } else if (depth === 0 && (this.isNameToken(t) || this.isKeywordLikeToken(t))) {
+                lastName = t.lexeme;
+              }
+              i += 1;
+            }
+            if (lastName !== undefined) volatilityOut.value = lastName;
+          }
         }
         if (head.kind === "kw_using") {
           if (usingCount > 0) {
