@@ -6856,7 +6856,7 @@ class Parser {
     };
   }
 
-  private parseInlineUpdateExpr(): { kind: "update"; typeName: string; filter?: FilterExpr; values: Record<string, ScalarValue> } {
+  private parseInlineUpdateExpr(): { kind: "update"; typeName: string; filter?: FilterExpr; values: Record<string, InsertValue>; operations?: Record<string, "assign" | "append" | "subtract"> } {
     this.expect("kw_update", "Expected 'update' in else expression");
     const typeName = this.parseQualifiedName("Expected type name in update expression");
 
@@ -6867,9 +6867,15 @@ class Parser {
 
     this.expect("kw_set", "Expected 'set' in update expression");
     this.expect("lbrace", "Expected '{' after 'set'");
-    const values: Record<string, ScalarValue> = {};
-    for (const assignment of this.parseDelimited("rbrace", () => this.parseInlineUpdateAssignment(), "Expected ',' between assignments")) {
+    // The ELSE UPDATE body accepts the same assignment grammar as a top-level
+    // UPDATE statement — arbitrary expressions (`'super ' ++ .tag`), parameter
+    // casts (`<str>$0`), `+=`/`-=`, and WITH-binding references — so reuse
+    // parseUpdateAssignment rather than a literal-only reader.
+    const values: Record<string, InsertValue> = {};
+    const operations: Record<string, "assign" | "append" | "subtract"> = {};
+    for (const assignment of this.parseDelimited("rbrace", () => this.parseUpdateAssignment(), "Expected ',' between assignments")) {
       values[assignment.field] = assignment.value;
+      operations[assignment.field] = assignment.operation;
     }
     this.expect("rbrace", "Expected '}' after assignments");
     return {
@@ -6877,15 +6883,7 @@ class Parser {
       typeName,
       filter,
       values,
-    };
-  }
-
-  private parseInlineUpdateAssignment(): { field: string; value: ScalarValue } {
-    const field = this.expectName("Expected field name in update expression").lexeme;
-    this.expect("assign", "Expected ':=' after field name");
-    return {
-      field,
-      value: this.readScalarLikeValue(),
+      operations: Object.keys(operations).length > 0 ? operations : undefined,
     };
   }
 

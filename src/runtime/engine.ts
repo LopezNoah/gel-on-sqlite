@@ -5,7 +5,7 @@ import { AppError, asAppError, isQueryFailure, tryResult } from "../errors.js";
 import { decorateErrorWithUnsupportedTag } from "../diagnostics/unsupported.js";
 import { parseEdgeQL, parseEdgeQLScript, type ParseEdgeQLOptions } from "../edgeql/parser.js";
 import { offsetToLineCol, tokenize, type Token } from "../edgeql/tokenizer.js";
-import type { BacklinkExpr, ClauseChain, ComputedExpr, ConfigureStatement, DDLStatement, DeleteStatement, FilterExpr, FilterValue, ForStatement, FreeObjectExpr, FunctionCallArgExpr, FunctionCallExpr, InsertStatement, InsertValue, OrderExpr, OrderExprChain, PathStep, SelectExprStatement, SelectStatement, ShapeElement, Statement, TypeExpr, UpdateStatement, WithBinding, WithBindingValue } from "../edgeql/ast.js";
+import type { BacklinkExpr, ClauseChain, ComputedExpr, ConfigureStatement, DDLStatement, DeleteStatement, FilterExpr, FilterValue, ForStatement, FreeObjectExpr, FunctionCallArgExpr, FunctionCallExpr, InsertStatement, InsertValue, OrderExpr, OrderExprChain, PathStep, SelectExprStatement, SelectStatement, ShapeElement, Statement, TypeExpr, UpdateStatement, WithBinding, WithBindingValue, WithModuleAlias } from "../edgeql/ast.js";
 import type { RuntimeDatabaseAdapter } from "./adapter.js";
 import type { SchemaSnapshot } from "../schema/schema.js";
 import type { GelIRSQLArtifact as SQLArtifact } from "../sql/gel_ir_compiler.js";
@@ -103,6 +103,13 @@ export interface SecurityContext {
   // INTERNAL_TESTMODE = True), only safety checks like the read-only
   // stdlib-module guard are applied. Read-only is always enforced.
   strictUserDDL?: boolean;
+  // Object ids inserted during the current top-level statement. A bare/ON
+  // UNLESS CONFLICT must NOT suppress a clash against a row created earlier in
+  // the *same* statement (WITH-bound sibling inserts, FOR-bound duplicates) —
+  // Gel surfaces those as a hard exclusivity error. The conflict pre-check
+  // ignores any matching id found in this set, letting the insert proceed and
+  // trip the constraint. Reset at each top-level statement boundary.
+  statementInsertedIds?: Set<string>;
 }
 
 const DEFAULT_SECURITY_CONTEXT: SecurityContext = {
@@ -7382,6 +7389,7 @@ const executeQueryWithTraceImpl = (
         result: { kind: "insert", changes: 0 },
       };
     }
+    context.statementInsertedIds = new Set<string>();
     validateParsedStatement(ast, { schema, module: ast.withModule });
     preValidateStatementAst(schema, ast, allowUserSpecifiedId(schema));
     const statementType = statementTypeOf(ast);
@@ -8264,6 +8272,9 @@ export const executeQueryUnitWithTrace = (
         continue;
       }
 
+      // Fresh per-statement insert tracker so same-statement conflicts aren't
+      // suppressed by UNLESS CONFLICT (see SecurityContext.statementInsertedIds).
+      context.statementInsertedIds = new Set<string>();
       validateParsedStatement(ast, { schema, module: ast.withModule });
       preValidateStatementAst(schema, ast, allowUserSpecifiedId(schema));
       const statementType = statementTypeOf(ast);
@@ -12145,6 +12156,260 @@ const findConflictRowId = (
   return typeof row?.id === "string" ? row.id : undefined;
 };
 
+// A single exclusive constraint reachable from an INSERT's type, normalized so
+// the conflict checker can both decide whether the inserted values clash with
+// an existing row and recover that row's id.
+interface ExclusiveCheck {
+  // The own-type fields the constraint covers (`["name"]`, `["first","bff"]`).
+  fields: string[];
+  // Storage columns to compare in each participating table (link → `<l>_id`).
+  columns: string[];
+  // Case-insensitive (`exclusive on (str_lower(__subject__))`).
+  lower: boolean;
+  // For a multi property the values live in a `<table>__<prop>` link table.
+  multiProp?: string;
+  // Concrete tables the constraint spans (this type + any type sharing it via
+  // inheritance), so a parent/child clash is detected (test _18a/_18b).
+  tables: string[];
+  // True when the constraint is owned by a *parent* type rather than declared
+  // on the inserted type itself — UNLESS CONFLICT … ELSE is rejected then
+  // (test _20a), and a bare/derived conflict is still suppressed (_18b).
+  fromParent: boolean;
+}
+
+const typeAncestorsOf = (schema: SchemaSnapshot, typeDef: TypeDef): TypeDef[] => {
+  const seen = new Set<string>();
+  const out: TypeDef[] = [];
+  const visit = (name: string): void => {
+    const t = schema.getType(name);
+    if (!t || seen.has(qualifiedTypeName(t))) return;
+    seen.add(qualifiedTypeName(t));
+    out.push(t);
+    for (const base of t.extends ?? []) visit(base);
+  };
+  for (const base of typeDef.extends ?? []) visit(base);
+  return out;
+};
+
+const constraintIsExclusiveLike = (c: { name: string }): boolean =>
+  c.name === "std::exclusive" || c.name === "exclusive";
+
+// All concrete tables that share `field`'s exclusive constraint with `typeDef`
+// — the declaring type's whole subtree (so a Person/DerivedPerson name clash is
+// caught), mirroring materializeExclusivity's shared bookkeeping table.
+const tablesSharingFieldConstraint = (
+  schema: SchemaSnapshot,
+  typeDef: TypeDef,
+  ownerName: string,
+): string[] => {
+  const tables = new Set<string>();
+  for (const concrete of schema.listConcreteTypesAssignableTo(ownerName)) {
+    tables.add(tableNameForType(qualifiedTypeName(concrete)));
+  }
+  tables.add(tableNameForType(qualifiedTypeName(typeDef)));
+  return [...tables];
+};
+
+// Enumerate the exclusive constraints to test for an INSERT under UNLESS
+// CONFLICT. `targetFields` restricts the set to those that exactly cover the
+// `ON (...)` target; a bare UNLESS CONFLICT (undefined) tests every exclusive
+// constraint reachable from the type.
+const exclusiveChecksFor = (
+  schema: SchemaSnapshot,
+  typeDef: TypeDef,
+  targetFields: string[] | undefined,
+): ExclusiveCheck[] => {
+  const checks: ExclusiveCheck[] = [];
+  const ancestors = typeAncestorsOf(schema, typeDef);
+
+  const linkColumn = (name: string): { column: string; isLink: boolean } => {
+    const link = (typeDef.links ?? []).find((l) => l.name === name);
+    return link ? { column: `${name}_id`, isLink: true } : { column: name, isLink: false };
+  };
+
+  // ── Field-level single-property exclusive constraints ──
+  for (const field of typeDef.fields) {
+    if (field.name === "id") continue;
+    const constraints = (field as { constraints?: Array<{ name: string; delegated?: boolean; onExpr?: string }> }).constraints ?? [];
+    const excl = constraints.find(constraintIsExclusiveLike);
+    if (!excl) continue;
+    // Locate the topmost ancestor declaring the same field constraint to find
+    // the shared-table owner + whether it's inherited.
+    let owner = typeDef;
+    for (const anc of ancestors) {
+      const ancField = anc.fields.find((f) => f.name === field.name) as { constraints?: Array<{ name: string }> } | undefined;
+      if (ancField?.constraints?.some(constraintIsExclusiveLike)) owner = anc;
+    }
+    const lower = excl.onExpr !== undefined && /str_lower\s*\(\s*__subject__\s*\)/.test(excl.onExpr);
+    checks.push({
+      fields: [field.name],
+      columns: [field.name],
+      lower,
+      multiProp: (field as { multi?: boolean }).multi ? field.name : undefined,
+      tables: tablesSharingFieldConstraint(schema, typeDef, qualifiedTypeName(owner)),
+      fromParent: qualifiedTypeName(owner) !== qualifiedTypeName(typeDef),
+    });
+  }
+
+  // ── Type-level exclusive constraints (single- or multi-field tuples) ──
+  // Recover the field references a type-level constraint covers. Most carry an
+  // explicit `fieldRefs`, but the `(__subject__.first, __subject__.last)` form
+  // leaves it empty — derive the names from the expression text instead.
+  const fieldRefsOf = (tc: { fieldRefs: string[]; exprText?: string }): string[] => {
+    if (tc.fieldRefs.length > 0) return tc.fieldRefs;
+    const text = tc.exprText ?? "";
+    const refs: string[] = [];
+    const re = /(?:__subject__|)\s*\.([A-Za-z_][A-Za-z0-9_]*)/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) refs.push(m[1]);
+    return refs;
+  };
+
+  const collectTypeConstraints = (t: TypeDef, parent: boolean): void => {
+    for (const tc of t.typeConstraints ?? []) {
+      if (!constraintIsExclusiveLike(tc)) continue;
+      const fields = fieldRefsOf(tc);
+      if (fields.length === 0) continue;
+      const columns = fields.map((f) => linkColumn(f).column);
+      const lower = /str_lower\s*\(\s*__subject__\s*\)/.test(tc.exprText ?? "");
+      const tables = new Set<string>();
+      for (const concrete of schema.listConcreteTypesAssignableTo(qualifiedTypeName(t))) {
+        tables.add(tableNameForType(qualifiedTypeName(concrete)));
+      }
+      tables.add(tableNameForType(qualifiedTypeName(typeDef)));
+      checks.push({ fields, columns, lower, tables: [...tables], fromParent: parent });
+    }
+  };
+  collectTypeConstraints(typeDef, false);
+  for (const anc of ancestors) collectTypeConstraints(anc, true);
+
+  if (targetFields === undefined) return checks;
+  const want = [...targetFields].sort().join(" ");
+  return checks.filter((c) => [...c.fields].sort().join(" ") === want);
+};
+
+// Given an exclusive check and the resolved storage-column values the INSERT is
+// about to write, find an existing row that already holds those values. Returns
+// its id, or undefined when there is no clash. Multi-property checks scan the
+// link table for any overlapping value.
+const findExclusiveConflictId = (
+  db: SQLiteDatabase,
+  check: ExclusiveCheck,
+  values: Record<string, ScalarValue | undefined>,
+): string | undefined => {
+  // A null value for any covered column means "no value" — exclusive
+  // constraints ignore empty sets, so there can be no conflict.
+  if (check.multiProp) {
+    const raw = values[check.multiProp];
+    const items: ScalarValue[] = Array.isArray(raw) ? raw as ScalarValue[] : raw === undefined || raw === null ? [] : [raw];
+    if (items.length === 0) return undefined;
+    for (const tbl of check.tables) {
+      const linkTbl = `${tbl}__${check.multiProp.toLowerCase()}`;
+      const exists = (db.prepare(`PRAGMA table_info(${quoteIdent(linkTbl)})`).all() as Array<{ name: string }>);
+      if (exists.length === 0) continue;
+      const valueCol = exists.some((c) => c.name === "value") ? "value" : exists.some((c) => c.name === "target") ? "target" : undefined;
+      const srcCol = exists.some((c) => c.name === "source") ? "source" : "src";
+      if (!valueCol) continue;
+      const placeholders = items.map(() => "?").join(", ");
+      const row = db
+        .prepare(`SELECT ${quoteIdent(srcCol)} AS ${quoteIdent("id")} FROM ${quoteIdent(linkTbl)} WHERE ${quoteIdent(valueCol)} IN (${placeholders}) LIMIT 1`)
+        .all(...items)[0] as { id?: unknown } | undefined;
+      if (typeof row?.id === "string") return row.id;
+    }
+    return undefined;
+  }
+
+  const colValues = check.columns.map((col) => values[col]);
+  if (colValues.some((v) => v === undefined || v === null)) return undefined;
+  for (const tbl of check.tables) {
+    const cols = (db.prepare(`PRAGMA table_info(${quoteIdent(tbl)})`).all() as Array<{ name: string }>).map((c) => c.name);
+    if (!check.columns.every((c) => cols.includes(c))) continue;
+    const wheres = check.columns
+      .map((col) => (check.lower ? `lower(${quoteIdent(col)}) = lower(?)` : `${quoteIdent(col)} = ?`))
+      .join(" AND ");
+    const row = db
+      .prepare(`SELECT ${quoteIdent("id")} AS ${quoteIdent("id")} FROM ${quoteIdent(tbl)} WHERE ${wheres} LIMIT 1`)
+      .all(...colValues as ScalarValue[])[0] as { id?: unknown } | undefined;
+    if (typeof row?.id === "string") return row.id;
+  }
+  return undefined;
+};
+
+// Recursively scan an INSERT value expression for volatile function calls
+// (`random`, `datetime_current`, …) so UNLESS CONFLICT ON can reject a volatile
+// conflict target (test _16b).
+// Resolve a (possibly multi) INSERT value to the flat list of scalar values it
+// produces — used for multi-property conflict targets (`name := {'a','b'}`).
+const insertValueToScalarSet = (
+  value: InsertValue | undefined,
+  ast: Statement,
+  context: SecurityContext,
+  line: number,
+  column: number,
+): ScalarValue[] => {
+  if (value === undefined || value === null) return [];
+  if (isScalarValue(value)) return [value];
+  const v = value as { kind?: string; values?: unknown[]; value?: unknown; name?: string };
+  if (v.kind === "set_literal" || v.kind === "set") {
+    const items = (v.values ?? []) as InsertValue[];
+    return items.flatMap((item) => insertValueToScalarSet(item, ast, context, line, column));
+  }
+  if (v.kind === "literal" && isScalarValue(v.value)) return [v.value as ScalarValue];
+  if (v.kind === "binding_ref" && typeof v.name === "string") {
+    const resolve = makeBindingResolver(ast, context, line, column);
+    const resolved = resolve(v.name);
+    return Array.isArray(resolved) ? resolved as ScalarValue[] : [resolved];
+  }
+  // A single scalar wrapped in an expr node.
+  return [scalarFromInsertValue(value, makeBindingResolver(ast, context, line, column), line, column)];
+};
+
+// After a UNIQUE write failure under UNLESS CONFLICT, decide whether the clash
+// is against a row inserted earlier in the *same* statement (which must surface
+// as an error, not be suppressed). Scans every exclusive check covering the
+// violated property and reports true when the only conflicting existing row was
+// inserted this statement.
+const conflictIsAgainstSameStatementRow = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  subjectType: TypeDef,
+  violatedProperty: string,
+  context: SecurityContext,
+): boolean => {
+  const stmtIds = context.statementInsertedIds;
+  if (!stmtIds || stmtIds.size === 0) return false;
+  const checks = exclusiveChecksFor(schema, subjectType, undefined)
+    .filter((c) => c.fields.includes(violatedProperty));
+  for (const check of checks) {
+    for (const tbl of check.tables) {
+      const cols = (db.prepare(`PRAGMA table_info(${quoteIdent(tbl)})`).all() as Array<{ name: string }>).map((c) => c.name);
+      if (check.multiProp) continue;
+      if (!check.columns.every((c) => cols.includes(c))) continue;
+      const rows = db.prepare(`SELECT ${quoteIdent("id")} AS ${quoteIdent("id")} FROM ${quoteIdent(tbl)}`).all() as Array<{ id?: unknown }>;
+      for (const row of rows) {
+        if (typeof row.id === "string" && stmtIds.has(row.id)) return true;
+      }
+    }
+  }
+  return false;
+};
+
+const VOLATILE_FUNCTION_NAMES = new Set(["random", "datetime_current", "datetime_of_transaction", "uuid_generate_v1mc", "uuid_generate_v4", "sequence_next"]);
+const insertValueIsVolatile = (node: unknown): boolean => {
+  if (Array.isArray(node)) return node.some(insertValueIsVolatile);
+  if (node === null || typeof node !== "object") return false;
+  const n = node as Record<string, unknown> & { kind?: string; name?: unknown; call?: { name?: unknown } };
+  const fnName = typeof n.name === "string" ? n.name : typeof n.call?.name === "string" ? n.call.name : undefined;
+  if ((n.kind === "function_call" || n.kind === "func_call" || n.kind === "call") && fnName) {
+    const short = fnName.includes("::") ? fnName.split("::").pop()! : fnName;
+    if (VOLATILE_FUNCTION_NAMES.has(short)) return true;
+  }
+  for (const value of Object.values(n)) {
+    if (insertValueIsVolatile(value)) return true;
+  }
+  return false;
+};
+
 const makeBindingResolver = (
   ast: Statement,
   context: SecurityContext,
@@ -12602,52 +12867,120 @@ const runWriteWithAccessPolicies = (
         }
       }
 
-      if (ast.kind === "insert" && ast.conflict) {
-        const conflictField = resolveConflictField(ast, subjectType);
-        if (conflictField) {
-          const resolveBinding = makeBindingResolver(ast, context, ast.pos.line, ast.pos.column);
-          const rawValue = ast.values[conflictField];
-          // Non-static conflict values (empty-set bindings, subqueries) skip
-          // the static pre-check; the UNIQUE catch below still honors the
-          // UNLESS CONFLICT suppression if the write actually conflicts.
-          const staticConflictValue = rawValue !== undefined
-            ? tryResult(() => scalarFromInsertValue(rawValue, resolveBinding, ast.pos.line, ast.pos.column))
-            : undefined;
-          // SQL-deferred conflict values (function calls, json paths, …):
-          // evaluate the column's compiled expression once to recover the
-          // value the insert is about to write.
-          const sqlConflictValue = !staticConflictValue?.ok && rawValue !== undefined
-            ? tryResult(() => {
-                const compiledColumn = sqlExprByColumn.get(conflictField);
-                if (!compiledColumn) return undefined;
+      // A volatile conflict-target value (`name := <str>math::floor(random()*2)`
+      // ON (.name)) can't be reconciled with an existing row — reject it
+      // (test _16b). Only applies when an explicit ON target names the field.
+      if (!ddlTracked && ast.kind === "insert" && ast.conflict) {
+        const onTargetFields = ast.conflict.onFields ?? (ast.conflict.onField !== undefined ? [ast.conflict.onField] : undefined);
+        if (onTargetFields) {
+          for (const targetField of onTargetFields) {
+            if (insertValueIsVolatile(ast.values[targetField])) {
+              throw new AppError(
+                "E_SEMANTIC",
+                "INSERT UNLESS CONFLICT ON does not support volatile properties",
+                ast.pos.line,
+                ast.pos.column,
+              );
+            }
+          }
+        }
+      }
+
+      if (ast.kind === "insert" && ast.conflict && !ddlTracked) {
+        // Conflict target → the exclusive constraints to test. An explicit
+        // `ON (...)` restricts to the constraint over exactly those fields; a
+        // bare UNLESS CONFLICT tests every exclusive constraint on the type.
+        const targetFields = ast.conflict.onFields ?? (ast.conflict.onField !== undefined ? [ast.conflict.onField] : undefined);
+        const checks = exclusiveChecksFor(schema, subjectType, targetFields);
+
+        if (checks.length > 0) {
+          // `UNLESS CONFLICT … ELSE` is illegal when the matched constraint is
+          // inherited from a parent type (test _20a).
+          if (ast.conflict.else && checks.some((c) => c.fromParent)) {
+            throw new AppError(
+              "E_SEMANTIC",
+              "UNLESS CONFLICT can not use ELSE when constraint is from a parent type",
+              ast.pos.line,
+              ast.pos.column,
+            );
+          }
+
+          // Resolve the own-table storage values the insert is about to write
+          // for every column the checks reference (literals from insertValues,
+          // SQL-deferred columns evaluated once).
+          const neededColumns = new Set<string>();
+          for (const c of checks) {
+            for (const col of c.columns) neededColumns.add(col);
+            if (c.multiProp) neededColumns.add(c.multiProp);
+          }
+          const resolvedColumnValues: Record<string, ScalarValue | undefined> = {};
+          for (const col of neededColumns) {
+            // Multi-property: the raw insert value is the (possibly multi)
+            // set of values, not an own-table column.
+            if (checks.some((c) => c.multiProp === col)) {
+              const rawMulti = ast.values[col];
+              const attempt = tryResult(() => insertValueToScalarSet(rawMulti, ast, context, ast.pos.line, ast.pos.column), { captureAll: true });
+              resolvedColumnValues[col] = attempt.ok ? attempt.value as unknown as ScalarValue : undefined;
+              continue;
+            }
+            if (Object.prototype.hasOwnProperty.call(insertValues, col)
+                && insertValues[col] !== PENDING_INSERT_SQL_EXPR_VALUE
+                && insertValues[col] !== PENDING_INLINE_LINK_VALUE
+                && insertValues[col] !== PENDING_INSERT_REWRITE_VALUE
+                && isScalarValue(insertValues[col])) {
+              resolvedColumnValues[col] = insertValues[col];
+              continue;
+            }
+            const compiledColumn = sqlExprByColumn.get(col);
+            if (compiledColumn) {
+              const attempt = tryResult(() => {
                 const row = db.prepare(`SELECT ${compiledColumn.sql} AS ${quoteIdent("v")}`).all(...compiledColumn.params)[0] as { v?: unknown } | undefined;
                 return row && isScalarValue(row.v) ? row.v : undefined;
-              }, { captureAll: true })
-            : undefined;
-          if (staticConflictValue?.ok || sqlConflictValue?.ok === true && sqlConflictValue.value !== undefined) {
-            const conflictValue = staticConflictValue?.ok ? staticConflictValue.value : sqlConflictValue?.ok ? sqlConflictValue.value as ScalarValue : null;
-            const existingId = findConflictRowId(db, ir.table, conflictField, conflictValue);
-            if (existingId) {
-              if (ast.conflict.else?.kind === "update") {
-                const updates = Object.entries(ast.conflict.else.values);
-                if (updates.length > 0) {
-                  const sql = `UPDATE ${quoteIdent(ir.table)} SET ${updates
-                    .map(([key]) => `${quoteIdent(key)} = ?`)
-                    .join(", ")} WHERE ${quoteIdent("id")} = ?`;
-                  const params = updates.map(([, value]) => value);
-                  params.push(existingId);
-                  const writeResult = db.prepare(sql).run(...params);
-                  db.prepare(dmlUsesSavepoint ? "RELEASE gel_dml" : "COMMIT").run();
-                  return { changes: writeResult.changes, rows: [{ id: existingId }] };
-                }
-              }
-
-              db.prepare(dmlUsesSavepoint ? "RELEASE gel_dml" : "COMMIT").run();
-              // ELSE <expr> yields the conflicting row; plain UNLESS CONFLICT
-              // yields the empty set (an empty rows array so the result reads
-              // as `[]`, e.g. test_edgeql_insert_explicit_id_05).
-              return ast.conflict.else ? { changes: 0, rows: [{ id: existingId }] } : { changes: 0, rows: [] };
+              }, { captureAll: true });
+              resolvedColumnValues[col] = attempt.ok ? attempt.value : undefined;
             }
+          }
+
+          let existingId: string | undefined;
+          for (const check of checks) {
+            const found = findExclusiveConflictId(db, check, resolvedColumnValues);
+            // Ignore a clash against a row inserted earlier in this same
+            // statement — that must surface as a hard error, not be suppressed
+            // (tests cross_type_conflict_08/09, self_01/02/03).
+            if (found && !context.statementInsertedIds?.has(found)) {
+              existingId = found;
+              break;
+            }
+          }
+
+          if (existingId) {
+            if (ast.conflict.else?.kind === "update") {
+              // Run the ELSE UPDATE as a real DML statement scoped to the
+              // conflicting row so its SET expressions (`'super ' ++ .tag`,
+              // `<str>$0`, WITH-binding refs) evaluate correctly.
+              const elseUpdate: UpdateStatement = {
+                kind: "update",
+                with: (ast as { with?: WithBinding[] }).with,
+                withModule: (ast as { withModule?: string }).withModule,
+                withModuleAliases: (ast as { withModuleAliases?: WithModuleAlias[] }).withModuleAliases,
+                typeName: ast.conflict.else.typeName,
+                filter: { kind: "predicate", target: { kind: "field", field: "id" }, op: "=", value: existingId } as unknown as UpdateStatement["filter"],
+                values: ast.conflict.else.values,
+                operations: ast.conflict.else.operations,
+                pos: ast.pos,
+              } as unknown as UpdateStatement;
+              db.prepare(dmlUsesSavepoint ? "RELEASE gel_dml" : "COMMIT").run();
+              executeDmlChainStatement(db, schema, elseUpdate, new Map(), undefined, context, ast.withModule ?? "default");
+              return { changes: 1, rows: [{ id: existingId, __tid__: existingId, __tname__: qualifiedTypeName(subjectType), __source_type: qualifiedTypeName(subjectType) }] };
+            }
+
+            db.prepare(dmlUsesSavepoint ? "RELEASE gel_dml" : "COMMIT").run();
+            // ELSE <expr> yields the conflicting row; plain UNLESS CONFLICT
+            // yields the empty set (an empty rows array so the result reads
+            // as `[]`, e.g. test_edgeql_insert_explicit_id_05).
+            return ast.conflict.else
+              ? { changes: 0, rows: [{ id: existingId, __tid__: existingId, __tname__: qualifiedTypeName(subjectType), __source_type: qualifiedTypeName(subjectType) }] }
+              : { changes: 0, rows: [] };
           }
         }
       }
@@ -12663,15 +12996,37 @@ const runWriteWithAccessPolicies = (
         // (no ON target) only covers conflicts on the inserted type itself; a
         // shared cross-type constraint clash still surfaces as an error.
         if (ast.kind === "insert" && ast.conflict && !ast.conflict.else && exclusivity) {
-          const sameTypeConflict = !exclusivity.crossType
-            || (ast.conflict.onField !== undefined || ast.conflict.onFields !== undefined);
-          if (sameTypeConflict) {
+          // A `UNLESS CONFLICT ON (...)` target only suppresses clashes on the
+          // properties it names — a conflict on a *different* exclusive
+          // constraint still surfaces (test _22: `ON (.foo)` does not swallow a
+          // `bar` violation). A bare UNLESS CONFLICT covers any same-type
+          // constraint but not a shared cross-type one.
+          const onTargetFields = ast.conflict.onFields ?? (ast.conflict.onField !== undefined ? [ast.conflict.onField] : undefined);
+          // This catch path only fires for conflicts the pre-check above did
+          // NOT resolve. For a fully-tracked schema that means the clashing row
+          // did not exist before this statement — i.e. a same-statement
+          // cross-type conflict, which Gel surfaces as an error (tests
+          // cross_type_conflict_08/09). Pre-existing cross-type clashes are
+          // already suppressed by the pre-check. DDL-synthesized types skip the
+          // pre-check, so the shared cross-type bookkeeping table is the only
+          // signal — keep suppressing those (test _22's Baz C/D/E).
+          // A clash against a row inserted earlier in this same statement is a
+          // hard error, never suppressed (tests self_01/02/03,
+          // cross_type_conflict_08/09). The conflicting value lives in the
+          // shared/own exclusivity table keyed by the violated property; if the
+          // only matching row was inserted this statement, refuse suppression.
+          const sameStatement = conflictIsAgainstSameStatementRow(db, schema, subjectType, exclusivity.property, context);
+          const suppress = !sameStatement && (onTargetFields !== undefined
+            ? onTargetFields.includes(exclusivity.property)
+            : (!exclusivity.crossType || ddlTracked));
+          if (suppress) {
             db.prepare(dmlUsesSavepoint ? "RELEASE gel_dml" : "COMMIT").run();
             return { changes: 0, rows: [] };
           }
         }
         // A plain UNIQUE failure with no parsed exclusivity metadata still
-        // suppresses under UNLESS CONFLICT (no ELSE).
+        // suppresses under UNLESS CONFLICT (no ELSE), unless the clash is
+        // against a same-statement row.
         if (ast.kind === "insert" && ast.conflict && !ast.conflict.else && !exclusivity
             && String((writeErr as Error).message ?? writeErr).includes("UNIQUE constraint failed")) {
           db.prepare(dmlUsesSavepoint ? "RELEASE gel_dml" : "COMMIT").run();
@@ -12725,6 +13080,7 @@ const runWriteWithAccessPolicies = (
           .all()[0] as { id?: unknown } | undefined;
         if (typeof inserted?.id === "string") {
           insertedId = inserted.id;
+          context.statementInsertedIds?.add(inserted.id);
           const postInsertIR = {
             ...ir,
             linkAssignments: ir.linkAssignments?.filter((assignment) => assignment.storage !== "inline"),

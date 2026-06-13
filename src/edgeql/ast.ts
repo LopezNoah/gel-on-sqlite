@@ -813,7 +813,8 @@ export interface InsertConflict {
         kind: "update";
         typeName: string;
         filter?: FilterExpr;
-        values: Record<string, ScalarValue>;
+        values: Record<string, InsertValue>;
+        operations?: Record<string, "assign" | "append" | "subtract">;
       };
 }
 
