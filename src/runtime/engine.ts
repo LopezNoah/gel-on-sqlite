@@ -6107,6 +6107,13 @@ export const executeQuery = (
   // normal compile pipeline.
   const rewrittenQuery = injectRuntimeAliasBinding(schema, query);
   validateRestrictedLinkPropertyTokens(rewrittenQuery);
+  // A multi-statement string passed to the single-query entry point
+  // (`insert …; select (…) {…}`) runs as an implicit script returning the
+  // final statement's result — mirroring the protocol's query() semantics.
+  const scriptStatements = tryResult(() => parseEdgeQLScript(rewrittenQuery), { captureAll: true });
+  if (scriptStatements.ok && scriptStatements.value.length > 1) {
+    return executeScript(db, schema, rewrittenQuery, securityContext);
+  }
   const parsedQuery = parseEdgeQL(rewrittenQuery);
   // Reject user-DDL targeting read-only modules (std/schema/cfg/sys/...)
   // before any execution side-effects. Mirrors `validateScriptUserDDL` for
@@ -6934,6 +6941,39 @@ const preExecuteMutationExprsInDmlValues = (
     }
     outerWith.push(binding);
   }
+  // A nested `INSERT Target { …, @prop := … }` used as a link value carries
+  // link-property assignments (`@comment`, `@note`) that belong to the
+  // ENCLOSING link, not the target type. Split those `@`-fields out of the
+  // inner insert's values and return them as computed shape elements so the
+  // (already supported) `(<insert>) { @prop := … }` shape-projection path
+  // applies them as link properties on the assignment. Returns undefined when
+  // the inner insert has no link-property fields.
+  const extractLinkPropShapeElements = (
+    stmt: Statement & { values?: Record<string, unknown> },
+  ): ShapeElement[] | undefined => {
+    const innerValues = stmt.values;
+    if (!innerValues) return undefined;
+    const linkPropElements: ShapeElement[] = [];
+    for (const key of Object.keys(innerValues)) {
+      if (!key.startsWith("@")) continue;
+      const raw = innerValues[key];
+      // Insert values store the assignment either as a raw literal (`'c'`) or
+      // wrapped as `{ kind: "expr", expr: … }`. Normalise to a shape-element
+      // computed expression.
+      const expr = (raw !== null && typeof raw === "object" && (raw as { kind?: string }).kind === "expr")
+        ? (raw as { expr: unknown }).expr
+        : { kind: "literal", value: raw };
+      linkPropElements.push({
+        kind: "computed",
+        name: key,
+        expr: expr as ShapeElement extends { expr: infer E } ? E : never,
+        operation: "assign",
+        origin: "explicit",
+      } as ShapeElement);
+      delete innerValues[key];
+    }
+    return linkPropElements.length > 0 ? linkPropElements : undefined;
+  };
   const runNested = (stmt: Statement & { with?: WithBinding[] }, extraWith: WithBinding[]): unknown => {
     const mergedWith = [...outerWith, ...extraWith, ...(stmt.with ?? [])];
     const merged = mergedWith.length > 0 ? ({ ...stmt, with: mergedWith } as Statement) : (stmt as Statement);
@@ -6993,12 +7033,69 @@ const preExecuteMutationExprsInDmlValues = (
     if (inserts === undefined) return undefined;
     const ids: string[] = [];
     let typeName = "";
+    // Per-iteration `@prop := …` assignments inside a FOR-INSERT link value
+    // (`subordinates := (FOR x IN {…} INSERT Subordinate { @comment := x.1 })`)
+    // belong to the enclosing link. After expansion the `@`-fields carry a
+    // concrete value for each iteration; hoist them out (so the inner insert
+    // compiles against the target type only) and pair each with the inserted
+    // id so the by-id selects re-attach them as link properties.
+    const perTargetLinkProps: Array<{ id: string; props: Record<string, ScalarValue> }> = [];
+    let anyLinkProps = false;
     for (const ins of inserts) {
+      const insVals = (ins as { values?: Record<string, unknown> }).values;
+      const hoisted: Record<string, ScalarValue> = {};
+      if (insVals) {
+        for (const key of Object.keys(insVals)) {
+          if (!key.startsWith("@")) continue;
+          const raw = insVals[key];
+          const body = (raw !== null && typeof raw === "object" && (raw as { kind?: string }).kind === "expr")
+            ? (raw as { expr: unknown }).expr
+            : raw;
+          const lit = (body !== null && typeof body === "object" && (body as { kind?: string }).kind === "literal")
+            ? (body as { value: unknown }).value
+            : body;
+          const scalar = coerceUnknownToScalar(lit);
+          if (scalar !== undefined) {
+            hoisted[key] = scalar;
+            anyLinkProps = true;
+          }
+          delete insVals[key];
+        }
+      }
       const resolved = executeDmlChainStatement(db, schema, ins as Statement, env, undefined, context, defaultModule);
       if (resolved.typeName) typeName = resolved.typeName;
       ids.push(...resolved.ids);
+      for (const id of resolved.ids) perTargetLinkProps.push({ id, props: hoisted });
     }
-    return chainByIdSelect({ typeName, ids });
+    if (!anyLinkProps) {
+      return chainByIdSelect({ typeName, ids });
+    }
+    // Build a set of per-target by-id selects, each carrying its captured
+    // link-property literals as `@`-shape computeds. The `kind: "select"`
+    // resolution path reads those `@`-columns off the rows — the same path
+    // that handles `subordinates := (SELECT Sub { @comment := … })`.
+    return {
+      kind: "set",
+      values: perTargetLinkProps.map(({ id, props }) => ({
+        kind: "select",
+        typeName,
+        shape: Object.entries(props).map(([name, value]) => ({
+          kind: "computed",
+          name,
+          expr: { kind: "literal", value },
+          operation: "assign",
+          origin: "explicit",
+        })),
+        clauses: {
+          filter: {
+            kind: "in_predicate",
+            target: { kind: "field", field: "id" },
+            op: "in",
+            values: { kind: "set_literal", values: [id] },
+          },
+        },
+      })),
+    };
   };
 
   const rewriteValue = (value: unknown): unknown => {
@@ -7012,7 +7109,17 @@ const preExecuteMutationExprsInDmlValues = (
         inner = inner.expr as Record<string, unknown> & { kind?: string };
       }
       if (inner?.kind === "mutation_expr" && inner.statement) {
-        const replaced = runNested(inner.statement as Statement & { with?: WithBinding[] }, innerBindings) as { expr: unknown };
+        const innerStmt = inner.statement as Statement & { with?: WithBinding[]; values?: Record<string, unknown> };
+        // Hoist `@prop` link-property assignments out of the nested insert so
+        // the inner INSERT compiles against only the target type's own fields;
+        // re-attach them as a shape projection over the by-id select so the
+        // link-assignment path applies them as link properties.
+        const linkPropElements = innerStmt.kind === "insert" ? extractLinkPropShapeElements(innerStmt) : undefined;
+        const replaced = runNested(innerStmt, innerBindings) as { expr: Record<string, unknown> & { shape?: ShapeElement[] } };
+        if (linkPropElements) {
+          const sel = replaced.expr;
+          replaced.expr = { ...sel, shape: [...(sel.shape ?? []), ...linkPropElements] };
+        }
         return replaced.expr;
       }
     }
@@ -7998,6 +8105,23 @@ const expandForInsertStatements = (
     return out;
   }
 
+  // Tuple-set iterator: `FOR x IN {('a','1'), ('b','2')} INSERT … { c := x.0,
+  // @p := x.1 }`. Each iteration binds the tuple element accesses (`x.0`,
+  // `x.1`) to literals from one tuple. The scalar path below can't handle these
+  // (tuples aren't scalar values), so evaluate each tuple's elements and
+  // substitute the loop variable's index accesses directly.
+  const tupleIterRows = evaluateForTupleIteratorRows(forAst.iteratorExpr, schema, db, context);
+  if (tupleIterRows !== undefined) {
+    const out: InsertStatement[] = [];
+    for (const tuple of tupleIterRows) {
+      const substituted = substituteTupleIndexRefs(body, forAst.variable, tuple) as ForStatement["body"];
+      const expanded = expandBodyToInserts(substituted, schema, db, context, [...accumWith, ...forStatementWith]);
+      if (expanded === undefined) return undefined;
+      out.push(...expanded);
+    }
+    return out;
+  }
+
   // Scalar iterator: one iteration per value, binding the variable as a WITH
   // literal. `evaluateForIteratorValues` materialises set literals, concats,
   // function calls, and SQL-lowerable selects.
@@ -8169,6 +8293,68 @@ const substituteBindingRefFields = (node: unknown, varName: string, row: Record<
   }
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(n)) out[k] = substituteBindingRefFields(v, varName, row);
+  return out;
+};
+
+// A FOR iterator written as a set of tuple literals (`{('a','1'), ('b','2')}`).
+// Returns one scalar-element array per tuple, or undefined when the iterator
+// isn't a set of (constant-foldable) tuples — leaving the scalar/object paths
+// to handle it.
+const evaluateForTupleIteratorRows = (
+  iteratorExpr: ForStatement["iteratorExpr"],
+  schema: SchemaSnapshot,
+  db: SQLiteDatabase,
+  context: SecurityContext,
+): ScalarValue[][] | undefined => {
+  const n = iteratorExpr as { kind?: string; values?: unknown[] };
+  if (n.kind !== "set_expr" || !Array.isArray(n.values) || n.values.length === 0) return undefined;
+  const peelExpr = (node: unknown): unknown =>
+    (node !== null && typeof node === "object" && (node as { kind?: string }).kind === "expr")
+      ? (node as { expr: unknown }).expr
+      : node;
+  const rows: ScalarValue[][] = [];
+  for (const raw of n.values) {
+    const el = peelExpr(raw) as { kind?: string; values?: unknown[] };
+    if (el?.kind !== "tuple" || !Array.isArray(el.values)) return undefined;
+    const elements: ScalarValue[] = [];
+    for (const member of el.values) {
+      const body = peelExpr(member) as { kind?: string; value?: unknown };
+      if (body?.kind === "literal") {
+        const scalar = coerceUnknownToScalar(body.value);
+        if (scalar === undefined) return undefined;
+        elements.push(scalar);
+        continue;
+      }
+      // Non-literal tuple member (`(x, a ++ "c")`) — evaluate via SQL.
+      const evaluated = evaluateScalarBindingViaSQL(db, schema, member as never, [], context, { line: 1, column: 1 });
+      if (evaluated === undefined || evaluated.kind !== "literal") return undefined;
+      const scalar = coerceUnknownToScalar((evaluated as { value: unknown }).value);
+      if (scalar === undefined) return undefined;
+      elements.push(scalar);
+    }
+    rows.push(elements);
+  }
+  return rows;
+};
+
+// Substitute the loop variable's tuple-element accesses (`x.0`, `x.1` —
+// `index_access` over a `binding_ref`/`path`) with literals from one tuple.
+const substituteTupleIndexRefs = (node: unknown, varName: string, tuple: ScalarValue[]): unknown => {
+  if (Array.isArray(node)) return node.map((item) => substituteTupleIndexRefs(item, varName, tuple));
+  if (node === null || typeof node !== "object") return node;
+  const n = node as Record<string, unknown> & { kind?: string };
+  if (n.kind === "index_access"
+    && typeof n.index === "number"
+    && (n.expr as { kind?: string; name?: string })?.kind === "binding_ref"
+    && (n.expr as { name?: string }).name === varName) {
+    return { kind: "literal", value: tuple[n.index as number] ?? null };
+  }
+  // `x.0` parsed as a path with a numeric tail step.
+  if (n.kind === "path" && n.head === varName && typeof n.tail === "string" && /^\d+$/.test(n.tail)) {
+    return { kind: "literal", value: tuple[Number(n.tail)] ?? null };
+  }
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(n)) out[k] = substituteTupleIndexRefs(v, varName, tuple);
   return out;
 };
 
@@ -13503,6 +13689,65 @@ type LinkTargetAssignment = {
   properties: Record<string, ScalarValue>;
 };
 
+// Compile a link-value projection (`(<select-or-subselect>) { @prop := … }`,
+// possibly with non-literal/volatile linkprop bodies) as a standalone SELECT
+// and read each `@`-prefixed column off the resulting rows. This is the
+// fully-SQL resolution path for link values whose link properties can't be
+// resolved by the literal pattern-match in the caller. Returns undefined when
+// the projection doesn't compile to a single SELECT (so the caller can fall
+// back to its other handling).
+const resolveLinkValueViaSelectSQL = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  projection: { kind: "shape_projection"; expr: FreeObjectExpr; shape: ShapeElement[] },
+  context: SecurityContext,
+  ast: InsertStatement,
+): LinkTargetAssignment[] | undefined => {
+  const hasLinkPropShape = projection.shape.some(
+    (el) => el.kind === "computed" && el.name.startsWith("@"),
+  );
+  if (!hasLinkPropShape) return undefined;
+  // Drop nested INSERT/UPDATE/DELETE targets — those are written by the
+  // mutation machinery, not a read-only SELECT compile.
+  const containsMutation = (node: unknown): boolean => {
+    if (Array.isArray(node)) return node.some(containsMutation);
+    if (node === null || typeof node !== "object") return false;
+    const k = (node as { kind?: unknown }).kind;
+    if (k === "mutation_expr" || k === "insert" || k === "update" || k === "delete") return true;
+    return Object.values(node as object).some(containsMutation);
+  };
+  if (containsMutation(projection.expr)) return undefined;
+  const stmtAst = {
+    kind: "select_expr",
+    expr: projection,
+    with: ast.with,
+    withModule: ast.withModule,
+    withModuleAliases: ast.withModuleAliases,
+    pos: ast.pos,
+  } as unknown as Statement;
+  const attempt = tryResult(() => {
+    const compiled = getCompilerService().compile(schema, stmtAst, { globals: context.globals, target: resolvedRuntimeTarget(context, db) });
+    if (compiled.sql.loweringMode !== "single_statement" || compiled.sql.sql.length === 0) return undefined;
+    if (compiled.ir.kind !== "select" && compiled.ir.kind !== "select_expr") return undefined;
+    return runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql, { keepInternalId: true })
+      .filter((row): row is Record<string, unknown> => row !== null && typeof row === "object");
+  }, { captureAll: true });
+  if (!attempt.ok || attempt.value === undefined) return undefined;
+  return attempt.value
+    .map((row) => {
+      if (typeof row.id !== "string") return undefined;
+      const properties: Record<string, ScalarValue> = {};
+      for (const [key, raw] of Object.entries(row)) {
+        if (!key.startsWith("@")) continue;
+        const scalar = coerceUnknownToScalar(raw);
+        if (scalar === undefined) continue;
+        properties[key] = scalar;
+      }
+      return { id: row.id, properties };
+    })
+    .filter((entry): entry is LinkTargetAssignment => !!entry);
+};
+
 const resolveInsertTargets = (
   db: SQLiteDatabase,
   schema: SchemaSnapshot,
@@ -13678,10 +13923,31 @@ const resolveInsertTargets = (
           properties[el.name] = litVal;
         }
       }
+      // Linkprop bodies that aren't plain literals (`@comment :=
+      // <str>uuid_generate_v1mc()`, `@comment := array_join(['a'] ++ [], '')`)
+      // and link targets wrapped in further subselects (`(SELECT (SELECT Sub
+      // LIMIT 1) { @comment := … })`) can't be resolved by the literal/inner
+      // pattern-match above. Compile the whole projection as a SELECT and read
+      // the `@`-prefixed columns off the resulting rows — the canonical,
+      // fully-SQL path that handles arbitrary linkprop expressions per target.
+      const projectionRows = resolveLinkValueViaSelectSQL(db, schema, projection, context, ast);
+      if (projectionRows !== undefined) return projectionRows;
       if (Object.keys(properties).length > 0) {
         return targets.map((t) => ({ id: t.id, properties: { ...t.properties, ...properties } }));
       }
       return targets;
+    }
+    // A link value wrapped in `select_expr_subquery` — unwrap and resolve the
+    // inner expression (which may itself be a linkprop shape projection or a
+    // plain select).
+    if (inner.kind === "select_expr_subquery") {
+      const unwrapped = (inner as { expr: FreeObjectExpr }).expr;
+      if (unwrapped.kind === "shape_projection") {
+        return resolveInsertTargets(db, schema, { kind: "expr", expr: unwrapped } as InsertValue, context, ast);
+      }
+      if (unwrapped.kind === "select") {
+        return resolveInsertTargets(db, schema, unwrapped as unknown as Extract<InsertValue, { kind: "select" }>, context, ast);
+      }
     }
   }
 
@@ -13742,7 +14008,91 @@ const resolveInsertTargets = (
     return rows;
   }
 
+  // A tuple-set `FOR x IN {(…), (…)} UNION (SELECT Target { @prop := x.0 }
+  // FILTER … x.1)` used as a link value (possibly wrapped in
+  // `DISTINCT(…)`/`expr`/`for_expr`). Each iteration substitutes the tuple
+  // element accesses (`x.0`, `x.1`) into the select — including the `@`-shape
+  // and FILTER — runs it, and reads the per-row `@`-columns as link properties.
+  const tupleForRows = resolveTupleForUnionSelectLinkValue(db, schema, value, context, ast);
+  if (tupleForRows !== undefined) return tupleForRows;
+
   return [];
+};
+
+// Unwrap `expr`/`distinct`/`for_expr`/`for` to a ForStatement whose iterator is
+// a set of tuple literals and whose body is a SELECT, then resolve each
+// iteration's targets (with `x.N` substituted) and read its `@`-columns.
+const resolveTupleForUnionSelectLinkValue = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  value: InsertValue,
+  context: SecurityContext,
+  ast: InsertStatement,
+): LinkTargetAssignment[] | undefined => {
+  let node: unknown = value;
+  for (let i = 0; i < 6 && node !== null && typeof node === "object"; i++) {
+    const k = (node as { kind?: string }).kind;
+    if (k === "expr" || k === "distinct" || k === "select_expr_subquery") {
+      node = (node as { expr: unknown }).expr;
+      continue;
+    }
+    break;
+  }
+  const n = node as { kind?: string } | null;
+  let forVariable: string | undefined;
+  let forIterator: ForStatement["iteratorExpr"] | undefined;
+  let forBody: unknown;
+  if (n?.kind === "for") {
+    const f = node as ForStatement;
+    forVariable = f.variable;
+    forIterator = f.iteratorExpr;
+    forBody = f.body;
+  } else if (n?.kind === "for_expr") {
+    // `for_expr` carries a SELECT body (unlike forExprChainToForStatement,
+    // which only accepts INSERT bodies) — read its parts directly.
+    const fe = node as unknown as { variable: string; iterator: ForStatement["iteratorExpr"]; body: unknown };
+    forVariable = fe.variable;
+    forIterator = fe.iterator;
+    forBody = fe.body;
+  }
+  if (forVariable === undefined || forIterator === undefined) return undefined;
+  const tupleRows = evaluateForTupleIteratorRows(forIterator, schema, db, context);
+  if (tupleRows === undefined) return undefined;
+  const forStmt = { variable: forVariable } as { variable: string };
+  // Peel a select_expr_subquery body down to the inner select.
+  let body: unknown = forBody;
+  if ((body as { kind?: string })?.kind === "select_expr_subquery") {
+    body = (body as { expr: unknown }).expr;
+  }
+  if ((body as { kind?: string })?.kind !== "select") return undefined;
+  const out: LinkTargetAssignment[] = [];
+  const seen = new globalThis.Set<string>();
+  for (const tuple of tupleRows) {
+    const substituted = substituteTupleIndexRefs(body, forStmt.variable, tuple) as Extract<InsertValue, { kind: "select" }>;
+    const scoped = {
+      ...substituted,
+      clauses: {
+        ...substituted.clauses,
+        _withBindings: substituted.clauses._withBindings ?? ast.with,
+        _withModule: substituted.clauses._withModule ?? ast.withModule,
+        _withModuleAliases: substituted.clauses._withModuleAliases ?? ast.withModuleAliases,
+      },
+    };
+    const selRows = executeSelectExprRows(db, schema, scoped, context);
+    for (const row of selRows) {
+      if (typeof row.id !== "string" || seen.has(row.id)) continue;
+      seen.add(row.id);
+      const properties: Record<string, ScalarValue> = {};
+      for (const [key, raw] of Object.entries(row)) {
+        if (!key.startsWith("@")) continue;
+        const scalar = coerceUnknownToScalar(raw);
+        if (scalar === undefined) continue;
+        properties[key] = scalar;
+      }
+      out.push({ id: row.id, properties });
+    }
+  }
+  return out;
 };
 
 const defaultLinkPropertyValueIR = (
