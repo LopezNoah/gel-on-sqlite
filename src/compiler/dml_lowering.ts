@@ -1095,7 +1095,14 @@ export const compileDmlToIR = (
     // where the user explicitly qualifies the subject by its alias.
     if (filterExpr && filterExpr.kind === "free_expr") {
       const e = filterExpr.expr;
-      if (e.kind === "compare" && e.op === "=") {
+      // `UPDATE T FILTER true` selects every row — equivalent to no filter.
+      // (`FILTER false` selects none; represent it with an unsatisfiable
+      // predicate so the runtime reads zero rows.)
+      if (e.kind === "literal" && typeof e.value === "boolean") {
+        filterExpr = e.value
+          ? undefined
+          : { kind: "predicate", target: { kind: "field", field: "id" }, op: "=", value: " __never__" };
+      } else if (e.kind === "compare" && e.op === "=") {
         const targetName = statement.typeName;
         const pickField = (s: FreeObjectExpr): string | undefined => {
           if (s.kind === "path" && s.head === targetName) return s.tail;
