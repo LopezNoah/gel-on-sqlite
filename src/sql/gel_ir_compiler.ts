@@ -1402,7 +1402,18 @@ const collectScalarPointerSources = (set: Set, sources: Map<string, TypeRef>): v
     const pointer = expr as Pointer;
     let sourceExpr: Expr = pointer.source.expr;
     while (sourceExpr.kind === "select_expr") {
-      sourceExpr = (sourceExpr as SelectExpr).result.expr;
+      const se = sourceExpr as SelectExpr;
+      // A pointer over a cardinality-clipped subquery
+      // (`(SELECT T ORDER BY … LIMIT 1).p`) must NOT register T as a flat table
+      // source — flattening would emit `FROM <T> g0` and silently drop the
+      // LIMIT / OFFSET, so the operand would see every row instead of the
+      // single clipped one (e.g. `(SELECT T ORDER BY .num DESC LIMIT 1).num
+      // + 1`). Leave the source unregistered so the operand compiles as a
+      // correlated scalar subquery that preserves the clip. A bare ORDER BY
+      // (no LIMIT/OFFSET) doesn't change cardinality, so `.p` still maps
+      // element-wise — don't divert those.
+      if (se.limit || se.offset) return;
+      sourceExpr = se.result.expr;
     }
     if (sourceExpr.kind === "type_root") {
       // If the source set was narrowed by a type intersection (e.g. `[IS T]`),
@@ -10895,6 +10906,34 @@ const compileValueSetSQL = (
       const alias = linkPropertyAlias ?? sourceAlias;
       return `${alias}.${quoteIdent(col)}`;
     }
+    // Pointer over a cardinality-clipped subquery
+    // (`(SELECT T ORDER BY … LIMIT 1).p`) used as a scalar value (e.g. an
+    // operand of `+`): the LIMIT / OFFSET can't survive a flat-source flatten,
+    // so emit a correlated scalar subquery over the clipped source that
+    // projects the leaf column. This preserves the clip that picks the single
+    // intended row. A bare ORDER BY doesn't clip, so leave those to the normal
+    // element-wise path.
+    if (pointer.source.expr.kind === "select_expr"
+        && pointer.ptrref.outTarget.isScalar
+        && !pointer.ptrref.isLinkProperty) {
+      let clip: SelectExpr | undefined;
+      let cursor: Expr = pointer.source.expr;
+      while (cursor.kind === "select_expr") {
+        const se = cursor as SelectExpr;
+        if (se.limit || se.offset) { clip = se; break; }
+        cursor = se.result.expr;
+      }
+      if (clip) {
+        const subCkpt = params.length;
+        const rowSrc = compileSelectSource(
+          pointer.source, undefined, undefined, options, params, target, "__clip", [col],
+        );
+        if (rowSrc) {
+          return `(SELECT ${rowSrc.alias}.${quoteIdent(col)} FROM ${rowSrc.sql})`;
+        }
+        params.length = subCkpt;
+      }
+    }
     const currentSourceAlias = pickSourcePathAlias(pointer.source, options);
     if (currentSourceAlias) {
       if (pointer.ptrref.isIdPointer || pointer.ptrref.shortName === "id") {
@@ -12479,7 +12518,10 @@ const compileOutboundLinkArrayExpr = (
     const sourceMatch = chainedSourceIds !== null
       ? `${joinAlias}.${quoteIdent("source")} IN (${chainedSourceIds})`
       : `${joinAlias}.${quoteIdent("source")} = ${sourceAlias}.${quoteIdent("id")}`;
-    const inner = compileLinkedInnerSelect(`SELECT ${rowExpr} AS ${quoteIdent("item")} FROM ${targetSource} JOIN ${quoteIdent(linkTable)} ${joinAlias} ON ${joinAlias}.${quoteIdent("target")} = ${targetAlias}.${quoteIdent("id")} WHERE ${sourceMatch}`, modifiers, targetAlias, params, target, options, joinAlias, pointer);
+    const inner = appendDefaultLinkOrder(
+      compileLinkedInnerSelect(`SELECT ${rowExpr} AS ${quoteIdent("item")} FROM ${targetSource} JOIN ${quoteIdent(linkTable)} ${joinAlias} ON ${joinAlias}.${quoteIdent("target")} = ${targetAlias}.${quoteIdent("id")} WHERE ${sourceMatch}`, modifiers, targetAlias, params, target, options, joinAlias, pointer),
+      modifiers, joinAlias,
+    );
     return `COALESCE((SELECT json_group_array(json(${quoteIdent("item")})) FROM (${inner})), '[]')`;
   }
 
@@ -12519,7 +12561,10 @@ const compileBacklinkArrayExpr = (
     const targetMatch = chainedSourceIds !== null
       ? `${joinAlias}.${quoteIdent("target")} IN (${chainedSourceIds})`
       : `${joinAlias}.${quoteIdent("target")} = ${sourceAlias}.${quoteIdent("id")}`;
-    const inner = compileLinkedInnerSelect(`SELECT ${rowExpr} AS ${quoteIdent("item")} FROM ${backlinkSource} JOIN ${quoteIdent(linkTable)} ${joinAlias} ON ${joinAlias}.${quoteIdent("source")} = ${backlinkAlias}.${quoteIdent("id")} WHERE ${targetMatch}`, modifiers, backlinkAlias, params, target, options, joinAlias, pointer);
+    const inner = appendDefaultLinkOrder(
+      compileLinkedInnerSelect(`SELECT ${rowExpr} AS ${quoteIdent("item")} FROM ${backlinkSource} JOIN ${quoteIdent(linkTable)} ${joinAlias} ON ${joinAlias}.${quoteIdent("source")} = ${backlinkAlias}.${quoteIdent("id")} WHERE ${targetMatch}`, modifiers, backlinkAlias, params, target, options, joinAlias, pointer),
+      modifiers, joinAlias,
+    );
     return `COALESCE((SELECT json_group_array(json(${quoteIdent("item")})) FROM (${inner})), '[]')`;
   }
 
@@ -12650,6 +12695,21 @@ const compileLinkedInnerSelect = (
     params.push(offset);
   }
   return inner;
+};
+
+// Default multi-link ordering. Multi-links are formally unordered, but tests
+// (and EdgeDB) surface them in insertion order; the link table's rowid records
+// that order. Append `ORDER BY <joinAlias>.rowid` only when the shape has no
+// explicit ORDER BY / LIMIT / OFFSET and the link materializes via a link
+// table (so a join alias with a real rowid exists).
+const appendDefaultLinkOrder = (
+  inner: string,
+  modifiers: SelectExpr | undefined,
+  joinAlias: string,
+): string => {
+  if (modifiers && modifiers.orderBy && modifiers.orderBy.length > 0) return inner;
+  if (modifiers && (modifiers.limit !== undefined || modifiers.offset !== undefined)) return inner;
+  return `${inner} ORDER BY ${joinAlias}.${quoteIdent("rowid")}`;
 };
 
 // EdgeQL's default empty-set placement (ASC → EMPTY FIRST, DESC → EMPTY
