@@ -6664,6 +6664,31 @@ const preExecuteMutationExprsInSelectExpr = (
   const defaultModule = (ast as { withModule?: string }).withModule ?? "default";
   const env: DmlChainEnv = new Map();
   const passthrough: WithBinding[] = (ast as { with?: WithBinding[] }).with ?? [];
+  // Upsert-by-coalesce: `SELECT (SELECT …) ?? (INSERT …)`. The `??` is
+  // short-circuiting — the right INSERT only runs when the left is empty — so
+  // it can't be walked leaf-by-leaf (that would always insert). Resolve the
+  // whole coalesce as an object set (resolveObjectSet honors the short-circuit)
+  // and replace the entire expression with a by-id SELECT. Also covers a shape
+  // projected over the coalesce (`(… ?? (INSERT …)) { … }`).
+  const coalesceNode = exprKind === "shape_projection" ? (expr as { expr?: unknown }).expr : expr;
+  if (coalesceNode && typeof coalesceNode === "object"
+      && (coalesceNode as { kind?: string }).kind === "coalesce"
+      && containsMutationExpr(coalesceNode)) {
+    const resolved = resolveObjectSet(
+      db,
+      schema,
+      attachWithToNestedMutations(coalesceNode, passthrough),
+      env,
+      undefined,
+      context,
+      defaultModule,
+    );
+    const byId = { kind: "select_expr_subquery", expr: chainByIdSelect(resolved) };
+    if (exprKind === "shape_projection") {
+      return { ...ast, expr: { ...(expr as object), expr: byId } } as Statement;
+    }
+    return { ...ast, expr: byId } as Statement;
+  }
   const walk = (node: unknown): unknown => {
     if (Array.isArray(node)) return node.map(walk);
     if (node === null || typeof node !== "object") return node;
@@ -7385,6 +7410,18 @@ export const executeQueryUnitWithTrace = (
       // DML inside WITH bindings / free-object entries executes up front; the
       // statement then compiles as a plain read over the captured ids.
       ast = preExecuteDmlBindings(db, schema, ast, context);
+      // DML embedded in a SELECT's body expression (`select (INSERT …).num`,
+      // `select (SELECT …) ?? (INSERT …)`) — execute the mutation(s) and
+      // substitute by-id selects, same as the single-query path.
+      ast = preExecuteMutationExprsInSelectExpr(db, schema, ast, context);
+      // `SELECT (DML …) { shape }` — run the mutation then re-project its rows.
+      {
+        const selectOverMutation = detectSelectOverMutation(ast);
+        if (selectOverMutation) {
+          traces.push(executeSelectOverMutation(db, schema, script, ast, selectOverMutation, context, runtimeTarget, compilerService));
+          continue;
+        }
+      }
       // Fully-constant subscripts (`select "abc"[1]`, `select [1,2,3][0:9]`)
       // are evaluated directly — see tryEvalConstantSubscriptStatement.
       {
