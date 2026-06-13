@@ -320,6 +320,19 @@ export const compileGelIRToSQL = (
               if (parts.length === selectOrderBy.length) orderSql = parts.join(", ");
             }
           }
+          if (!orderSql) {
+            // `SELECT X.p ORDER BY X.p` — the scalar body projects exactly the
+            // path the ORDER BY references, so the per-row sort key is the
+            // already-projected `value` column. (compileValueSortPath returns
+            // null for a bare pointer set since, on its own, it can't know the
+            // pointer is what `value` holds.)
+            const sourceKey = pathIdKey(sourceSet);
+            const parts = selectOrderBy.map((entry) =>
+              pathIdKey(entry.path) === sourceKey
+                ? `${quoteIdent("value")} ${entry.direction.toUpperCase()}${sortNullsClause(entry)}`
+                : "").filter((p) => p.length > 0);
+            if (parts.length === selectOrderBy.length) orderSql = parts.join(", ");
+          }
           if (orderSql) {
             // SQLite forbids ORDER BY expressions over a `UNION ALL` chain
             // unless wrapped in a subquery — only bare column names are
