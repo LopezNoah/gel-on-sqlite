@@ -41,6 +41,9 @@ export interface CompileContext {
   target?: RuntimeTarget;
   schemaModel?: GeneratedSchema;
   schemaModelName?: string;
+  // Set when the connection ran `CONFIGURE SESSION SET allow_user_specified_id
+  // := true`; lets an INSERT assign an explicit `id` instead of rejecting it.
+  allowUserSpecifiedId?: boolean;
 }
 
 interface CachedCompile {
@@ -103,7 +106,7 @@ export class CompilerService {
       // Keep this after compileSqlFromGelIR so gelIR compile errors retain
       // precedence over plan validation errors, matching the legacy order.
       ir = statement.kind === "insert" || statement.kind === "update" || statement.kind === "delete"
-        ? compileDmlToIR(schema, statement, { globals: context.globals })
+        ? compileDmlToIR(schema, statement, { globals: context.globals, allowUserSpecifiedId: context.allowUserSpecifiedId })
         : needsLegacyRuntimeIR(statement)
           ? compileToIR(schema, statement, {
               overlays: context.overlays,
@@ -194,6 +197,8 @@ export const buildCompileCacheKey = (schema: SchemaSnapshot, statement: Statemen
     .update(paramsFingerprint)
     .update("|")
     .update(targetFingerprint)
+    .update("|")
+    .update(context.allowUserSpecifiedId ? "uid" : "")
     .digest("hex");
 };
 

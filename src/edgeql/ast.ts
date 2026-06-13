@@ -765,6 +765,11 @@ export type InsertValue =
       typeName: string;
       shape: ShapeElement[];
       clauses: ClauseChain;
+      // True when the inline select was written `SELECT DETACHED T …`. A
+      // DETACHED reference breaks the correlation with the enclosing INSERT,
+      // so it is exempt from the self-referencing-INSERT check
+      // (test_edgeql_insert_selfref_04).
+      detached?: boolean;
     }
   | {
       kind: "insert";
@@ -774,6 +779,10 @@ export type InsertValue =
   | {
       kind: "set";
       values: InsertValue[];
+      // Cast target type when the set was written as `<T>{}` (an empty set
+      // with an explicit cast). Used to type-check empty-set assignments
+      // against the declared pointer type (test_edgeql_insert_empty_02/05).
+      castType?: string;
     }
   | {
       kind: "function_call";
@@ -845,7 +854,7 @@ export interface ForStatement {
   variable: string;
   optional?: boolean;
   iteratorExpr: FreeObjectExpr;
-  body: InsertStatement | SelectStatement | SelectExprStatement | SelectFreeStatement;
+  body: InsertStatement | SelectStatement | SelectExprStatement | SelectFreeStatement | ForStatement;
   pos: SourcePos;
 }
 
