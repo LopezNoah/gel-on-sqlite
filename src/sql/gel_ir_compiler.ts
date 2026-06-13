@@ -114,6 +114,14 @@ export interface GelIRCompileOptions {
   // SCOPED singleton (0 when the LEFT-JOINed row is NULL, else 1) rather
   // than the whole table (set_of_nonempty_01).
   scopedAggRoot?: { alias: string; typerefId: string };
+  // Set only when the enclosing scalar select has NO bound row source (e.g.
+  // `(SELECT <json>Issue {…} FILTER …) = to_json(…)` — the comparison's
+  // operands contribute no outer iteration). With no enclosing row, a
+  // free-rooted subquery operand cannot be path-sharing-correlated with a
+  // sibling, so it is safe to compile as a self-contained scalar subselect
+  // with its own FROM. Left unset (path-sharing semantics apply) when a row
+  // source exists, so `Issue.number ++ (SELECT Issue.number)` stays correlated.
+  allowIndependentSubquery?: boolean;
 }
 
 // See GelIRCompileOptions.strictShape.
@@ -333,17 +341,15 @@ export const compileGelIRToSQL = (
         // produces only one row.
         const stmtLimit = statement.limit ?? topSelect.selectExpr?.limit;
         const stmtOffset = statement.offset ?? topSelect.selectExpr?.offset;
-        if (stmtLimit) {
-          const limitN = extractNumericLiteral(stmtLimit);
-          if (limitN !== undefined) {
-            sql += ` LIMIT ${limitN}`;
-          }
+        const limitN = stmtLimit ? extractNumericLiteral(stmtLimit) : undefined;
+        const offsetN = stmtOffset ? extractNumericLiteral(stmtOffset) : undefined;
+        if (limitN !== undefined) {
+          sql += ` LIMIT ${limitN}`;
         }
-        if (stmtOffset) {
-          const offsetN = extractNumericLiteral(stmtOffset);
-          if (offsetN !== undefined) {
-            sql += ` OFFSET ${offsetN}`;
-          }
+        if (offsetN !== undefined) {
+          // SQLite requires a LIMIT before OFFSET; `LIMIT -1` means unbounded.
+          if (limitN === undefined) sql += ` LIMIT -1`;
+          sql += ` OFFSET ${offsetN}`;
         }
         return { sql, params, loweringMode: "single_statement" };
       }
@@ -3009,6 +3015,16 @@ const compileScalarSelectSQLInner = (
   options: GelIRCompileOptions,
   outerWheres: Set[],
 ): string | null => {
+  // An optional parameter (`<optional str>$0`) accepts the empty set: a
+  // missing/NULL arg is zero rows, not a NULL-valued row. Emit a row source
+  // that filters out the NULL binding so a surrounding union/LIMIT sees the
+  // empty set. (A required parameter keeps its single—possibly NULL—row.)
+  if (sourceSet.expr.kind === "parameter" && (sourceSet.expr as { required?: boolean }).required === false) {
+    const v = compileValueSetSQL(sourceSet, "g0", params, target, options);
+    if (v) {
+      return `SELECT ${quoteIdent("value")} FROM (SELECT ${v} AS ${quoteIdent("value")}) WHERE ${quoteIdent("value")} IS NOT NULL`;
+    }
+  }
   // Pointer chains rooted at the empty-set marker (`(<Bar>{}).a`, often the
   // result of inlining a UDF called with an empty arg) yield zero rows —
   // without this the pointer lowering emits a column ref with no FROM.
@@ -3371,11 +3387,15 @@ const compileScalarSelectSQLInner = (
     const innerScalarSql = compileScalarSelectSQL(castExpr.expr, params, target, options, outerWheres);
     if (innerScalarSql) {
       // `<json>X` JSON-encodes a scalar source via json_quote (`'RED'` →
-      // `"RED"`, `42` → `42`); collections / already-JSON values pass through
-      // (json_quote would double-encode them).
+      // `"RED"`, `42` → `42`); collections, object shapes (already `json_object`
+      // text), and already-JSON values pass through (json_quote would
+      // double-encode them).
       if (qualifyTypeName(castExpr.toType) === "std::json") {
         const srcType = castExpr.expr.typeref;
-        const srcIsJsonAlready = srcType.collection !== undefined || qualifyTypeName(srcType) === "std::json";
+        const srcIsObjectShape = castSourceIsObjectShape(castExpr.expr);
+        const srcIsJsonAlready = srcType.collection !== undefined
+          || qualifyTypeName(srcType) === "std::json"
+          || srcIsObjectShape;
         const jsonExpr = srcIsJsonAlready ? quoteIdent("value") : `json_quote(${quoteIdent("value")})`;
         return `SELECT ${jsonExpr} AS ${quoteIdent("value")} FROM (${innerScalarSql})`;
       }
@@ -3689,6 +3709,23 @@ const compileScalarSelectSQLInner = (
         }
         params.length = cp;
       }
+      // Literal index over a tuple whose slots are objects/tuples
+      // (`((SELECT Issue {x}), Issue).0`): the multi-row check above only fires
+      // for set producers, but a tuple of object sets is itself multi-row.
+      // Compile the tuple to its per-row JSON array and extract the slot.
+      {
+        let cur: Set = idxExpr.expr;
+        while (cur.expr.kind === "select_expr") cur = (cur.expr as SelectExpr).result;
+        if (cur.expr.kind === "tuple") {
+          const cp = params.length;
+          const rows = compileScalarSelectSQL(idxExpr.expr, params, target, options);
+          if (rows) {
+            const path = idxLit < 0 ? `$[#${idxLit}]` : `$[${idxLit}]`;
+            return `SELECT json_extract(${quoteIdent("value")}, '${path}') AS ${quoteIdent("value")} FROM (${rows})`;
+          }
+          params.length = cp;
+        }
+      }
     }
     // `arr[{0, 1}]` — set-valued indexing produces multiple results. Lower
     // to a json_extract per index in the index set.
@@ -3745,6 +3782,8 @@ const compileScalarSelectSQLInner = (
     }
     const offset = extractNumericLiteral(selectExpr.offset);
     if (offset !== undefined) {
+      // SQLite requires a LIMIT before OFFSET; `LIMIT -1` means unbounded.
+      if (limit === undefined) sql += " LIMIT -1";
       sql += " OFFSET ?";
       params.push(offset);
     }
@@ -3823,6 +3862,27 @@ const compileScalarSelectSQLInner = (
         parts.push(partSql);
       }
       if (ok && parts.length > 0) return parts.join(" UNION ALL ");
+    }
+  }
+  // Field access on a tuple-slot object (`((SELECT Issue {x := …}), Issue).0.x`):
+  // the slot was extracted as a JSON object, so the pointer reads its field
+  // with json_extract instead of a table column.
+  if (sourceSet.expr.kind === "pointer" && !(sourceSet.expr as Pointer).ptrref.isLinkProperty) {
+    const fieldPtr = sourceSet.expr as Pointer;
+    let src: Set = fieldPtr.source;
+    while (src.expr.kind === "select_expr") {
+      const se = src.expr as SelectExpr;
+      if (se.where || se.limit || se.offset || (se.orderBy && se.orderBy.length > 0)) break;
+      src = se.result;
+    }
+    if (src.expr.kind === "index_expr") {
+      const cp = params.length;
+      const slotRows = compileScalarSelectSQL(fieldPtr.source, params, target, options);
+      if (slotRows) {
+        const path = `$."${fieldPtr.ptrref.shortName.replaceAll('"', '""')}"`;
+        return `SELECT json_extract(${quoteIdent("value")}, ${quoteLiteral(path)}) AS ${quoteIdent("value")} FROM (${slotRows})`;
+      }
+      params.length = cp;
     }
   }
   const isObjectSourceSet = sourceSet.expr.kind === "pointer"
@@ -4153,7 +4213,13 @@ const compileScalarSelectSQLInner = (
         const bare = unwrapBare(element.val);
         if (bare.expr.kind === "type_root"
             && keyOf((bare.expr as TypeRoot).typeref, bare.pathId?.namespace ?? []) === sharedKey) {
-          elemCols.push(`json_object(${quoteLiteral("id")}, ${sharedAlias}.${quoteIdent("id")}) AS ${quoteIdent(`__e${i}`)}`);
+          // A shaped object element (`(User, User {name})`) serializes its
+          // shape, not just the implicit id. A bare element keeps the id-only
+          // object (rendered as `{}` once the test helper drops the id key).
+          const shapeJson = bare.shape && bare.shape.length > 0
+            ? compileShapeObjectWithAliases(bare, sharedAlias, new Map(), params, target, innerOptions)
+            : null;
+          elemCols.push(`${shapeJson ?? `json_object(${quoteLiteral("id")}, ${sharedAlias}.${quoteIdent("id")})`} AS ${quoteIdent(`__e${i}`)}`);
           outerSlots.push(`json(${quoteIdent(`__e${i}`)})`);
           continue;
         }
@@ -4251,6 +4317,12 @@ const compileScalarSelectSQLInner = (
     const valueExpr = tuple.named
       ? `json_object(${tuple.elements.map((element, index) => `${quoteLiteral(element.name ?? String(index))}, ${values[index]}`).join(", ")})`
       : `json_array(${values.join(", ")})`;
+    // A free object (`{ a := … }`) keeps its single row even when a field is
+    // empty — the empty field serializes to null. Real tuples collapse to the
+    // empty set when any element is empty.
+    if (tuple.isFreeObject) {
+      return `SELECT ${valueExpr} AS ${quoteIdent("value")} FROM ${sources.join(" CROSS JOIN ")}`;
+    }
     return `SELECT CASE WHEN ${valueRefs.map((ref) => `${ref} IS NULL`).join(" OR ")} THEN NULL ELSE ${valueExpr} END AS ${quoteIdent("value")} FROM ${sources.join(" CROSS JOIN ")}`;
   }
 
@@ -4672,7 +4744,10 @@ const compileScalarSelectSQLInner = (
   // For a single-source optional compare, the iteration root is a scoped
   // path — expose it to SET OF (aggregate) args (see scopedAggRoot).
   const valueOptions = ((): GelIRCompileOptions => {
-    if (sources.size !== 1) return options;
+    // No enclosing row source: free-rooted subquery operands can be compiled
+    // self-contained (see allowIndependentSubquery).
+    const base = sources.size === 0 ? { ...options, allowIndependentSubquery: true } : options;
+    if (sources.size !== 1) return base;
     let cur: Set = sourceSet;
     while (cur.expr.kind === "select_expr") cur = (cur.expr as SelectExpr).result;
     if (cur.expr.kind === "operator_call") {
@@ -4682,7 +4757,7 @@ const compileScalarSelectSQLInner = (
         if (tr) return { ...options, scopedAggRoot: { alias: "g0", typerefId: tr.id } };
       }
     }
-    return options;
+    return base;
   })();
   const valueSql = compileValueSetSQL(sourceSet, "g0", params, target, valueOptions);
   if (!valueSql) return null;
@@ -7442,6 +7517,35 @@ const collectForExprProjectedColumns = (sourceSet: Set, where?: Set, orderBy?: S
 // and the json constructor would emit `?` twice without re-pushing the param
 // ("Too few parameter values"). We compute the parts once into aliased columns
 // of a correlated subquery, then guard/construct off those aliases.
+// An object reference used as a tuple slot serializes to a JSON object, but
+// the value compilers resolve a bare (identity-only) object reference to its
+// `id` column — correct for `= User` identity comparisons, wrong for a tuple
+// slot, where `json(<uuid>)` reads the id text as malformed JSON. Detect the
+// identity-only object element so the tuple builder wraps it as
+// `json_object('id', <id>)`. A meaningfully-shaped element already compiles to
+// a JSON object and is left alone.
+const isIdentityObjectElement = (set: Set): boolean => {
+  let cursor: Set = set;
+  while (cursor.expr.kind === "select_expr") {
+    const se = cursor.expr as SelectExpr;
+    if (se.where || (se.orderBy && se.orderBy.length > 0) || se.limit || se.offset) return false;
+    cursor = se.result;
+  }
+  const isRoot = cursor.expr.kind === "type_root";
+  const isObjectLink = cursor.expr.kind === "pointer"
+    && !(cursor.expr as Pointer).ptrref.outTarget.isScalar
+    && !(cursor.expr as Pointer).ptrref.isLinkProperty;
+  if (!isRoot && !isObjectLink) return false;
+  if (cursor.typeref?.isScalar || cursor.typeref?.collection) return false;
+  const meaningfulShape = (cursor.shape ?? []).some((el) => {
+    const elName = (el as { name?: string }).name;
+    if (elName === "id") return false;
+    if (el.shapeOrigin === "default") return false;
+    return true;
+  });
+  return !meaningfulShape;
+};
+
 const nullPropagatingTupleSQL = (tuple: Tuple, parts: Array<string | null>): string => {
   // The empty tuple `()` is a singleton empty-tuple VALUE (not the empty
   // set) — emit an empty JSON array rather than NULL, which would read as
@@ -7467,14 +7571,29 @@ const nullPropagatingTupleSQL = (tuple: Tuple, parts: Array<string | null>): str
   // A nested tuple/array part is JSON text once selected into an alias column;
   // SQLite's JSON subtype doesn't survive that round-trip, so re-`json(...)` it
   // to embed it as nested JSON rather than a quoted string.
-  const valueOf = (idx: number): string =>
-    setValueIsJson(tuple.elements[idx].val) || yieldsJsonBool(tuple.elements[idx].val)
+  const valueOf = (idx: number): string => {
+    // An identity-only object slot compiled to a bare id column — embed it as
+    // `json_object('id', <id>)` so it nests as an object, not a quoted uuid.
+    // A part that already compiled to a JSON object (meaningful shape) is left
+    // for the json() re-wrap below.
+    const part = parts[idx] ?? "";
+    if (isIdentityObjectElement(tuple.elements[idx].val) && !/^\s*json/.test(part)) {
+      return `json_object(${quoteLiteral("id")}, ${aliases[idx]})`;
+    }
+    return setValueIsJson(tuple.elements[idx].val) || yieldsJsonBool(tuple.elements[idx].val)
       ? `json(${aliases[idx]})`
       : aliases[idx];
+  };
   const projected = tuple.named
     ? `json_object(${tuple.elements.map((element, idx) => `${quoteLiteral(element.name ?? String(idx))}, ${valueOf(idx)}`).join(", ")})`
     : `json_array(${tuple.elements.map((_, idx) => valueOf(idx)).join(", ")})`;
   const inner = `SELECT ${parts.map((part, idx) => `(${part}) AS ${aliases[idx]}`).join(", ")}`;
+  // A free object (`{ a := … }`) keeps its single row even when a field is
+  // empty — the empty field just serializes to null. Only real tuples collapse
+  // to the empty set when any element is empty.
+  if (tuple.isFreeObject) {
+    return `(SELECT ${projected} FROM (${inner}))`;
+  }
   return `(SELECT CASE WHEN ${aliases.map((a) => `${a} IS NULL`).join(" OR ")} THEN NULL ELSE ${projected} END FROM (${inner}))`;
 };
 
@@ -7558,7 +7677,26 @@ const compileValueSetSQLWithAliases = (
   // instead of decorrelating into a fresh set subquery.
   if ((unwrapped.result.expr.kind === "type_root" || unwrapped.result.expr.kind === "pointer")
     && unwrapped.result.shape && unwrapped.result.shape.length > 0) {
-    const typeAlias = bindingAliases.get(pathIdKey(unwrapped.result));
+    let typeAlias = bindingAliases.get(pathIdKey(unwrapped.result));
+    // A shaped object reference used as a tuple slot (`(L, L.1 {name})` where
+    // L := ('x', User)) carries the binding's namespace, so its pathId won't
+    // match the outer scope's key exactly. Fall back to the same id+namespace
+    // scan the bare-root path below uses, so the slot serializes as the shape
+    // object instead of leaking a bare id that a later `json()` wrap mangles.
+    if (!typeAlias && unwrapped.result.expr.kind === "type_root") {
+      const tid = (unwrapped.result.expr as TypeRoot).typeref?.id;
+      const wantNs = JSON.stringify(unwrapped.result.pathId?.namespace ?? []);
+      if (tid) {
+        for (const [k, v] of bindingAliases.entries()) {
+          if (k.includes(`"id":"${tid}"`) && k.includes(`"namespace":${wantNs}`)) { typeAlias = v; break; }
+        }
+        if (!typeAlias) {
+          for (const [k, v] of bindingAliases.entries()) {
+            if (k.includes(`"id":"${tid}"`)) { typeAlias = v; break; }
+          }
+        }
+      }
+    }
     if (typeAlias) {
       const obj = compileShapeObjectWithAliases(
         unwrapped.result, typeAlias, bindingAliases, params, target, options,
@@ -8326,6 +8464,11 @@ const collectReferencedColumns = (set: Set): string[] => {
       if (fk) {
         out.add(fk);
       }
+    }
+    // A shaped element (`User {name}` inside a tuple) reads its shape fields'
+    // columns off the same source — surface them too.
+    for (const shapeEl of node.shape ?? []) {
+      visit(shapeEl.expr);
     }
     const expr = node.expr;
     if (expr.kind === "pointer") {
@@ -10866,6 +11009,18 @@ const compileValueSetSQL = (
   const outerScopeIdRef = tryResolveOuterScopeIdRef(set, options);
   if (outerScopeIdRef) return outerScopeIdRef;
   if (unwrapped.selectExpr) {
+    // An independent subquery operand (its roots aren't bound to any enclosing
+    // scope) needs its own FROM clause — compile it as a self-contained scalar
+    // subselect rather than a correlated `SELECT value` that dangles on the
+    // caller's alias.
+    if (options.allowIndependentSubquery && subqueryReferencesOnlyFreeRoots(unwrapped.selectExpr, options)) {
+      const cp = params.length;
+      const scalarSql = compileScalarSelectSQL(set, params, target, { ...options, allowIndependentSubquery: false });
+      if (scalarSql) {
+        return `(SELECT ${quoteIdent("value")} FROM (${scalarSql}))`;
+      }
+      params.length = cp;
+    }
     const subquery = compileSelectExprSubquery(unwrapped.selectExpr, sourceAlias, params, target, options, linkPropertyAlias);
     if (!subquery) {
       params.length = checkpoint;
@@ -11083,11 +11238,15 @@ const compileValueSetSQL = (
     // `<json>X` JSON-encodes its source rather than just stringifying it. For a
     // scalar (str/enum/int/float/bool/uuid) that means `json_quote`, which
     // quotes strings (`'RED'` → `"RED"`) but leaves numbers/bools bare
-    // (`42` → `42`). Collections / values already in JSON text are passed
-    // through unchanged (json_quote would double-encode them as a string).
+    // (`42` → `42`). Collections, object shapes (`<json>Issue {…}` →
+    // `json_object(…)`), and values already in JSON text are passed through
+    // unchanged (json_quote would double-encode them as a string).
     if (qualifyTypeName(castExpr.toType) === "std::json") {
       const srcType = castExpr.expr.typeref;
-      const srcIsJsonAlready = srcType.collection !== undefined || qualifyTypeName(srcType) === "std::json";
+      const srcIsObjectShape = castSourceIsObjectShape(castExpr.expr);
+      const srcIsJsonAlready = srcType.collection !== undefined
+        || qualifyTypeName(srcType) === "std::json"
+        || srcIsObjectShape;
       return srcIsJsonAlready ? inner : `json_quote(${inner})`;
     }
     // Casting FROM std::json: JSON `null` is the EMPTY SET (SQL NULL), and
@@ -12466,7 +12625,7 @@ const compileOutboundLinkArrayExpr = (
     const sourceMatch = chainedSourceIds !== null
       ? `${joinAlias}.${quoteIdent("source")} IN (${chainedSourceIds})`
       : `${joinAlias}.${quoteIdent("source")} = ${sourceAlias}.${quoteIdent("id")}`;
-    const inner = compileLinkedInnerSelect(`SELECT ${rowExpr} AS ${quoteIdent("item")} FROM ${targetSource} JOIN ${quoteIdent(linkTable)} ${joinAlias} ON ${joinAlias}.${quoteIdent("target")} = ${targetAlias}.${quoteIdent("id")} WHERE ${sourceMatch}`, modifiers, targetAlias, params, target, options, joinAlias, pointer);
+    const inner = compileLinkedInnerSelect(rowExpr, `FROM ${targetSource} JOIN ${quoteIdent(linkTable)} ${joinAlias} ON ${joinAlias}.${quoteIdent("target")} = ${targetAlias}.${quoteIdent("id")} WHERE ${sourceMatch}`, modifiers, targetAlias, params, target, options, joinAlias, pointer);
     return `COALESCE((SELECT json_group_array(json(${quoteIdent("item")})) FROM (${inner})), '[]')`;
   }
 
@@ -12474,7 +12633,7 @@ const compileOutboundLinkArrayExpr = (
   const targetMatch = chainedSourceIds !== null
     ? `${targetAlias}.${quoteIdent("id")} IN (SELECT ${quoteIdent(inlineColumn)} FROM ${quoteIdent(tableNameForType(qualifyTypeName(pointer.ptrref.outSource)))} WHERE ${quoteIdent("id")} IN (${chainedSourceIds}))`
     : `${targetAlias}.${quoteIdent("id")} = ${sourceAlias}.${quoteIdent(inlineColumn)}`;
-  const inner = compileLinkedInnerSelect(`SELECT ${rowExpr} AS ${quoteIdent("item")} FROM ${targetSource} WHERE ${targetMatch}`, modifiers, targetAlias, params, target, options, undefined, pointer);
+  const inner = compileLinkedInnerSelect(rowExpr, `FROM ${targetSource} WHERE ${targetMatch}`, modifiers, targetAlias, params, target, options, undefined, pointer);
   return `COALESCE((SELECT json_group_array(json(${quoteIdent("item")})) FROM (${inner})), '[]')`;
 };
 
@@ -12506,7 +12665,7 @@ const compileBacklinkArrayExpr = (
     const targetMatch = chainedSourceIds !== null
       ? `${joinAlias}.${quoteIdent("target")} IN (${chainedSourceIds})`
       : `${joinAlias}.${quoteIdent("target")} = ${sourceAlias}.${quoteIdent("id")}`;
-    const inner = compileLinkedInnerSelect(`SELECT ${rowExpr} AS ${quoteIdent("item")} FROM ${backlinkSource} JOIN ${quoteIdent(linkTable)} ${joinAlias} ON ${joinAlias}.${quoteIdent("source")} = ${backlinkAlias}.${quoteIdent("id")} WHERE ${targetMatch}`, modifiers, backlinkAlias, params, target, options, joinAlias, pointer);
+    const inner = compileLinkedInnerSelect(rowExpr, `FROM ${backlinkSource} JOIN ${quoteIdent(linkTable)} ${joinAlias} ON ${joinAlias}.${quoteIdent("source")} = ${backlinkAlias}.${quoteIdent("id")} WHERE ${targetMatch}`, modifiers, backlinkAlias, params, target, options, joinAlias, pointer);
     return `COALESCE((SELECT json_group_array(json(${quoteIdent("item")})) FROM (${inner})), '[]')`;
   }
 
@@ -12514,7 +12673,7 @@ const compileBacklinkArrayExpr = (
   const fkMatch = chainedSourceIds !== null
     ? `${backlinkAlias}.${quoteIdent(inlineColumn)} IN (${chainedSourceIds})`
     : `${backlinkAlias}.${quoteIdent(inlineColumn)} = ${sourceAlias}.${quoteIdent("id")}`;
-  const inner = compileLinkedInnerSelect(`SELECT ${rowExpr} AS ${quoteIdent("item")} FROM ${backlinkSource} WHERE ${fkMatch}`, modifiers, backlinkAlias, params, target, options, undefined, pointer);
+  const inner = compileLinkedInnerSelect(rowExpr, `FROM ${backlinkSource} WHERE ${fkMatch}`, modifiers, backlinkAlias, params, target, options, undefined, pointer);
   return `COALESCE((SELECT json_group_array(json(${quoteIdent("item")})) FROM (${inner})), '[]')`;
 };
 
@@ -12580,7 +12739,11 @@ const rewriteFilterAgainstPointerChain = (filterSet: Set, outerPointer: Pointer)
 };
 
 const compileLinkedInnerSelect = (
-  baseSql: string,
+  // The per-row projection (`json_object(...) AS item`) and the FROM/WHERE
+  // tail are passed separately so a correlated LIMIT/OFFSET can re-emit the
+  // projection alongside a window column (see below).
+  rowExpr: string,
+  fromWhere: string,
   modifiers: SelectExpr | undefined,
   targetAlias: string,
   params: ScalarValue[],
@@ -12592,10 +12755,11 @@ const compileLinkedInnerSelect = (
   // on the target alias rather than re-walking the chain.
   outerPointer?: Pointer,
 ): string => {
+  const itemCol = quoteIdent("item");
+  const baseSelect = `SELECT ${rowExpr} AS ${itemCol} ${fromWhere}`;
   if (!modifiers) {
-    return baseSql;
+    return baseSelect;
   }
-  let inner = baseSql;
   const clauses: string[] = [];
   if (modifiers.where) {
     // Same trick as compileSelectStmtToSQL: when the filter references the
@@ -12610,9 +12774,8 @@ const compileLinkedInnerSelect = (
       clauses.push(where);
     }
   }
-  if (clauses.length > 0) {
-    inner += ` AND ${clauses.join(" AND ")}`;
-  }
+  const whereExt = clauses.length > 0 ? ` AND ${clauses.join(" AND ")}` : "";
+  let orderSql = "";
   if (modifiers.orderBy && modifiers.orderBy.length > 0) {
     // Same rewrite as for WHERE: `User.todo.number` inside the link's
     // iteration shape must resolve to `targetAlias.number`, not against the
@@ -12621,20 +12784,51 @@ const compileLinkedInnerSelect = (
     const rewrittenOrderBy = outerPointer
       ? modifiers.orderBy.map((entry) => ({ ...entry, path: rewriteFilterAgainstPointerChain(entry.path, outerPointer) }))
       : modifiers.orderBy;
-    const orderSql = compileSortExprs(rewrittenOrderBy, targetAlias, linkPropertyAlias, params, target, options);
-    if (orderSql) {
-      inner += ` ORDER BY ${orderSql}`;
+    orderSql = compileSortExprs(rewrittenOrderBy, targetAlias, linkPropertyAlias, params, target, options) || "";
+  }
+  // LIMIT / OFFSET may be a correlated expression (`LIMIT len(User.name) - 3`
+  // on a per-row link shape) rather than a constant. Prefer the literal fast
+  // path; otherwise compile the expression as a scalar value — paths into the
+  // outer shaped row resolve through options.outerScopes.
+  const limitLit = extractNumericLiteral(modifiers.limit);
+  let limitSql: string | null = limitLit !== undefined ? String(limitLit) : null;
+  let limitCorrelated = false;
+  if (limitSql === null && modifiers.limit) {
+    limitSql = compileValueSetSQL(modifiers.limit, targetAlias, params, target, options, linkPropertyAlias);
+    limitCorrelated = limitSql !== null;
+  }
+  const offsetLit = extractNumericLiteral(modifiers.offset);
+  let offsetSql: string | null = offsetLit !== undefined ? String(offsetLit) : null;
+  let offsetCorrelated = false;
+  if (offsetSql === null && modifiers.offset) {
+    offsetSql = compileValueSetSQL(modifiers.offset, targetAlias, params, target, options, linkPropertyAlias);
+    offsetCorrelated = offsetSql !== null;
+  }
+  // SQLite rejects correlated outer-column references inside a subquery's
+  // LIMIT/OFFSET clause (though it allows them in WHERE). When a bound is a
+  // correlated expression, rank the rows with row_number() and filter on the
+  // rank — the correlated bound then lives in a WHERE, which SQLite accepts.
+  if (limitCorrelated || offsetCorrelated) {
+    const overOrder = orderSql ? `ORDER BY ${orderSql}` : "";
+    const ranked = `SELECT ${rowExpr} AS ${itemCol}, row_number() OVER (${overOrder}) AS ${quoteIdent("__rn")} ${fromWhere}${whereExt}`;
+    const conds: string[] = [];
+    if (offsetSql !== null) conds.push(`${quoteIdent("__rn")} > (${offsetSql})`);
+    if (limitSql !== null) {
+      // LIMIT counts rows remaining AFTER the offset.
+      conds.push(offsetSql !== null
+        ? `${quoteIdent("__rn")} <= (${offsetSql}) + (${limitSql})`
+        : `${quoteIdent("__rn")} <= (${limitSql})`);
     }
+    const condSql = conds.length > 0 ? ` WHERE ${conds.join(" AND ")}` : "";
+    return `SELECT ${itemCol} FROM (${ranked})${condSql} ORDER BY ${quoteIdent("__rn")}`;
   }
-  const limit = extractNumericLiteral(modifiers.limit);
-  if (limit !== undefined) {
-    inner += " LIMIT ?";
-    params.push(limit);
-  }
-  const offset = extractNumericLiteral(modifiers.offset);
-  if (offset !== undefined) {
-    inner += " OFFSET ?";
-    params.push(offset);
+  let inner = `${baseSelect}${whereExt}`;
+  if (orderSql) inner += ` ORDER BY ${orderSql}`;
+  if (limitSql !== null) inner += ` LIMIT ${limitSql}`;
+  if (offsetSql !== null) {
+    // SQLite requires a LIMIT before OFFSET; `LIMIT -1` means unbounded.
+    if (limitSql === null) inner += ` LIMIT -1`;
+    inner += ` OFFSET ${offsetSql}`;
   }
   return inner;
 };
@@ -12695,6 +12889,90 @@ const unwrapSelectExprSet = (set: Set): { result: Set; selectExpr?: SelectExpr }
     return { result: set };
   }
   return { result: (set.expr as SelectExpr).result, selectExpr: set.expr as SelectExpr };
+};
+
+// Whether a cast's source is an object SHAPE (`Issue { number }`, possibly
+// behind several `select_expr` fences) rather than a scalar. The shape may sit
+// on any of the nested select levels, so walk them all. Used to decide that
+// `<json>X` should pass the already-`json_object` text through unchanged
+// instead of `json_quote`-ing it into a JSON string.
+const castSourceIsObjectShape = (set: Set): boolean => {
+  let cur: Set = set;
+  for (;;) {
+    if (cur.shape && cur.shape.length > 0) return true;
+    if (cur.expr.kind === "select_expr") {
+      cur = (cur.expr as SelectExpr).result;
+      continue;
+    }
+    return false;
+  }
+};
+
+// A subquery operand is "independent" when every type-root it reads from is a
+// free reference — none resolve to an enclosing iteration (outerScopes) or a
+// bound non-root source (sourcePathAliases). Such a subquery (`(SELECT
+// <json>Issue {…} FILTER Issue.number = '1')` as a `=` operand) needs its own
+// FROM clause; compiling it as a correlated `SELECT value` against the caller's
+// alias would dangle on an alias that doesn't exist. Returns false for a
+// constant subquery (no roots) — those compile fine without a FROM.
+const subqueryReferencesOnlyFreeRoots = (
+  selectExpr: SelectExpr,
+  options: GelIRCompileOptions,
+): boolean => {
+  let hasRoot = false;
+  let allFree = true;
+  const consider = (src: Set): void => {
+    if (src.expr.kind !== "type_root") return;
+    hasRoot = true;
+    const namespace = src.pathId?.namespace ?? [];
+    const typerefId = (src.expr as TypeRoot).typeref.id;
+    if (findMatchingOuterScope({ typerefId, namespace }, options)) allFree = false;
+    if ((options.sourcePathAliases ?? []).some((p) => p.pathKey === pathIdKey(src))) allFree = false;
+  };
+  const visit = (set: Set): void => {
+    if (!allFree) return;
+    const expr = set.expr;
+    if (expr.kind === "type_root") { consider(set); return; }
+    if (expr.kind === "pointer") { visit((expr as Pointer).source); return; }
+    if (expr.kind === "type_cast") { visit((expr as TypeCast).expr); return; }
+    if (expr.kind === "operator_call") {
+      for (const arg of orderedCallArgs((expr as OperatorCall).args)) visit(arg.expr);
+      return;
+    }
+    if (expr.kind === "function_call") {
+      for (const arg of orderedCallArgs((expr as FunctionCall).args)) visit(arg.expr);
+      return;
+    }
+    if (expr.kind === "select_expr") {
+      const se = expr as SelectExpr;
+      visit(se.result);
+      if (se.where) visit(se.where);
+      for (const order of se.orderBy ?? []) visit(order.path);
+      return;
+    }
+    if (expr.kind === "tuple") { for (const el of (expr as Tuple).elements) visit(el.val); return; }
+    if (expr.kind === "array") { for (const el of (expr as ArrayExpr).elements) visit(el); return; }
+    if (expr.kind === "if_else_expr") {
+      const ifElse = expr as IfElseExpr;
+      visit(ifElse.condition); visit(ifElse.ifExpr); visit(ifElse.elseExpr);
+      return;
+    }
+    if (expr.kind === "coalesce_expr") {
+      const coalesce = expr as CoalesceExpr;
+      visit(coalesce.left); visit(coalesce.right);
+      return;
+    }
+    if (expr.kind === "exists_expr") { visit((expr as ExistsExpr).expr); return; }
+    if (expr.kind === "index_expr") {
+      const indexExpr = expr as IndexExpr;
+      visit(indexExpr.expr); visit(indexExpr.index);
+      return;
+    }
+  };
+  visit(selectExpr.result);
+  if (selectExpr.where) visit(selectExpr.where);
+  for (const order of selectExpr.orderBy ?? []) visit(order.path);
+  return hasRoot && allFree;
 };
 
 const compileSelectExprSubquery = (

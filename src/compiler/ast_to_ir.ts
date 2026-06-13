@@ -29,6 +29,9 @@ import type {
   Cardinality,
   CallArg,
   CoalesceExpr,
+  ArrayExpr,
+  IndexExpr,
+  TypeCast,
   BaseConstant,
   FunctionCall as IRFunctionCall,
   Global,
@@ -1307,6 +1310,91 @@ const tryExtendGroupRowFieldPath = (out: Set, stepName: string, direction?: "out
   return undefined;
 };
 
+// `.field` on a (named) tuple value (`WITH t := (a := 1, b := 2) SELECT t.a`)
+// resolves to the named element's value Set. The tuple may sit behind a
+// SELECT wrapper or a FOR body (`SELECT (a := …)`), so peel those first.
+// resolvePointerRef has no pointer for a `std::tuple` type, so without this the
+// `.field` step is dropped and the entire tuple leaks through.
+const resolveNamedTupleElement = (source: Set, field: string): Set | undefined => {
+  if (field.startsWith("@")) return undefined;
+  let cursor: Set = source;
+  for (;;) {
+    if (cursor.expr.kind === "select_expr") {
+      cursor = (cursor.expr as SelectExpr).result;
+    } else if (cursor.expr.kind === "for_expr") {
+      cursor = (cursor.expr as { body: Set }).body;
+    } else {
+      break;
+    }
+  }
+  if (cursor.expr.kind === "tuple" && (cursor.expr as Tuple).named) {
+    return (cursor.expr as Tuple).elements.find((e) => e.name === field)?.val;
+  }
+  return undefined;
+};
+
+// Collect the schema type-root ids a Set's value depends on. Used to decide
+// whether a constant index into a literal tuple can be resolved to the element
+// directly without changing cardinality (see resolveConstTupleIndexElement).
+const collectSetTypeRoots = (set: Set, out: globalThis.Set<string>): void => {
+  const e = set.expr;
+  switch (e.kind) {
+    case "type_root": out.add((e as TypeRoot).typeref.id); break;
+    case "pointer": collectSetTypeRoots((e as Pointer).source, out); break;
+    case "select_expr": collectSetTypeRoots((e as SelectExpr).result, out); break;
+    case "for_expr": collectSetTypeRoots((e as { body: Set }).body, out); break;
+    case "index_expr": collectSetTypeRoots((e as IndexExpr).expr, out); break;
+    case "tuple": for (const el of (e as Tuple).elements) collectSetTypeRoots(el.val, out); break;
+    case "array": for (const el of (e as ArrayExpr).elements) collectSetTypeRoots(el, out); break;
+    case "coalesce_expr":
+      collectSetTypeRoots((e as CoalesceExpr).left, out);
+      collectSetTypeRoots((e as CoalesceExpr).right, out);
+      break;
+    case "type_cast": collectSetTypeRoots((e as TypeCast).expr, out); break;
+    case "exists_expr": collectSetTypeRoots((e as ExistsExpr).expr, out); break;
+    case "operator_call":
+    case "function_call":
+      for (const arg of Object.values((e as { args: Record<string, CallArg> }).args)) {
+        collectSetTypeRoots(arg.expr, out);
+      }
+      break;
+    default: break;
+  }
+  for (const sh of set.shape ?? []) collectSetTypeRoots(sh.expr, out);
+};
+
+// `(A, B).N` with a constant N over a literal tuple. EdgeQL builds the tuple as
+// the cross product of its element sets, so `.N` generally can't be peeled to
+// element N (that would drop the other elements' cardinality multiplier). It
+// IS safe when every element depends on at most one common type root R and
+// element N itself depends on R (so the cross product collapses to |R| and
+// element N already has that cardinality), or when all elements are singletons.
+// Peeling enables shared-root correlation and shape reprojection that the
+// opaque index_expr form blocks (e.g. `(…, Issue).0.x ++ Issue.number`,
+// `(L, L.1 {name})`).
+const resolveConstTupleIndexElement = (source: Set, index: number): Set | undefined => {
+  if (!Number.isInteger(index) || index < 0) return undefined;
+  let cursor: Set = source;
+  while (cursor.expr.kind === "select_expr") {
+    const se = cursor.expr as SelectExpr;
+    if (se.where || se.limit || se.offset || (se.orderBy && se.orderBy.length > 0)) return undefined;
+    cursor = se.result;
+  }
+  if (cursor.expr.kind !== "tuple") return undefined;
+  const elements = (cursor.expr as Tuple).elements;
+  if (index >= elements.length) return undefined;
+  const allRoots = new globalThis.Set<string>();
+  for (const el of elements) collectSetTypeRoots(el.val, allRoots);
+  if (allRoots.size > 1) return undefined;
+  if (allRoots.size === 1) {
+    const elemRoots = new globalThis.Set<string>();
+    collectSetTypeRoots(elements[index].val, elemRoots);
+    // Element N must carry the shared root, else peeling drops the multiplier.
+    if (elemRoots.size === 0) return undefined;
+  }
+  return elements[index].val;
+};
+
 const compilePathSteps = (steps: EdgeQLPathStep[], ctx: IRCompileContext): Set => {
   if (steps.length === 0) {
     return literalToSet(null);
@@ -1380,6 +1468,12 @@ const compilePathSteps = (steps: EdgeQLPathStep[], ctx: IRCompileContext): Set =
       }
       if (step.name === "name" && out.expr.kind === "pointer" && (out.expr as Pointer).ptrref.shortName === "__type__") {
         out = synthesizeTypeNamePointerSet(out);
+        continue;
+      }
+      // `.field` on a named-tuple binding (`WITH t := (a := 1) SELECT t.a`).
+      const tupleElement = resolveNamedTupleElement(out, step.name);
+      if (tupleElement) {
+        out = tupleElement;
         continue;
       }
       // Paths off a group-rows set (`g.elements`, `g.key.x` where g is a FOR
@@ -3052,6 +3146,20 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
       }
       const typeref = bound?.typeref ?? aliasSet?.typeref ?? resolveTypeRef(scoped, expr.typeName);
       let root = bound ?? aliasSet ?? setFromTypeRoot(typeref);
+      // `(DETACHED User)` is a fresh, independent set: stamp a unique namespace
+      // so two detached references to the same type don't factor together into
+      // one correlated source. (`(DETACHED User).name ++ (DETACHED User).name`
+      // is the full cross product, not the diagonal.)
+      if (expr.detached && !bound && !aliasSet) {
+        const detachedNs = `detached:${ctx.nextScopeId++}`;
+        root = {
+          ...root,
+          pathId: {
+            ...root.pathId,
+            namespace: [...(root.pathId?.namespace ?? []), detachedNs],
+          },
+        };
+      }
       if (expr.shape.length > 0) {
         const compiledShape = compileShape(root, expr.shape, scoped);
         augmentGroupRowFieldShape(root, expr.shape, compiledShape);
@@ -3177,8 +3285,13 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
           result: inner,
           where: expr.filter ? compileFreeObjectExpr(expr.filter, clauseCtx) : undefined,
           orderBy: expr.orderBy ? compileOrderExprChain(expr.orderBy, clauseCtx) : undefined,
-          offset: expr.offset === undefined ? undefined : literalToSet(expr.offset),
-          limit: expr.limit === undefined ? undefined : literalToSet(expr.limit),
+          // A non-constant LIMIT/OFFSET (`LIMIT len(User.name) - 3`) parses to
+          // `limitExpr`/`offsetExpr` — compile it as a set so the SQL layer can
+          // correlate its paths to the enclosing row, instead of dropping it.
+          offset: expr.offset !== undefined ? literalToSet(expr.offset)
+            : expr.offsetExpr !== undefined ? compileFreeObjectExpr(expr.offsetExpr, clauseCtx) : undefined,
+          limit: expr.limit !== undefined ? literalToSet(expr.limit)
+            : expr.limitExpr !== undefined ? compileFreeObjectExpr(expr.limitExpr, clauseCtx) : undefined,
           implicitWrapper: false,
         },
         pathId: defaultPathId("select_expr_subquery"),
@@ -3788,6 +3901,17 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
         }
       }
       const source = compileFreeObjectExpr(expr.expr, ctx);
+      // A constant index into a literal tuple may resolve straight to the
+      // element when cardinality is preserved — keeps the element's type root
+      // visible so downstream shaping / operator correlation factor correctly.
+      // Skip an implicit-subject index (`filter .1`, `order by .0`): there `.N`
+      // selects a slot of the materialized result row, which the SQL stage
+      // resolves against the row JSON — re-deriving the element decorrelates it.
+      if (expr.indexExpr === undefined && typeof expr.index === "number"
+          && expr.expr.kind !== "current_item") {
+        const peeled = resolveConstTupleIndexElement(source, expr.index);
+        if (peeled) return peeled;
+      }
       return {
         kind: "set",
         expr: {
@@ -3873,6 +3997,9 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
         expr: {
           kind: "tuple",
           named: true,
+          // `(a := …)` (tupleLike) is a real tuple; `{a := …}` is a free object
+          // whose fields may be empty without collapsing the object.
+          isFreeObject: !expr.tupleLike,
           elements,
         },
         pathId: defaultPathId("free_object"),
@@ -4848,6 +4975,15 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
       }
 
       const inner = compileFreeObjectExpr(innerExpr, ctx);
+      // `<optional T>$0` — the cardinality modifier makes the parameter accept
+      // the empty set. Mark the underlying parameter (and its registered
+      // binding) optional so SQL lowering drops a missing/NULL arg to zero
+      // rows instead of emitting a NULL-valued row.
+      if (expr.optional && inner.expr.kind === "parameter") {
+        (inner.expr as { required: boolean }).required = false;
+        const paramDef = ctx.params.get((inner.expr as { name: string }).name);
+        if (paramDef) (paramDef as { required: boolean }).required = false;
+      }
       const toType = resolveTypeRef(ctx, expr.castType);
       return {
         kind: "set",
@@ -7790,7 +7926,20 @@ const compileSelectStatement = (rawStatement: SelectStatement, ctx: IRCompileCon
         const ptrref = resolvePointerRef(scoped, cursor.typeref, segment);
         cursor = ptrref ? extendPathSet(cursor, ptrref) : undefined;
       }
-      path = cursor ?? literalToSet(null);
+      if (cursor) {
+        path = cursor;
+      } else {
+        // The path may step through a computed shape element (`.key.name`
+        // where `key := {…}`), which isn't a schema pointer. Resolve it as a
+        // leading-dot field access against the shaped subject — the same way
+        // FILTER does (compileFreeObjectExpr consults the bound __subject__'s
+        // shape computeds).
+        let node: FreeObjectExpr = { kind: "current_item" };
+        for (const segment of segments) {
+          node = { kind: "field_access", expr: node, field: segment, optional: false };
+        }
+        path = compileFreeObjectExpr(node, scoped);
+      }
     } else {
       path = literalToSet(null);
     }
@@ -7836,7 +7985,7 @@ const compileSelectFreeStatement = (statement: SelectFreeStatement, ctx: IRCompi
   const tupleValues = statement.entries.map((entry) => ({ name: entry.name, val: compileFreeObjectExpr(entry.expr, scoped) }));
   const tupleSet: Set = {
     kind: "set",
-    expr: { kind: "tuple", named: true, elements: tupleValues.map((entry) => ({ name: entry.name, val: entry.val })) },
+    expr: { kind: "tuple", named: true, isFreeObject: true, elements: tupleValues.map((entry) => ({ name: entry.name, val: entry.val })) },
     pathId: defaultPathId("free_object"),
     typeref: unknownTypeRef("std::tuple"),
     shape: [],

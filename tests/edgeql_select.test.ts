@@ -9490,7 +9490,10 @@ describe("TestEdgeQLSelect", () => {
   });
 
   it("test_edgeql_select_expr_objects_07", () => {
-    let res = h.query("\n            SELECT User {\n                name,\n                id\n            }\n            ORDER BY User.name;\n        ");
+    let res = queryRows<{ name: string; id: string }>(
+      h,
+      "\n            SELECT User {\n                name,\n                id\n            }\n            ORDER BY User.name;\n        "
+    );
     assertQueryResult(
       h,
       `
@@ -9499,7 +9502,7 @@ describe("TestEdgeQLSelect", () => {
             SELECT _ := (L, L.1 {name})
             ORDER BY _.1.name;
             `,
-      undefined
+      res.map((user) => [["x", { id: String(user.id) }], { name: user.name }])
     );
     assertQueryResult(
       h,
@@ -9509,7 +9512,7 @@ describe("TestEdgeQLSelect", () => {
             SELECT _ := (L.1 {name}, L)
             ORDER BY _.0.name;
             `,
-      undefined
+      res.map((user) => [{ name: user.name }, ["x", { id: String(user.id) }]])
     );
   });
 
