@@ -850,7 +850,7 @@ const compileDmlAssignments = (
       }
       if (ptr.outTarget.isScalar) {
         columns.push(ptr.shortName);
-        values.push(unionSql);
+        values.push(normalizeBoolColumnValue(ptr, unionSql));
       } else {
         columns.push(`${ptr.shortName}_id`);
         values.push(`json_extract(${unionSql}, '$[0].id')`);
@@ -868,7 +868,7 @@ const compileDmlAssignments = (
     }
     if (ptr.outTarget.isScalar) {
       columns.push(ptr.shortName);
-      values.push(valueSql);
+      values.push(normalizeBoolColumnValue(ptr, valueSql));
       paramSpans.push([spanStart, params.length]);
       continue;
     }
@@ -877,6 +877,22 @@ const compileDmlAssignments = (
     paramSpans.push([spanStart, params.length]);
   }
   return { columns, values, paramSpans };
+};
+
+// Bool-typed scalar columns are stored as integer 0/1 in the data table (the
+// INSERT path binds JS booleans which SQLite coerces to 0/1). A SELECT
+// expression compiles a bool literal as `json('true')`/`json('false')` so the
+// runtime decoder reads a JSON boolean — but that text must never be written
+// into a stored bool column. When an UPDATE/INSERT assignment targets a bool
+// property, rewrite the canonical literal forms to 0/1 so reads round-trip.
+const normalizeBoolColumnValue = (ptr: PointerRef, valueSql: string): string => {
+  const targetId = ptr.outTarget.id ?? "";
+  const targetName = ptr.outTarget.nameHint ?? "";
+  const isBool = targetId === "std::bool" || targetName === "std::bool" || targetId === "bool" || targetName === "bool";
+  if (!isBool) return valueSql;
+  if (valueSql === "json('true')") return "1";
+  if (valueSql === "json('false')") return "0";
+  return valueSql;
 };
 
 const containsUnionOperator = (set: Set): boolean => {
