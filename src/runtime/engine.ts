@@ -13602,14 +13602,15 @@ const translateExclusivityWriteError = (writeErr: unknown, line: number, column:
 // check covering the chain's subject types at chain start, then re-reading it
 // at chain end. If any exclusive value is held by a DIFFERENT row at the end
 // than at the start, some statement re-used a reserved value → conflict.
-type ExclusiveSnapshot = Array<{ property: string; valueToId: Map<string, string> }>;
+type ExclusiveSnapshot = Array<{ property: string; valueToId: Map<string, string>; valueToIds?: Map<string, Set<string>> }>;
 
 const snapshotKeyForValue = (value: unknown): string => JSON.stringify(value);
 
-const captureExclusiveSnapshot = (
+const captureExclusiveSnapshotInternal = (
   db: SQLiteDatabase,
   schema: SchemaSnapshot,
   typeNames: Iterable<string>,
+  trackAllIds: boolean,
 ): ExclusiveSnapshot => {
   const out: ExclusiveSnapshot = [];
   const seenCheckKeys = new Set<string>();
@@ -13623,6 +13624,15 @@ const captureExclusiveSnapshot = (
       if (seenCheckKeys.has(checkKey)) continue;
       seenCheckKeys.add(checkKey);
       const valueToId = new Map<string, string>();
+      const valueToIds = trackAllIds ? new Map<string, Set<string>>() : undefined;
+      const record = (key: string, id: string): void => {
+        valueToId.set(key, id);
+        if (valueToIds) {
+          const set = valueToIds.get(key) ?? new Set<string>();
+          set.add(id);
+          valueToIds.set(key, set);
+        }
+      };
       if (check.multiProp) {
         // Multi scalar properties store their set as a JSON array in the data
         // table's column; expand each element to (value → owner id).
@@ -13646,7 +13656,7 @@ const captureExclusiveSnapshot = (
             } else {
               elements = [row.v];
             }
-            for (const el of elements) valueToId.set(snapshotKeyForValue(el), row.id);
+            for (const el of elements) record(snapshotKeyForValue(el), row.id);
           }
         }
       } else {
@@ -13659,15 +13669,46 @@ const captureExclusiveSnapshot = (
             if (typeof row.id !== "string") continue;
             const vals = check.columns.map((c) => (check.lower && typeof row[c] === "string" ? (row[c] as string).toLowerCase() : row[c]));
             if (vals.some((v) => v === null || v === undefined)) continue;
-            valueToId.set(snapshotKeyForValue(vals), row.id);
+            record(snapshotKeyForValue(vals), row.id);
           }
         }
       }
-      out.push({ property: check.fields.join(","), valueToId });
+      // Single-property constraints report the property name; multi-field
+      // (type-level tuple) constraints report the SHORT name of the type that
+      // declares the constraint (EdgeQL: "Person2a violates exclusivity
+      // constraint"). Find the topmost ancestor carrying the same tuple
+      // constraint so an inherited constraint reports the declaring type.
+      let property = check.fields.join(",");
+      if (check.fields.length > 1) {
+        const wanted = [...check.fields].sort().join(",");
+        const declaresTuple = (t: TypeDef): boolean =>
+          (t.typeConstraints ?? []).some((tc) => {
+            if (!constraintIsExclusiveLike(tc)) return false;
+            const refs = (tc.fieldRefs.length > 0
+              ? tc.fieldRefs
+              : [...(tc.exprText ?? "").matchAll(/\.([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]));
+            return [...new Set(refs)].sort().join(",") === wanted;
+          });
+        let owner: TypeDef | undefined = declaresTuple(typeDef) ? typeDef : undefined;
+        for (const anc of typeAncestorsOf(schema, typeDef)) {
+          if (declaresTuple(anc)) owner = anc;
+        }
+        if (owner) {
+          const qn = qualifiedTypeName(owner);
+          property = qn.includes("::") ? qn.split("::").pop()! : qn;
+        }
+      }
+      out.push({ property, valueToId, valueToIds });
     }
   }
   return out;
 };
+
+const captureExclusiveSnapshot = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  typeNames: Iterable<string>,
+): ExclusiveSnapshot => captureExclusiveSnapshotInternal(db, schema, typeNames, false);
 
 // Re-capture the same exclusive values and throw if any value is now held by a
 // different row than it was at chain start (a reserved value was re-used).
@@ -13678,22 +13719,55 @@ const validateExclusiveSnapshot = (
   before: ExclusiveSnapshot,
   pos: { line: number; column: number },
 ): void => {
-  const after = captureExclusiveSnapshot(db, schema, typeNames);
-  const afterByProp = new Map(after.map((e) => [`${e.property}`, e.valueToId] as const));
-  // Index `before` by property too; multiple checks can share a property name
-  // only via tuple constraints — disambiguate by also matching the value set.
-  for (const beforeEntry of before) {
-    const afterMap = afterByProp.get(beforeEntry.property);
-    if (!afterMap) continue;
-    for (const [valueKey, beforeId] of beforeEntry.valueToId) {
-      const afterId = afterMap.get(valueKey);
-      if (afterId !== undefined && afterId !== beforeId) {
-        // This exclusive value is now held by a row that did not hold it at
-        // snapshot start: a sibling statement re-used a reserved value.
-        throw new AppError("E_VALIDATION", `${beforeEntry.property} violates exclusivity constraint`, pos.line, pos.column);
+  const after = captureExclusiveSnapshotMulti(db, schema, typeNames);
+  // Multiple snapshot entries can share a property label (an inherited
+  // type-level constraint captured once per concrete type). Merge by property
+  // so the value→ids sets are unioned rather than overwritten.
+  const beforeByProp = new Map<string, Map<string, string>>();
+  for (const e of before) {
+    const m = beforeByProp.get(e.property) ?? new Map<string, string>();
+    for (const [k, v] of e.valueToId) m.set(k, v);
+    beforeByProp.set(e.property, m);
+  }
+  const afterByProp = new Map<string, Map<string, Set<string>>>();
+  for (const e of after) {
+    const m = afterByProp.get(e.property) ?? new Map<string, Set<string>>();
+    for (const [k, ids] of e.valueToIds) {
+      const set = m.get(k) ?? new Set<string>();
+      for (const id of ids) set.add(id);
+      m.set(k, set);
+    }
+    afterByProp.set(e.property, m);
+  }
+  for (const [property, afterMap] of afterByProp) {
+    const beforeMap = beforeByProp.get(property);
+    for (const [valueKey, afterIds] of afterMap) {
+      // (a) An exclusive value now held by more than one row — two siblings
+      // collided on the same (possibly new) value (07a/08a tuple constraints
+      // that have no materialised DB index to catch the clash directly).
+      if (afterIds.size > 1) {
+        throw new AppError("E_VALIDATION", `${property} violates exclusivity constraint`, pos.line, pos.column);
+      }
+      // (b) A value occupied at snapshot start now held by a DIFFERENT row: a
+      // sibling freed a reserved value and another re-used it.
+      const beforeId = beforeMap?.get(valueKey);
+      const afterId = [...afterIds][0];
+      if (beforeId !== undefined && afterId !== undefined && afterId !== beforeId) {
+        throw new AppError("E_VALIDATION", `${property} violates exclusivity constraint`, pos.line, pos.column);
       }
     }
   }
+};
+
+// Same as captureExclusiveSnapshot but keeps every owner id per value so the
+// end-of-chain validator can detect a value held by two distinct rows.
+const captureExclusiveSnapshotMulti = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  typeNames: Iterable<string>,
+): Array<{ property: string; valueToIds: Map<string, Set<string>> }> => {
+  const base = captureExclusiveSnapshotInternal(db, schema, typeNames, true);
+  return base.map((e) => ({ property: e.property, valueToIds: e.valueToIds! }));
 };
 
 // Collect every type name referenced by a DML chain AST (subject + WITH-bound
