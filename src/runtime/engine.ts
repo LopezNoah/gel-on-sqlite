@@ -7442,6 +7442,121 @@ const preExecuteDmlBindings = (
     return rewriteEnvRefsInNode(expr, env) as FreeObjectExpr;
   };
 
+  // For a plain SELECT whose body references a DML-bound singleton
+  // (`WITH I := (INSERT …) SELECT T FILTER T.num > I.l2`), the binding's value
+  // can't be threaded as a WITH subquery into the filter — the SQL compiler
+  // mis-resolves `I.l2` against the outer extent. Rewrite those references to
+  // field accesses over the inserted object's by-id select and drop the
+  // (now-unused) DML bindings from the WITH so the SELECT lowers cleanly.
+  if (ast.kind === "select" || ast.kind === "select_expr") {
+    // Only bindings resolved into `env` (a whole-statement DML binding, e.g.
+    // `I := (INSERT …)`) can be rewritten to literals here. DML nested inside a
+    // tuple/set binding (`noobs := {((insert …), "bar")}`) is kept as a
+    // rewritten subquery binding by the loop above and must NOT be dropped.
+    const dmlBoundNames = new Set(
+      withBindings
+        .filter((b) => bindingValueContainsMutation(b.value))
+        .map((b) => b.name)
+        .filter((name) => {
+          const bound = env.get(name);
+          return bound !== undefined && bound.typeName !== "";
+        }),
+    );
+    if (dmlBoundNames.size > 0) {
+      // Read a scalar property off a DML-bound singleton (`I.l2`) from its
+      // table so the SELECT body can compare against the concrete inserted
+      // value. EdgeQL materializes the WITH binding, so the singleton's value
+      // is fixed for the whole statement — emitting a literal is faithful.
+      const boundFieldScalar = (root: unknown, field: string): { ok: boolean; value: ScalarValue | null } | undefined => {
+        if (typeof root !== "string") return undefined;
+        const bound = env.get(root);
+        if (!bound || bound.typeName === "" || bound.ids.length !== 1) return undefined;
+        try {
+          const rows = db.prepare(
+            `SELECT ${quoteIdent(field)} AS v FROM ${quoteIdent(tableNameForType(bound.typeName))} WHERE ${quoteIdent("id")} = ?`,
+          ).all(bound.ids[0]) as Array<{ v?: unknown }>;
+          if (rows.length !== 1) return undefined;
+          const v = rows[0].v;
+          if (v === null || v === undefined) return { ok: true, value: null };
+          return { ok: true, value: v as ScalarValue };
+        } catch {
+          return undefined;
+        }
+      };
+      // Resolve a node that references a DML-bound singleton's scalar field
+      // (`field_ref{root,field}` or `path` head). Returns the captured scalar
+      // (or null) when it resolves, otherwise undefined.
+      const resolveBoundRef = (nn: Record<string, unknown> & { kind?: string }): { value: ScalarValue | null } | undefined => {
+        if (nn.kind === "field_ref" && typeof nn.field === "string" && dmlBoundNames.has(nn.root as string)) {
+          const r = boundFieldScalar(nn.root, nn.field as string);
+          if (r) return { value: r.value };
+        }
+        if (nn.kind === "path" && dmlBoundNames.has(nn.head as string)) {
+          const steps = (nn.steps as Array<{ kind?: string; name?: string }> | undefined) ?? [];
+          const ptrSteps = steps.filter((s) => s.kind === "ptr" && typeof s.name === "string");
+          const field = ptrSteps.length === 1 ? ptrSteps[0].name : (typeof nn.tail === "string" ? nn.tail : undefined);
+          if (field) {
+            const r = boundFieldScalar(nn.head, field as string);
+            if (r) return { value: r.value };
+          }
+        }
+        return undefined;
+      };
+      // `inExpr` distinguishes general expression contexts (which want a
+      // `{kind:"literal"}` node) from predicate `value` positions (which store
+      // the raw scalar directly).
+      const rewriteBody = (node: unknown, asExpr = true): unknown => {
+        if (Array.isArray(node)) return node.map((item) => rewriteBody(item, asExpr));
+        if (node === null || typeof node !== "object") return node;
+        const nn = node as Record<string, unknown> & { kind?: string };
+        const resolved = resolveBoundRef(nn);
+        if (resolved) {
+          return asExpr ? { kind: "literal", value: resolved.value } : resolved.value;
+        }
+        // A predicate's `value`/`values` positions store raw scalars, not
+        // expression nodes — rewrite a bound-ref there to the raw scalar.
+        if (nn.kind === "predicate" || nn.kind === "in_predicate") {
+          const out: Record<string, unknown> = {};
+          for (const [k, v] of Object.entries(nn)) {
+            out[k] = (k === "value" || k === "values") ? rewriteBody(v, false) : rewriteBody(v, true);
+          }
+          return out;
+        }
+        const out: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(nn)) out[k] = rewriteBody(v, asExpr);
+        return out;
+      };
+      // Only the scalar-comparison clauses (FILTER / ORDER BY / pagination) hit
+      // the mis-resolution bug, and only those need the captured literal. Shape
+      // and body expressions keep referencing the (retained) WITH binding so
+      // their object cardinality / projection stay intact.
+      const sel = ast as unknown as Record<string, unknown>;
+      const rewrittenFields: Record<string, unknown> = {};
+      let touched = false;
+      for (const key of ["filter", "orderBy", "limit", "offset"]) {
+        if (sel[key] !== undefined) {
+          const rewritten = rewriteBody(sel[key]);
+          rewrittenFields[key] = rewritten;
+          if (JSON.stringify(rewritten) !== JSON.stringify(sel[key])) touched = true;
+        }
+      }
+      // A select_expr body that references a DML-bound object (`SELECT (select
+      // I)`, `SELECT {I}`) — rewrite those references to the inserted object's
+      // by-id select so the projection keeps its id/shape. Shape computeds are
+      // left to the retained WITH binding (preserving singleton cardinality).
+      if (ast.kind === "select_expr" && sel.expr !== undefined) {
+        const rewrittenExpr = rewriteEnvRefsInNode(sel.expr, env);
+        if (JSON.stringify(rewrittenExpr) !== JSON.stringify(sel.expr)) {
+          rewrittenFields.expr = rewrittenExpr;
+          touched = true;
+        }
+      }
+      if (touched) {
+        return { ...ast, ...rewrittenFields, with: newWith.length > 0 ? newWith : undefined } as Statement;
+      }
+    }
+  }
+
   const out = { ...ast, with: newWith.length > 0 ? newWith : undefined } as Statement;
   if (ast.kind === "select_free") {
     (out as unknown as { entries: Array<{ name: string; expr: FreeObjectExpr }> }).entries =
@@ -8374,7 +8489,7 @@ const expandForInsertStatements = (
     // references (`name := <var> ++ "x"`) still need the WITH binding.
     const directlySubstitutable = body.kind === "insert" && value !== null && isScalarValue(value);
     const substitutedBody = directlySubstitutable
-      ? substituteTopLevelInsertVarRefs(body, forAst.variable, value)
+      ? substituteTopLevelInsertVarRefs(body as InsertStatement, forAst.variable, value)
       : body;
     const varBinding: WithBinding[] = value !== null && isScalarValue(value)
       ? [{ name: forAst.variable, value: { kind: "literal", value } }]
