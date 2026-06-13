@@ -6509,15 +6509,21 @@ const runDmlChain = (
     }
     env.set(binding.name, resolveObjectSet(db, schema, binding.value, env, undefined, context, defaultModule));
     if (binding.value.kind === "subquery_expr") {
+      // Materialize a scalar WITH binding to a single literal so every
+      // reference shares ONE value. This matters in two cases:
+      //  - the binding reads an executed DML binding (`y := x.name ++ …`), and
+      //  - the binding is purely volatile (`x := <str>random()`): without
+      //    capture, the compiler inlines `random()` at each use site and the
+      //    references diverge (`x ++ a` vs `x ++ b` get different randoms).
+      // Evaluate against the env-rewritten expression so DML refs resolve;
+      // capture only when it collapses to a single literal.
       const rewrittenExpr = rewriteEnvRefsInNode(binding.value.expr, env) as FreeObjectExpr;
-      if (JSON.stringify(rewrittenExpr) !== JSON.stringify(binding.value.expr)) {
-        const evaluated = tryEvaluateScalarBinding(rewrittenExpr);
-        if (evaluated !== undefined) {
-          const replacement = { name: binding.name, value: evaluated } as WithBinding;
-          passthroughWith.push(replacement);
-          replacedBindings.set(binding.name, replacement);
-          continue;
-        }
+      const evaluated = tryEvaluateScalarBinding(rewrittenExpr);
+      if (evaluated !== undefined && evaluated.kind === "literal") {
+        const replacement = { name: binding.name, value: evaluated } as WithBinding;
+        passthroughWith.push(replacement);
+        replacedBindings.set(binding.name, replacement);
+        continue;
       }
     }
     passthroughWith.push(binding);
@@ -7283,8 +7289,26 @@ const expandForInsertStatements = (
 ): InsertStatement[] | undefined => {
   const body = forAst.body;
   // FOR-level WITH bindings (other than the loop variable) flow onto each leaf.
-  const forStatementWith = ((forAst as { with?: WithBinding[] }).with ?? [])
+  // A scalar binding is materialized to a single literal up front so a volatile
+  // expression (`WITH x := <str>random() FOR y IN … (… tag2 := x)`) captures
+  // ONE value shared by every iteration — otherwise each cloned leaf re-inlines
+  // `random()` and the per-row values diverge. Evaluate each in the scope of
+  // the bindings before it (plus accumulated enclosing-loop literals).
+  const rawForWith = ((forAst as { with?: WithBinding[] }).with ?? [])
     .filter((binding) => binding.name !== forAst.variable);
+  const forStatementWith: WithBinding[] = [];
+  for (const binding of rawForWith) {
+    if (binding.value.kind === "subquery_expr" && !bindingValueContainsMutation(binding.value)) {
+      const evaluated = evaluateScalarBindingViaSQL(
+        db, schema, binding.value.expr, [...accumWith, ...forStatementWith], context, forAst.pos,
+      );
+      if (evaluated !== undefined && evaluated.kind === "literal") {
+        forStatementWith.push({ name: binding.name, value: evaluated } as WithBinding);
+        continue;
+      }
+    }
+    forStatementWith.push(binding);
+  }
 
   // Object-set iterator: materialise the rows (augmented with every field the
   // body reads off the loop variable) and bind those fields per element.
