@@ -3035,7 +3035,44 @@ const arrayUnpackSourceIsMultiSet = (set: Set): boolean => {
     if (se.where || se.limit || se.offset || (se.orderBy && se.orderBy.length > 0)) return false;
     cur = se.result;
   }
-  return cur.expr.kind === "operator_call" && (cur.expr as OperatorCall).operator === "union";
+  if (cur.expr.kind === "operator_call" && (cur.expr as OperatorCall).operator === "union") return true;
+  // An array CONSTRUCTOR whose elements are multi/empty sets is itself a SET of
+  // arrays (cross-product of element sets) — the shape a `variadic` UDF param
+  // takes when packed from multi/empty positional args: `foo({1,2,3}, 10)`
+  // packs `[{1,2,3}, 10]`, which is the array set `{[1,10],[2,10],[3,10]}`; an
+  // empty element (`foo(1, <int64>{})` → `[1, {}]`) makes the whole set empty
+  // (EdgeQL array elements are required). Treat it as multi so the unpack/agg
+  // distributes per array (and yields zero rows when empty), instead of the
+  // generic path that would `json_group_array`-collapse the multi element.
+  if (cur.expr.kind === "array") {
+    return (cur.expr as ArrayExpr).elements.some((el) => arrayElementIsMultiOrEmpty(el));
+  }
+  return false;
+};
+
+// An array element that is a multi-element set (union) or a provably-empty set
+// (empty set_literal, or a cast of one). Used to decide that an array
+// constructor produces a SET of arrays rather than a single array value.
+const arrayElementIsMultiOrEmpty = (set: Set): boolean => {
+  let cur = set;
+  while (cur.expr.kind === "select_expr") {
+    const se = cur.expr as SelectExpr;
+    if (se.where || se.limit || se.offset || (se.orderBy && se.orderBy.length > 0)) return false;
+    cur = se.result;
+  }
+  if (isEmptySetBranch(cur)) return true;
+  while (cur.expr.kind === "type_cast") cur = (cur.expr as TypeCast).expr;
+  if (cur.expr.kind === "operator_call" && (cur.expr as OperatorCall).operator === "union") {
+    // A union that is an ENCLOSING FOR-loop iterator co-iterates with the outer
+    // scope (it is bound to a single element per outer row), so it is NOT an
+    // independent multi-element argument: `for x in {1,2,3} union foo(x)` packs
+    // `[x]` — one array per outer row, not a set of arrays. Skip the multi-set
+    // treatment so the generic array_unpack path co-iterates with the FOR.
+    const ns = cur.pathId?.namespace;
+    if (ns && ns.some((tag) => tag.startsWith("for:"))) return false;
+    return true;
+  }
+  return false;
 };
 
 // Whether a cast target names a collection type (array/tuple). Collection
@@ -3051,6 +3088,40 @@ const castTargetIsCollection = (toType: TypeRef): boolean => {
   const modIdx = nameHint.indexOf("::");
   const bare = modIdx >= 0 && (ltIdx < 0 || modIdx < ltIdx) ? nameHint.slice(modIdx + 2) : nameHint;
   return bare.startsWith("array<") || bare.startsWith("tuple<");
+};
+
+// Does an expression tree reach a multi-element scalar set-union (the IR shape
+// an inlined multi-element argument takes — `{1,2,3}`)? Descends through the
+// arithmetic / coalesce / cast / conditional connectives that distribute
+// element-wise, but stops at select_expr fences (a fenced `(SELECT …)` is a
+// SET OF expression, evaluated as a whole) and at type_root union branches
+// (object unions keep their dedicated polymorphic handling). Used to decide
+// whether a coalesce LHS should be lowered element-wise (per branch) instead
+// of via the set-level collapse.
+const reachesScalarUnion = (set: Set): boolean => {
+  const e = set.expr;
+  if (e.kind === "operator_call") {
+    const op = e as OperatorCall;
+    if (op.operator === "union") {
+      const args = orderedCallArgs(op.args);
+      return args.length > 0 && args.every((a) => a.expr.expr.kind !== "type_root");
+    }
+    return orderedCallArgs(op.args).some((a) => reachesScalarUnion(a.expr));
+  }
+  if (e.kind === "function_call") {
+    const body = (e as FunctionCall).body;
+    if (body && reachesScalarUnion(body)) return true;
+    return orderedCallArgs((e as FunctionCall).args).some((a) => reachesScalarUnion(a.expr));
+  }
+  if (e.kind === "coalesce_expr") {
+    return reachesScalarUnion((e as CoalesceExpr).left) || reachesScalarUnion((e as CoalesceExpr).right);
+  }
+  if (e.kind === "type_cast") return reachesScalarUnion((e as TypeCast).expr);
+  if (e.kind === "if_else_expr") {
+    const ife = e as IfElseExpr;
+    return reachesScalarUnion(ife.condition) || reachesScalarUnion(ife.ifExpr) || reachesScalarUnion(ife.elseExpr);
+  }
+  return false;
 };
 
 const compileScalarSelectSQL = (
@@ -3391,8 +3462,31 @@ const compileScalarSelectSQLInner = (
     // Outer FILTERs that don't reference the iterator binding are
     // independent of the iteration — EdgeQL gives them existential
     // semantics, but the body's per-row WHERE would over-restrict. Drop
-    // those; only keep wheres that reference the iterator.
+    // those from the per-row WHERE; only keep wheres that reference the
+    // iterator. The independent ones are applied below as a whole-result
+    // existential gate.
     const propagatedWheres = outerWheres.filter((w) => setRefersToIter(w));
+    // A required-param emptiness guard inlined around a set-returning FOR body
+    // (`foo(x: int64) -> set of int64 using (for y in {x,x+1,x+2} union y)`
+    // called with `<int64>{}`) arrives as an independent `EXISTS <x>` where:
+    // when x is empty the WHOLE FOR result must be suppressed (empty set), not
+    // one NULL row per `x+k` iterator branch. We only gate on EXISTS-shaped
+    // independent wheres (the guard's exact shape) — a general independent
+    // FILTER over an unrelated set (`… FILTER Card.element = 'Air'`) carries
+    // existential semantics handled elsewhere and must NOT restrict the result
+    // here (test_edgeql_for_filter_02/03).
+    const independentWheres = outerWheres.filter((w) =>
+      !setRefersToIter(w) && w.expr.kind === "exists_expr");
+    const wrapIndependentGate = (innerSql: string): string => {
+      if (independentWheres.length === 0) return innerSql;
+      const gateParts: string[] = [];
+      for (const w of independentWheres) {
+        const g = compileValueSetSQL(w, "g_indep", params, target, options);
+        if (!g) return innerSql; // can't express the gate — leave ungated
+        gateParts.push(`(${g}) IN (1, 'true')`);
+      }
+      return `SELECT ${quoteIdent("value")} FROM (${innerSql}) WHERE ${gateParts.join(" AND ")}`;
+    };
     // We don't know yet whether body uses the iterator — that depends on
     // its IR shape. Build body and iter SQLs separately into a scratch
     // params array so we can stitch them in the right order (iter first
@@ -3402,7 +3496,7 @@ const compileScalarSelectSQLInner = (
     if (!bodySql) return null;
     if (bodyUsesIter) {
       params.push(...bodyParams);
-      return bodySql;
+      return wrapIndependentGate(bodySql);
     }
     // Body is independent of the iterator: cross-join with the iterator
     // when its SQL is available, otherwise fall back to body alone (some
@@ -3412,11 +3506,11 @@ const compileScalarSelectSQLInner = (
     const iterSql = compileScalarSelectSQL(forExpr.iterator, iterParams, target, options, []);
     if (!iterSql) {
       params.push(...bodyParams);
-      return bodySql;
+      return wrapIndependentGate(bodySql);
     }
     // SQL ordering puts iter first, then body — params must match.
     params.push(...iterParams, ...bodyParams);
-    return `SELECT ${quoteIdent("body")}.${quoteIdent("value")} AS ${quoteIdent("value")} FROM (${iterSql}) ${quoteIdent("iter")} CROSS JOIN (${bodySql}) ${quoteIdent("body")}`;
+    return wrapIndependentGate(`SELECT ${quoteIdent("body")}.${quoteIdent("value")} AS ${quoteIdent("value")} FROM (${iterSql}) ${quoteIdent("iter")} CROSS JOIN (${bodySql}) ${quoteIdent("body")}`);
   }
   // A user-defined function call whose AST→IR pass attached a substituted
   // body inlines at the statement level: lower the body as if it were
@@ -4453,6 +4547,15 @@ const compileScalarSelectSQLInner = (
     if (arr.elements.length === 0) {
       return `SELECT json_array() AS ${quoteIdent("value")}`;
     }
+    // When elements reach union-bound sets, a flat CROSS JOIN would always
+    // cross-product them — but elements that reference the SAME union (e.g. a
+    // FOR iterator inlined as a `variadic` arg: `foo(x, x*10, x*100)`) must
+    // co-iterate, not cross-product. Defer to the union-distribution block
+    // below, which re-emits the array per branch combo with shared unions
+    // pinned to the same branch.
+    if (arr.elements.some((el) => reachesScalarUnion(el))) {
+      // fall through to the distribution block
+    } else {
     const arrSources: string[] = [];
     const arrValues: string[] = [];
     for (let i = 0; i < arr.elements.length; i += 1) {
@@ -4466,6 +4569,7 @@ const compileScalarSelectSQLInner = (
       arrValues.push(wrapInJson ? `json(${valueRef})` : valueRef);
     }
     return `SELECT json_array(${arrValues.join(", ")}) AS ${quoteIdent("value")} FROM ${arrSources.join(" CROSS JOIN ")}`;
+    }
   }
   // The set-level coalesce / ?= / ?!= shortcuts carry outer FILTER clauses
   // themselves (applied per LHS row, and against an all-NULL LHS binding in
@@ -4516,9 +4620,24 @@ const compileScalarSelectSQLInner = (
         }
       }
     }
-    const setLevel = tryCompileSetLevelCoalesceSQL(expr as CoalesceExpr, params, target, options, outerWheres);
-    if (setLevel) {
-      return setLevel;
+    // When the LHS is itself a multi-element set-union (e.g. an OPTIONAL UDF
+    // param inlined with `{1,2,3}` — `x ?? 5`), set-level coalesce would
+    // collapse the whole set into one `json_group_array` value. EdgeQL applies
+    // the function element-wise, so defer to the union-distribution block
+    // below (which re-emits `i ?? 5` per branch). A union LHS arising this way
+    // is recognised structurally: a `union` operator after peeling select_expr
+    // wrappers, whose branches are scalar values (not object/type roots — those
+    // keep their dedicated union-prefix handling above).
+    {
+      let lhsCursor: Set = (expr as CoalesceExpr).left;
+      while (lhsCursor.expr.kind === "select_expr") lhsCursor = (lhsCursor.expr as SelectExpr).result;
+      const lhsIsScalarUnion = reachesScalarUnion(lhsCursor);
+      if (!lhsIsScalarUnion) {
+        const setLevel = tryCompileSetLevelCoalesceSQL(expr as CoalesceExpr, params, target, options, outerWheres);
+        if (setLevel) {
+          return setLevel;
+        }
+      }
     }
   }
   if (expr.kind === "operator_call") {
@@ -4649,16 +4768,30 @@ const compileScalarSelectSQLInner = (
     }
   }
 
-  // Distribute a binary operator_call over union-bound sets reachable from
-  // its args. `2 * (1 UNION 2)` and `(SELECT 2) * (1 UNION 2)` should yield
-  // a set of products (`{2, 4}`), not a scalar of `2 * json_group_array(...)`.
-  // We re-emit the operator_call once per branch (Cartesian over distinct
+  // Distribute a binary operator_call (or a coalesce_expr) over union-bound
+  // sets reachable from its args. `2 * (1 UNION 2)` and `(SELECT 2) * (1 UNION 2)`
+  // should yield a set of products (`{2, 4}`), not a scalar of
+  // `2 * json_group_array(...)`.
+  // We re-emit the expression once per branch (Cartesian over distinct
   // union sources; co-iteration when the *same* bound set appears multiple
   // times — `WITH x := {1,2,3} SELECT x * x + x` produces three values, not
   // 27, because all three `x` references must use the same branch per row).
-  if (expr.kind === "operator_call" && (expr as OperatorCall).operator !== "union") {
+  // The coalesce case matters for OPTIONAL UDF params inlined with a
+  // multi-element argument: `foo(x: optional int64) using (x ?? 5)` called
+  // with `{1,2,3}` binds `x` to the union `{1,2,3}`; distributing per branch
+  // gives `{1??5, 2??5, 3??5}` = `{1,2,3}` (element-wise), not the set-level
+  // `[1,2,3]` collapse. An empty argument is bound to an empty set_literal
+  // (not a union), so it skips this block and the set-level path supplies the
+  // `5` fallback — exactly the optional-param semantics.
+  if ((expr.kind === "operator_call" && (expr as OperatorCall).operator !== "union")
+    || expr.kind === "coalesce_expr"
+    || expr.kind === "array") {
     const opCall = expr as OperatorCall;
-    const args = orderedCallArgs(opCall.args);
+    const args = expr.kind === "coalesce_expr"
+      ? [{ expr: (expr as CoalesceExpr).left }, { expr: (expr as CoalesceExpr).right }]
+      : expr.kind === "array"
+      ? (expr as ArrayExpr).elements.map((e) => ({ expr: e }))
+      : orderedCallArgs(opCall.args);
     const unwrapUnionBranches = (s: Set): Set[] | null => {
       if (s.expr.kind === "operator_call" && (s.expr as OperatorCall).operator === "union") {
         const branches = orderedCallArgs((s.expr as OperatorCall).args).map((arg) => arg.expr);
@@ -4700,6 +4833,8 @@ const compileScalarSelectSQLInner = (
         collectReachableUnions(co.right);
       } else if (e.kind === "exists_expr") {
         collectReachableUnions((e as ExistsExpr).expr);
+      } else if (e.kind === "array") {
+        for (const el of (e as ArrayExpr).elements) collectReachableUnions(el);
       }
     };
     for (const arg of args) {
@@ -4763,6 +4898,16 @@ const compileScalarSelectSQLInner = (
         const inner = substituteSetByIdentity((e as ExistsExpr).expr, source, replacement);
         return inner === (e as ExistsExpr).expr ? s : { ...s, expr: { ...(e as ExistsExpr), expr: inner } };
       }
+      if (e.kind === "array") {
+        const arrE = e as ArrayExpr;
+        let changed = false;
+        const newElements = arrE.elements.map((el) => {
+          const sub = substituteSetByIdentity(el, source, replacement);
+          if (sub !== el) changed = true;
+          return sub;
+        });
+        return changed ? { ...s, expr: { ...arrE, elements: newElements } } : s;
+      }
       return s;
     };
     if (reachableUnions.length > 0) {
@@ -4786,26 +4931,15 @@ const compileScalarSelectSQLInner = (
       let failed = false;
       for (const combo of combos) {
         // Substitute every reachable union with its chosen branch throughout
-        // the operator_call's args. Co-iteration falls out for free: if two
-        // sub-expressions reference the same union (same identity), they
-        // both get rewritten to the same branch in this combo.
-        let variantCall: OperatorCall = opCall;
+        // the whole expression (operator_call args OR coalesce left/right).
+        // Co-iteration falls out for free: if two sub-expressions reference
+        // the same union (same identity), they both get rewritten to the same
+        // branch in this combo.
+        let variantSet: Set = sourceSet;
         reachableUnions.forEach((source, idx) => {
           const replacement = branchesPerUnion[idx][combo[idx]];
-          const newArgs: Record<string, CallArg> = {};
-          let changed = false;
-          for (const [k, arg] of Object.entries(variantCall.args)) {
-            const newArgExpr = substituteSetByIdentity(arg.expr, source, replacement);
-            if (newArgExpr !== arg.expr) {
-              newArgs[k] = { ...arg, expr: newArgExpr };
-              changed = true;
-            } else {
-              newArgs[k] = arg;
-            }
-          }
-          if (changed) variantCall = { ...variantCall, args: newArgs };
+          variantSet = substituteSetByIdentity(variantSet, source, replacement);
         });
-        const variantSet: Set = { ...sourceSet, expr: variantCall };
         const partSql = compileScalarSelectSQL(variantSet, params, target, options, outerWheres);
         if (!partSql) {
           failed = true;
@@ -4814,7 +4948,12 @@ const compileScalarSelectSQLInner = (
         parts.push(partSql);
       }
       if (!failed && parts.length > 0) {
-        return parts.join(" UNION ALL ");
+        // A per-branch part that is itself a CTE (`WITH … SELECT …`, e.g. a
+        // set-level coalesce branch) can't be a bare UNION ALL operand —
+        // SQLite rejects `… UNION ALL WITH …`. Wrap those in a subquery.
+        const wrapped = parts.map((p) =>
+          /^\s*WITH\b/i.test(p) ? `SELECT ${quoteIdent("value")} FROM (${p})` : p);
+        return wrapped.join(" UNION ALL ");
       }
       params.length = innerCheckpoint;
     }
