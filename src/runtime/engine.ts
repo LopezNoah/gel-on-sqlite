@@ -12135,7 +12135,15 @@ const runWriteWithAccessPolicies = (
       }
 
       db.prepare(dmlUsesSavepoint ? "RELEASE gel_dml" : "COMMIT").run();
-      return { changes: writeResult.changes, rows: insertedId !== undefined ? [{ id: insertedId }] : undefined };
+      // Expose the same type-metadata columns a SELECT/DELETE returning row
+      // carries (`__tid__`, `__tname__`, `__source_type`) so a bare INSERT's
+      // free shape behaves like any object set — clients/tooling that inspect
+      // the object's type (test_edgeql_insert_returning_02) see them, while
+      // result comparison ignores extra keys.
+      const insertMeta = ast.kind === "insert"
+        ? { __tid__: insertedId, __tname__: qualifiedTypeName(subjectType), __source_type: qualifiedTypeName(subjectType) }
+        : {};
+      return { changes: writeResult.changes, rows: insertedId !== undefined ? [{ id: insertedId, ...insertMeta }] : undefined };
     }
 
     if (ir.kind === "update") {
