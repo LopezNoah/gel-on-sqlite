@@ -49,7 +49,28 @@ export const PENDING_INSERT_SQL_EXPR_VALUE = "__gel_pending_insert_sql_expr__";
 
 export interface DmlCompileContext {
   globals?: Record<string, ScalarValue>;
+  // Set after `CONFIGURE SESSION SET allow_user_specified_id := true`: lets an
+  // INSERT assign an explicit `id` rather than rejecting it as server-generated
+  // (test_edgeql_insert_explicit_id_*).
+  allowUserSpecifiedId?: boolean;
 }
+
+// Resolves the explicit `id` value an INSERT supplies under
+// `allow_user_specified_id`. The parser already folds `<uuid>'…'` to a bare
+// string and `<uuid>to_json('"…"')` to a JSON-quoted string; strip the JSON
+// quotes so both forms store (and round-trip) as the same uuid text. Returns
+// undefined for an empty value (`<optional uuid>{}`), which the caller turns
+// into the required-property error (test_edgeql_insert_explicit_id_06).
+const resolveExplicitInsertId = (value: unknown): string | undefined => {
+  if (typeof value === "string") {
+    if (value.length >= 2 && value.startsWith("\"") && value.endsWith("\"")) {
+      const parsed = tryResult(() => JSON.parse(value) as unknown, { captureAll: true });
+      if (parsed.ok && typeof parsed.value === "string") return parsed.value;
+    }
+    return value;
+  }
+  return undefined;
+};
 
 type MutationValueKind = "insert" | "update" | "delete";
 
@@ -936,7 +957,23 @@ export const compileDmlToIR = (
 
     for (const [field, value] of Object.entries(statement.values)) {
       if (field === "id") {
-        fail("'id' is server-generated and cannot be assigned");
+        // Without `CONFIGURE SESSION SET allow_user_specified_id := true`, `id`
+        // is server-generated and assigning it is an error
+        // (test_edgeql_insert_explicit_id_00).
+        if (!context.allowUserSpecifiedId) {
+          fail("'id' is server-generated and cannot be assigned");
+        }
+        // With the config on, the explicit id is written verbatim. The cast
+        // `<uuid>'…'` / `<uuid>to_json('"…"')` is already folded by the parser
+        // to a (possibly JSON-quoted) string; `<optional uuid>{}` stays an
+        // expr wrapping an empty set, which fails the required-property check
+        // (test_edgeql_insert_explicit_id_06).
+        const explicitId = requireDefined(
+          resolveExplicitInsertId(value),
+          `missing value for required property 'id' of object type '${qualifiedTypeName(typeDef)}'`,
+        );
+        scalarValues.id = explicitId;
+        continue;
       }
 
       if (knownFields.has(field)) {

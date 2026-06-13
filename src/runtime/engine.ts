@@ -5,7 +5,7 @@ import { AppError, asAppError, isQueryFailure, tryResult } from "../errors.js";
 import { decorateErrorWithUnsupportedTag } from "../diagnostics/unsupported.js";
 import { parseEdgeQL, parseEdgeQLScript, type ParseEdgeQLOptions } from "../edgeql/parser.js";
 import { offsetToLineCol, tokenize, type Token } from "../edgeql/tokenizer.js";
-import type { BacklinkExpr, ClauseChain, ComputedExpr, DDLStatement, DeleteStatement, FilterExpr, FilterValue, ForStatement, FreeObjectExpr, FunctionCallArgExpr, FunctionCallExpr, InsertStatement, InsertValue, OrderExpr, OrderExprChain, PathStep, SelectExprStatement, SelectStatement, ShapeElement, Statement, TypeExpr, UpdateStatement, WithBinding, WithBindingValue } from "../edgeql/ast.js";
+import type { BacklinkExpr, ClauseChain, ComputedExpr, ConfigureStatement, DDLStatement, DeleteStatement, FilterExpr, FilterValue, ForStatement, FreeObjectExpr, FunctionCallArgExpr, FunctionCallExpr, InsertStatement, InsertValue, OrderExpr, OrderExprChain, PathStep, SelectExprStatement, SelectStatement, ShapeElement, Statement, TypeExpr, UpdateStatement, WithBinding, WithBindingValue } from "../edgeql/ast.js";
 import type { RuntimeDatabaseAdapter } from "./adapter.js";
 import type { SchemaSnapshot } from "../schema/schema.js";
 import type { GelIRSQLArtifact as SQLArtifact } from "../sql/gel_ir_compiler.js";
@@ -188,6 +188,42 @@ const dedupeRowsById = (rows: unknown[]): unknown[] => {
 };
 
 const runtimeExprAliases = new WeakMap<SchemaSnapshot, Map<string, string>>();
+
+// Per-connection (schema-snapshot-scoped) session configuration set via
+// `CONFIGURE SESSION SET …`. The harness/client reuses one SchemaSnapshot per
+// connection across separate script()/query() calls, so keying the session
+// state on the snapshot makes `CONFIGURE SESSION SET allow_user_specified_id
+// := true` persist for the INSERTs that follow it on the same connection.
+// The only knob sqlite-ts honors is `allow_user_specified_id`, which lets an
+// INSERT assign an explicit `id` (test_edgeql_insert_explicit_id_*).
+interface SessionConfig {
+  allowUserSpecifiedId?: boolean;
+}
+const sessionConfigBySchema = new WeakMap<SchemaSnapshot, SessionConfig>();
+
+const allowUserSpecifiedId = (schema: SchemaSnapshot): boolean =>
+  sessionConfigBySchema.get(schema)?.allowUserSpecifiedId === true;
+
+// Applies a `CONFIGURE … SET/RESET …` statement to the connection's session
+// config. Only `allow_user_specified_id` is meaningful; everything else stays
+// a no-op (sqlite-ts has no analogue for the other config knobs).
+const applySessionConfigure = (schema: SchemaSnapshot, ast: ConfigureStatement): void => {
+  if (ast.target !== "allow_user_specified_id") return;
+  let config = sessionConfigBySchema.get(schema);
+  if (!config) {
+    config = {};
+    sessionConfigBySchema.set(schema, config);
+  }
+  if (ast.operation === "reset") {
+    config.allowUserSpecifiedId = false;
+    return;
+  }
+  const value = ast.value;
+  config.allowUserSpecifiedId =
+    value !== undefined && value !== null && (value as { kind?: string }).kind === "literal"
+      ? (value as { value?: unknown }).value === true
+      : false;
+};
 
 // Lists every alias known for a schema — both schema::Alias entries
 // registered via schema.addAlias (typed aliases with shapes) and runtime
@@ -6839,6 +6875,7 @@ const executeQueryWithTraceImpl = (
       // so callers that fire it from `.query()` don't have to pre-filter or
       // catch the compile-time "Statement kind 'configure' requires
       // typeName" raised by the strict typed-mutation pipeline.
+      applySessionConfigure(schema, ast);
       return {
         ast,
         ir: { kind: "select", rows: [] } as unknown as IRStatement,
@@ -6850,7 +6887,7 @@ const executeQueryWithTraceImpl = (
       };
     }
     validateParsedStatement(ast, { schema, module: ast.withModule });
-    preValidateStatementAst(schema, ast);
+    preValidateStatementAst(schema, ast, allowUserSpecifiedId(schema));
     const statementType = statementTypeOf(ast);
     enforceBuiltinPermissions(context, statementType, ast.pos.line, ast.pos.column);
     // Fully-constant subscripts (`select "abc"[1]`, `select [1,2,3][0:9]`)
@@ -6903,7 +6940,7 @@ const executeQueryWithTraceImpl = (
     if (isWithDmlChain(ast)) {
       return executeWithDmlChain(db, schema, ast, context);
     }
-    const compiled = compilerService.compile(schema, ast, { globals: context.globals, target: runtimeTarget });
+    const compiled = compilerService.compile(schema, ast, { globals: context.globals, target: runtimeTarget, allowUserSpecifiedId: allowUserSpecifiedId(schema) });
     const ir = compiled.ir;
     const subjectType = ir.kind === "insert" || ir.kind === "update" || ir.kind === "delete"
       ? typeDefForTable(schema, ir.table)
@@ -7598,15 +7635,17 @@ export const executeQueryUnitWithTrace = (
       }
       if (ast.kind === "configure") {
         // Session/instance/database CONFIGURE statements (e.g. `CONFIGURE
-        // SESSION SET allow_user_specified_id := true`) don't have a SQLite
-        // analogue — sqlite-ts has no equivalent session-config knobs to
-        // mutate. Treat them as no-ops so scripts that use them for parity
-        // with upstream still execute their following DML.
+        // SESSION SET allow_user_specified_id := true`) have no SQLite
+        // analogue. The only knob sqlite-ts honors is allow_user_specified_id
+        // (recorded on the connection's session config so the INSERTs that
+        // follow may assign an explicit `id`); everything else is a no-op so
+        // scripts that use CONFIGURE for upstream parity still run their DML.
+        applySessionConfigure(schema, ast);
         continue;
       }
 
       validateParsedStatement(ast, { schema, module: ast.withModule });
-      preValidateStatementAst(schema, ast);
+      preValidateStatementAst(schema, ast, allowUserSpecifiedId(schema));
       const statementType = statementTypeOf(ast);
       enforceBuiltinPermissions(context, statementType, ast.pos.line, ast.pos.column);
       // `__default__` references resolve against the assigned pointer's
@@ -7645,7 +7684,7 @@ export const executeQueryUnitWithTrace = (
       // `INSERT std::FreeObject;` / `INSERT InsertTest;` — fall through to
       // compilation and let the IR pass raise the right diagnostic instead.)
 
-      const compiled = compilerService.compile(schema, ast, { overlays, globals: context.globals, target: runtimeTarget });
+      const compiled = compilerService.compile(schema, ast, { overlays, globals: context.globals, target: runtimeTarget, allowUserSpecifiedId: allowUserSpecifiedId(schema) });
       const ir = compiled.ir;
       const sqlArtifact = compiled.sql;
       assertTargetSqlCompatibility(sqlArtifact.sql, runtimeTarget);
@@ -11672,7 +11711,11 @@ const runWriteWithAccessPolicies = (
 
       const normalizedEntries = Object.entries(insertValues).filter(([column, value]) => {
         if (column === "id") {
-          return false;
+          // Auto-generated ids never reach ir.values (the SQLite column default
+          // produces them). An `id` entry is therefore only present when the
+          // INSERT supplied an explicit id under allow_user_specified_id — keep
+          // that so it's written instead of generating a fresh uuid.
+          return typeof value === "string" && value.length > 0;
         }
         if (value === PENDING_INLINE_LINK_VALUE || value === PENDING_INSERT_REWRITE_VALUE) {
           return false;
@@ -11760,8 +11803,9 @@ const runWriteWithAccessPolicies = (
 
               db.prepare(dmlUsesSavepoint ? "RELEASE gel_dml" : "COMMIT").run();
               // ELSE <expr> yields the conflicting row; plain UNLESS CONFLICT
-              // yields the empty set.
-              return ast.conflict.else ? { changes: 0, rows: [{ id: existingId }] } : { changes: 0 };
+              // yields the empty set (an empty rows array so the result reads
+              // as `[]`, e.g. test_edgeql_insert_explicit_id_05).
+              return ast.conflict.else ? { changes: 0, rows: [{ id: existingId }] } : { changes: 0, rows: [] };
             }
           }
         }
@@ -11777,7 +11821,22 @@ const runWriteWithAccessPolicies = (
         if (ast.kind === "insert" && ast.conflict && !ast.conflict.else
             && String((writeErr as Error).message ?? writeErr).includes("UNIQUE constraint failed")) {
           db.prepare(dmlUsesSavepoint ? "RELEASE gel_dml" : "COMMIT").run();
-          return { changes: 0 };
+          return { changes: 0, rows: [] };
+        }
+        // An explicit id that duplicates an existing object fails the id
+        // PRIMARY KEY (same table) or the `__gel_global_ids` PRIMARY KEY (a
+        // different type sharing the id space — the AFTER INSERT trigger writes
+        // every new id there). Both surface as a SQLite UNIQUE/PRIMARY KEY
+        // failure on an `id` column; map them to EdgeQL's exclusivity wording
+        // (test_edgeql_insert_explicit_id_02 / _03).
+        const writeErrMessage = String((writeErr as Error).message ?? writeErr);
+        if (/(?:UNIQUE|PRIMARY KEY) constraint failed:.*\.id\b/.test(writeErrMessage)) {
+          throw new AppError(
+            "E_VALIDATION",
+            "id violates exclusivity constraint",
+            ast.pos.line,
+            ast.pos.column,
+          );
         }
         // A SQL-lowered assignment that evaluates to the empty set inserts
         // NULL; the schema's NOT NULL constraint then fires. Surface it with
@@ -12760,6 +12819,8 @@ interface AstPreValidationCtx {
   schema: SchemaSnapshot;
   module: string;
   bindings: Map<string, WithBindingValue>;
+  // Mirrors the session config: when true, an INSERT may assign `id`.
+  allowUserSpecifiedId?: boolean;
 }
 
 function preValidationFail(message: string): never {
@@ -13220,13 +13281,13 @@ function checkFunctionCallSignatures(ctx: AstPreValidationCtx, call: FunctionCal
 
 // ── statement-level static pre-validation ──────────────────────────────────
 
-function preValidateStatementAst(schema: SchemaSnapshot, statement: Statement): void {
+function preValidateStatementAst(schema: SchemaSnapshot, statement: Statement, allowUserSpecifiedId = false): void {
   const module = (statement as { withModule?: string }).withModule ?? "default";
   const bindings = new Map<string, WithBindingValue>();
   for (const binding of (statement as { with?: WithBinding[] }).with ?? []) {
     bindings.set(binding.name, binding.value);
   }
-  const ctx: AstPreValidationCtx = { schema, module, bindings };
+  const ctx: AstPreValidationCtx = { schema, module, bindings, allowUserSpecifiedId };
 
   // `SELECT T.scalarProp FILTER .x …` — partial paths can't be resolved
   // against a primitive subject. (Checked before the generic walk so the
@@ -13358,7 +13419,8 @@ function checkInsertStatementAst(
   for (const field of Object.keys(values)) {
     // `id` is server-generated; assigning it requires the
     // `allow_user_specified_id` config (test_edgeql_insert_explicit_id_00).
-    if (field === "id") {
+    // With that config on, the explicit id is allowed through to lowering.
+    if (field === "id" && !ctx.allowUserSpecifiedId) {
       preValidationFail("cannot assign to property 'id'");
     }
     // `__type__` is a system link that names the object's type and can't be
