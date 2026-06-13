@@ -11,6 +11,16 @@ const bitWidthOf = (typeHint: string | undefined): number => {
   return 64;
 };
 
+// Canonical uuid text (8-4-4-4-12) built inline from per-segment randomblob
+// draws. Each `randomblob(n)` appears directly in the row expression (no
+// wrapping subquery) so SQLite re-evaluates it for every row — a non-correlated
+// scalar subquery would be folded to a single value and every row would share
+// one uuid, which breaks `count(DISTINCT …)`-style volatility.
+const uuidGenerateSql = (): string =>
+  "(lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-' || "
+  + "lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(2))) || '-' || "
+  + "lower(hex(randomblob(6))))";
+
 const STDLIB_SQL_TEMPLATES = new Map<string, StdlibSqlTemplate>([
   ["math::abs", (argSql) => argSql[0] ? `abs(${argSql[0]})` : null],
   ["math::ceil", (argSql) => argSql[0] ? `ceil(${argSql[0]})` : null],
@@ -75,6 +85,13 @@ const STDLIB_SQL_TEMPLATES = new Map<string, StdlibSqlTemplate>([
   // `random() / 9223372036854775808.0` (max abs value + 1) which yields
   // values in (-1, 1), then halve+shift to [0, 1).
   ["std::random", () => "((CAST(random() AS REAL) / 18446744073709551616.0) + 0.5)"],
+  // `std::uuid_generate_v1mc()` / `std::uuid_generate_v4()` — generate a fresh
+  // uuid. SQLite has no uuid type, so build a canonical 8-4-4-4-12 hex string
+  // from 16 random bytes (`randomblob(16)`), splicing dashes at the right
+  // offsets. Both forms produce distinct random values per row, which is all
+  // the EdgeQL semantics require here (a uuid value carried as text).
+  ["std::uuid_generate_v1mc", () => uuidGenerateSql()],
+  ["std::uuid_generate_v4", () => uuidGenerateSql()],
   // `std::array_get(arr, idx [, default])` — returns the element at `idx`,
   // or `default` (or empty set / NULL) when out of range. Negative indices
   // count from the end. SQLite's json_extract returns NULL for invalid

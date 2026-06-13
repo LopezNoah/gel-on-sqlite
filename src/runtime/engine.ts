@@ -15901,6 +15901,13 @@ function checkInsertStatementAst(
     // property type is an invalid target.
     checkArrayValuedScalarTarget(ctx, typeDef, field, value);
 
+    // A link value carrying a link-property computed body of indeterminate
+    // type — `subordinates := (SELECT Sub { @comment := [] })`
+    // (test_edgeql_insert_empty_array_04). The scalar guard above only sees
+    // top-level shape fields, so reach into the link value's own shape and
+    // reject any `@prop := <indeterminate>` linkprop body.
+    checkIndeterminateLinkPropTarget(value);
+
     // A link value that references the (non-detached) extent of the type being
     // inserted — `INSERT SelfRef { ref := SelfRef }` and SELECT/WITH variants
     // (test_edgeql_insert_selfref_01/02/03). DETACHED breaks the correlation
@@ -16023,6 +16030,40 @@ function inferArrayElementType(el: unknown, depth: number): string | undefined {
   if (node.kind === "literal") return literalScalarName(node);
   if (node.kind === "expr") return inferArrayElementType(node.expr, depth + 1);
   return undefined;
+}
+
+// Reject a link-property computed body whose value type is indeterminate —
+// `subordinates := (SELECT Sub { @comment := [] })`
+// (test_edgeql_insert_empty_array_04). A bare empty array `[]` in a linkprop
+// body has no element type and must error rather than silently writing an
+// empty value. The shape parser folds `@comment := []` to a literal carrying
+// the JSON text `"[]"`, so recognise both that and the `array_literal` form.
+function checkIndeterminateLinkPropTarget(value: unknown): void {
+  if (!value || typeof value !== "object") return;
+  const node = value as Record<string, unknown> & { kind?: string };
+
+  // Unwrap the shapes a link value can take to reach the `@`-prefixed shape
+  // elements: `select`/`shape_projection`/`expr`/`select_expr_subquery`.
+  let shape: unknown[] | undefined;
+  if (node.kind === "select" && Array.isArray(node.shape)) shape = node.shape as unknown[];
+  else if (node.kind === "shape_projection" && Array.isArray(node.shape)) shape = node.shape as unknown[];
+  else if (node.kind === "expr") return checkIndeterminateLinkPropTarget(node.expr);
+  else if (node.kind === "select_expr" || node.kind === "select_expr_subquery") return checkIndeterminateLinkPropTarget(node.expr);
+
+  if (!shape) return;
+  for (const raw of shape) {
+    if (!raw || typeof raw !== "object") continue;
+    const el = raw as Record<string, unknown> & { kind?: string; name?: string };
+    if (el.kind !== "computed" || typeof el.name !== "string" || !el.name.startsWith("@")) continue;
+    const body = el.expr as Record<string, unknown> & { kind?: string } | undefined;
+    if (!body) continue;
+    const isEmptyArrayLiteral = body.kind === "array_literal"
+      && Array.isArray(body.values) && (body.values as unknown[]).length === 0;
+    const isFoldedEmptyArray = body.kind === "literal" && body.value === "[]";
+    if (isEmptyArrayLiteral || isFoldedEmptyArray) {
+      preValidationFail("expression returns value of indeterminate type");
+    }
+  }
 }
 
 // Reject array-valued or indeterminate assignments to a scalar property.

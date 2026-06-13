@@ -80,6 +80,8 @@ const BASE_SQL_NATIVE_STDLIB_LOWERING = new Set<string>([
   "std::contains",
   "std::array_join",
   "std::random",
+  "std::uuid_generate_v1mc",
+  "std::uuid_generate_v4",
   "std::array_get",
   "std::bit_and",
   "std::bit_or",
