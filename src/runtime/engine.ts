@@ -13285,6 +13285,10 @@ const executeNestedInsert = (
     withModuleAliases: parentAst?.withModuleAliases,
     typeName: expr.typeName,
     values: expr.values,
+    // Preserve an UNLESS CONFLICT clause so a nested upsert
+    // (`link := (INSERT T {…} UNLESS CONFLICT … ELSE …)`) resolves through the
+    // conflict-aware write path (test unless_conflict_08).
+    conflict: (expr as { conflict?: InsertStatement["conflict"] }).conflict,
     pos: { line: 1, column: 1 },
   };
 
@@ -13298,6 +13302,16 @@ const executeNestedInsert = (
   const typeDef = typeDefForInsertIR(schema, compiled.ir.table);
   if (!typeDef) {
     return [];
+  }
+
+  // When the nested insert carries an UNLESS CONFLICT clause, delegate to the
+  // conflict-aware write path so a clash is suppressed / resolved via ELSE
+  // rather than tripping the constraint.
+  if (ast.conflict) {
+    const writeResult = runWriteWithAccessPolicies(db, schema, ast, compiled.ir, compiled.sql, typeDef, context);
+    return (writeResult.rows ?? [])
+      .map((row) => (row as { id?: unknown }).id)
+      .filter((id): id is string => typeof id === "string");
   }
 
   enforceInsertPolicies(typeDef, compiled.ir.values, context, 1, 1);
@@ -13456,6 +13470,16 @@ const resolveInsertTargets = (
   // them up.
   if (value.kind === "expr") {
     const inner = (value as { kind: "expr"; expr: FreeObjectExpr }).expr;
+    // `link := (INSERT T {…} UNLESS CONFLICT …)` — a bare nested mutation
+    // (no shape projection). Run it and link the resulting (inserted or
+    // conflict-resolved) row id (test unless_conflict_08).
+    if (inner.kind === "mutation_expr") {
+      const stmt = (inner as { kind: "mutation_expr"; statement: Statement }).statement;
+      if (stmt.kind === "insert") {
+        return executeNestedInsert(db, schema, stmt as Extract<InsertValue, { kind: "insert" }>, context, ast)
+          .map((id) => ({ id, properties: {} }));
+      }
+    }
     if (inner.kind === "shape_projection") {
       const projection = inner as { kind: "shape_projection"; expr: FreeObjectExpr; shape: ShapeElement[] };
       const innerExpr = projection.expr;
