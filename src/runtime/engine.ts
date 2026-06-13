@@ -6185,6 +6185,7 @@ const resolveObjectSet = (
     case "expr":
     case "subquery_expr":
     case "distinct":
+    case "shape_projection":
       return resolveObjectSet(db, schema, n.expr, env, current, context, defaultModule);
     case "function_call": {
       // Set-identity guards (`assert_distinct`, `assert_single`,
@@ -6433,7 +6434,7 @@ const bindingValueContainsMutation = (value: WithBindingValue): boolean => {
       const pair = expr as unknown as { left?: FreeObjectExpr; right?: FreeObjectExpr };
       return walk(pair.left) || walk(pair.right);
     }
-    if (expr.kind === "set_expr") {
+    if (expr.kind === "set_expr" || expr.kind === "tuple") {
       return (expr as { values: FreeObjectExpr[] }).values.some((v) => walk(v));
     }
     if (expr.kind === "for_expr") {
@@ -6446,6 +6447,59 @@ const bindingValueContainsMutation = (value: WithBindingValue): boolean => {
     return false;
   };
   return walk(value.expr);
+};
+
+// True when a binding/expr contains a `mutation_expr` that sits *inside* a
+// tuple element (`x := { ((INSERT A), "bar") }`) rather than being the
+// object set itself (`x := (INSERT A)` / `x := { (INSERT A), (INSERT B) }`).
+// A mutation inside a tuple can't be collapsed to an object set — the tuple's
+// scalar members and shape must survive — so it needs leaf substitution.
+const mutationNestedInTuple = (node: unknown): boolean => {
+  const walk = (cur: unknown, insideTuple: boolean): boolean => {
+    if (Array.isArray(cur)) return cur.some((c) => walk(c, insideTuple));
+    if (cur === null || typeof cur !== "object") return false;
+    const n = cur as Record<string, unknown> & { kind?: string };
+    if (n.kind === "mutation_expr") return insideTuple;
+    // A shape projection over a mutation (`(INSERT A){ @lp := … }`) is handled
+    // by the link-assignment machinery — don't treat it as a bare tuple leaf.
+    if (n.kind === "shape_projection") return false;
+    const nowInsideTuple = insideTuple || n.kind === "tuple" || n.kind === "named_tuple";
+    return Object.entries(n).some(([key, value]) =>
+      key === "kind" ? false : walk(value, nowInsideTuple));
+  };
+  return walk(node, false);
+};
+
+// Execute every `mutation_expr` leaf in a binding/expr subtree and replace it
+// in place with a by-id SELECT, leaving the surrounding tuple/set structure
+// intact. Used for DML-valued tuple elements (`x := { ((INSERT A), "bar") }`)
+// so the remainder lowers to plain SQL.
+const substituteMutationLeaves = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  node: unknown,
+  env: DmlChainEnv,
+  context: SecurityContext,
+  defaultModule: string,
+  passthrough: WithBinding[],
+): unknown => {
+  const walk = (cur: unknown): unknown => {
+    if (Array.isArray(cur)) return cur.map(walk);
+    if (cur === null || typeof cur !== "object") return cur;
+    const n = cur as Record<string, unknown> & { kind?: string; statement?: Statement };
+    if (n.kind === "mutation_expr" && n.statement) {
+      const resolved = resolveObjectSet(
+        db, schema,
+        attachWithToNestedMutations(n, passthrough),
+        env, undefined, context, defaultModule,
+      );
+      return { kind: "select_expr_subquery", expr: chainByIdSelect(resolved) };
+    }
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(n)) out[key] = walk(value);
+    return out;
+  };
+  return walk(node);
 };
 
 const isWithDmlChain = (ast: Statement): ast is UpdateStatement | DeleteStatement | InsertStatement => {
@@ -6550,8 +6604,11 @@ const preExecuteMutationExprsInDmlValues = (
   const containsMutationExpr = (node: unknown): boolean => {
     if (Array.isArray(node)) return node.some(containsMutationExpr);
     if (node === null || typeof node !== "object") return false;
-    if ((node as { kind?: unknown }).kind === "mutation_expr") return true;
-    return Object.values(node).some(containsMutationExpr);
+    const k = (node as { kind?: unknown }).kind;
+    // A bare nested INSERT/UPDATE/DELETE statement (e.g. a `for`-value body, or
+    // a `for` value itself) is DML even without a `mutation_expr` wrapper.
+    if (k === "mutation_expr" || k === "insert" || k === "update" || k === "delete") return true;
+    return Object.values(node as object).some(containsMutationExpr);
   };
   if (!containsMutationExpr(values)) return ast;
   const defaultModule = (ast as { withModule?: string }).withModule ?? "default";
@@ -6608,7 +6665,41 @@ const preExecuteMutationExprsInDmlValues = (
   // A whole-value mutation (`note := (WITH … INSERT Note {…})`) replaces the
   // assignment with a plain by-id select so the link machinery resolves it
   // natively; mutations nested deeper in an expression substitute in place.
+  // `link := (FOR v IN {…} UNION (INSERT T {…}))` — a FOR-INSERT as a link
+  // value. Expand to concrete per-iteration INSERTs, run them, and replace the
+  // value with a by-id SELECT over the inserted ids so the link assignment
+  // lowers natively. Accepts the bare `for` statement and the
+  // `for_expr`-wrapped forms a select/expr may carry.
+  const runForInsertValue = (node: unknown): unknown | undefined => {
+    let forStmt: ForStatement | undefined;
+    const n = node as { kind?: string; expr?: unknown };
+    if (n?.kind === "for") {
+      forStmt = node as ForStatement;
+    } else {
+      let inner = (n?.kind === "expr" ? n.expr : node) as { kind?: string; expr?: unknown } | undefined;
+      if (inner?.kind === "select_expr_subquery") inner = inner.expr as { kind?: string };
+      if (inner?.kind === "for_expr") {
+        const f = forExprChainToForStatement(inner as never, ast.pos);
+        if (f) forStmt = f;
+      }
+    }
+    if (!forStmt) return undefined;
+    const withForOuter = { ...forStmt, with: [...outerWith, ...((forStmt as { with?: WithBinding[] }).with ?? [])] } as ForStatement;
+    const inserts = expandForInsertStatements(withForOuter, schema, db, context, []);
+    if (inserts === undefined) return undefined;
+    const ids: string[] = [];
+    let typeName = "";
+    for (const ins of inserts) {
+      const resolved = executeDmlChainStatement(db, schema, ins as Statement, env, undefined, context, defaultModule);
+      if (resolved.typeName) typeName = resolved.typeName;
+      ids.push(...resolved.ids);
+    }
+    return chainByIdSelect({ typeName, ids });
+  };
+
   const rewriteValue = (value: unknown): unknown => {
+    const forReplaced = runForInsertValue(value);
+    if (forReplaced !== undefined) return forReplaced;
     if (value !== null && typeof value === "object" && (value as { kind?: string }).kind === "expr") {
       let inner = (value as { expr?: unknown }).expr as (Record<string, unknown> & { kind?: string }) | undefined;
       let innerBindings: WithBinding[] = [];
@@ -6666,6 +6757,20 @@ const preExecuteDmlBindings = (
       passthrough.push(binding);
       continue;
     }
+    // DML nested inside a tuple element keeps the surrounding tuple/set shape:
+    // substitute each mutation leaf with a by-id SELECT and re-bind the value
+    // as a plain subquery so the rest lowers to SQL.
+    if (binding.value.kind === "subquery_expr"
+        && mutationNestedInTuple((binding.value as { expr?: unknown }).expr)) {
+      const newExpr = substituteMutationLeaves(
+        db, schema,
+        (binding.value as { expr: unknown }).expr,
+        env, context, defaultModule, passthrough,
+      );
+      newWith.push({ name: binding.name, value: { kind: "subquery_expr", expr: newExpr } } as WithBinding);
+      passthrough.push(binding);
+      continue;
+    }
     const resolved = resolveObjectSet(
       db,
       schema,
@@ -6677,14 +6782,25 @@ const preExecuteDmlBindings = (
     );
     env.set(binding.name, resolved);
     const select = chainByIdSelect(resolved) as { typeName: string; shape: ShapeElement[]; clauses: unknown };
-    newWith.push({
-      name: binding.name,
-      value: { kind: "subquery", query: { typeName: select.typeName, shape: select.shape, clauses: select.clauses } },
-    } as WithBinding);
+    // A FOR statement iterating over this binding needs the value to keep its
+    // object typing (so the loop variable binds as an object, not a bare id).
+    // The `subquery_expr → select_expr_subquery → select` form preserves it,
+    // mirroring a plain `noobs := (select T)` binding; other statements keep
+    // the lighter `{kind:"subquery"}` form they already rely on.
+    const bindingValue = ast.kind === "for"
+      ? { kind: "subquery_expr", expr: { kind: "select_expr_subquery", expr: chainByIdSelect(resolved) } }
+      : { kind: "subquery", query: { typeName: select.typeName, shape: select.shape, clauses: select.clauses } };
+    newWith.push({ name: binding.name, value: bindingValue } as WithBinding);
   }
 
   const rewriteEntryExpr = (expr: FreeObjectExpr): FreeObjectExpr => {
     if (entryHasMutation(expr)) {
+      // `obj := (INSERT T {…}) { name, l2 }` — a shape over the mutation.
+      // Resolve the mutation, then re-project the inserted rows through the
+      // requested shape (instead of an id-only select).
+      const projShape = (expr as { kind?: string; shape?: ShapeElement[] }).kind === "shape_projection"
+        ? (expr as { shape?: ShapeElement[] }).shape
+        : undefined;
       const resolved = resolveObjectSet(
         db,
         schema,
@@ -6694,7 +6810,11 @@ const preExecuteDmlBindings = (
         context,
         defaultModule,
       );
-      return { kind: "select_expr_subquery", expr: chainByIdSelect(resolved) } as unknown as FreeObjectExpr;
+      const byId = chainByIdSelect(resolved) as { typeName: string; shape: ShapeElement[]; clauses: unknown };
+      if (projShape && projShape.length > 0) {
+        byId.shape = projShape;
+      }
+      return { kind: "select_expr_subquery", expr: byId } as unknown as FreeObjectExpr;
     }
     return rewriteEnvRefsInNode(expr, env) as FreeObjectExpr;
   };
@@ -6703,6 +6823,20 @@ const preExecuteDmlBindings = (
   if (ast.kind === "select_free") {
     (out as unknown as { entries: Array<{ name: string; expr: FreeObjectExpr }> }).entries =
       entries.map((entry) => ({ ...entry, expr: rewriteEntryExpr(entry.expr) }));
+  }
+  // A FOR statement's body carries a copy of the enclosing WITH bindings (the
+  // parser scopes them into the body). The DML in those bindings was already
+  // executed once above — replace the body's same-named bindings with the
+  // rewritten by-id versions so the mutation doesn't re-run and the body
+  // lowers to plain SQL.
+  if (ast.kind === "for") {
+    const body = (ast as ForStatement).body as { with?: WithBinding[] } | undefined;
+    const bodyWith = body?.with;
+    if (bodyWith && bodyWith.some((b) => withBindings.some((o) => o.name === b.name && bindingValueContainsMutation(o.value)))) {
+      const rewrittenByName = new Map(newWith.map((b) => [b.name, b]));
+      const newBodyWith = bodyWith.map((b) => rewrittenByName.get(b.name) ?? b);
+      (out as ForStatement).body = { ...(body as object), with: newBodyWith } as ForStatement["body"];
+    }
   }
   return out;
 };
@@ -6963,13 +7097,14 @@ const executeQueryWithTraceImpl = (
   schema: SchemaSnapshot,
   query: string,
   securityContext: SecurityContext = DEFAULT_SECURITY_CONTEXT,
+  presetAst?: Statement,
 ): QueryExecutionTrace => {
   try {
     query = injectRuntimeAliasBinding(schema, query);
     const context = normalizeSecurityContext(securityContext);
     const runtimeTarget = resolvedRuntimeTarget(context, db);
     const compilerService = getCompilerService();
-    let ast = parseEdgeQL(query);
+    let ast = presetAst ?? parseEdgeQL(query);
     if (ast.kind === "configure") {
       // CONFIGURE has no SQLite analogue — return an empty insert-like result
       // so callers that fire it from `.query()` don't have to pre-filter or
@@ -7009,6 +7144,27 @@ const executeQueryWithTraceImpl = (
     // `assert_exists(...)`/`array_agg(...)[i]` pointer steps over an empty /
     // out-of-bounds inner set must raise instead of returning empty rows.
     enforceRootSetAssertions(db, schema, ast, context, runtimeTarget);
+    // `FOR v IN <iter> UNION (<value-expr with embedded INSERT/…>)` — body is
+    // an expression carrying DML (a tuple, shaped select, nested FOR). Run each
+    // iteration's embedded DML and concatenate the produced rows. Skipped for
+    // GROUP iterators (handled below) and bare-INSERT bodies (FOR-INSERT path).
+    if (ast.kind === "for"
+        && ast.body.kind === "select_expr"
+        && !unwrapGroupIteratorExpr(ast.iteratorExpr)
+        && nodeContainsMutationExpr(ast.body.expr)) {
+      const rows = executeForWithDmlBodyExpr(db, schema, ast, context, []);
+      if (rows !== undefined) {
+        return {
+          ast,
+          ir: { kind: "select", rows: [] } as unknown as IRStatement,
+          sql: { sql: "", params: [], loweringMode: "single_statement" } as SQLArtifact,
+          compiler: { key: "for-dml-body", status: "miss", stats: { hits: 0, misses: 0, size: 0 } },
+          sqlTrail: [],
+          overlays: [],
+          result: { kind: "select", rows },
+        };
+      }
+    }
     // `FOR g IN (GROUP …) UNION (…body…)` — when the group-rows iterator and
     // per-row body lower fully to SQL, the generic path below runs that
     // artifact. Only bodies the SQL stage can't express route through the
@@ -7286,9 +7442,47 @@ const expandForInsertStatements = (
   const forStatementWith = ((forAst as { with?: WithBinding[] }).with ?? [])
     .filter((binding) => binding.name !== forAst.variable);
 
+  // `array_unpack([<object-set>])` iterates the object set — unwrap it to the
+  // inner object select so the object-iterator path handles it.
+  const unwrapArrayUnpackObjectIterator = (
+    iter: ForStatement["iteratorExpr"],
+  ): ForStatement["iteratorExpr"] | undefined => {
+    const n = iter as { kind?: string; call?: { name?: string; args?: Array<{ kind?: string; expr?: unknown }> } };
+    if (n.kind !== "function_call") return undefined;
+    if ((n.call?.name ?? "").split("::").pop() !== "array_unpack") return undefined;
+    const arg = n.call?.args?.[0];
+    const arr = arg?.kind === "expr" ? (arg.expr as { kind?: string; values?: unknown[] }) : undefined;
+    if (arr?.kind !== "array_literal_expr" || arr.values?.length !== 1) return undefined;
+    const el = arr.values[0] as { kind?: string };
+    if (el?.kind === "select") return el as ForStatement["iteratorExpr"];
+    return undefined;
+  };
+
   // Object-set iterator: materialise the rows (augmented with every field the
   // body reads off the loop variable) and bind those fields per element.
   const referencedFields = collectBindingRefFields(body, forAst.variable);
+  // `{ (SELECT …) }` — a single-element set wrapping an object select iterates
+  // that object set; unwrap to the inner select.
+  const unwrapSingletonSetObjectIterator = (
+    iter: ForStatement["iteratorExpr"],
+  ): ForStatement["iteratorExpr"] | undefined => {
+    const n = iter as { kind?: string; values?: Array<{ kind?: string }> };
+    if (n.kind !== "set_expr" || n.values?.length !== 1) return undefined;
+    const el = n.values[0];
+    if (el?.kind === "select" || el?.kind === "select_expr_subquery") {
+      return el as ForStatement["iteratorExpr"];
+    }
+    return undefined;
+  };
+
+  const normalizedObjIterator = forAst.iteratorExpr.kind === "select_expr_subquery"
+      || forAst.iteratorExpr.kind === "select"
+    ? forAst.iteratorExpr
+    : unwrapArrayUnpackObjectIterator(forAst.iteratorExpr)
+      ?? unwrapSingletonSetObjectIterator(forAst.iteratorExpr);
+  if (normalizedObjIterator) {
+    forAst = { ...forAst, iteratorExpr: normalizedObjIterator };
+  }
   if (forAst.iteratorExpr.kind === "select_expr_subquery" || forAst.iteratorExpr.kind === "select") {
     const objectRows = evaluateForObjectIteratorRows(
       forAst.iteratorExpr, referencedFields, schema, db, context,
@@ -7300,15 +7494,28 @@ const expandForInsertStatements = (
     const effectiveRows: (Record<string, unknown> | null)[] = objectRows.length === 0 && forAst.optional
       ? [null]
       : objectRows;
+    // The iterator's object type — used to bind a by-id object WITH binding for
+    // bare loop-variable references (`subject := x`, not just `x.field`).
+    const iterSel = (forAst.iteratorExpr.kind === "select_expr_subquery"
+      ? (forAst.iteratorExpr as { expr?: { typeName?: string } }).expr
+      : forAst.iteratorExpr) as { typeName?: string } | undefined;
+    const iterTypeName = iterSel?.typeName;
     const out: InsertStatement[] = [];
     for (const row of effectiveRows) {
       // Bind `var.field` references to row values by substituting the
-      // field_access nodes with literals (the loop variable is an object, so
-      // it can't be a single WITH literal — only its read fields matter).
+      // field_access nodes with literals, and bind the loop variable itself to
+      // a by-id object SELECT so bare `var` references (e.g. as a link target)
+      // resolve to the iterated object.
       const substituted = row === null
         ? body
         : substituteBindingRefFields(body, forAst.variable, row) as ForStatement["body"];
-      const expanded = expandBodyToInserts(substituted, schema, db, context, [...accumWith, ...forStatementWith]);
+      const objBinding: WithBinding[] = row !== null && typeof row.id === "string" && iterTypeName
+        ? [{
+            name: forAst.variable,
+            value: { kind: "subquery_expr", expr: { kind: "select_expr_subquery", expr: chainByIdSelect({ typeName: iterTypeName, ids: [row.id as string] }) } },
+          } as WithBinding]
+        : [];
+      const expanded = expandBodyToInserts(substituted, schema, db, context, [...accumWith, ...forStatementWith, ...objBinding]);
       if (expanded === undefined) return undefined;
       out.push(...expanded);
     }
@@ -7457,6 +7664,11 @@ const collectBindingRefFields = (node: unknown, varName: string, acc = new globa
       && (n.expr as { name?: string }).name === varName) {
       acc.add(n.field);
     }
+    // `t.name` references off an object loop variable also parse as a `path`
+    // node (head = variable, tail = field) inside INSERT/expression values.
+    if (n.kind === "path" && n.head === varName && typeof n.tail === "string") {
+      acc.add(n.tail);
+    }
     for (const v of Object.values(n)) walk(v);
   };
   walk(node);
@@ -7474,6 +7686,10 @@ const substituteBindingRefFields = (node: unknown, varName: string, row: Record<
     && (n.expr as { kind?: string; name?: string })?.kind === "binding_ref"
     && (n.expr as { name?: string }).name === varName) {
     return { kind: "literal", value: row[n.field as string] ?? null };
+  }
+  // `t.name` written as a `path` node (head = loop variable, tail = field).
+  if (n.kind === "path" && n.head === varName && typeof n.tail === "string") {
+    return { kind: "literal", value: row[n.tail as string] ?? null };
   }
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(n)) out[k] = substituteBindingRefFields(v, varName, row);
@@ -8134,6 +8350,104 @@ const unwrapGroupIteratorExpr = (
     return cursor;
   }
   return undefined;
+};
+
+// Does an AST subtree contain a `mutation_expr` anywhere?
+const nodeContainsMutationExpr = (node: unknown): boolean => {
+  if (Array.isArray(node)) return node.some(nodeContainsMutationExpr);
+  if (node === null || typeof node !== "object") return false;
+  if ((node as { kind?: unknown }).kind === "mutation_expr") return true;
+  return Object.values(node).some(nodeContainsMutationExpr);
+};
+
+// `FOR v IN <scalar-iter> UNION (<expr containing INSERT/UPDATE/DELETE>)` where
+// the body is a value expression (a tuple, a shaped select, a nested FOR, …)
+// rather than a bare INSERT. Each iteration must run its embedded DML once and
+// thread the produced object(s) into the surrounding expression. We bind the
+// loop variable as a WITH literal and run the body through the ordinary
+// single-statement pipeline (which executes embedded DML via
+// preExecuteMutationExprsInSelectExpr / DML bindings), then concatenate the
+// per-iteration rows. Nested FORs recurse. Returns undefined when the body
+// can't be handled this way (no embedded DML, non-scalar iterator).
+const executeForWithDmlBodyExpr = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  ast: ForStatement,
+  context: SecurityContext,
+  accumWith: WithBinding[],
+): unknown[] | undefined => {
+  const body = ast.body;
+  // Only handle bodies that are value expressions carrying embedded DML.
+  if (body.kind !== "select_expr") return undefined;
+  if (!nodeContainsMutationExpr(body.expr)) return undefined;
+
+  // Scalar iterator values, evaluated with any enclosing loop bindings in
+  // scope (so a nested FOR's iterator may reference outer variables).
+  let iterValues: unknown[];
+  if (accumWith.length > 0) {
+    const viaSql = evaluateForScalarIteratorViaSql(ast, schema, db, context, accumWith);
+    iterValues = viaSql ?? [];
+  } else {
+    try {
+      iterValues = ast.iteratorExpr.kind === "set_literal"
+        ? ast.iteratorExpr.values
+        : evaluateForIteratorValues(ast.iteratorExpr, schema, db, context);
+    } catch {
+      iterValues = [];
+    }
+  }
+  if (!iterValues.every((v) => v === null || isScalarValue(v))) return undefined;
+  const effective: (ScalarValue | null)[] = iterValues.length === 0 && ast.optional
+    ? [null]
+    : (iterValues as (ScalarValue | null)[]);
+
+  const forStatementWith = ((ast as { with?: WithBinding[] }).with ?? [])
+    .filter((b) => b.name !== ast.variable);
+
+  const out: unknown[] = [];
+  for (const value of effective) {
+    const varBinding: WithBinding[] = value !== null && isScalarValue(value)
+      ? [{ name: ast.variable, value: { kind: "literal", value } } as WithBinding]
+      : [];
+    const iterWith = [...accumWith, ...forStatementWith, ...varBinding];
+
+    // A nested FOR (`FOR a … UNION (FOR b … UNION (…INSERT…))`) recurses with
+    // the accumulated bindings; its body's inner FOR is wrapped in select_expr.
+    const innerForExpr = body.expr.kind === "for_expr" ? body.expr : undefined;
+    if (innerForExpr) {
+      const innerForAst: ForStatement = {
+        kind: "for",
+        variable: innerForExpr.variable,
+        iteratorExpr: innerForExpr.iterator as ForStatement["iteratorExpr"],
+        optional: innerForExpr.optional ?? false,
+        body: { kind: "select_expr", expr: innerForExpr.body } as ForStatement["body"],
+        withModule: ast.withModule,
+        withModuleAliases: ast.withModuleAliases,
+        pos: ast.pos,
+      } as ForStatement;
+      const innerRows = executeForWithDmlBodyExpr(db, schema, innerForAst, context, iterWith);
+      if (innerRows === undefined) return undefined;
+      out.push(...innerRows);
+      continue;
+    }
+
+    // Run the body once with the loop variable(s) bound as literals. The body
+    // is a select_expr whose embedded DML executes through the standard path.
+    const bodyStmt: Statement = {
+      kind: "select_expr",
+      expr: body.expr,
+      orderBy: body.orderBy,
+      with: iterWith.length > 0 ? iterWith : undefined,
+      withModule: ast.withModule,
+      withModuleAliases: ast.withModuleAliases,
+      pos: ast.pos,
+    } as unknown as Statement;
+    const trace = executeQueryWithTraceImpl(db, schema, "", context, bodyStmt);
+    if (trace.result.kind === "select" && trace.result.rows) {
+      out.push(...trace.result.rows);
+    }
+  }
+  return out;
 };
 
 const executeForLoop = (
