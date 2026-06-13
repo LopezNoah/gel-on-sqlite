@@ -7410,6 +7410,15 @@ const runDmlChain = (
 ): ObjectSet => {
   const defaultModule = (ast as { withModule?: string }).withModule ?? "default";
   const env: DmlChainEnv = new Map();
+  // Snapshot exclusive values before any chain DML runs, so a value freed by
+  // one statement and re-used by a sibling surfaces as the exclusivity conflict
+  // EdgeQL's single-snapshot semantics require (see captureExclusiveSnapshot).
+  // Only meaningful when the chain mutates from more than one statement.
+  const chainDmlCount = ((ast as { with?: WithBinding[] }).with ?? [])
+    .filter((b) => bindingValueContainsMutation(b.value)).length
+    + ((ast.kind === "insert" || ast.kind === "update" || ast.kind === "delete") ? 1 : 0);
+  const chainTypeNames = chainDmlCount >= 2 ? collectChainTypeNames(ast, defaultModule) : undefined;
+  const exclusiveSnapshot = chainTypeNames ? captureExclusiveSnapshot(db, schema, chainTypeNames) : undefined;
   // Evaluate WITH bindings in declaration order; DML bindings execute (and
   // mutate) as they're evaluated. Scalar/non-DML bindings declared earlier are
   // forwarded onto each DML binding's statement so its values can resolve
@@ -7458,7 +7467,11 @@ const runDmlChain = (
         with: ((ast as { with?: WithBinding[] }).with ?? []).map((binding) => replacedBindings.get(binding.name) ?? binding),
       } as typeof ast)
     : ast;
-  return executeDmlChainStatement(db, schema, finalAst, env, undefined, context, defaultModule);
+  const chainResult = executeDmlChainStatement(db, schema, finalAst, env, undefined, context, defaultModule);
+  if (exclusiveSnapshot && chainTypeNames) {
+    validateExclusiveSnapshot(db, schema, chainTypeNames, exclusiveSnapshot, ast.pos);
+  }
+  return chainResult;
 };
 
 // Mutations nested inside DML value expressions (`INSERT A { x := (INSERT C
@@ -7842,6 +7855,14 @@ const preExecuteDmlBindings = (
   if (!hasDmlBinding && !hasDmlEntry) return ast;
 
   const defaultModule = (ast as { withModule?: string }).withModule ?? "default";
+  // Single-snapshot exclusivity: when two or more DML statements run in one
+  // query (via WITH bindings or free-object entries), a value freed by one and
+  // re-used by a sibling is a conflict (cross_type_conflict_07a/07b/08a/12,
+  // and_delete_01). Snapshot the exclusive values before any of them run.
+  const dmlBindingCount = withBindings.filter((b) => bindingValueContainsMutation(b.value)).length
+    + entries.filter((e) => entryHasMutation(e.expr)).length;
+  const chainTypeNames = dmlBindingCount >= 2 ? collectChainTypeNames(ast, defaultModule) : undefined;
+  const exclusiveSnapshot = chainTypeNames ? captureExclusiveSnapshot(db, schema, chainTypeNames) : undefined;
   const env: DmlChainEnv = new Map();
   const newWith: WithBinding[] = [];
   const passthrough: WithBinding[] = [];
@@ -8046,6 +8067,9 @@ const preExecuteDmlBindings = (
       const newBodyWith = bodyWith.map((b) => rewrittenByName.get(b.name) ?? b);
       (out as ForStatement).body = { ...(body as object), with: newBodyWith } as ForStatement["body"];
     }
+  }
+  if (exclusiveSnapshot && chainTypeNames) {
+    validateExclusiveSnapshot(db, schema, chainTypeNames, exclusiveSnapshot, ast.pos);
   }
   return out;
 };
@@ -13565,6 +13589,136 @@ const translateExclusivityWriteError = (writeErr: unknown, line: number, column:
   return writeErr;
 };
 
+// ── WITH-DML chain exclusivity snapshot ──────────────────────────────────
+// EdgeQL runs every DML statement in a single query against ONE read snapshot,
+// and validates exclusive constraints against that snapshot. A value occupied
+// by some row at the start of the statement is therefore "reserved" for the
+// whole statement: a sibling that frees it (UPDATE renames it away, DELETE
+// removes the row) and then re-uses it in another statement is a conflict —
+// even though the live row count after both run would be consistent
+// (cross_type_conflict_07a/07b/08a/12, and_delete_01).
+//
+// We model this by snapshotting `exclusiveValue → ownerId` for every exclusive
+// check covering the chain's subject types at chain start, then re-reading it
+// at chain end. If any exclusive value is held by a DIFFERENT row at the end
+// than at the start, some statement re-used a reserved value → conflict.
+type ExclusiveSnapshot = Array<{ property: string; valueToId: Map<string, string> }>;
+
+const snapshotKeyForValue = (value: unknown): string => JSON.stringify(value);
+
+const captureExclusiveSnapshot = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  typeNames: Iterable<string>,
+): ExclusiveSnapshot => {
+  const out: ExclusiveSnapshot = [];
+  const seenCheckKeys = new Set<string>();
+  for (const typeName of typeNames) {
+    const typeDef = schema.getType(typeName);
+    if (!typeDef) continue;
+    for (const check of exclusiveChecksFor(schema, typeDef, undefined)) {
+      // The implicit id PK never participates in value-reuse conflicts.
+      if (check.fields.length === 1 && check.fields[0] === "id") continue;
+      const checkKey = `${check.fields.slice().sort().join(",")}|${[...check.tables].sort().join(",")}|${check.multiProp ?? ""}`;
+      if (seenCheckKeys.has(checkKey)) continue;
+      seenCheckKeys.add(checkKey);
+      const valueToId = new Map<string, string>();
+      if (check.multiProp) {
+        // Multi scalar properties store their set as a JSON array in the data
+        // table's column; expand each element to (value → owner id).
+        const col = check.multiProp;
+        for (const tbl of check.tables) {
+          const cols = (db.prepare(`PRAGMA table_info(${quoteIdent(tbl)})`).all() as Array<{ name: string }>).map((c) => c.name);
+          if (!cols.includes(col)) continue;
+          const rows = db.prepare(
+            `SELECT ${quoteIdent("id")} AS ${quoteIdent("id")}, ${quoteIdent(col)} AS ${quoteIdent("v")} FROM ${quoteIdent(tbl)}`,
+          ).all() as Array<{ id?: unknown; v?: unknown }>;
+          for (const row of rows) {
+            if (typeof row.id !== "string" || row.v === null || row.v === undefined) continue;
+            let elements: unknown[];
+            if (typeof row.v === "string") {
+              try {
+                const parsed = JSON.parse(row.v);
+                elements = Array.isArray(parsed) ? parsed : [parsed];
+              } catch {
+                elements = [row.v];
+              }
+            } else {
+              elements = [row.v];
+            }
+            for (const el of elements) valueToId.set(snapshotKeyForValue(el), row.id);
+          }
+        }
+      } else {
+        for (const tbl of check.tables) {
+          const cols = (db.prepare(`PRAGMA table_info(${quoteIdent(tbl)})`).all() as Array<{ name: string }>).map((c) => c.name);
+          if (!check.columns.every((c) => cols.includes(c))) continue;
+          const selectCols = check.columns.map((c) => quoteIdent(c)).join(", ");
+          const rows = db.prepare(`SELECT ${quoteIdent("id")} AS ${quoteIdent("id")}, ${selectCols} FROM ${quoteIdent(tbl)}`).all() as Array<Record<string, unknown>>;
+          for (const row of rows) {
+            if (typeof row.id !== "string") continue;
+            const vals = check.columns.map((c) => (check.lower && typeof row[c] === "string" ? (row[c] as string).toLowerCase() : row[c]));
+            if (vals.some((v) => v === null || v === undefined)) continue;
+            valueToId.set(snapshotKeyForValue(vals), row.id);
+          }
+        }
+      }
+      out.push({ property: check.fields.join(","), valueToId });
+    }
+  }
+  return out;
+};
+
+// Re-capture the same exclusive values and throw if any value is now held by a
+// different row than it was at chain start (a reserved value was re-used).
+const validateExclusiveSnapshot = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  typeNames: Iterable<string>,
+  before: ExclusiveSnapshot,
+  pos: { line: number; column: number },
+): void => {
+  const after = captureExclusiveSnapshot(db, schema, typeNames);
+  const afterByProp = new Map(after.map((e) => [`${e.property}`, e.valueToId] as const));
+  // Index `before` by property too; multiple checks can share a property name
+  // only via tuple constraints — disambiguate by also matching the value set.
+  for (const beforeEntry of before) {
+    const afterMap = afterByProp.get(beforeEntry.property);
+    if (!afterMap) continue;
+    for (const [valueKey, beforeId] of beforeEntry.valueToId) {
+      const afterId = afterMap.get(valueKey);
+      if (afterId !== undefined && afterId !== beforeId) {
+        // This exclusive value is now held by a row that did not hold it at
+        // snapshot start: a sibling statement re-used a reserved value.
+        throw new AppError("E_VALIDATION", `${beforeEntry.property} violates exclusivity constraint`, pos.line, pos.column);
+      }
+    }
+  }
+};
+
+// Collect every type name referenced by a DML chain AST (subject + WITH-bound
+// DML subqueries) so the snapshot only covers relevant tables.
+const collectChainTypeNames = (ast: Statement, defaultModule: string): Set<string> => {
+  const names = new Set<string>();
+  const add = (raw: unknown): void => {
+    if (typeof raw === "string" && raw.length > 0) names.add(qualifyChainType(raw, defaultModule));
+  };
+  const walk = (node: unknown): void => {
+    if (Array.isArray(node)) { node.forEach(walk); return; }
+    if (node === null || typeof node !== "object") return;
+    const n = node as Record<string, unknown> & { kind?: string; typeName?: unknown };
+    if ((n.kind === "insert" || n.kind === "update" || n.kind === "delete" || n.kind === "mutation_expr")) {
+      add(n.typeName);
+    }
+    for (const [k, v] of Object.entries(n)) {
+      if (k === "kind") continue;
+      walk(v);
+    }
+  };
+  walk(ast);
+  return names;
+};
+
 const resolveConflictField = (ast: InsertStatement, typeDef: TypeDef): string | undefined => {
   if (ast.conflict?.onField) {
     return ast.conflict.onField;
@@ -14615,6 +14769,15 @@ const runWriteWithAccessPolicies = (
         }
       }
       if (ast.kind === "update") {
+        applyUpdateMultiScalarProps(
+          db,
+          schema,
+          subjectType,
+          ir,
+          ast,
+          preRows.map((row) => String(row.id)),
+          ast.pos,
+        );
         applyUpdateLinkAssignments(
           db,
           schema,
@@ -15411,6 +15574,94 @@ const writeUpdateLinkTableRows = (
     }
   }
   db.prepare(sql).run(...params);
+};
+
+// Apply multi (set-valued) scalar property assignments on UPDATE. These live in
+// `ir.values` as a JSON-array string (the new set), but the base SQL UPDATE
+// skips multi-cardinality columns, and the `:=`/`+=`/`-=` operation isn't
+// folded into that encoded value. We read each matched row's current JSON
+// array, apply the operation, and write the merged array back to the column.
+// The materialised exclusivity AFTER-UPDATE triggers re-mirror the column into
+// the shared excl table, so a duplicate value surfaces as a UNIQUE failure that
+// we translate to EdgeQL's exclusivity wording.
+const applyUpdateMultiScalarProps = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  subjectType: TypeDef,
+  ir: UpdateIR,
+  ast: UpdateStatement,
+  sourceIds: string[],
+  pos: { line: number; column: number },
+): void => {
+  if (sourceIds.length === 0) return;
+  const operations = (ast as { operations?: Record<string, string> }).operations ?? {};
+  // Collect multi scalar fields the UPDATE assigns. Links are handled
+  // separately by applyUpdateLinkAssignments; we only touch scalar columns
+  // declared `multi property`.
+  const multiFields: Array<{ name: string; type: string }> = [];
+  for (const field of subjectType.fields) {
+    if (!(field as { multi?: boolean }).multi) continue;
+    if (!Object.prototype.hasOwnProperty.call(ir.values, field.name)) continue;
+    const encoded = ir.values[field.name];
+    if (typeof encoded !== "string") continue;
+    multiFields.push({ name: field.name, type: (field as { type?: string }).type ?? "str" });
+  }
+  if (multiFields.length === 0) return;
+
+  for (const sourceId of sourceIds) {
+    for (const field of multiFields) {
+      const encoded = ir.values[field.name] as string;
+      let assigned: unknown[];
+      try {
+        const parsed = JSON.parse(encoded);
+        assigned = Array.isArray(parsed) ? parsed : [parsed];
+      } catch {
+        assigned = [];
+      }
+      const op = operations[field.name] ?? "assign";
+      let next: unknown[];
+      if (op === "assign") {
+        next = assigned;
+      } else {
+        const currentRaw = db
+          .prepare(`SELECT ${quoteIdent(field.name)} AS ${quoteIdent("v")} FROM ${quoteIdent(ir.table)} WHERE ${quoteIdent("id")} = ?`)
+          .all(sourceId)[0] as { v?: unknown } | undefined;
+        let current: unknown[] = [];
+        if (typeof currentRaw?.v === "string" && currentRaw.v.length > 0) {
+          try {
+            const parsed = JSON.parse(currentRaw.v);
+            current = Array.isArray(parsed) ? parsed : [parsed];
+          } catch {
+            current = [];
+          }
+        }
+        if (op === "append") {
+          // EdgeQL `+=` is a set union; multi scalar properties are sets, so
+          // appending an already-present value is a no-op (no duplicates).
+          const seen = new Set(current.map((v) => JSON.stringify(v)));
+          next = [...current];
+          for (const v of assigned) {
+            const key = JSON.stringify(v);
+            if (!seen.has(key)) {
+              seen.add(key);
+              next.push(v);
+            }
+          }
+        } else if (op === "subtract") {
+          const remove = new Set(assigned.map((v) => JSON.stringify(v)));
+          next = current.filter((v) => !remove.has(JSON.stringify(v)));
+        } else {
+          next = assigned;
+        }
+      }
+      try {
+        db.prepare(`UPDATE ${quoteIdent(ir.table)} SET ${quoteIdent(field.name)} = ? WHERE ${quoteIdent("id")} = ?`)
+          .run(JSON.stringify(next), sourceId);
+      } catch (writeErr) {
+        throw translateExclusivityWriteError(writeErr, pos.line, pos.column);
+      }
+    }
+  }
 };
 
 const applyUpdateLinkAssignments = (
