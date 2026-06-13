@@ -13420,7 +13420,91 @@ const resolveInsertTargets = (
     return rows;
   }
 
+  // A tuple-set `FOR x IN {(…), (…)} UNION (SELECT Target { @prop := x.0 }
+  // FILTER … x.1)` used as a link value (possibly wrapped in
+  // `DISTINCT(…)`/`expr`/`for_expr`). Each iteration substitutes the tuple
+  // element accesses (`x.0`, `x.1`) into the select — including the `@`-shape
+  // and FILTER — runs it, and reads the per-row `@`-columns as link properties.
+  const tupleForRows = resolveTupleForUnionSelectLinkValue(db, schema, value, context, ast);
+  if (tupleForRows !== undefined) return tupleForRows;
+
   return [];
+};
+
+// Unwrap `expr`/`distinct`/`for_expr`/`for` to a ForStatement whose iterator is
+// a set of tuple literals and whose body is a SELECT, then resolve each
+// iteration's targets (with `x.N` substituted) and read its `@`-columns.
+const resolveTupleForUnionSelectLinkValue = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  value: InsertValue,
+  context: SecurityContext,
+  ast: InsertStatement,
+): LinkTargetAssignment[] | undefined => {
+  let node: unknown = value;
+  for (let i = 0; i < 6 && node !== null && typeof node === "object"; i++) {
+    const k = (node as { kind?: string }).kind;
+    if (k === "expr" || k === "distinct" || k === "select_expr_subquery") {
+      node = (node as { expr: unknown }).expr;
+      continue;
+    }
+    break;
+  }
+  const n = node as { kind?: string } | null;
+  let forVariable: string | undefined;
+  let forIterator: ForStatement["iteratorExpr"] | undefined;
+  let forBody: unknown;
+  if (n?.kind === "for") {
+    const f = node as ForStatement;
+    forVariable = f.variable;
+    forIterator = f.iteratorExpr;
+    forBody = f.body;
+  } else if (n?.kind === "for_expr") {
+    // `for_expr` carries a SELECT body (unlike forExprChainToForStatement,
+    // which only accepts INSERT bodies) — read its parts directly.
+    const fe = node as unknown as { variable: string; iterator: ForStatement["iteratorExpr"]; body: unknown };
+    forVariable = fe.variable;
+    forIterator = fe.iterator;
+    forBody = fe.body;
+  }
+  if (forVariable === undefined || forIterator === undefined) return undefined;
+  const tupleRows = evaluateForTupleIteratorRows(forIterator, schema, db, context);
+  if (tupleRows === undefined) return undefined;
+  const forStmt = { variable: forVariable } as { variable: string };
+  // Peel a select_expr_subquery body down to the inner select.
+  let body: unknown = forBody;
+  if ((body as { kind?: string })?.kind === "select_expr_subquery") {
+    body = (body as { expr: unknown }).expr;
+  }
+  if ((body as { kind?: string })?.kind !== "select") return undefined;
+  const out: LinkTargetAssignment[] = [];
+  const seen = new globalThis.Set<string>();
+  for (const tuple of tupleRows) {
+    const substituted = substituteTupleIndexRefs(body, forStmt.variable, tuple) as Extract<InsertValue, { kind: "select" }>;
+    const scoped = {
+      ...substituted,
+      clauses: {
+        ...substituted.clauses,
+        _withBindings: substituted.clauses._withBindings ?? ast.with,
+        _withModule: substituted.clauses._withModule ?? ast.withModule,
+        _withModuleAliases: substituted.clauses._withModuleAliases ?? ast.withModuleAliases,
+      },
+    };
+    const selRows = executeSelectExprRows(db, schema, scoped, context);
+    for (const row of selRows) {
+      if (typeof row.id !== "string" || seen.has(row.id)) continue;
+      seen.add(row.id);
+      const properties: Record<string, ScalarValue> = {};
+      for (const [key, raw] of Object.entries(row)) {
+        if (!key.startsWith("@")) continue;
+        const scalar = coerceUnknownToScalar(raw);
+        if (scalar === undefined) continue;
+        properties[key] = scalar;
+      }
+      out.push({ id: row.id, properties });
+    }
+  }
+  return out;
 };
 
 const defaultLinkPropertyValueIR = (
