@@ -6694,6 +6694,7 @@ const preExecuteMutationExprsInSelectExpr = (
     if (node === null || typeof node !== "object") return node;
     const n = node as Record<string, unknown> & { kind?: string; statement?: Statement };
     if (n.kind === "mutation_expr" && n.statement) {
+      const mutationKind = (n.statement as { kind?: string }).kind;
       const resolved = resolveObjectSet(
         db,
         schema,
@@ -6703,6 +6704,13 @@ const preExecuteMutationExprsInSelectExpr = (
         context,
         defaultModule,
       );
+      // A DELETE removes its rows, so a by-id SELECT would find nothing — but
+      // `count((delete T))` / `exists (delete T)` must see the rows that *were*
+      // deleted. Substitute the captured ids as a literal set so the enclosing
+      // aggregate/exists sees the right cardinality.
+      if (mutationKind === "delete") {
+        return { kind: "set_literal", values: resolved.ids };
+      }
       return { kind: "select_expr_subquery", expr: chainByIdSelect(resolved) };
     }
     const out: Record<string, unknown> = {};
