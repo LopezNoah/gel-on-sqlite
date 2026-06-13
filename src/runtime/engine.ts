@@ -8153,7 +8153,7 @@ const expandForInsertStatements = (
   context: SecurityContext,
   accumWith: WithBinding[] = [],
 ): InsertStatement[] | undefined => {
-  const body = forAst.body;
+  let body = forAst.body;
   // FOR-level WITH bindings (other than the loop variable) flow onto each leaf.
   // A scalar binding is materialized to a single literal up front so a volatile
   // expression (`WITH x := <str>random() FOR y IN … (… tag2 := x)`) captures
@@ -8191,6 +8191,64 @@ const expandForInsertStatements = (
     if (el?.kind === "select") return el as ForStatement["iteratorExpr"];
     return undefined;
   };
+
+  // `array_unpack([(<object-set>,)])` — a single-element array whose element is
+  // a 1-tuple wrapping an object select. The loop variable `t` is that 1-tuple,
+  // so body references read `t.0.field` / `t.0`. Unwrap to the inner object
+  // select and rewrite `t.0` → `t` so the object-iterator path applies, binding
+  // the loop variable directly to each iterated object.
+  const unwrapArrayUnpackSingleTupleObjectIterator = (
+    iter: ForStatement["iteratorExpr"],
+  ): ForStatement["iteratorExpr"] | undefined => {
+    const n = iter as { kind?: string; call?: { name?: string; args?: Array<{ kind?: string; expr?: unknown }> } };
+    if (n.kind !== "function_call") return undefined;
+    if ((n.call?.name ?? "").split("::").pop() !== "array_unpack") return undefined;
+    const arg = n.call?.args?.[0];
+    const arr = arg?.kind === "expr" ? (arg.expr as { kind?: string; values?: unknown[] }) : undefined;
+    if (arr?.kind !== "array_literal_expr" || arr.values?.length !== 1) return undefined;
+    const tup = arr.values[0] as { kind?: string; values?: unknown[] };
+    if (tup?.kind !== "tuple" || tup.values?.length !== 1) return undefined;
+    const el = tup.values[0] as { kind?: string };
+    if (el?.kind === "select" || el?.kind === "select_expr_subquery") {
+      return el as ForStatement["iteratorExpr"];
+    }
+    return undefined;
+  };
+  // Collapse `<var>.0` (the only element of a 1-tuple loop variable) to a bare
+  // reference to `<var>` so downstream field-access substitution treats the
+  // object as the loop variable itself.
+  const collapseTupleZeroRefs = (node: unknown, varName: string): unknown => {
+    if (Array.isArray(node)) return node.map((item) => collapseTupleZeroRefs(item, varName));
+    if (node === null || typeof node !== "object") return node;
+    const n = node as Record<string, unknown> & { kind?: string };
+    if (n.kind === "index_access"
+      && n.index === 0
+      && (n.expr as { kind?: string; name?: string })?.kind === "binding_ref"
+      && (n.expr as { name?: string }).name === varName) {
+      return { kind: "binding_ref", name: varName };
+    }
+    if (n.kind === "path" && n.head === varName && Array.isArray(n.steps)) {
+      // `t.0.name` may parse as a path with steps; drop a leading "0" step.
+      const steps = n.steps as unknown[];
+      if (steps.length > 0 && (steps[0] as { name?: string })?.name === "0") {
+        return { ...n, steps: steps.slice(1) };
+      }
+    }
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(n)) out[k] = collapseTupleZeroRefs(v, varName);
+    return out;
+  };
+  {
+    const tupleObjIterator = unwrapArrayUnpackSingleTupleObjectIterator(forAst.iteratorExpr);
+    if (tupleObjIterator) {
+      forAst = {
+        ...forAst,
+        iteratorExpr: tupleObjIterator,
+        body: collapseTupleZeroRefs(forAst.body, forAst.variable) as ForStatement["body"],
+      };
+      body = forAst.body;
+    }
+  }
 
   // Object-set iterator: materialise the rows (augmented with every field the
   // body reads off the loop variable) and bind those fields per element.
@@ -15733,6 +15791,14 @@ function unwrapToInsert(value: unknown, iterators: unknown[] = [], depth = 0): {
   }
   if (node.kind === "for_expr" || node.kind === "for") {
     return unwrapToInsert(node.body, [...iterators, node.iterator], depth + 1);
+  }
+  // A nested tuple (`SELECT (20, (FOR y … INSERT …))`) — descend into each
+  // element until an INSERT surfaces, carrying the accumulated FOR iterators.
+  if (node.kind === "tuple" && Array.isArray(node.values)) {
+    for (const el of node.values) {
+      const found = unwrapToInsert(el, iterators, depth + 1);
+      if (found) return found;
+    }
   }
   return undefined;
 }
