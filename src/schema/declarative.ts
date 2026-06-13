@@ -125,6 +125,7 @@ export interface ObjectTypeDeclaration {
     exprText: string;
     fieldRefs: string[];
     delegated?: boolean;
+    exceptExpr?: string;
   }>;
 }
 

@@ -6732,6 +6732,27 @@ class Parser {
       }
       const fields: string[] = [];
       const readOne = (): void => {
+        const tok = this.peek();
+        // The ON target must be a `.property` reference on the inserted type.
+        // Surface the canonical Gel diagnostics for the common mistakes:
+        //   ON 20            → not a property at all
+        //   ON Note.name     → a property, but of a different type
+        if (tok.kind !== "dot") {
+          if (this.isNameToken(tok)) {
+            // `Type.field` style — a property reference, but rooted on another
+            // type rather than the inserted one.
+            throw new AppError(
+              "E_SEMANTIC",
+              "UNLESS CONFLICT argument must be a property of the type being inserted",
+              ...this.posPair(tok),
+            );
+          }
+          throw new AppError(
+            "E_SEMANTIC",
+            "UNLESS CONFLICT argument must be a property",
+            ...this.posPair(tok),
+          );
+        }
         this.expect("dot", "Expected '.' in conflict target");
         fields.push(this.expectName("Expected field name in conflict target").lexeme);
       };
