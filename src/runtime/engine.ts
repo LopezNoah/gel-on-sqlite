@@ -6884,6 +6884,39 @@ const preExecuteMutationExprsInDmlValues = (
     }
     outerWith.push(binding);
   }
+  // A nested `INSERT Target { …, @prop := … }` used as a link value carries
+  // link-property assignments (`@comment`, `@note`) that belong to the
+  // ENCLOSING link, not the target type. Split those `@`-fields out of the
+  // inner insert's values and return them as computed shape elements so the
+  // (already supported) `(<insert>) { @prop := … }` shape-projection path
+  // applies them as link properties on the assignment. Returns undefined when
+  // the inner insert has no link-property fields.
+  const extractLinkPropShapeElements = (
+    stmt: Statement & { values?: Record<string, unknown> },
+  ): ShapeElement[] | undefined => {
+    const innerValues = stmt.values;
+    if (!innerValues) return undefined;
+    const linkPropElements: ShapeElement[] = [];
+    for (const key of Object.keys(innerValues)) {
+      if (!key.startsWith("@")) continue;
+      const raw = innerValues[key];
+      // Insert values store the assignment either as a raw literal (`'c'`) or
+      // wrapped as `{ kind: "expr", expr: … }`. Normalise to a shape-element
+      // computed expression.
+      const expr = (raw !== null && typeof raw === "object" && (raw as { kind?: string }).kind === "expr")
+        ? (raw as { expr: unknown }).expr
+        : { kind: "literal", value: raw };
+      linkPropElements.push({
+        kind: "computed",
+        name: key,
+        expr: expr as ShapeElement extends { expr: infer E } ? E : never,
+        operation: "assign",
+        origin: "explicit",
+      } as ShapeElement);
+      delete innerValues[key];
+    }
+    return linkPropElements.length > 0 ? linkPropElements : undefined;
+  };
   const runNested = (stmt: Statement & { with?: WithBinding[] }, extraWith: WithBinding[]): unknown => {
     const mergedWith = [...outerWith, ...extraWith, ...(stmt.with ?? [])];
     const merged = mergedWith.length > 0 ? ({ ...stmt, with: mergedWith } as Statement) : (stmt as Statement);
@@ -6962,7 +6995,17 @@ const preExecuteMutationExprsInDmlValues = (
         inner = inner.expr as Record<string, unknown> & { kind?: string };
       }
       if (inner?.kind === "mutation_expr" && inner.statement) {
-        const replaced = runNested(inner.statement as Statement & { with?: WithBinding[] }, innerBindings) as { expr: unknown };
+        const innerStmt = inner.statement as Statement & { with?: WithBinding[]; values?: Record<string, unknown> };
+        // Hoist `@prop` link-property assignments out of the nested insert so
+        // the inner INSERT compiles against only the target type's own fields;
+        // re-attach them as a shape projection over the by-id select so the
+        // link-assignment path applies them as link properties.
+        const linkPropElements = innerStmt.kind === "insert" ? extractLinkPropShapeElements(innerStmt) : undefined;
+        const replaced = runNested(innerStmt, innerBindings) as { expr: Record<string, unknown> & { shape?: ShapeElement[] } };
+        if (linkPropElements) {
+          const sel = replaced.expr;
+          replaced.expr = { ...sel, shape: [...(sel.shape ?? []), ...linkPropElements] };
+        }
         return replaced.expr;
       }
     }
