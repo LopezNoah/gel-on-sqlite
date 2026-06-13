@@ -8239,10 +8239,17 @@ const preExecuteMutationExprsInSelectExpr = (
   if (mutationCount < 2) {
     return { ...ast, expr: walk(expr) } as Statement;
   }
+  // Two or more sibling mutations run in one query against a single read
+  // snapshot: a value freed by one and re-used by another is a conflict
+  // (and_delete_01: `SELECT ((DELETE T …), (INSERT T …))`). Snapshot the
+  // exclusive values before any sibling runs and re-validate after.
+  const chainTypeNames = collectChainTypeNames(ast, defaultModule);
+  const exclusiveSnapshot = captureExclusiveSnapshot(db, schema, chainTypeNames);
   const savepoint = "gel_select_mut";
   db.prepare(`SAVEPOINT ${savepoint}`).run();
   try {
     const rewritten = { ...ast, expr: walk(expr) } as Statement;
+    validateExclusiveSnapshot(db, schema, chainTypeNames, exclusiveSnapshot, ast.pos);
     db.prepare(`RELEASE ${savepoint}`).run();
     return rewritten;
   } catch (err) {
@@ -13663,10 +13670,13 @@ const captureExclusiveSnapshotInternal = (
         for (const tbl of check.tables) {
           const cols = (db.prepare(`PRAGMA table_info(${quoteIdent(tbl)})`).all() as Array<{ name: string }>).map((c) => c.name);
           if (!check.columns.every((c) => cols.includes(c))) continue;
-          const selectCols = check.columns.map((c) => quoteIdent(c)).join(", ");
+          const hasExcept = check.exceptColumn !== undefined && cols.includes(check.exceptColumn);
+          const selectCols = [...check.columns, ...(hasExcept ? [check.exceptColumn!] : [])].map((c) => quoteIdent(c)).join(", ");
           const rows = db.prepare(`SELECT ${quoteIdent("id")} AS ${quoteIdent("id")}, ${selectCols} FROM ${quoteIdent(tbl)}`).all() as Array<Record<string, unknown>>;
           for (const row of rows) {
             if (typeof row.id !== "string") continue;
+            // `except (.flag)` — rows with a truthy flag are exempt.
+            if (hasExcept && (row[check.exceptColumn!] === 1 || row[check.exceptColumn!] === true)) continue;
             const vals = check.columns.map((c) => (check.lower && typeof row[c] === "string" ? (row[c] as string).toLowerCase() : row[c]));
             if (vals.some((v) => v === null || v === undefined)) continue;
             record(snapshotKeyForValue(vals), row.id);
@@ -13855,7 +13865,17 @@ interface ExclusiveCheck {
   // on the inserted type itself — UNLESS CONFLICT … ELSE is rejected then
   // (test _20a), and a bare/derived conflict is still suppressed (_18b).
   fromParent: boolean;
+  // `exclusive … except (.flag)` — rows whose `<flag>` column is truthy are
+  // exempt from the constraint (test except_constraint_02).
+  exceptColumn?: string;
 }
+
+// Parse `except (.flag)` → the bare flag column name.
+const exceptColumnFrom = (exceptExpr?: string): string | undefined => {
+  if (!exceptExpr) return undefined;
+  const m = /\(?\s*\.([A-Za-z_][A-Za-z0-9_]*)\s*\)?/.exec(exceptExpr);
+  return m ? m[1] : undefined;
+};
 
 const typeAncestorsOf = (schema: SchemaSnapshot, typeDef: TypeDef): TypeDef[] => {
   const seen = new Set<string>();
@@ -13910,7 +13930,7 @@ const exclusiveChecksFor = (
   // ── Field-level single-property exclusive constraints ──
   for (const field of typeDef.fields) {
     if (field.name === "id") continue;
-    const constraints = (field as { constraints?: Array<{ name: string; delegated?: boolean; onExpr?: string }> }).constraints ?? [];
+    const constraints = (field as { constraints?: Array<{ name: string; delegated?: boolean; onExpr?: string; exceptExpr?: string }> }).constraints ?? [];
     const excl = constraints.find(constraintIsExclusiveLike);
     if (!excl) continue;
     // Locate the topmost ancestor declaring the same field constraint to find
@@ -13928,6 +13948,7 @@ const exclusiveChecksFor = (
       multiProp: (field as { multi?: boolean }).multi ? field.name : undefined,
       tables: tablesSharingFieldConstraint(schema, typeDef, qualifiedTypeName(owner)),
       fromParent: qualifiedTypeName(owner) !== qualifiedTypeName(typeDef),
+      exceptColumn: exceptColumnFrom(excl.exceptExpr),
     });
   }
 
@@ -13957,7 +13978,7 @@ const exclusiveChecksFor = (
         tables.add(tableNameForType(qualifiedTypeName(concrete)));
       }
       tables.add(tableNameForType(qualifiedTypeName(typeDef)));
-      checks.push({ fields, columns, lower, tables: [...tables], fromParent: parent });
+      checks.push({ fields, columns, lower, tables: [...tables], fromParent: parent, exceptColumn: exceptColumnFrom((tc as { exceptExpr?: string }).exceptExpr) });
     }
   };
   collectTypeConstraints(typeDef, false);
