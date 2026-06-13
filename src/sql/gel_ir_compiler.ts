@@ -12417,6 +12417,10 @@ const scalarArgTypeHint = (set: Set): string | undefined => {
   if (cur.expr.kind === "type_cast") {
     return (cur.expr as TypeCast).toType.nameHint ?? cur.typeref.nameHint;
   }
+  // Collection-typed properties report `std::json` storage in their nameHint;
+  // surface the structural `array<…>` marker so polymorphic templates (len)
+  // can dispatch on the logical collection kind.
+  if (cur.typeref.collection === "array") return `array<${cur.typeref.nameHint ?? ""}>`;
   const hint = cur.typeref.nameHint;
   if (hint && /::int(16|32|64)$/.test(hint)) return hint;
   if (cur.expr.kind === "function_call") {

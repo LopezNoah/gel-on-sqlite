@@ -125,7 +125,17 @@ const STDLIB_SQL_TEMPLATES = new Map<string, StdlibSqlTemplate>([
     const path = argSql.slice(1).map((a) => ` || '."' || ${a} || '"'`).join("");
     return `json_extract(${argSql[0]}, '$'${path})`;
   }],
-  ["std::len", (argSql) => argSql[0] ? `length(COALESCE(CAST(${argSql[0]} AS TEXT), ''))` : null],
+  // `len` is polymorphic: over arrays it counts elements (json_array_length),
+  // over bytes it counts bytes (octet length), and over strings it counts
+  // characters. Dispatch on the inferred argument type — a bare TEXT length()
+  // would count the JSON characters of an array (`"[]"` → 2) instead of 0.
+  ["std::len", (argSql, argTypes) => {
+    if (!argSql[0]) return null;
+    const t = argTypes?.[0] ?? "";
+    if (t.includes("array<")) return `json_array_length(COALESCE(${argSql[0]}, '[]'))`;
+    if (t.endsWith("bytes")) return `length(CAST(${argSql[0]} AS BLOB))`;
+    return `length(COALESCE(CAST(${argSql[0]} AS TEXT), ''))`;
+  }],
   ["std::count", (argSql) => argSql[0] ? `count(${argSql[0]})` : null],
   ["std::max", (argSql) => argSql[0] ? `max(${argSql[0]})` : null],
   ["std::min", (argSql) => argSql[0] ? `min(${argSql[0]})` : null],

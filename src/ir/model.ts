@@ -567,6 +567,11 @@ export interface InsertLinkDefaultIR {
   targetTable: string;
   defaultTargetValues: ScalarValue[];
   lookupColumn?: string;
+  // When the link `default` is an INSERT expression (e.g.
+  // `default := (INSERT DefaultTest5 { … })`), this carries the EdgeQL text of
+  // that nested insert. The runtime executes it and links the new row, rather
+  // than looking an existing target up by `lookupColumn`.
+  insertExprText?: string;
 }
 
 export interface InsertIR extends MutationBaseIR {

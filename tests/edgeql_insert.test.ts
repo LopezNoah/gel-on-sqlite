@@ -125,19 +125,19 @@ describe("TestInsert", () => {
 
             INSERT InsertTest {
                 name := 'insert simple 01',
-                l3 := "Test\"1\"",
+                l3 := "Test\\"1\\"",
                 l2 := 1
             };
 
             INSERT InsertTest {
                 name := 'insert simple 01',
-                l3 := 'Test\'2\'',
+                l3 := 'Test\\'2\\'',
                 l2 := 2
             };
 
             INSERT InsertTest {
                 name := 'insert simple 01',
-                l3 := '\"Test\'3\'\"',
+                l3 := '\\"Test\\'3\\'\\"',
                 l2 := 3
             };
         `
@@ -3155,19 +3155,19 @@ describe("TestInsert", () => {
 
             INSERT DerivedTest {
                 name := 'insert derived 01',
-                l3 := "Test\"1\"",
+                l3 := "Test\\"1\\"",
                 l2 := 1
             };
 
             INSERT DerivedTest {
                 name := 'insert derived 01',
-                l3 := 'Test\'2\'',
+                l3 := 'Test\\'2\\'',
                 l2 := 2
             };
 
             INSERT DerivedTest {
                 name := 'insert derived 01',
-                l3 := '\"Test\'3\'\"',
+                l3 := '\\"Test\\'3\\'\\"',
                 l2 := 3
             };
         `
