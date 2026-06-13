@@ -7180,22 +7180,31 @@ const expandForInsertStatements = (
   // Scalar iterator: one iteration per value, binding the variable as a WITH
   // literal. `evaluateForIteratorValues` materialises set literals, concats,
   // function calls, and SQL-lowerable selects.
+  //
+  // A nested FOR's iterator may reference enclosing loop variables
+  // (`FOR a … FOR b IN {a ++ "c"} …`); those arrive as `accumWith` literal
+  // bindings, so evaluate the iterator via SQL with them (plus the FOR's own
+  // WITH) in scope rather than the standalone evaluator.
   let iterValues: unknown[];
-  try {
-    iterValues = forAst.iteratorExpr.kind === "set_literal"
-      ? forAst.iteratorExpr.values
-      : evaluateForIteratorValues(forAst.iteratorExpr, schema, db, context);
-  } catch {
-    iterValues = [];
-  }
-  // Iterators referencing the FOR's own WITH bindings (`WITH raw := …, FOR item
-  // IN json_array_unpack(raw)`) can't be materialised by the standalone
-  // evaluator — compile a one-off SELECT with those bindings in scope and read
-  // its scalar rows.
-  if (!iterValues.every((v) => v === null || isScalarValue(v))
-    || (iterValues.length === 0 && ((forAst as { with?: WithBinding[] }).with?.length ?? 0) > 0)) {
-    const sqlValues = evaluateForScalarIteratorViaSql(forAst, schema, db, context);
-    if (sqlValues !== undefined) iterValues = sqlValues;
+  if (accumWith.length > 0) {
+    const sqlValues = evaluateForScalarIteratorViaSql(forAst, schema, db, context, accumWith);
+    iterValues = sqlValues ?? [];
+  } else {
+    try {
+      iterValues = forAst.iteratorExpr.kind === "set_literal"
+        ? forAst.iteratorExpr.values
+        : evaluateForIteratorValues(forAst.iteratorExpr, schema, db, context);
+    } catch {
+      iterValues = [];
+    }
+    // Iterators referencing the FOR's own WITH bindings (`WITH raw := …, FOR
+    // item IN json_array_unpack(raw)`) can't be materialised by the standalone
+    // evaluator — compile a one-off SELECT with those bindings in scope.
+    if (!iterValues.every((v) => v === null || isScalarValue(v))
+      || (iterValues.length === 0 && ((forAst as { with?: WithBinding[] }).with?.length ?? 0) > 0)) {
+      const sqlValues = evaluateForScalarIteratorViaSql(forAst, schema, db, context);
+      if (sqlValues !== undefined) iterValues = sqlValues;
+    }
   }
   // Object rows leaking through evaluateForIteratorValues aren't scalar-bindable.
   if (!iterValues.every((v) => v === null || isScalarValue(v))) return undefined;
@@ -7253,11 +7262,15 @@ const evaluateForScalarIteratorViaSql = (
   schema: SchemaSnapshot,
   db: SQLiteDatabase,
   context: SecurityContext,
+  extraWith: WithBinding[] = [],
 ): (ScalarValue | null)[] | undefined => {
+  // Enclosing-loop bindings (extraWith) precede the FOR's own WITH so the
+  // iterator can resolve outer variables (`FOR a … FOR b IN {a ++ "c"}`).
+  const mergedWith = [...extraWith, ...((forAst as { with?: WithBinding[] }).with ?? [])];
   const stmtAst = {
     kind: "select_expr",
     expr: forAst.iteratorExpr,
-    with: (forAst as { with?: WithBinding[] }).with,
+    with: mergedWith.length > 0 ? mergedWith : undefined,
     withModule: forAst.withModule,
     pos: forAst.pos,
   } as unknown as Statement;
