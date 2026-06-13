@@ -1450,7 +1450,7 @@ describe("TestInsert", () => {
             };
         `
     );
-    let sub = h.query("\n            insert Subordinate { name := \"asdf\" };\n        ");
+    let sub = querySingle<{ id: string }>(h, "\n            insert Subordinate { name := \"asdf\" };\n        ");
     expect(() => {
       h.script(
         `
@@ -1474,7 +1474,8 @@ describe("TestInsert", () => {
     h.script(
       `
             set global sub_id := <uuid>$0
-        `
+        `,
+      [sub.id]
     );
     h.script(
       `
@@ -9428,7 +9429,8 @@ describe("TestInsert", () => {
             `,
       [
             {},
-          ]
+          ],
+      { variables: [true] }
     );
     assertQueryResult(
       h,
@@ -9453,7 +9455,8 @@ describe("TestInsert", () => {
             `,
       [
             {},
-          ]
+          ],
+      { variables: [false] }
     );
     assertQueryResult(
       h,
@@ -9483,7 +9486,8 @@ describe("TestInsert", () => {
       [
             {},
             {},
-          ]
+          ],
+      { variables: [[true, false]] }
     );
     assertQueryResult(
       h,
@@ -9495,7 +9499,8 @@ describe("TestInsert", () => {
             `,
       [
             {},
-          ]
+          ],
+      { variables: [true] }
     );
     assertQueryResult(
       h,
@@ -9555,7 +9560,8 @@ describe("TestInsert", () => {
             {
               "l2": 4,
             },
-          ]
+          ],
+      { variables: [[1, 2, 3, 4, 5]] }
     );
     assertQueryResult(
       h,
@@ -9704,7 +9710,8 @@ describe("TestInsert", () => {
               "name": "?",
               "new": true,
             },
-          ]
+          ],
+      { variables: [[1, 2]] }
     );
     assertQueryResult(
       h,
@@ -9735,7 +9742,8 @@ describe("TestInsert", () => {
               "name": "?",
               "new": true,
             },
-          ]
+          ],
+      { variables: [[0, 1, 2, 3]] }
     );
   });
 
@@ -10068,7 +10076,8 @@ describe("TestInsert", () => {
         `,
       [
             {},
-          ]
+          ],
+      { variables: [true] }
     );
     assertQueryResult(
       h,
@@ -10088,7 +10097,8 @@ describe("TestInsert", () => {
         `,
       [
             {},
-          ]
+          ],
+      { variables: [true] }
     );
     assertQueryResult(
       h,
@@ -10113,7 +10123,8 @@ describe("TestInsert", () => {
         `,
       [
             {},
-          ]
+          ],
+      { variables: [false] }
     );
     assertQueryResult(
       h,
@@ -10133,7 +10144,8 @@ describe("TestInsert", () => {
         `,
       [
             {},
-          ]
+          ],
+      { variables: [false] }
     );
     assertQueryResult(
       h,

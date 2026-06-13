@@ -5631,6 +5631,10 @@ class Parser {
           "plus", "minus", "star", "slash",
           "coalesce", "equals", "not_equals", "lt", "gt", "lte", "gte",
           "concat", "kw_union",
+          // Membership operators (`.id in X`, `.id not in X`) must also defer to
+          // the general expression parser; otherwise the dot-ref returns early
+          // and the trailing `in …` is left unconsumed inside a shape body.
+          "kw_in", "kw_not",
         ];
         if (afterChain && continuesAsBinary.includes(afterChain)) {
           return undefined;

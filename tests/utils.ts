@@ -9,6 +9,7 @@ import {
   deserializeSchemaFromGelTables,
 } from "../src/schema/gel_persistence.js";
 import { Client } from "../src/client/index.js";
+import type { QueryVariables } from "../src/runtime/engine.js";
 // import { parseDeclarativeSchema } from "../src/schema/declarative.js";
 import { schemaSnapshotFromDeclarative } from "../src/schema/uiSchema.js";
 import { SchemaSnapshot } from "../src/schema/schema.js";
@@ -325,15 +326,15 @@ export class QueryHarness {
     return harness;
   }
 
-  query(q: string) {
-    return this.client.querySyncEnvelope(q);
+  query(q: string, variables?: QueryVariables) {
+    return this.client.querySyncEnvelope(q, variables);
   }
 
   /**
    * Execute a multi-statement script (semicolon-separated)
    */
-  script(s: string) {
-    return this.client.scriptSyncEnvelope(s);
+  script(s: string, variables?: QueryVariables) {
+    return this.client.scriptSyncEnvelope(s, variables);
   }
 
   /**
