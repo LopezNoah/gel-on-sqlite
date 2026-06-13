@@ -3011,6 +3011,22 @@ const SET_CONSUMING_FUNCTIONS = new Set<string>([
   "array_unpack", "range_unpack", "array_join", "array_get",
 ]);
 
+// Whether an `array_unpack` argument is a multi-element SET of arrays (so the
+// unpack must run per array and union the results), as opposed to a single
+// array value (one combined json_each). Structural detection: peel clause-free
+// SELECT wrappers, then treat a `union` of array constructors — `{[1],[2,3]}`,
+// the shape an inlined `array<…>` param bound to a multi-element set takes — as
+// multi. A single array constructor / pointer / param stays the value path.
+const arrayUnpackSourceIsMultiSet = (set: Set): boolean => {
+  let cur = set;
+  while (cur.expr.kind === "select_expr") {
+    const se = cur.expr as SelectExpr;
+    if (se.where || se.limit || se.offset || (se.orderBy && se.orderBy.length > 0)) return false;
+    cur = se.result;
+  }
+  return cur.expr.kind === "operator_call" && (cur.expr as OperatorCall).operator === "union";
+};
+
 // Whether a cast target names a collection type (array/tuple). Collection
 // targets parsed from source text qualify as `default::array<str>` without a
 // `collection` marker — strip the module prefix and match the bare name too.
@@ -3469,6 +3485,41 @@ const compileScalarSelectSQLInner = (
     if (shortName === "assert_exists" && args.length === 1) {
       return compileScalarSelectSQL(args[0].expr, params, target, options, outerWheres);
     }
+    // `agg(array_unpack(S))` where S is a MULTI-element set of arrays — the
+    // shape an inlined non-`set of` UDF param bound to `{[1],[2,3]}` takes for
+    // a body like `sum(array_unpack(x))`. EdgeQL distributes the whole body —
+    // and therefore the aggregate — element-wise over the param's set, so the
+    // result is one aggregate value PER array (`{sum([1]), sum([2,3])}={1,5}`),
+    // a multi-row set — NOT one aggregate over the flattened union (which the
+    // generic scalar-aggregate path would produce as the single value 6). Emit
+    // one row per array, aggregating that array's own json_each elements.
+    if (args.length === 1
+        && ["sum", "min", "max", "avg", "array_agg", "all", "any"].includes(shortName)) {
+      const aggArg = unwrapSelectExprSet(args[0].expr).result;
+      if (aggArg.expr.kind === "function_call"
+          && (aggArg.expr as FunctionCall).functionName.split("::").pop() === "array_unpack") {
+        const unpackArgs = orderedCallArgs((aggArg.expr as FunctionCall).args);
+        if (unpackArgs.length === 1 && arrayUnpackSourceIsMultiSet(unpackArgs[0].expr)) {
+          const cpDist = params.length;
+          const rows = compileScalarSelectSQL(unpackArgs[0].expr, params, target, options);
+          if (rows) {
+            const elems = `json_each(COALESCE(g_aum.${quoteIdent("value")}, '[]')) je`;
+            const v = `je.${quoteIdent("value")}`;
+            const perArrayAgg = shortName === "array_agg"
+              ? `(SELECT COALESCE(json_group_array(${v}), '[]') FROM ${elems})`
+              : shortName === "all"
+                ? `(SELECT IFNULL(min(${v}), json('true')) FROM ${elems} WHERE ${v} IS NOT NULL)`
+                : shortName === "any"
+                  ? `(SELECT IFNULL(max(${v}), json('false')) FROM ${elems} WHERE ${v} IS NOT NULL)`
+                  : shortName === "sum"
+                    ? `(SELECT IFNULL(sum(${v}), 0) FROM ${elems})`
+                    : `(SELECT ${shortName}(${v}) FROM ${elems})`;
+            return `SELECT ${perArrayAgg} AS ${quoteIdent("value")} FROM (${rows}) g_aum`;
+          }
+          params.length = cpDist;
+        }
+      }
+    }
     // `enumerate(X)` — one `(index, element)` tuple row per element of X,
     // indexed in row order starting at 0.
     if (shortName === "enumerate" && args.length === 1) {
@@ -3502,6 +3553,23 @@ const compileScalarSelectSQLInner = (
         // expression is `.tag_array` inside `FILTER 'x' IN array_unpack(.tag_array)`),
         // prefer that alias so the lookup correlates to the outer row.
         const checkpointBefore = params.length;
+        // MULTI-element SET of arrays (`array_unpack({[1], [2, 3]})`, e.g. an
+        // inlined UDF param bound to a set of arrays): unpacking is element-wise
+        // over the set — each array in the set is exploded on its own, and the
+        // results unioned. compileValueSetSQL would instead `json_group_array`
+        // the whole set into ONE combined array and json_each only its outer
+        // level, yielding the arrays themselves rather than their elements. So
+        // when the source is multi-valued, compile it as a row-per-array select
+        // and json_each each row, preserving the per-array (co-iterated) shape.
+        if (arrayUnpackSourceIsMultiSet(inner)) {
+          const cpMulti = params.length;
+          const rows = compileScalarSelectSQL(inner, params, target, options);
+          if (rows) {
+            return `SELECT je.${quoteIdent("value")} AS ${quoteIdent("value")}`
+              + ` FROM (${rows}) g_aum CROSS JOIN json_each(COALESCE(g_aum.${quoteIdent("value")}, '[]')) je`;
+          }
+          params.length = cpMulti;
+        }
         const correlatedAlias = pickOuterScopeAliasForExpr(inner, options);
         const arrSql = compileValueSetSQL(inner, correlatedAlias ?? "g_au", params, target, options);
         if (arrSql) {
