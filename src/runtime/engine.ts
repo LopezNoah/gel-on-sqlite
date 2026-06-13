@@ -13,7 +13,7 @@ import { executeStdlibFunction, resolveStdlibFunction, type RuntimeFunctionArg }
 import { assertTargetSqlCompatibility, type RuntimeTarget } from "./target.js";
 import type { ShapeElement as GelIRShapeElement, Set as GelIRSet, Statement as GelIRStatement, TypeRef as GelIRTypeRef } from "../ir/gel_ir.js";
 import type { GroupIR, InsertIR, InsertLinkDefaultIR, InsertLinkPropertyIR, IRStatement, OverlayIR, SelectIR, UpdateIR, UpdateLinkAssignmentIR } from "../ir/model.js";
-import type { AccessPolicyCondition, AccessPolicyDef, ComputedLinkPropertyExpr, ConstraintDef, FieldDef, FunctionDef, FunctionExprDef, FunctionVolatility, LinkPropertyDef, ScalarType, ScalarValue, TypeDef } from "../types.js";
+import type { AccessPolicyCondition, AccessPolicyDef, ComputedLinkPropertyExpr, ConstraintDef, FieldDef, FieldDefaultExpr, FunctionDef, FunctionExprDef, FunctionVolatility, LinkPropertyDef, ScalarType, ScalarValue, TypeDef } from "../types.js";
 import { fieldSequenceName, normalizeLinkTargetNames, qualifiedTypeName } from "../schema/schema.js";
 import { tableNameForType } from "../codegen/sql.js";
 import { populateSchemaIntrospection } from "../schema/schema_introspection.js";
@@ -1048,6 +1048,288 @@ const exclusiveConstraintFieldRefs = (onExpr: string | undefined): string[] => {
   return [...new Set(refs)];
 };
 
+// An operation parsed out of a top-level `ALTER TYPE …` statement: a
+// `SET default := <expr>` on a pointer path (property or link-property), or a
+// drop/create of an exclusive constraint on the type. The `pointerPath` is the
+// chain of `ALTER LINK`/`ALTER PROPERTY` names that precede the operation
+// (e.g. `["subordinates", "comment"]` for a link-property; `["a"]` for a plain
+// property).
+type AlterTypeOp =
+  | { kind: "set_default"; pointerPath: string[]; exprText: string }
+  | { kind: "drop_constraint"; constraint: DynamicExclusiveConstraint }
+  | { kind: "create_constraint"; constraint: DynamicExclusiveConstraint };
+
+// Token-based parser for `ALTER TYPE <name> …`. Handles both the chained form
+// (`ALTER TYPE T ALTER LINK l ALTER PROPERTY p SET default := …`) and the
+// braced form (`ALTER TYPE T { ALTER PROPERTY a { SET default := … }; … }`).
+// Returns the target type name + the list of operations, or undefined when the
+// statement isn't an ALTER TYPE (so the caller falls through to other DDL).
+const parseAlterTypeStatement = (
+  statement: string,
+): { rawName: string; ops: AlterTypeOp[] } | undefined => {
+  const src = statement.trim();
+  const tokenized = tryResult(() => tokenize(src));
+  if (!tokenized.ok) return undefined;
+  const tokens: readonly Token[] = tokenized.value;
+  if (tokens[0]?.kind !== "kw_alter" || tokens[1]?.lower !== "type") return undefined;
+  const nameTok = tokens[2];
+  if (!nameTok || (nameTok.kind !== "identifier" && nameTok.kind !== "backtick_name" && nameTok.kind !== "kw_unreserved")) {
+    return undefined;
+  }
+  let rawName = stripBacktickName(nameTok.lexeme);
+  let i = 3;
+  while (tokens[i]?.kind === "coloncolon") {
+    const seg = tokens[i + 1];
+    if (!seg) break;
+    rawName += `::${stripBacktickName(seg.lexeme)}`;
+    i += 2;
+  }
+
+  const ops: AlterTypeOp[] = [];
+
+  // Slice the balanced parenthesised expression text starting at `startIdx`
+  // (which must be an `lparen`). Returns the inner text + the index past the
+  // matching `rparen`.
+  const sliceParen = (startIdx: number): { text: string; next: number } | undefined => {
+    if (tokens[startIdx]?.kind !== "lparen") return undefined;
+    let depth = 0;
+    for (let j = startIdx; j < tokens.length; j += 1) {
+      const t = tokens[j];
+      if (t.kind === "lparen") depth += 1;
+      else if (t.kind === "rparen") {
+        depth -= 1;
+        if (depth === 0) return { text: src.slice(tokens[startIdx].offset + 1, t.offset).trim(), next: j + 1 };
+      }
+    }
+    return undefined;
+  };
+
+  // Parse a `(DROP|CREATE) [DELEGATED] CONSTRAINT exclusive [ON (…)] [EXCEPT (…)]`
+  // starting at `idx` (positioned on the verb). Returns the op + next index.
+  const parseConstraintOp = (idx: number): { op: AlterTypeOp; next: number } | undefined => {
+    const verb = tokens[idx];
+    const isDrop = verb?.kind === "kw_drop";
+    const isCreate = verb?.kind === "kw_create";
+    if (!isDrop && !isCreate) return undefined;
+    let j = idx + 1;
+    let delegated = false;
+    if (tokens[j]?.kind === "identifier" && tokens[j].lower === "delegated") { delegated = true; j += 1; }
+    if (tokens[j]?.kind !== "kw_constraint") return undefined;
+    j += 1;
+    const cnameTok = tokens[j];
+    if (!cnameTok) return undefined;
+    let cname = stripBacktickName(cnameTok.lexeme);
+    j += 1;
+    if (tokens[j]?.kind === "coloncolon" && tokens[j + 1]) { cname = stripBacktickName(tokens[j + 1].lexeme); j += 2; }
+    if (cname.includes("::")) cname = cname.slice(cname.lastIndexOf("::") + 2);
+    if (cname !== "exclusive") return undefined;
+    let onExpr: string | undefined;
+    let exceptExpr: string | undefined;
+    while (tokens[j]) {
+      if (tokens[j].kind === "kw_on") {
+        const sliced = sliceParen(j + 1);
+        if (!sliced) break;
+        onExpr = sliced.text; j = sliced.next; continue;
+      }
+      if (tokens[j].kind === "kw_except") {
+        const sliced = sliceParen(j + 1);
+        if (!sliced) break;
+        exceptExpr = sliced.text; j = sliced.next; continue;
+      }
+      break;
+    }
+    const constraint: DynamicExclusiveConstraint = { delegated, onExpr, exceptExpr };
+    return { op: { kind: isDrop ? "drop_constraint" : "create_constraint", constraint }, next: j };
+  };
+
+  // Slice a `SET default := <expr>` value starting just after `:=` (idx points
+  // at the `assign` token). The expression runs until the enclosing `}` / `;` /
+  // eof at the current brace depth.
+  const sliceDefaultExpr = (assignIdx: number, _braceDepth: number): { text: string; next: number } => {
+    const startTok = tokens[assignIdx + 1];
+    let depth = 0;
+    let j = assignIdx + 1;
+    for (; j < tokens.length; j += 1) {
+      const t = tokens[j];
+      if (t.kind === "eof") break;
+      if (t.kind === "lparen" || t.kind === "lbrace" || t.kind === "lbracket") depth += 1;
+      else if (t.kind === "rparen" || t.kind === "rbracket") depth -= 1;
+      else if (t.kind === "rbrace") {
+        if (depth === 0) break;
+        depth -= 1;
+      } else if (t.kind === "semi" && depth === 0) break;
+    }
+    // Bound the expression by the terminator token's start offset (or end of
+    // source). Using the terminator offset — rather than reconstructing from the
+    // last expression token's lexeme — avoids miscounting tokens whose lexeme
+    // drops delimiters (string literals carry their text without quotes).
+    const endTok = tokens[j];
+    const endOffset = endTok && endTok.kind !== "eof" ? endTok.offset : src.length;
+    return { text: startTok ? src.slice(startTok.offset, endOffset).trim() : "", next: j };
+  };
+
+  // Walk the statement, tracking the current pointer-path prefix as we descend
+  // through ALTER LINK/PROPERTY clauses (chained or brace-nested).
+  const walk = (start: number, end: number, path: string[], braceDepth: number): void => {
+    let j = start;
+    while (j < end) {
+      const t = tokens[j];
+      if (!t || t.kind === "eof") break;
+      if (t.kind === "lbrace") {
+        // Recurse into the brace block carrying the current path; find matching close.
+        let depth = 1; let k = j + 1;
+        while (k < end && depth > 0) {
+          if (tokens[k].kind === "lbrace") depth += 1;
+          else if (tokens[k].kind === "rbrace") depth -= 1;
+          if (depth === 0) break;
+          k += 1;
+        }
+        walk(j + 1, k, path, braceDepth + 1);
+        j = k + 1;
+        continue;
+      }
+      if (t.kind === "rbrace" || t.kind === "semi") { j += 1; continue; }
+      if (t.kind === "kw_alter") {
+        const kindTok = tokens[j + 1];
+        const nameT = tokens[j + 2];
+        if ((kindTok?.kind === "kw_link" || kindTok?.kind === "kw_property") && nameT) {
+          walkAlterPointer(j, end, path, braceDepth);
+          // walkAlterPointer consumes through its own scope; advance past it.
+          j = skipPointerClause(j, end);
+          continue;
+        }
+        j += 1;
+        continue;
+      }
+      if (t.kind === "kw_set" && tokens[j + 1]?.lower === "default" && tokens[j + 2]?.kind === "assign") {
+        const sliced = sliceDefaultExpr(j + 2, braceDepth);
+        if (path.length > 0) ops.push({ kind: "set_default", pointerPath: [...path], exprText: sliced.text });
+        j = sliced.next;
+        continue;
+      }
+      const con = parseConstraintOp(j);
+      if (con) { ops.push(con.op); j = con.next; continue; }
+      j += 1;
+    }
+  };
+
+  // Find the index just past an `ALTER LINK/PROPERTY <name>` clause's scope: it
+  // ends at the matching `}` (braced form) or the trailing `;`/eof (chained).
+  const skipPointerClause = (start: number, end: number): number => {
+    let j = start + 3; // past ALTER <kind> <name>
+    // Skip a possible `{ … }` block.
+    while (j < end && tokens[j]?.kind !== "lbrace" && tokens[j]?.kind !== "kw_alter"
+      && tokens[j]?.kind !== "kw_set" && tokens[j]?.kind !== "semi"
+      && tokens[j]?.kind !== "kw_drop" && tokens[j]?.kind !== "kw_create") {
+      j += 1;
+    }
+    return j;
+  };
+
+  // Handle `ALTER LINK/PROPERTY <name> …` by extending the path then walking
+  // either its brace block or the chained continuation.
+  const walkAlterPointer = (start: number, end: number, path: string[], braceDepth: number): void => {
+    const nameT = tokens[start + 2];
+    const name = stripBacktickName(nameT.lexeme);
+    const nextPath = [...path, name];
+    let j = start + 3;
+    if (tokens[j]?.kind === "lbrace") {
+      let depth = 1; let k = j + 1;
+      while (k < end && depth > 0) {
+        if (tokens[k].kind === "lbrace") depth += 1;
+        else if (tokens[k].kind === "rbrace") depth -= 1;
+        if (depth === 0) break;
+        k += 1;
+      }
+      walk(j + 1, k, nextPath, braceDepth + 1);
+    } else {
+      // Chained: continue walking from here with the extended path until the
+      // statement-level terminator.
+      walk(j, end, nextPath, braceDepth);
+    }
+  };
+
+  walk(i, tokens.length, [], 0);
+  return { rawName, ops };
+};
+
+// If `exprText` is a bare scalar literal (`'foo'`, `"foo"`, `42`, `true`),
+// return the structured literal default; otherwise undefined (the text-only
+// default path handles general expressions like `'a=' ++ .b`).
+const literalDefaultFromText = (exprText: string): FieldDefaultExpr | undefined => {
+  const t = exprText.trim();
+  if ((t.startsWith("'") && t.endsWith("'")) || (t.startsWith("\"") && t.endsWith("\""))) {
+    return { kind: "literal", value: t.slice(1, -1) };
+  }
+  if (/^-?\d+$/.test(t)) return { kind: "literal", value: Number(t) };
+  if (/^-?\d+\.\d+$/.test(t)) return { kind: "literal", value: Number(t) };
+  if (t === "true" || t === "false") return { kind: "literal", value: t === "true" };
+  return undefined;
+};
+
+// Apply the operations parsed from a top-level `ALTER TYPE …` statement to the
+// schema in place. Returns true when the statement was a (recognised) ALTER
+// TYPE, so the caller re-materialises and clears the compiler cache.
+const applyAlterTypeDDL = (schema: SchemaSnapshot, statement: string, defaultModule = "default"): boolean => {
+  const parsed = parseAlterTypeStatement(statement.trim());
+  if (!parsed || parsed.ops.length === 0) return false;
+  const { module, name } = dynamicQualifiedNameParts(parsed.rawName, defaultModule);
+  const typeDef = schema.getType(`${module}::${name}`);
+  if (!typeDef) return false;
+
+  let mutated = false;
+  for (const op of parsed.ops) {
+    if (op.kind === "set_default") {
+      const literal = literalDefaultFromText(op.exprText);
+      if (op.pointerPath.length === 1) {
+        const field = typeDef.fields.find((f) => f.name === op.pointerPath[0]);
+        if (field) {
+          field.hasDefault = true;
+          field.defaultExprText = op.exprText;
+          field.defaultExpr = literal;
+          mutated = true;
+        }
+      } else if (op.pointerPath.length === 2) {
+        const link = (typeDef.links ?? []).find((l) => l.name === op.pointerPath[0]);
+        const linkProp = link?.properties?.find((p) => p.name === op.pointerPath[1]);
+        if (linkProp) {
+          linkProp.hasDefault = true;
+          linkProp.defaultExprText = op.exprText;
+          linkProp.defaultExpr = literal;
+          mutated = true;
+        }
+      }
+    } else if (op.kind === "create_constraint") {
+      const refs = exclusiveConstraintFieldRefs(op.constraint.onExpr);
+      if (refs.length > 0) {
+        typeDef.typeConstraints = [
+          ...(typeDef.typeConstraints ?? []),
+          {
+            name: "std::exclusive",
+            exprText: op.constraint.onExpr ?? "",
+            fieldRefs: refs,
+            delegated: op.constraint.delegated || undefined,
+            exceptExpr: op.constraint.exceptExpr,
+          },
+        ];
+        mutated = true;
+      }
+    } else if (op.kind === "drop_constraint") {
+      const before = typeDef.typeConstraints?.length ?? 0;
+      typeDef.typeConstraints = (typeDef.typeConstraints ?? []).filter((c) => {
+        // Drop the matching exclusive constraint (same on/except expression).
+        const sameOn = (c.exprText ?? "").replace(/\s+/g, "") === (op.constraint.onExpr ?? "").replace(/\s+/g, "");
+        const sameExcept = (c.exceptExpr ?? "").replace(/\s+/g, "") === (op.constraint.exceptExpr ?? "").replace(/\s+/g, "");
+        return !(c.name === "std::exclusive" && sameOn && sameExcept);
+      });
+      if ((typeDef.typeConstraints?.length ?? 0) !== before) mutated = true;
+    }
+  }
+
+  if (mutated) schema.addType(typeDef);
+  return mutated;
+};
+
 const registerDynamicTypeDDL = (schema: SchemaSnapshot, statement: string, defaultModule = "default"): boolean => {
   const header = parseCreateTypeHeader(statement.trim());
   if (!header) return false;
@@ -1255,6 +1537,7 @@ const maybeRegisterDynamicDDLScript = (db: SQLiteDatabase, schema: SchemaSnapsho
   let registeredType = false;
   for (const statement of splitTopLevelScriptStatements(script)) {
     registeredType = registerDynamicTypeDDL(schema, statement, defaultModule) || registeredType;
+    registeredType = applyAlterTypeDDL(schema, statement, defaultModule) || registeredType;
     const futureFlag = parseCreateFutureFlag(statement);
     if (futureFlag) {
       schema.setFutureFlag(futureFlag, true);
@@ -6254,6 +6537,13 @@ export const executeQuery = (
   // before any execution side-effects. Mirrors `validateScriptUserDDL` for
   // the single-statement entry point.
   validateUserDDLStatement(parsedQuery, securityContext.strictUserDDL ?? false);
+  // A single DDL statement (`create type …`, `alter type …`) needs the same
+  // schema pre-pass the multi-statement script path runs — otherwise the
+  // dynamic CREATE/ALTER TYPE registration never fires and the statement
+  // reaches GEL-IR lowering as an unsupported `ddl`.
+  if (parsedQuery.kind === "ddl") {
+    return executeScript(db, schema, rewrittenQuery, securityContext);
+  }
   if (parsedQuery.kind === "for" && forStatementYieldsInsert(parsedQuery)) {
     const script = rewrittenQuery.trim().endsWith(";") ? rewrittenQuery : `${rewrittenQuery};`;
     return executeQueryUnitWithTrace(db, schema, script, securityContext).result;
