@@ -899,6 +899,11 @@ export interface FunctionDecl {
   returnType: string;
   returnOptional?: boolean;
   returnSetOf?: boolean;
+  // Volatility category from a top-level `SET volatility := ...` command in
+  // the function body (e.g. "Modifying"). Captured by the parser so the
+  // runtime can attach it to the function definition; modifying functions
+  // enforce singleton-cardinality on their arguments.
+  volatility?: string;
   body: {
     kind: "query";
     language: string;
