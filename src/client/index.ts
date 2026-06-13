@@ -14,7 +14,7 @@
 // verbatim from the Python suite's JSON-ish shapes) keep matching.
 
 import { openSQLite } from "../runtime/database.js";
-import { executeQuery, executeScript, type QueryResult } from "../runtime/engine.js";
+import { executeQuery, executeScript, type QueryResult, type QueryVariables } from "../runtime/engine.js";
 import {
   deserializeSchemaFromGelTables,
   deserializeSchemaFromInstdata,
@@ -139,16 +139,16 @@ export class Client implements Executor {
     this.securityContext = context;
   }
 
-  querySyncEnvelope(query: string): QueryResult {
+  querySyncEnvelope(query: string, variables?: QueryVariables): QueryResult {
     this.assertOpen();
-    return executeQuery(this.db, this.schema, query, this.securityContext as never);
+    return executeQuery(this.db, this.schema, query, this.securityContext as never, variables);
   }
 
-  scriptSyncEnvelope(script: string): QueryResult {
+  scriptSyncEnvelope(script: string, variables?: QueryVariables): QueryResult {
     this.assertOpen();
     return executeScript(this.db, this.schema, script, this.securityContext as never, {
       defaultModule: this.options.defaultModule,
-    });
+    }, variables);
   }
 
   private decodedRows(query: string): unknown[] {

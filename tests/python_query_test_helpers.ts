@@ -1,5 +1,6 @@
 import { expect } from "vitest";
 import type { QueryHarness } from "./utils.js";
+import type { QueryVariables } from "../src/runtime/engine.js";
 
 export type UnorderedBag = { __kind: "bag"; items: unknown[] };
 export type UnorderedSet = { __kind: "set"; items: unknown[] };
@@ -153,7 +154,7 @@ function templateContainsUnordered(value: unknown): boolean {
   return false;
 }
 
-export type AssertOptions = { absTol?: number };
+export type AssertOptions = { absTol?: number; variables?: QueryVariables };
 
 // Mirror of Python's assert_query_result(..., abs_tol=...): numeric leaves
 // compare within the tolerance instead of exactly. Sets/bags of numbers are
@@ -294,7 +295,7 @@ export function assertQueryResult(
   expected: unknown,
   options?: AssertOptions,
 ): void {
-  const result = h.query(query);
+  const result = h.query(query, options?.variables);
   const normalized =
     result && typeof result === "object" && "rows" in (result as unknown as Record<string, unknown>)
       ? (result as { rows: unknown }).rows

@@ -96,6 +96,10 @@ export interface SecurityContext {
   isSuperuser?: boolean;
   permissions?: string[];
   globals?: Record<string, ScalarValue>;
+  // Query parameter values for `$0`, `$name`, etc. Keyed by parameter name
+  // (the part after `$`). Threaded into the SQL compiler so positional/named
+  // EdgeQL parameters bind their `?` placeholders to these values.
+  params?: Record<string, ScalarValue>;
   runtimeTarget?: RuntimeTarget;
   // Mirrors upstream's `INTERNAL_TESTMODE = False` test-class setting:
   // when true, the engine enforces user-DDL restrictions (no generic
@@ -6586,12 +6590,53 @@ const forStatementYieldsInsert = (forAst: ForStatement): boolean => {
   return false;
 };
 
+// EdgeQL query parameters supplied at execution time. A positional tuple/array
+// (`variables=(True,)` upstream) binds `$0`, `$1`, … by index; a record binds
+// named parameters (`$name`). Values may be JS arrays/objects for collection
+// parameters (`<array<int64>>$0`), which bind as JSON strings to match how the
+// SQL compiler unpacks them (`json_each`).
+export type QueryVariables = readonly unknown[] | Record<string, unknown>;
+
+// Collection/composite parameter values lower to a single SQLite `?` bound to
+// the JSON encoding the array/json operators expect; scalars pass through
+// unchanged (booleans → 0/1, the form the cast-over-parameter SQL consumes).
+const normalizeQueryVariableValue = (value: unknown): ScalarValue => {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (Array.isArray(value) || typeof value === "object") {
+    return JSON.stringify(value);
+  }
+  if (typeof value === "boolean") {
+    return value ? 1 : 0;
+  }
+  return value as ScalarValue;
+};
+
+const normalizeQueryVariables = (variables: QueryVariables): Record<string, ScalarValue> => {
+  const params: Record<string, ScalarValue> = {};
+  if (Array.isArray(variables)) {
+    variables.forEach((value, index) => {
+      params[String(index)] = normalizeQueryVariableValue(value);
+    });
+  } else {
+    for (const [name, value] of Object.entries(variables as Record<string, unknown>)) {
+      params[name] = normalizeQueryVariableValue(value);
+    }
+  }
+  return params;
+};
+
 export const executeQuery = (
   db: SQLiteDatabase,
   schema: SchemaSnapshot,
   query: string,
   securityContext: SecurityContext = DEFAULT_SECURITY_CONTEXT,
+  variables?: QueryVariables,
 ): QueryResult => {
+  if (variables !== undefined) {
+    securityContext = { ...securityContext, params: normalizeQueryVariables(variables) };
+  }
   // SELECTs execute the gelIR SQL artifact; INSERT/UPDATE/DELETE compile
   // through ast_to_ir (SQL artifact) plus dml_lowering (runtime mutation
   // plan: link-table writes, defaults, conflict handling still run here in
@@ -6635,7 +6680,11 @@ export const executeScript = (
   script: string,
   securityContext: SecurityContext = DEFAULT_SECURITY_CONTEXT,
   parserOptions: ParseEdgeQLOptions = {},
+  variables?: QueryVariables,
 ): QueryResult => {
+  if (variables !== undefined) {
+    securityContext = { ...securityContext, params: normalizeQueryVariables(variables) };
+  }
   // Reject user-DDL targeting read-only modules before any pre-pass /
   // registration runs. Otherwise `CREATE TYPE std::Foo` would be silently
   // registered by `maybeRegisterDynamicDDLScript` before per-statement
@@ -6682,6 +6731,26 @@ const qualifyChainType = (name: string, defaultModule: string): string =>
 // References to already-executed chain bindings (`x.name`, `note := new`)
 // can't resolve in a standalone compile — rewrite them to by-id SELECTs over
 // the captured object sets so every value still lowers to SQL.
+// Find a type that every type in `types` is a subtype of (their nearest common
+// ancestor). Walks the first type's ancestor chain until all others are
+// assignable to a candidate; falls back to the first type when they share no
+// ancestor. Used to type the result of a conditional whose branches insert
+// related types (`if … then InsertTest else DerivedTest`).
+const commonAncestorType = (schema: SchemaSnapshot, types: string[]): string => {
+  const distinct = [...new Set(types.filter((t) => t.length > 0))];
+  if (distinct.length === 0) return "";
+  if (distinct.length === 1) return distinct[0];
+  let candidate: string | undefined = distinct[0];
+  const seen = new Set<string>();
+  while (candidate && !seen.has(candidate)) {
+    seen.add(candidate);
+    if (distinct.every((t) => schema.isTypeSubtypeOf(t, candidate as string))) return candidate;
+    const def = schema.getType(candidate);
+    candidate = def?.extends?.find((b) => schema.getType(b));
+  }
+  return distinct[0];
+};
+
 const chainByIdSelect = (bound: ObjectSet): Record<string, unknown> => ({
   kind: "select",
   typeName: bound.typeName,
@@ -6720,6 +6789,34 @@ const attachWithToNestedMutations = <T>(node: T, extras: WithBinding[]): T => {
   return walk(node) as T;
 };
 
+// Bind a FOR loop variable into the loop body before it's resolved as an
+// object set. Inside a nested mutation statement the value is supplied as a
+// WITH binding (so `INSERT T { p := v }` resolves `v` through the mutation's
+// own compile, where property values are raw scalars, not literal nodes).
+// Everywhere else — `if v % 2 = 0` conditions, scalar expressions — the
+// `binding_ref`/bare path to `v` is substituted with a literal expression node
+// so the surrounding expression compiles standalone. Descent stops at a nested
+// FOR that rebinds the same variable (its own binding shadows ours).
+const bindLoopVarInForBody = (node: unknown, name: string, value: ScalarValue): unknown => {
+  const varBinding = { name, value: { kind: "literal", value } } as WithBinding;
+  const walk = (cur: unknown): unknown => {
+    if (Array.isArray(cur)) return cur.map(walk);
+    if (cur === null || typeof cur !== "object") return cur;
+    const n = cur as Record<string, unknown> & { kind?: string; statement?: unknown; variable?: unknown };
+    if (n.kind === "binding_ref" && n.name === name) return { kind: "literal", value };
+    if (n.kind === "path" && n.head === name && n.tail === undefined) return { kind: "literal", value };
+    if (n.kind === "for_expr" && n.variable === name) return cur;
+    if ((n.kind === "mutation_expr" || n.kind === "subquery_statement") && n.statement && typeof n.statement === "object") {
+      const st = n.statement as { with?: WithBinding[] };
+      return { ...n, statement: { ...st, with: [varBinding, ...(st.with ?? [])] } };
+    }
+    const out: Record<string, unknown> = {};
+    for (const [key, v] of Object.entries(n)) out[key] = walk(v);
+    return out;
+  };
+  return walk(node);
+};
+
 // Evaluate a scalar WITH-binding expression exactly once through a one-off
 // SQL SELECT (with the given sibling bindings in scope). Returns a literal /
 // empty-set binding value, or undefined when the expression doesn't evaluate
@@ -6741,7 +6838,7 @@ const evaluateScalarBindingViaSQL = (
   // captureAll: any compile/run failure just means "leave the binding for
   // the downstream compile to handle".
   const attempt = tryResult(() => {
-    const compiled = getCompilerService().compile(schema, stmtAst, { globals: context.globals, target: resolvedRuntimeTarget(context, db) });
+    const compiled = getCompilerService().compile(schema, stmtAst, { globals: context.globals, params: context.params, target: resolvedRuntimeTarget(context, db) });
     if (compiled.sql.loweringMode !== "single_statement" || compiled.sql.sql.length === 0) return undefined;
     return runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
   }, { captureAll: true });
@@ -6854,6 +6951,32 @@ const captureFreeObjectScalarBindings = (
   const withClause = (ast as { with?: WithBinding[] }).with;
   const substituted = substitute({ ...ast, with: undefined }) as Statement;
   return { ...substituted, with: withClause } as Statement;
+};
+
+// Evaluate an `if`-condition expression to the full ordered set of scalar rows
+// it produces (EdgeQL `if` is element-wise over the condition set). Returns []
+// on an empty set or any compile/run failure. Used by the SELECT-with-DML
+// pre-pass so a conditional only runs the taken branch's DML per element.
+const evaluateConditionRowsViaSQL = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  expr: FreeObjectExpr,
+  withBindings: WithBinding[],
+  context: SecurityContext,
+  pos: { line: number; column: number },
+): unknown[] => {
+  const stmtAst = {
+    kind: "select_expr",
+    expr,
+    with: withBindings.length > 0 ? [...withBindings] : undefined,
+    pos,
+  } as unknown as Statement;
+  const attempt = tryResult(() => {
+    const compiled = getCompilerService().compile(schema, stmtAst, { globals: context.globals, params: context.params, target: resolvedRuntimeTarget(context, db) });
+    if (compiled.sql.loweringMode !== "single_statement" || compiled.sql.sql.length === 0) return undefined;
+    return runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
+  }, { captureAll: true });
+  return attempt.ok && Array.isArray(attempt.value) ? attempt.value : [];
 };
 
 const rewriteEnvRefsInNode = (node: unknown, env: DmlChainEnv): unknown => {
@@ -7035,30 +7158,53 @@ const resolveObjectSet = (
       if (left.ids.length > 0) return left;
       return resolveObjectSet(db, schema, n.right, env, current, context, defaultModule);
     }
+    case "if_else": {
+      // `if <cond> then (DML) else (DML)` — element-wise over the condition
+      // set; only the taken branch per condition element runs. (A FOR loop
+      // variable referenced by the condition is substituted in as a literal by
+      // the for_expr case before this point, so the condition compiles
+      // standalone.)
+      const condRows = evaluateConditionRowsViaSQL(db, schema, n.condition as FreeObjectExpr, [], context, { line: 0, column: 0 });
+      let typeName = "";
+      const ids: string[] = [];
+      for (const condRow of condRows) {
+        const taken = condRow === true || condRow === 1 ? n.thenExpr : n.elseExpr;
+        if (!taken) continue;
+        const result = resolveObjectSet(db, schema, taken, env, current, context, defaultModule);
+        if (result.typeName) typeName = result.typeName;
+        ids.push(...result.ids);
+      }
+      return { typeName, ids };
+    }
     case "for_expr": {
-      // `FOR v IN {…} UNION (INSERT …)` bound in WITH — run the body once per
-      // scalar iterator value with `v` bound as a literal.
+      // `FOR v IN <iter> UNION (<body>)` — run the body once per scalar iterator
+      // value with `v` bound. The iterator may be a literal set or any scalar
+      // expression (`array_unpack(<array<int64>>$0)`); the body may be a bare
+      // mutation, a coalesce, or a conditional. The loop value is bound two
+      // ways for the body: as a WITH binding attached to nested mutations (so
+      // an inserted property `l2 := v` resolves through the mutation's own
+      // compile), and substituted as a literal into condition/non-mutation
+      // expressions (so an `if v % 2 = 0` condition compiles standalone).
       const iterator = n.iterator as { kind?: string; values?: unknown[] } | undefined;
       const variable = n.variable as string | undefined;
-      const body = n.body as { kind?: string; statement?: Statement } | undefined;
-      if (iterator?.kind !== "set_literal" || !variable || body?.kind !== "mutation_expr" || !body.statement) {
+      const body = n.body;
+      if (!variable || !body) {
         return { typeName: current?.typeName ?? "", ids: [] };
+      }
+      let iterValues: unknown[];
+      if (iterator?.kind === "set_literal") {
+        iterValues = iterator.values ?? [];
+      } else {
+        iterValues = evaluateConditionRowsViaSQL(db, schema, n.iterator as FreeObjectExpr, [], context, { line: 0, column: 0 });
       }
       let typeName = "";
       const ids: string[] = [];
-      for (const iterValue of iterator.values ?? []) {
+      for (const iterValue of iterValues) {
         if (iterValue !== null && !isScalarValue(iterValue)) {
           return { typeName: current?.typeName ?? "", ids: [] };
         }
-        const stmt = body.statement as Statement & { with?: WithBinding[] };
-        const bound = {
-          ...stmt,
-          with: [
-            { name: variable, value: { kind: "literal", value: iterValue as ScalarValue } },
-            ...(stmt.with ?? []),
-          ],
-        } as Statement;
-        const result = executeDmlChainStatement(db, schema, bound, env, current, context, defaultModule);
+        const boundBody = bindLoopVarInForBody(body, variable, iterValue as ScalarValue);
+        const result = resolveObjectSet(db, schema, boundBody, env, current, context, defaultModule);
         if (result.typeName) typeName = result.typeName;
         ids.push(...result.ids);
       }
@@ -7192,7 +7338,7 @@ const executeDmlChainStatement = (
     const rewritten = env.size > 0
       ? ({ ...stmt, values: rewriteEnvRefsInNode(stmt.values, env) } as typeof stmt)
       : stmt;
-    const compiled = compilerService.compile(schema, rewritten, { globals: context.globals, target: runtimeTarget });
+    const compiled = compilerService.compile(schema, rewritten, { globals: context.globals, params: context.params, target: runtimeTarget });
     const subjectType = typeDefForTable(schema, (compiled.ir as { table?: string }).table ?? "");
     if (!subjectType) return { typeName: "", ids: [] };
     const writeResult = runWriteWithAccessPolicies(db, schema, rewritten, compiled.ir, compiled.sql, subjectType, context);
@@ -7212,10 +7358,15 @@ const executeDmlChainStatement = (
   } else if (envTarget) {
     target = envTarget;
   } else {
+    // Carry the statement's own WITH bindings (e.g. a FOR loop variable bound
+    // as a literal) into the synthetic target SELECT so the FILTER expression
+    // (`.l2 = n`) can resolve them — otherwise an unbound name resolves as a
+    // (non-existent) type.
+    const targetWith = (stmt as { with?: WithBinding[] }).with;
     const rows = executeSelectExprRows(
       db,
       schema,
-      { kind: "select", typeName: stmtAny.typeName, shape: [{ kind: "field", name: "id" }], clauses: { filter: stmtAny.filter } } as unknown as Extract<InsertValue, { kind: "select" }>,
+      { kind: "select", typeName: stmtAny.typeName, shape: [{ kind: "field", name: "id" }], clauses: { filter: stmtAny.filter, _withBindings: targetWith } } as unknown as Extract<InsertValue, { kind: "select" }>,
       context,
     );
     target = { typeName: qualifyChainType(stmtAny.typeName, defaultModule), ids: rows.map((r) => r.id).filter((id): id is string => typeof id === "string") };
@@ -7224,7 +7375,7 @@ const executeDmlChainStatement = (
   if (stmt.kind === "delete") {
     for (const id of target.ids) {
       const perId = { kind: "delete", typeName: target.typeName, filter: { kind: "predicate", target: { kind: "field", field: "id" }, op: "=", value: id }, pos: { line: 1, column: 1 } } as unknown as DeleteStatement;
-      const c = compilerService.compile(schema, perId, { globals: context.globals, target: runtimeTarget });
+      const c = compilerService.compile(schema, perId, { globals: context.globals, params: context.params, target: runtimeTarget });
       const st = typeDefForTable(schema, (c.ir as { table?: string }).table ?? "");
       if (st) runWriteWithAccessPolicies(db, schema, perId, c.ir, c.sql, st, context);
     }
@@ -7275,7 +7426,7 @@ const executeDmlChainStatement = (
       operations,
       pos: { line: 1, column: 1 },
     } as unknown as UpdateStatement;
-    const c = compilerService.compile(schema, perId, { globals: context.globals, target: runtimeTarget });
+    const c = compilerService.compile(schema, perId, { globals: context.globals, params: context.params, target: runtimeTarget });
     const st = typeDefForTable(schema, (c.ir as { table?: string }).table ?? "");
     if (st) runWriteWithAccessPolicies(db, schema, perId, c.ir, c.sql, st, context);
   }
@@ -8211,6 +8362,41 @@ const preExecuteMutationExprsInSelectExpr = (
       );
       return { kind: "select_expr_subquery", expr: chainByIdSelect(resolved) };
     }
+    // `if <cond> then (INSERT …) else (INSERT …)` — the branches are mutually
+    // exclusive per condition element, so only the taken branch's DML may run.
+    // Walking leaf-by-leaf would execute BOTH inserts. EdgeQL evaluates `if`
+    // element-wise over the condition set: each condition element emits the
+    // then-branch (true) or else-branch (false), so a multi-element condition
+    // (`array_unpack(<array<bool>>$0)`) runs each branch once per matching
+    // element. An empty condition set yields no rows.
+    if (n.kind === "if_else" && containsMutationExpr(n)) {
+      const pos = (ast as { pos?: { line: number; column: number } }).pos ?? { line: 0, column: 0 };
+      const condRows = evaluateConditionRowsViaSQL(db, schema, n.condition as FreeObjectExpr, passthrough, context, pos);
+      const branchIds: string[] = [];
+      const branchTypes: string[] = [];
+      for (const condRow of condRows) {
+        const taken = condRow === true || condRow === 1 ? n.thenExpr : n.elseExpr;
+        if (!taken) continue;
+        const resolved = resolveObjectSet(
+          db,
+          schema,
+          attachWithToNestedMutations(taken, passthrough),
+          env,
+          undefined,
+          context,
+          defaultModule,
+        );
+        if (resolved.typeName) branchTypes.push(resolved.typeName);
+        branchIds.push(...resolved.ids);
+      }
+      // A branch that produced no objects (`else {}`, an all-false condition)
+      // contributes nothing — the whole conditional is the empty set.
+      if (branchIds.length === 0) return { kind: "set_literal", values: [] };
+      // The two branches may produce different (related) types — e.g.
+      // `then InsertTest else DerivedTest`. The result set's type is their
+      // common ancestor, so the by-id read sees every inserted object.
+      return { kind: "select_expr_subquery", expr: chainByIdSelect({ typeName: commonAncestorType(schema, branchTypes), ids: branchIds }) };
+    }
     if (n.kind === "mutation_expr" && n.statement) {
       const mutationKind = (n.statement as { kind?: string }).kind;
       const resolved = resolveObjectSet(
@@ -8336,7 +8522,7 @@ const executeSelectOverMutation = (
       orderBy: order as SelectStatement["orderBy"],
       pos: ast.pos,
     };
-    const compiled = compilerService.compile(schema, selectAst, { globals: context.globals, target: runtimeTarget });
+    const compiled = compilerService.compile(schema, selectAst, { globals: context.globals, params: context.params, target: runtimeTarget });
     const rows = runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
     return { rows, sql: compiled.sql };
   };
@@ -8376,7 +8562,7 @@ const executeSelectOverMutation = (
       // UNLESS CONFLICT, this pass detects the conflict and drops the nested
       // DML so it doesn't run (dependent_15/17/21/23/25).
       const preparedMutation = preExecuteMutationExprsInDmlValues(db, schema, mutation, context) as typeof mutation;
-      lastCompiled = compilerService.compile(schema, preparedMutation, { globals: context.globals, target: runtimeTarget });
+      lastCompiled = compilerService.compile(schema, preparedMutation, { globals: context.globals, params: context.params, target: runtimeTarget });
       const writeResult0 = runWriteWithAccessPolicies(db, schema, preparedMutation, lastCompiled.ir, lastCompiled.sql, subjectType, context);
       affectedIds = (writeResult0.rows ?? [])
         .map((row) => (row && typeof row === "object" ? (row as { id?: unknown }).id : undefined))
@@ -8395,7 +8581,7 @@ const executeSelectOverMutation = (
         target: undefined,
         filter: { kind: "predicate", target: { kind: "field", field: "id" }, op: "=", value: id },
       } as InsertStatement | UpdateStatement | DeleteStatement;
-      lastCompiled = compilerService.compile(schema, perId, { globals: context.globals, target: runtimeTarget });
+      lastCompiled = compilerService.compile(schema, perId, { globals: context.globals, params: context.params, target: runtimeTarget });
       runWriteWithAccessPolicies(db, schema, perId, lastCompiled.ir, lastCompiled.sql, perIdSubjectType, context);
     }
   }
@@ -8543,7 +8729,7 @@ const executeQueryWithTraceImpl = (
     // artifact. Only bodies the SQL stage can't express route through the
     // runtime FOR-group executor.
     if (ast.kind === "for" && unwrapGroupIteratorExpr(ast.iteratorExpr) && ast.body.kind === "select_expr") {
-      const probe = compilerService.compile(schema, ast, { globals: context.globals, target: runtimeTarget });
+      const probe = compilerService.compile(schema, ast, { globals: context.globals, params: context.params, target: runtimeTarget });
       const sqlIsComplete = probe.sql.loweringMode === "single_statement" && probe.sql.sql.length > 0;
       if (!sqlIsComplete) {
         const traces: QueryExecutionTrace[] = [];
@@ -8576,7 +8762,7 @@ const executeQueryWithTraceImpl = (
     if (isWithDmlChain(ast)) {
       return executeWithDmlChain(db, schema, ast, context);
     }
-    const compiled = compilerService.compile(schema, ast, { globals: context.globals, target: runtimeTarget, allowUserSpecifiedId: allowUserSpecifiedId(schema) });
+    const compiled = compilerService.compile(schema, ast, { globals: context.globals, params: context.params, target: runtimeTarget, allowUserSpecifiedId: allowUserSpecifiedId(schema) });
     const ir = compiled.ir;
     const subjectType = ir.kind === "insert" || ir.kind === "update" || ir.kind === "delete"
       ? typeDefForTable(schema, ir.table)
@@ -9106,7 +9292,7 @@ const evaluateForScalarIteratorViaSql = (
     pos: forAst.pos,
   } as unknown as Statement;
   try {
-    const compiled = getCompilerService().compile(schema, stmtAst, { globals: context.globals });
+    const compiled = getCompilerService().compile(schema, stmtAst, { globals: context.globals, params: context.params });
     if (compiled.sql.loweringMode !== "single_statement" || compiled.sql.sql.length === 0) return undefined;
     const rows = runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
     const mapped = rows.map((row) => (row !== null && typeof row === "object" ? JSON.stringify(row) : row));
@@ -9327,7 +9513,7 @@ const evaluateForObjectIteratorRows = (
     pos: { line: 1, column: 1 },
   };
   try {
-    const compiled = getCompilerService().compile(schema, augmented as unknown as Statement, { globals: context.globals });
+    const compiled = getCompilerService().compile(schema, augmented as unknown as Statement, { globals: context.globals, params: context.params });
     if (compiled.sql.loweringMode !== "single_statement" || compiled.sql.sql.length === 0) return undefined;
     const rows = runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
     return rows.map((r) => (r !== null && typeof r === "object" ? r as Record<string, unknown> : { __scalar: r }));
@@ -9639,7 +9825,7 @@ export const executeQueryUnitWithTrace = (
       // `INSERT std::FreeObject;` / `INSERT InsertTest;` — fall through to
       // compilation and let the IR pass raise the right diagnostic instead.)
 
-      const compiled = compilerService.compile(schema, ast, { overlays, globals: context.globals, target: runtimeTarget, allowUserSpecifiedId: allowUserSpecifiedId(schema) });
+      const compiled = compilerService.compile(schema, ast, { overlays, globals: context.globals, params: context.params, target: runtimeTarget, allowUserSpecifiedId: allowUserSpecifiedId(schema) });
       const ir = compiled.ir;
       const sqlArtifact = compiled.sql;
       assertTargetSqlCompatibility(sqlArtifact.sql, runtimeTarget);
@@ -9891,7 +10077,7 @@ const preEvaluateGroupBindings = (
   // engine's own compile of the unchanged AST reuses it.
   try {
     const compiled = getCompilerService().compile(schema, ast, {
-      globals: context.globals,
+      globals: context.globals, params: context.params,
       target: resolvedRuntimeTarget(context, db),
     });
     if (compiled.sql.loweringMode === "single_statement" && compiled.sql.sql.length > 0) {
@@ -9930,7 +10116,7 @@ const preEvaluateGroupBindings = (
     };
     try {
       const compiled = getCompilerService().compile(schema, groupStatement, {
-        globals: context.globals,
+        globals: context.globals, params: context.params,
         target: resolvedRuntimeTarget(context, db),
       });
       if (compiled.ir.kind !== "group") return binding;
@@ -10157,7 +10343,7 @@ const executeForLoop = (
     };
     const compiled = compilerService.compile(schema, groupStatement, {
       overlays,
-      globals: context.globals,
+      globals: context.globals, params: context.params,
       target: runtimeTarget,
     });
     const ir = compiled.ir;
@@ -10234,7 +10420,7 @@ const executeForLoop = (
         throw new AppError("E_SEMANTIC", `Unknown type '${insertAst.typeName}'`, ast.pos.line, ast.pos.column);
       }
 
-      const compiled = compilerService.compile(schema, insertAst, { overlays, globals: context.globals, target: runtimeTarget });
+      const compiled = compilerService.compile(schema, insertAst, { overlays, globals: context.globals, params: context.params, target: runtimeTarget });
       const ir = compiled.ir;
       const sqlArtifact = compiled.sql;
       assertTargetSqlCompatibility(sqlArtifact.sql, runtimeTarget);
@@ -10293,7 +10479,7 @@ const executeForLoop = (
     // executeFunctionCall. `tryRuntimeSelectExprEvaluationAst` returns
     // undefined when the body doesn't need runtime eval, so plain FOR loops
     // still fall through to the SQL path below.
-    const compiled = compilerService.compile(schema, syntheticAst, { overlays, globals: context.globals, target: runtimeTarget });
+    const compiled = compilerService.compile(schema, syntheticAst, { overlays, globals: context.globals, params: context.params, target: runtimeTarget });
     const ir = compiled.ir;
     const sqlArtifact = compiled.sql;
     assertTargetSqlCompatibility(sqlArtifact.sql, runtimeTarget);
@@ -10355,7 +10541,7 @@ const executeForLoop = (
       pos: ast.pos,
     };
 
-    const compiled = compilerService.compile(schema, syntheticAst, { overlays, globals: context.globals, target: runtimeTarget });
+    const compiled = compilerService.compile(schema, syntheticAst, { overlays, globals: context.globals, params: context.params, target: runtimeTarget });
     const ir = compiled.ir;
     const sqlArtifact = compiled.sql;
     assertTargetSqlCompatibility(sqlArtifact.sql, runtimeTarget);
@@ -10398,7 +10584,7 @@ const executeForLoop = (
     for (const value of iteratorValues) {
       const selectAst = bindSelectAstVariable(selectBody, ast.variable, value);
 
-      const compiled = compilerService.compile(schema, selectAst, { overlays, globals: context.globals, target: runtimeTarget });
+      const compiled = compilerService.compile(schema, selectAst, { overlays, globals: context.globals, params: context.params, target: runtimeTarget });
       const ir = compiled.ir as SelectIR;
       const sqlArtifact = compiled.sql;
       assertTargetSqlCompatibility(sqlArtifact.sql, runtimeTarget);
@@ -10460,7 +10646,7 @@ const evaluateForIteratorValues = (
     };
 
     const compiler = getCompilerService();
-    const compiled = compiler.compile(schema, selectAst, { globals: context.globals, target: resolvedRuntimeTarget(context, db) });
+    const compiled = compiler.compile(schema, selectAst, { globals: context.globals, params: context.params, target: resolvedRuntimeTarget(context, db) });
     assertTargetSqlCompatibility(compiled.sql.sql, resolvedRuntimeTarget(context, db));
     if (compiled.ir.kind !== "select") {
       return [];
@@ -11637,7 +11823,7 @@ const runGroupIR = (
     } else {
       try {
         const sourceCompiled = getCompilerService().compile(schema, ir.source, {
-          globals: context.globals,
+          globals: context.globals, params: context.params,
           target: resolvedRuntimeTarget(context, db),
         });
         if (sourceCompiled.ir.kind === "select") {
@@ -11821,7 +12007,7 @@ const evaluateNestedGroupSource = (
     pos: { line: 1, column: 1 },
   };
   const compiled = getCompilerService().compile(schema, groupStatement, {
-    globals: context.globals,
+    globals: context.globals, params: context.params,
     target: resolvedRuntimeTarget(context, db),
   });
   if (compiled.ir.kind !== "group") {
@@ -14204,7 +14390,7 @@ const executeSelectExprRows = (
   };
 
   const compiler = getCompilerService();
-  const compiled = compiler.compile(schema, ast, { globals: context.globals });
+  const compiled = compiler.compile(schema, ast, { globals: context.globals, params: context.params });
   assertTargetSqlCompatibility(compiled.sql.sql, resolvedRuntimeTarget(context, db));
   if (compiled.ir.kind !== "select") {
     return [];
@@ -14229,6 +14415,7 @@ const normalizeSecurityContext = (context: SecurityContext): SecurityContext => 
     isSuperuser: context.isSuperuser ?? DEFAULT_SECURITY_CONTEXT.isSuperuser,
     permissions: context.permissions ? [...context.permissions] : [...(DEFAULT_SECURITY_CONTEXT.permissions ?? [])],
     globals: { ...(DEFAULT_SECURITY_CONTEXT.globals ?? {}), ...(context.globals ?? {}) },
+    params: context.params ? { ...context.params } : undefined,
     runtimeTarget: context.runtimeTarget ?? DEFAULT_SECURITY_CONTEXT.runtimeTarget,
     strictUserDDL: context.strictUserDDL ?? DEFAULT_SECURITY_CONTEXT.strictUserDDL,
   };
@@ -14337,7 +14524,7 @@ const runWriteWithAccessPolicies = (
           const attempt = tryResult(() => {
             const parsed = parseEdgeQL(`SELECT (${text})`);
             const stmt = substituteSourceRefs(Array.isArray(parsed) ? parsed[0] : parsed) as Statement;
-            const compiled = getCompilerService().compile(schema, stmt, { globals: context.globals, target: resolvedRuntimeTarget(context, db) });
+            const compiled = getCompilerService().compile(schema, stmt, { globals: context.globals, params: context.params, target: resolvedRuntimeTarget(context, db) });
             if (compiled.sql.loweringMode !== "single_statement" || compiled.sql.sql.length === 0) return undefined;
             return runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
           }, { captureAll: true });
@@ -14360,7 +14547,7 @@ const runWriteWithAccessPolicies = (
             const attempt = tryResult(() => {
               const parsed = parseEdgeQL(`SELECT (${text})`);
               const stmt = (Array.isArray(parsed) ? parsed[0] : parsed) as Statement;
-              const compiled = getCompilerService().compile(schema, stmt, { globals: context.globals, target: resolvedRuntimeTarget(context, db) });
+              const compiled = getCompilerService().compile(schema, stmt, { globals: context.globals, params: context.params, target: resolvedRuntimeTarget(context, db) });
               if (compiled.sql.loweringMode !== "single_statement" || compiled.sql.sql.length === 0) return undefined;
               return runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
             }, { captureAll: true });
@@ -14943,7 +15130,7 @@ const executeMutationBinding = (
   const collected: Record<string, unknown>[] = [];
 
   for (const ast of expanded) {
-    const compiled = compilerService.compile(schema, ast, { globals: context.globals, target: runtimeTarget });
+    const compiled = compilerService.compile(schema, ast, { globals: context.globals, params: context.params, target: runtimeTarget });
     const ir = compiled.ir;
     if (ir.kind !== "update" && ir.kind !== "insert" && ir.kind !== "delete") {
       continue;
@@ -15011,7 +15198,7 @@ const executeNestedInsert = (
   };
 
   const compiler = getCompilerService();
-  const compiled = compiler.compile(schema, ast, { globals: context.globals });
+  const compiled = compiler.compile(schema, ast, { globals: context.globals, params: context.params });
   assertTargetSqlCompatibility(compiled.sql.sql, resolvedRuntimeTarget(context, db));
   if (compiled.ir.kind !== "insert") {
     return [];
@@ -15087,7 +15274,7 @@ const resolveLinkValueViaSelectSQL = (
     pos: ast.pos,
   } as unknown as Statement;
   const attempt = tryResult(() => {
-    const compiled = getCompilerService().compile(schema, stmtAst, { globals: context.globals, target: resolvedRuntimeTarget(context, db) });
+    const compiled = getCompilerService().compile(schema, stmtAst, { globals: context.globals, params: context.params, target: resolvedRuntimeTarget(context, db) });
     if (compiled.sql.loweringMode !== "single_statement" || compiled.sql.sql.length === 0) return undefined;
     if (compiled.ir.kind !== "select" && compiled.ir.kind !== "select_expr") return undefined;
     return runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql, { keepInternalId: true })
@@ -15136,7 +15323,7 @@ const resolveInsertTargets = (
       // captureAll: bindings that don't evaluate to object rows just yield no
       // link targets.
       const attempt = tryResult(() => {
-        const compiled = getCompilerService().compile(schema, stmtAst, { globals: context.globals, target: resolvedRuntimeTarget(context, db) });
+        const compiled = getCompilerService().compile(schema, stmtAst, { globals: context.globals, params: context.params, target: resolvedRuntimeTarget(context, db) });
         if (compiled.sql.loweringMode !== "single_statement" || compiled.sql.sql.length === 0) return undefined;
         return runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
       }, { captureAll: true });
@@ -15324,7 +15511,7 @@ const resolveInsertTargets = (
       if (value.body.kind === "select") {
         const selectAst = ensureSelectAstHasId(bindSelectAstVariable(value.body, value.variable, iterValue));
         const compiler = getCompilerService();
-        const compiled = compiler.compile(schema, selectAst, { globals: context.globals });
+        const compiled = compiler.compile(schema, selectAst, { globals: context.globals, params: context.params });
         assertTargetSqlCompatibility(compiled.sql.sql, resolvedRuntimeTarget(context, db));
         if (compiled.ir.kind !== "select") {
           continue;
@@ -17328,7 +17515,7 @@ function countFunctionArgRows(
     pos: (statement as { pos?: { line: number; column: number } }).pos ?? { line: 1, column: 1 },
   } as unknown as Statement;
   try {
-    const compiled = getCompilerService().compile(schema, innerStatement, { globals: context.globals, target: runtimeTarget });
+    const compiled = getCompilerService().compile(schema, innerStatement, { globals: context.globals, params: context.params, target: runtimeTarget });
     if (compiled.sql.loweringMode !== "single_statement" || compiled.sql.sql.length === 0) return undefined;
     const rows = runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
     return rows.length;
