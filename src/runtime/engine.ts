@@ -7166,6 +7166,22 @@ const preExecuteMutationExprsInSelectExpr = (
     if (Array.isArray(node)) return node.map(walk);
     if (node === null || typeof node !== "object") return node;
     const n = node as Record<string, unknown> & { kind?: string; statement?: Statement };
+    // `FOR v IN {…} UNION (INSERT/UPDATE/DELETE …)` — resolve the whole loop as
+    // an object set (resolveObjectSet's for_expr case binds `v` per iteration)
+    // rather than descending into the inner mutation, which would run it once
+    // with `v` unbound (tests _06, _17, _20b, self_01).
+    if (n.kind === "for_expr" && containsMutationExpr(n)) {
+      const resolved = resolveObjectSet(
+        db,
+        schema,
+        attachWithToNestedMutations(n, passthrough),
+        env,
+        undefined,
+        context,
+        defaultModule,
+      );
+      return { kind: "select_expr_subquery", expr: chainByIdSelect(resolved) };
+    }
     if (n.kind === "mutation_expr" && n.statement) {
       const mutationKind = (n.statement as { kind?: string }).kind;
       const resolved = resolveObjectSet(
@@ -12908,14 +12924,22 @@ const runWriteWithAccessPolicies = (
 
         if (checks.length > 0) {
           // `UNLESS CONFLICT … ELSE` is illegal when the matched constraint is
-          // inherited from a parent type (test _20a).
+          // inherited from a parent type AND the ELSE branch reads the inserted
+          // (child) type itself: the conflicting row may be a parent-only row
+          // the child-typed ELSE can't see (test _20a). An ELSE that targets
+          // the parent type is fine — it correctly reaches that row (test
+          // _20b: `ELSE (UPDATE Person …)` while inserting DerivedPerson).
           if (ast.conflict.else && checks.some((c) => c.fromParent)) {
-            throw new AppError(
-              "E_SEMANTIC",
-              "UNLESS CONFLICT can not use ELSE when constraint is from a parent type",
-              ast.pos.line,
-              ast.pos.column,
-            );
+            const elseType = qualifyChainType(ast.conflict.else.typeName, ast.withModule ?? "default");
+            const insertedType = qualifiedTypeName(subjectType);
+            if (elseType === insertedType) {
+              throw new AppError(
+                "E_SEMANTIC",
+                "UNLESS CONFLICT can not use ELSE when constraint is from a parent type",
+                ast.pos.line,
+                ast.pos.column,
+              );
+            }
           }
 
           // Resolve the own-table storage values the insert is about to write
