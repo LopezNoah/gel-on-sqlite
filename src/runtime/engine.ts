@@ -7206,7 +7206,38 @@ const preExecuteMutationExprsInSelectExpr = (
     for (const [key, value] of Object.entries(n)) out[key] = walk(value);
     return out;
   };
-  return { ...ast, expr: walk(expr) } as Statement;
+  // When a SELECT contains more than one mutation sub-expression
+  // (`select { (insert …), (insert …) }`), the siblings execute sequentially
+  // and each individual write commits on its own. If a later sibling violates a
+  // constraint, the earlier (already-committed) writes — and any shared-table
+  // trigger rows they produced — would leak. EdgeQL treats the whole statement
+  // atomically, so wrap the sequence in a savepoint and undo every sibling when
+  // any one of them fails.
+  const mutationCount = countMutationExprs(expr);
+  if (mutationCount < 2) {
+    return { ...ast, expr: walk(expr) } as Statement;
+  }
+  const savepoint = "gel_select_mut";
+  db.prepare(`SAVEPOINT ${savepoint}`).run();
+  try {
+    const rewritten = { ...ast, expr: walk(expr) } as Statement;
+    db.prepare(`RELEASE ${savepoint}`).run();
+    return rewritten;
+  } catch (err) {
+    db.prepare(`ROLLBACK TO ${savepoint}`).run();
+    db.prepare(`RELEASE ${savepoint}`).run();
+    throw err;
+  }
+};
+
+// Count mutation_expr nodes anywhere in a tree (used to decide whether a
+// SELECT body needs an atomic savepoint around its sibling mutations).
+const countMutationExprs = (node: unknown): number => {
+  if (Array.isArray(node)) return node.reduce<number>((acc, v) => acc + countMutationExprs(v), 0);
+  if (node === null || typeof node !== "object") return 0;
+  let count = (node as { kind?: unknown }).kind === "mutation_expr" ? 1 : 0;
+  for (const value of Object.values(node)) count += countMutationExprs(value);
+  return count;
 };
 
 // `SELECT (UPDATE/INSERT/DELETE …) { shape }` — a DML statement used as the
@@ -8285,6 +8316,15 @@ export const executeQueryUnitWithTrace = (
         // follow may assign an explicit `id`); everything else is a no-op so
         // scripts that use CONFIGURE for upstream parity still run their DML.
         applySessionConfigure(schema, ast);
+        continue;
+      }
+      if (ast.kind === "describe") {
+        // The parser routes session-management passthrough statements that have
+        // no SQLite analogue — `SET GLOBAL <name> := …`, `SET ALIAS …`,
+        // `DESCRIBE …` — to a describe placeholder. They carry no executable IR,
+        // so treat them as no-ops here rather than failing GEL-IR lowering. This
+        // keeps multi-statement scripts that toggle a global for upstream parity
+        // (e.g. `set global break := true`) running their subsequent DML.
         continue;
       }
 

@@ -5700,6 +5700,40 @@ const ScalarBindingNames = new globalThis.Set<string>([
   "__subject__", "__current__", "__source__",
 ]);
 
+// Does a SELECT's FILTER clause guarantee at most one row by equality-matching
+// a property that carries a plain (non-`except`) exclusive constraint?
+// `select Person filter .name = 'x'` → yes (name is exclusive). An
+// `exclusive … except (.flag)` constraint does not clamp (exempt rows can
+// duplicate the value), so it returns false.
+const selectFilterClampsToOne = (
+  typeName: string,
+  filter: FilterExpr | undefined,
+  ctx: IRCompileContext,
+): boolean => {
+  if (!filter || filter.kind !== "predicate" || filter.op !== "=") return false;
+  if (filter.target.kind !== "field" || filter.target.field.includes(".")) return false;
+  const fieldName = filter.target.field;
+  const typeDef = getSchemaType(ctx, typeName);
+  if (!typeDef) return false;
+  // Field-level `constraint exclusive` (no `except`).
+  const field = typeDef.fields.find((f) => f.name === fieldName) as
+    | { multi?: boolean; constraints?: Array<{ name?: string; exceptExpr?: string }> }
+    | undefined;
+  if (field && !field.multi) {
+    const excl = (field.constraints ?? []).find((c) => c.name === "std::exclusive" || c.name === "exclusive");
+    if (excl && excl.exceptExpr === undefined) return true;
+  }
+  // Type-level single-field `constraint exclusive on (.field)` without `except`.
+  const typeExcl = (typeDef.typeConstraints ?? []).find(
+    (c) =>
+      (c.name === "std::exclusive" || c.name === "exclusive")
+      && c.fieldRefs.length === 1
+      && c.fieldRefs[0] === fieldName,
+  );
+  if (typeExcl && typeExcl.exceptExpr === undefined) return true;
+  return false;
+};
+
 const inferFreeExprCard = (
   expr: FreeObjectExpr,
   ctx: IRCompileContext,
@@ -5756,10 +5790,20 @@ const inferFreeExprCard = (
       return { upper: "unknown", lower: "unknown" };
     case "select_expr_subquery": {
       if (expr.limit === 1) return { upper: "one", lower: "zero" };
+      // A parenthesised subquery (`(select T filter …)`) carries its inner
+      // SELECT under `.expr` — recurse so exclusive-filter clamping is honoured.
+      if (expr.expr) return inferFreeExprCard(expr.expr, ctx, subjectTypeRef);
       return { upper: "unknown", lower: "zero" };
     }
     case "select":
       if (expr.clauses?.limit === 1) return { upper: "one", lower: "zero" };
+      // An equality filter on a property carrying a plain `exclusive` constraint
+      // selects at most one row (`select Person filter .name = 'x'`). An
+      // `exclusive … except (…)` constraint does NOT clamp — exempt rows can
+      // share the value — so it stays many.
+      if (selectFilterClampsToOne(expr.typeName, expr.clauses?.filter, ctx)) {
+        return { upper: "one", lower: "zero" };
+      }
       return { upper: "many", lower: "zero" };
     case "tuple":
       return { upper: "one", lower: "one" };
@@ -7982,6 +8026,23 @@ const compileSelectStatement = (rawStatement: SelectStatement, ctx: IRCompileCon
 
 const compileSelectFreeStatement = (statement: SelectFreeStatement, ctx: IRCompileContext): SelectStmt => {
   const scoped = withBindings(ctx, statement.with);
+  // `select { single x := <expr> }` requires `<expr>` to be provably single-or-
+  // empty. An exclusive constraint on the filtered property clamps to one, but
+  // an `exclusive … except (…)` constraint does NOT (rows can share the value),
+  // so a filtered select over an except-exclusive prop stays many — reject it.
+  const freeObjectTypeRef = unknownTypeRef("std::FreeObject");
+  for (const entry of statement.entries) {
+    if (entry.cardinality !== "one") continue;
+    const card = inferFreeExprCard(entry.expr, scoped, freeObjectTypeRef);
+    if (card.upper === "many") {
+      throw new AppError(
+        "E_SEMANTIC",
+        `possibly more than one element returned by an expression for a computed property '${entry.name}' declared as 'single'`,
+        statement.pos.line,
+        statement.pos.column,
+      );
+    }
+  }
   const tupleValues = statement.entries.map((entry) => ({ name: entry.name, val: compileFreeObjectExpr(entry.expr, scoped) }));
   const tupleSet: Set = {
     kind: "set",
