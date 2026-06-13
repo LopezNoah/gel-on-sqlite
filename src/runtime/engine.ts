@@ -8044,6 +8044,13 @@ const preExecuteDmlBindings = (
         }
       }
       if (touched) {
+        // The chain's DML has all executed by this point; run the single-
+        // snapshot exclusivity validation before returning the rewritten SELECT
+        // (the multi-property cross-type conflict in 07b is only caught here —
+        // there is no materialised unique index to trip during the INSERT).
+        if (exclusiveSnapshot && chainTypeNames) {
+          validateExclusiveSnapshot(db, schema, chainTypeNames, exclusiveSnapshot, ast.pos);
+        }
         return { ...ast, ...rewrittenFields, with: newWith.length > 0 ? newWith : undefined } as Statement;
       }
     }
