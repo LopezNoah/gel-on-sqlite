@@ -13,7 +13,7 @@ import { executeStdlibFunction, resolveStdlibFunction, type RuntimeFunctionArg }
 import { assertTargetSqlCompatibility, type RuntimeTarget } from "./target.js";
 import type { ShapeElement as GelIRShapeElement, Set as GelIRSet, Statement as GelIRStatement, TypeRef as GelIRTypeRef } from "../ir/gel_ir.js";
 import type { GroupIR, InsertIR, InsertLinkDefaultIR, InsertLinkPropertyIR, IRStatement, OverlayIR, SelectIR, UpdateIR, UpdateLinkAssignmentIR } from "../ir/model.js";
-import type { AccessPolicyCondition, AccessPolicyDef, ComputedLinkPropertyExpr, FieldDef, FunctionDef, FunctionExprDef, LinkPropertyDef, ScalarType, ScalarValue, TypeDef } from "../types.js";
+import type { AccessPolicyCondition, AccessPolicyDef, ComputedLinkPropertyExpr, ConstraintDef, FieldDef, FunctionDef, FunctionExprDef, LinkPropertyDef, ScalarType, ScalarValue, TypeDef } from "../types.js";
 import { normalizeLinkTargetNames, qualifiedTypeName } from "../schema/schema.js";
 import { tableNameForType } from "../codegen/sql.js";
 import { populateSchemaIntrospection } from "../schema/schema_introspection.js";
@@ -774,6 +774,141 @@ const parseMemberHeader = (entry: string): MemberHeader | undefined => {
   return undefined;
 };
 
+// Parse an `ALTER PROPERTY <name>` / `ALTER LINK <name>` body-entry header.
+// Returns the pointer kind + name, or `undefined` for any other entry.
+const parseAlterPointerHeader = (entry: string): { kind: "property" | "link"; name: string } | undefined => {
+  const tokenized = tryResult(() => tokenize(entry));
+  if (!tokenized.ok) return undefined;
+  const tokens: readonly Token[] = tokenized.value;
+  let i = 0;
+  if (tokens[i]?.kind !== "kw_alter") return undefined;
+  i += 1;
+  const kindTok = tokens[i];
+  let kind: "property" | "link";
+  if (kindTok?.kind === "kw_property") kind = "property";
+  else if (kindTok?.kind === "kw_link") kind = "link";
+  else return undefined;
+  i += 1;
+  const nameTok = tokens[i];
+  if (!nameTok || (nameTok.kind !== "identifier" && nameTok.kind !== "backtick_name")) return undefined;
+  const name = nameTok.kind === "backtick_name" ? stripBacktickName(nameTok.lexeme) : nameTok.lexeme;
+  return { kind, name };
+};
+
+// Parse a `CREATE [DELEGATED] CONSTRAINT exclusive [ON (<expr>)] [EXCEPT (<expr>)]`
+// body entry. Returns the structured exclusive-constraint descriptor, or
+// `undefined` for anything that isn't an exclusive constraint declaration
+// (other constraint kinds — max_len_value, regexp, … — aren't enforced by the
+// runtime, so we don't record them).
+type DynamicExclusiveConstraint = {
+  delegated: boolean;
+  onExpr?: string;
+  exceptExpr?: string;
+};
+
+const parseExclusiveConstraintEntry = (entry: string): DynamicExclusiveConstraint | undefined => {
+  const tokenized = tryResult(() => tokenize(entry));
+  if (!tokenized.ok) return undefined;
+  const tokens: readonly Token[] = tokenized.value;
+  let i = 0;
+  if (tokens[i]?.kind !== "kw_create") return undefined;
+  i += 1;
+  let delegated = false;
+  // `delegated` arrives as an unreserved identifier.
+  if (tokens[i] && tokens[i].kind === "identifier" && tokens[i].lower === "delegated") {
+    delegated = true;
+    i += 1;
+  }
+  if (tokens[i]?.kind !== "kw_constraint") return undefined;
+  i += 1;
+  // The constraint name (`exclusive` or `std::exclusive`). `exclusive` is an
+  // unreserved identifier; allow the `std::` qualifier too.
+  const nameTok = tokens[i];
+  if (!nameTok || (nameTok.kind !== "identifier" && nameTok.kind !== "backtick_name")) return undefined;
+  let constraintName = nameTok.kind === "backtick_name" ? stripBacktickName(nameTok.lexeme) : nameTok.lexeme;
+  i += 1;
+  // Optional `std::` module qualifier. The tokenizer may emit `std`, `::`,
+  // `exclusive` as separate tokens, or fold them into one qualified identifier.
+  if (tokens[i]?.kind === "coloncolon") {
+    const qualTok = tokens[i + 1];
+    if (qualTok && (qualTok.kind === "identifier" || qualTok.kind === "backtick_name")) {
+      constraintName = qualTok.kind === "backtick_name" ? stripBacktickName(qualTok.lexeme) : qualTok.lexeme;
+      i += 2;
+    }
+  }
+  if (constraintName.includes("::")) {
+    constraintName = constraintName.slice(constraintName.lastIndexOf("::") + 2);
+  }
+  if (constraintName !== "exclusive") return undefined;
+
+  let onExpr: string | undefined;
+  let exceptExpr: string | undefined;
+  // Optional `ON (<expr>)` and `EXCEPT (<expr>)` clauses. Slice the parenthesised
+  // expression text by walking balanced parens via token offsets.
+  const sliceParen = (startIdx: number): { text: string; next: number } | undefined => {
+    if (tokens[startIdx]?.kind !== "lparen") return undefined;
+    let depth = 0;
+    for (let j = startIdx; j < tokens.length; j += 1) {
+      const t = tokens[j];
+      if (t.kind === "lparen") depth += 1;
+      else if (t.kind === "rparen") {
+        depth -= 1;
+        if (depth === 0) {
+          const text = entry.slice(tokens[startIdx].offset + 1, t.offset).trim();
+          return { text, next: j + 1 };
+        }
+      }
+    }
+    return undefined;
+  };
+  while (tokens[i]) {
+    if (tokens[i].kind === "kw_on") {
+      const sliced = sliceParen(i + 1);
+      if (!sliced) break;
+      onExpr = sliced.text;
+      i = sliced.next;
+      continue;
+    }
+    if (tokens[i].kind === "kw_except") {
+      const sliced = sliceParen(i + 1);
+      if (!sliced) break;
+      exceptExpr = sliced.text;
+      i = sliced.next;
+      continue;
+    }
+    break;
+  }
+  return { delegated, onExpr, exceptExpr };
+};
+
+// Collect exclusive constraints declared inside a property/link `{ … }` block
+// (e.g. `CREATE CONSTRAINT exclusive;`). Returns the ConstraintDef[] shape that
+// materializeExclusivity consumes, or `undefined` when none are present.
+const collectDynamicExclusiveConstraints = (innerBody: string): ConstraintDef[] | undefined => {
+  const out: ConstraintDef[] = [];
+  for (const bodyEntry of splitTopLevelScriptStatements(innerBody)) {
+    const excl = parseExclusiveConstraintEntry(stripTrailingBraceBlock(bodyEntry));
+    if (!excl) continue;
+    out.push({
+      name: "std::exclusive",
+      annotations: [],
+      delegated: excl.delegated || undefined,
+      onExpr: excl.onExpr,
+      exceptExpr: excl.exceptExpr,
+    });
+  }
+  return out.length > 0 ? out : undefined;
+};
+
+// Extract single-field references from a type-level constraint `on` expression
+// (e.g. `(.name)` → ["name"]). Tuple constraints over multiple fields are not
+// enforced by the runtime, so they yield no refs and are dropped.
+const exclusiveConstraintFieldRefs = (onExpr: string | undefined): string[] => {
+  if (onExpr === undefined) return [];
+  const refs = [...onExpr.matchAll(/\.([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]);
+  return [...new Set(refs)];
+};
+
 const registerDynamicTypeDDL = (schema: SchemaSnapshot, statement: string, defaultModule = "default"): boolean => {
   const header = parseCreateTypeHeader(statement.trim());
   if (!header) return false;
@@ -782,6 +917,7 @@ const registerDynamicTypeDDL = (schema: SchemaSnapshot, statement: string, defau
   const fields: FieldDef[] = [];
   const links: NonNullable<TypeDef["links"]> = [];
   const computeds: NonNullable<TypeDef["computeds"]> = [];
+  const typeConstraints: NonNullable<TypeDef["typeConstraints"]> = [];
   const extendsList = extendsRaw
     ? extendsRaw.map((entry) => normalizeDynamicTypeName(entry, module)).filter((entry) => entry.length > 0)
     : undefined;
@@ -795,7 +931,16 @@ const registerDynamicTypeDDL = (schema: SchemaSnapshot, statement: string, defau
       const baseType = schema.getType(baseName);
       if (!baseType) continue;
       for (const field of baseType.fields) {
-        if (!fields.some((f) => f.name === field.name)) fields.push({ ...field });
+        const existing = fields.find((f) => f.name === field.name);
+        if (!existing) {
+          fields.push({ ...field });
+        } else if (field.constraints && field.constraints.length > 0) {
+          // The same field inherited from multiple bases (`Baz EXTENDING Foo,
+          // Bar` where both declare `name`): merge constraints so an exclusive
+          // constraint declared on ANY base is enforced on the subtype, not
+          // dropped because an unconstrained base was visited first.
+          existing.constraints = [...(existing.constraints ?? []), ...field.constraints];
+        }
       }
       for (const link of baseType.links ?? []) {
         if (!links.some((l) => l.name === link.name)) links.push({ ...link });
@@ -812,15 +957,65 @@ const registerDynamicTypeDDL = (schema: SchemaSnapshot, statement: string, defau
     const innerBody = extractTrailingBraceBlock(rawEntry);
     const entry = stripTrailingBraceBlock(rawEntry);
     const member = parseMemberHeader(entry);
-    if (!member) continue;
+    if (!member) {
+      // `ALTER PROPERTY <name> { CREATE [DELEGATED] CONSTRAINT exclusive … }` /
+      // `ALTER LINK <name> { … }` — add an exclusive constraint to a pointer
+      // (typically inherited from a base type) without redeclaring it. Used by
+      // `CREATE TYPE Bar EXTENDING Foo { ALTER PROPERTY name { CREATE
+      // CONSTRAINT exclusive } }`.
+      const altered = parseAlterPointerHeader(entry);
+      if (altered && innerBody) {
+        const constraints = collectDynamicExclusiveConstraints(innerBody);
+        if (constraints) {
+          if (altered.kind === "property") {
+            const existing = fields.find((f) => f.name === altered.name);
+            if (existing) {
+              existing.constraints = [...(existing.constraints ?? []), ...constraints];
+            } else {
+              // Inherited field not yet materialised on this type's field list —
+              // record a bare field carrying just the constraint so the
+              // exclusivity collector can pick it up.
+              fields.push({ name: altered.name, type: "str", constraints });
+            }
+          } else {
+            const existingLink = links.find((l) => l.name === altered.name);
+            if (existingLink) {
+              existingLink.constraints = [...(existingLink.constraints ?? []), ...constraints];
+            }
+            const fkField = fields.find((f) => f.name === `${altered.name}_id`);
+            if (fkField) {
+              fkField.constraints = [...(fkField.constraints ?? []), ...constraints];
+            }
+          }
+        }
+        continue;
+      }
+      // Type-level `CREATE [DELEGATED] CONSTRAINT exclusive [on (.field)] [except (...)]`.
+      const typeExcl = parseExclusiveConstraintEntry(entry);
+      if (typeExcl) {
+        const refs = exclusiveConstraintFieldRefs(typeExcl.onExpr);
+        if (refs.length > 0) {
+          typeConstraints.push({
+            name: "std::exclusive",
+            exprText: typeExcl.onExpr ?? "",
+            fieldRefs: refs,
+            delegated: typeExcl.delegated || undefined,
+            exceptExpr: typeExcl.exceptExpr,
+          });
+        }
+      }
+      continue;
+    }
     if (member.kind === "property") {
       const scalar = dynamicScalarFromType(member.targetType);
+      const constraints = innerBody ? collectDynamicExclusiveConstraints(innerBody) : undefined;
       fields.push({
         name: member.name,
         type: scalar.type,
         required: member.modifiers.required,
         multi: member.modifiers.multi,
         collection: scalar.collection,
+        constraints,
       });
       continue;
     }
@@ -840,17 +1035,27 @@ const registerDynamicTypeDDL = (schema: SchemaSnapshot, statement: string, defau
           });
         }
       }
+      const linkConstraints = innerBody ? collectDynamicExclusiveConstraints(innerBody) : undefined;
       links.push({
         name: member.name,
         targetType: normalizeDynamicTypeName(member.targetType, module),
         multi,
         properties: linkProperties.length > 0 ? linkProperties : undefined,
+        constraints: linkConstraints,
       });
       // Without an inline FK column when the link uses a link table (i.e.
       // when it has properties OR is multi). The runtime creates a
       // `<owner>__<link>` table for these.
       if (!multi && linkProperties.length === 0) {
-        fields.push({ name: `${member.name}_id`, type: "uuid", isLinkColumn: true });
+        // Carry an exclusive constraint declared on the link down to the
+        // synthetic FK column so the same-table UNIQUE index / shared
+        // exclusivity machinery enforces it (links are unique on their target).
+        fields.push({
+          name: `${member.name}_id`,
+          type: "uuid",
+          isLinkColumn: true,
+          constraints: linkConstraints,
+        });
       }
       continue;
     }
@@ -874,6 +1079,7 @@ const registerDynamicTypeDDL = (schema: SchemaSnapshot, statement: string, defau
     fields,
     links: links.length ? links : undefined,
     computeds: computeds.length ? computeds : undefined,
+    typeConstraints: typeConstraints.length ? typeConstraints : undefined,
     extends: extendsList,
   });
   return true;
@@ -6322,6 +6528,30 @@ const resolveObjectSet = (
 // values against `env`, and return the affected rows as an id-set. Writes go
 // through the normal write path, one `.id = <uuid>` mutation per row, with
 // each SET link value rewritten to a by-id SELECT (or empty set).
+// Resolve the concrete type that physically stores a given id within a
+// (possibly abstract) base type's hierarchy. Multi-table inheritance stores
+// each concrete type in its own table, so a per-id UPDATE/DELETE must target
+// the table the row actually lives in — not the base type's table (which may
+// be empty / a different type). Returns the base type's name as a fallback.
+const concreteTypeNameForId = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  baseTypeName: string,
+  id: string,
+): string => {
+  const concretes = schema.listConcreteTypesAssignableTo(baseTypeName);
+  for (const typeDef of concretes) {
+    const table = tableNameForType(qualifiedTypeName(typeDef));
+    const row = tryResult(() =>
+      db.prepare(`SELECT 1 FROM ${quoteIdent(table)} WHERE ${quoteIdent("id")} = ? LIMIT 1`).all(id)[0],
+    );
+    if (row.ok && row.value !== undefined) {
+      return qualifiedTypeName(typeDef);
+    }
+  }
+  return baseTypeName;
+};
+
 const executeDmlChainStatement = (
   db: SQLiteDatabase,
   schema: SchemaSnapshot,
@@ -6383,12 +6613,25 @@ const executeDmlChainStatement = (
   // UPDATE: per affected row, rewrite each SET link value to a by-id SELECT
   // (or empty set) resolved against env + the current row.
   for (const id of target.ids) {
-    const current: ObjectSet = { typeName: target.typeName, ids: [id] };
+    const concreteType = concreteTypeNameForId(db, schema, target.typeName, id);
+    const current: ObjectSet = { typeName: concreteType, ids: [id] };
+    // Link names of the concrete type — only link assignments are resolved
+    // to object-set by-id selects. Scalar property assignments (e.g. `name :=
+    // 'Madeline Hatch'`) must pass through unchanged (with env refs rewritten),
+    // otherwise resolveObjectSet would coerce them to an empty set → NULL.
+    const concreteDef = schema.getType(concreteType);
+    const linkNames = new Set((concreteDef?.links ?? []).map((l) => l.name));
     const values: Record<string, unknown> = {};
     const operations: Record<string, string> = {};
     for (const [link, raw] of Object.entries(stmtAny.values ?? {})) {
-      const resolved = resolveObjectSet(db, schema, raw, env, current, context, defaultModule);
       operations[link] = stmtAny.operations?.[link] ?? "assign";
+      if (!linkNames.has(link)) {
+        // Scalar property: keep the original value expression, rewriting any
+        // chain-binding references to literals/by-id selects.
+        values[link] = env.size > 0 ? rewriteEnvRefsInNode(raw, env) : raw;
+        continue;
+      }
+      const resolved = resolveObjectSet(db, schema, raw, env, current, context, defaultModule);
       values[link] = resolved.ids.length === 0
         ? { kind: "set", values: [] }
         : {
@@ -6400,7 +6643,12 @@ const executeDmlChainStatement = (
     }
     const perId = {
       kind: "update",
-      typeName: target.typeName,
+      typeName: concreteType,
+      // Preserve the statement's WITH bindings + module so scalar property
+      // assignments that reference them (`SET {name := name}`) still resolve.
+      with: (stmt as { with?: WithBinding[] }).with,
+      withModule: (stmt as { withModule?: string }).withModule,
+      withModuleAliases: (stmt as { withModuleAliases?: unknown }).withModuleAliases,
       filter: { kind: "predicate", target: { kind: "field", field: "id" }, op: "=", value: id },
       values,
       operations,
@@ -6901,12 +7149,19 @@ const executeSelectOverMutation = (
     }
   } else {
     for (const id of affectedIds) {
+      // Re-target the per-id mutation at the concrete type that physically
+      // stores the row (multi-table inheritance): the base type's table may
+      // not contain it, so an UPDATE/DELETE against the base would no-op.
+      const concreteType = concreteTypeNameForId(db, schema, qualifiedSubject, id);
+      const perIdSubjectType = schema.getType(concreteType) ?? subjectType;
       const perId = {
         ...mutation,
+        typeName: concreteType,
+        target: undefined,
         filter: { kind: "predicate", target: { kind: "field", field: "id" }, op: "=", value: id },
       } as InsertStatement | UpdateStatement | DeleteStatement;
       lastCompiled = compilerService.compile(schema, perId, { globals: context.globals, target: runtimeTarget });
-      runWriteWithAccessPolicies(db, schema, perId, lastCompiled.ir, lastCompiled.sql, subjectType, context);
+      runWriteWithAccessPolicies(db, schema, perId, lastCompiled.ir, lastCompiled.sql, perIdSubjectType, context);
     }
   }
 
@@ -7200,13 +7455,27 @@ const expandPolymorphicMutation = (
 ): Array<UpdateStatement | DeleteStatement> | undefined => {
   const target = ast.target;
   if (!target) {
-    const qualified = ast.typeName.includes("::") ? ast.typeName : `default::${ast.typeName}`;
-    if (qualified !== "default::Object" && qualified !== "std::Object") {
+    const moduleName = ast.withModule ?? "default";
+    const qualified = ast.typeName.includes("::") ? ast.typeName : `${moduleName}::${ast.typeName}`;
+    if (qualified === "default::Object" || qualified === "std::Object") {
+      const concretes = schema.listTypes()
+        .filter((typeDef) => !typeDef.abstract)
+        .map((typeDef) => qualifiedTypeName(typeDef));
+      return concretes.map((typeName) => ({ ...ast, typeName }));
+    }
+    // A plain `UPDATE/DELETE <BaseType>` over a type with concrete descendants
+    // stored in their own tables (multi-table inheritance): fan the mutation
+    // out to every concrete type in the hierarchy. Without this the base-table
+    // statement misses rows that physically live in subtype tables (and skips
+    // their exclusivity triggers). When the subject is itself the only concrete
+    // type, leave it untouched (no expansion needed).
+    const concretes = schema.listConcreteTypesAssignableTo(qualified).map((typeDef) => qualifiedTypeName(typeDef));
+    if (concretes.length === 0) {
       return undefined;
     }
-    const concretes = schema.listTypes()
-      .filter((typeDef) => !typeDef.abstract)
-      .map((typeDef) => qualifiedTypeName(typeDef));
+    if (concretes.length === 1 && concretes[0] === qualified) {
+      return undefined;
+    }
     return concretes.map((typeName) => ({ ...ast, typeName }));
   }
   const typeExpr = extractTargetTypeExpr(target);
@@ -11479,6 +11748,22 @@ const parseExclusivityViolation = (
   return undefined;
 };
 
+// Map a write error to EdgeQL's exclusivity-constraint diagnostic. A UNIQUE
+// failure (same-table index or shared cross-type bookkeeping table, including
+// the `id` PRIMARY KEY) becomes "<prop> violates exclusivity constraint";
+// anything else is returned unchanged so the original error still propagates.
+const translateExclusivityWriteError = (writeErr: unknown, line: number, column: number): unknown => {
+  const message = String((writeErr as Error)?.message ?? writeErr);
+  if (/(?:UNIQUE|PRIMARY KEY) constraint failed:.*\.id\b/.test(message)) {
+    return new AppError("E_VALIDATION", "id violates exclusivity constraint", line, column);
+  }
+  const exclusivity = parseExclusivityViolation(message);
+  if (exclusivity) {
+    return new AppError("E_VALIDATION", `${exclusivity.property} violates exclusivity constraint`, line, column);
+  }
+  return writeErr;
+};
+
 const resolveConflictField = (ast: InsertStatement, typeDef: TypeDef): string | undefined => {
   if (ast.conflict?.onField) {
     return ast.conflict.onField;
@@ -12124,9 +12409,19 @@ const runWriteWithAccessPolicies = (
       // Skip running it — the real work happens in applyUpdateLinkAssignments,
       // and the matched-row count is just the pre-read row count.
       const baseIsNoop = /SET "id" = g0_w\."id" (?:FROM|WHERE)/.test(sqlArtifact.sql);
-      const writeResult = baseIsNoop
-        ? { changes: preRows.length }
-        : db.prepare(sqlArtifact.sql).run(...sqlArtifact.params);
+      let writeResult: { changes: number };
+      if (baseIsNoop) {
+        writeResult = { changes: preRows.length };
+      } else {
+        try {
+          writeResult = db.prepare(sqlArtifact.sql).run(...sqlArtifact.params);
+        } catch (writeErr) {
+          // An UPDATE that drives a value into an existing exclusive value trips
+          // a UNIQUE failure (same-table index or shared cross-type table).
+          // Translate it to EdgeQL's exclusivity wording before it propagates.
+          throw translateExclusivityWriteError(writeErr, ast.pos.line, ast.pos.column);
+        }
+      }
       if (ast.kind === "update") {
         applyUpdateLinkAssignments(
           db,
