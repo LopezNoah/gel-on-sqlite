@@ -85,6 +85,13 @@ export class SchemaSnapshot {
     this.typesByName.set(qualifiedTypeName(typeDef), cloneTypeDef(typeDef));
   }
 
+  // Registers (or replaces) a global declared at runtime via `CREATE GLOBAL`.
+  // `exprText` carries the default expression for computed globals; settable
+  // globals (`create global a -> int64`) have no exprText.
+  addGlobal(global: GlobalDef): void {
+    this.globalsByName.set(`${global.module}::${global.name}`, { ...global });
+  }
+
   setFutureFlag(name: string, enabled: boolean): void {
     if (enabled) this.futureFlagsSet.add(name);
     else this.futureFlagsSet.delete(name);

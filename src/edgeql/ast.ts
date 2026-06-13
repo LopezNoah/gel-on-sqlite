@@ -871,6 +871,12 @@ export interface ConfigureStatement {
   operation: "set" | "insert" | "reset";
   target: string;
   value?: FreeObjectExpr;
+  // Set when this node represents `SET GLOBAL <name> := <expr>` /
+  // `RESET GLOBAL <name>` (session global assignment), as opposed to a
+  // `CONFIGURE …` knob. `target` holds the global's (qualified) name and
+  // `value` (for SET) holds the assigned expression. The engine evaluates and
+  // stores the value in its per-connection global state.
+  isSessionGlobal?: boolean;
   pos: SourcePos;
 }
 

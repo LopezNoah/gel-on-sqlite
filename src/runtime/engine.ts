@@ -232,6 +232,120 @@ const applySessionConfigure = (schema: SchemaSnapshot, ast: ConfigureStatement):
       : false;
 };
 
+// Per-connection (schema-snapshot-scoped) values for session globals. Two
+// sources populate it, keyed by the global's unqualified name (matching how
+// `global a` / `global_expr` reference globals):
+//   • computed globals (`create global a := <expr>`) — their default is
+//     evaluated once at CREATE time and stored here (they always read back as
+//     that default).
+//   • settable globals — `set global a := <expr>` stores the value; `reset
+//     global a` (or never-set) leaves it absent, so reads yield the empty set.
+// The stored value is merged into `context.globals` before each compile so the
+// `global_expr` SQL lowering (which reads `globalValues[name]`) sees it.
+//
+// EMPTY_GLOBAL marks a global that exists but currently holds the empty set
+// (distinct from "never declared"). We don't actually need to store it — an
+// absent key already lowers to NULL/empty — so the map only ever holds present
+// scalar values.
+const globalValuesBySchema = new WeakMap<SchemaSnapshot, Map<string, ScalarValue>>();
+
+const globalValuesFor = (schema: SchemaSnapshot): Map<string, ScalarValue> => {
+  let map = globalValuesBySchema.get(schema);
+  if (!map) {
+    map = new Map<string, ScalarValue>();
+    globalValuesBySchema.set(schema, map);
+  }
+  return map;
+};
+
+// Evaluates a global's expression (default or `set` value) to a single scalar
+// by compiling it as `select (<expr>)` and running it. EdgeQL globals are
+// single-or-empty, so we return the lone scalar row, or `undefined` when the
+// expression yields the empty set (caller treats that as "no value"). Object /
+// non-scalar results aren't valid global values; they return undefined too.
+const evaluateGlobalExpr = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  expr: FreeObjectExpr,
+  context: SecurityContext,
+): ScalarValue | undefined => {
+  const stmtAst = {
+    kind: "select_expr",
+    expr,
+    pos: { line: 1, column: 1 },
+  } as unknown as SelectExprStatement;
+  try {
+    const compiled = getCompilerService().compile(schema, stmtAst as unknown as Statement, { globals: context.globals });
+    if (compiled.sql.loweringMode !== "single_statement" || compiled.sql.sql.length === 0) return undefined;
+    const rows = runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
+    if (rows.length === 0) return undefined;
+    const first = rows[0];
+    return first === null || isScalarValue(first) ? (first as ScalarValue) : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+// Applies `CREATE GLOBAL <name> [:= <expr>]`. Registers the global on the
+// schema and, for computed globals (those with a default), evaluates and caches
+// the default value. Settable globals start absent (empty set until `set`).
+const applyCreateGlobalDDL = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  ast: DDLStatement,
+  defaultModule: string,
+): void => {
+  const name = ast.name;
+  // `create global mod::a` carries the module in the qualified name; otherwise
+  // it lives in the statement's WITH-module or the script default module.
+  const qualified = name.includes("::") ? name : `${ast.withModule ?? defaultModule}::${name}`;
+  const [moduleName, shortName] = qualified.split("::");
+  schema.addGlobal({ module: moduleName, name: shortName, exprText: ast.value ? "<computed>" : undefined });
+  const values = globalValuesFor(schema);
+  if (ast.value) {
+    const evaluated = evaluateGlobalExpr(db, schema, ast.value, normalizeSecurityContext(DEFAULT_SECURITY_CONTEXT));
+    if (evaluated === undefined) values.delete(shortName);
+    else values.set(shortName, evaluated);
+  } else {
+    // Settable global: empty until a `set global` assigns it.
+    values.delete(shortName);
+  }
+};
+
+// Applies `SET GLOBAL <name> := <expr>` / `RESET GLOBAL <name>` to the
+// connection's per-schema global state.
+const applySessionGlobal = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  ast: ConfigureStatement,
+  context: SecurityContext,
+): void => {
+  const name = ast.target.includes("::") ? ast.target.split("::").at(-1)! : ast.target;
+  const values = globalValuesFor(schema);
+  if (ast.operation === "reset") {
+    values.delete(name);
+    return;
+  }
+  if (!ast.value) {
+    values.delete(name);
+    return;
+  }
+  const evaluated = evaluateGlobalExpr(db, schema, ast.value, context);
+  if (evaluated === undefined) values.delete(name);
+  else values.set(name, evaluated);
+};
+
+// Merges the per-schema session-global values into a context's `globals` map.
+// Caller-supplied globals win over stored defaults (so explicit query-time
+// globals can still override). Returns a new context; the original is unchanged.
+const withSessionGlobals = (schema: SchemaSnapshot, context: SecurityContext): SecurityContext => {
+  const stored = globalValuesBySchema.get(schema);
+  if (!stored || stored.size === 0) return context;
+  const merged: Record<string, ScalarValue> = {};
+  for (const [k, v] of stored) merged[k] = v;
+  return { ...context, globals: { ...merged, ...(context.globals ?? {}) } };
+};
+
 // Lists every alias known for a schema — both schema::Alias entries
 // registered via schema.addAlias (typed aliases with shapes) and runtime
 // expr aliases stashed in the WeakMap above (scalar/tuple-set CREATE ALIAS
@@ -1179,7 +1293,10 @@ const maybeHandleAliasDDLScript = (schema: SchemaSnapshot, script: string): bool
     return true;
   }
 
-  if (/^create\s+(?:type|global|module)\b/i.test(trimmed) || /^drop\s+(?:type|global|module)\b/i.test(trimmed)) {
+  // `CREATE GLOBAL` is handled by the per-statement executor (it registers the
+  // global and evaluates computed defaults), so let it fall through rather than
+  // treating it as a handled no-op here. `type`/`module` remain no-ops.
+  if (/^create\s+(?:type|module)\b/i.test(trimmed) || /^drop\s+(?:type|global|module)\b/i.test(trimmed)) {
     return true;
   }
 
@@ -7666,11 +7783,27 @@ const executeQueryWithTraceImpl = (
 ): QueryExecutionTrace => {
   try {
     query = injectRuntimeAliasBinding(schema, query);
-    const context = normalizeSecurityContext(securityContext);
+    // Merge any session globals stored on this schema (from prior CREATE/SET
+    // GLOBAL on the same connection) into the context before compiling.
+    const context = withSessionGlobals(schema, normalizeSecurityContext(securityContext));
     const runtimeTarget = resolvedRuntimeTarget(context, db);
     const compilerService = getCompilerService();
     let ast = presetAst ?? parseEdgeQL(query);
     if (ast.kind === "configure") {
+      // `SET/RESET GLOBAL …` issued via `.query()` updates the session global
+      // state directly.
+      if (ast.isSessionGlobal) {
+        applySessionGlobal(db, schema, ast, context);
+        return {
+          ast,
+          ir: { kind: "select", rows: [] } as unknown as IRStatement,
+          sql: { sql: "", params: [], loweringMode: "single_statement" } as SQLArtifact,
+          compiler: { key: "set-global-noop", status: "miss", stats: { hits: 0, misses: 0, size: 0 } },
+          sqlTrail: [],
+          overlays: [],
+          result: { kind: "insert", changes: 0 },
+        };
+      }
       // CONFIGURE has no SQLite analogue — return an empty insert-like result
       // so callers that fire it from `.query()` don't have to pre-filter or
       // catch the compile-time "Statement kind 'configure' requires
@@ -8447,7 +8580,10 @@ export const executeQueryUnitWithTrace = (
     // module targets (`CREATE TYPE std::Foo`, …) never get registered.
     validateScriptUserDDL(script, parserOptions, securityContext.strictUserDDL ?? false);
     maybeRegisterDynamicDDLScript(db, schema, script);
-    const context = normalizeSecurityContext(securityContext);
+    // Seed the context with session globals stored on this schema (from prior
+    // script() calls on the same connection); statements in this script may add
+    // more, refreshing `context.globals` as they run.
+    const context = withSessionGlobals(schema, normalizeSecurityContext(securityContext));
     const runtimeTarget = resolvedRuntimeTarget(context, db);
     const compilerService = getCompilerService();
     const statements = parseEdgeQLScript(script, parserOptions);
@@ -8637,10 +8773,23 @@ export const executeQueryUnitWithTrace = (
           applyParsedFunctionDDL(schema, ast, parserOptions.defaultModule ?? "default");
           populateSchemaIntrospection(db, schema, listAllRuntimeAliasNames(schema), runtimeExprAliases.get(schema));
           compilerService.clear();
+        } else if (ast.action === "create" && ast.objectKind === "global") {
+          // Register the global and (for computed globals) cache its default
+          // value, then refresh the context so later statements read it.
+          applyCreateGlobalDDL(db, schema, ast, parserOptions.defaultModule ?? "default");
+          context.globals = withSessionGlobals(schema, context).globals;
+          compilerService.clear();
         }
         continue;
       }
       if (ast.kind === "configure") {
+        // `SET GLOBAL <name> := …` / `RESET GLOBAL <name>` assign or clear a
+        // session global; store the value and refresh the context.
+        if (ast.isSessionGlobal) {
+          applySessionGlobal(db, schema, ast, context);
+          context.globals = withSessionGlobals(schema, context).globals;
+          continue;
+        }
         // Session/instance/database CONFIGURE statements (e.g. `CONFIGURE
         // SESSION SET allow_user_specified_id := true`) have no SQLite
         // analogue. The only knob sqlite-ts honors is allow_user_specified_id
