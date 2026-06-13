@@ -7387,6 +7387,14 @@ class Parser {
       this.consume();
       op = "?!=";
     } else if (token.kind === "kw_in") {
+      // A dot-path (or backlink) RHS — e.g. `.tup IN .multi_tup` — isn't one of
+      // the forms parseInPredicateValues accepts (set literal / identifier /
+      // SELECT subquery). Rewind and parse the whole predicate as a free expr.
+      if (this.peekNext().kind === "dot") {
+        this.index = beforeTarget;
+        const expr = this.parseFreeObjectExpr();
+        return { kind: "free_expr", expr };
+      }
       this.consume();
       const values = this.parseInPredicateValues();
       return {
@@ -7413,6 +7421,13 @@ class Parser {
         };
       }
       this.expect("kw_in", "Expected 'IN' after 'NOT' in filter");
+      // Dot-path RHS (`.tup NOT IN .multi_tup`) isn't accepted by
+      // parseInPredicateValues — rewind and parse as a free expr.
+      if (this.peek().kind === "dot") {
+        this.index = beforeTarget;
+        const expr = this.parseFreeObjectExpr();
+        return { kind: "free_expr", expr };
+      }
       const values = this.parseInPredicateValues();
       return {
         kind: "in_predicate",

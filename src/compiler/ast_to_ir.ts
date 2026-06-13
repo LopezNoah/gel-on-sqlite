@@ -506,12 +506,22 @@ const parseTupleStructuredTypeRef = (ctx: IRCompileContext, name: string): TypeR
     }
     return resolveTypeRef(ctx, part);
   });
-  const qualified = qualifyTypeName(name, ctx.module);
+  // Reconstruct the canonical tuple type name from the *resolved* subtypes so
+  // element types are fully qualified (`tuple<std::str, std::str>`). Naively
+  // running the raw `tuple<str, str>` through qualifyTypeName would mis-prefix
+  // the whole thing as `default::tuple<...>` because it has no top-level `::`.
+  const cleanId = (st: TypeRef): string => {
+    const raw = st.id ?? st.nameHint ?? "";
+    return raw.startsWith("unknown:") ? raw.slice("unknown:".length) : raw;
+  };
+  const canonical = `tuple<${subtypes
+    .map((st) => (st.elementName ? `${st.elementName}: ${cleanId(st)}` : cleanId(st)))
+    .join(", ")}>`;
   return {
     kind: "type_ref",
-    id: qualified,
-    nameHint: qualified,
-    module: qualified.includes("::") ? (qualified.split("::")[0] ?? "std") : "std",
+    id: canonical,
+    nameHint: canonical,
+    module: "std",
     isView: false,
     isScalar: false,
     isAbstract: false,
@@ -565,13 +575,23 @@ const idPointerRef = (source: TypeRef): PointerRef => ({
   hasProperties: false,
 });
 
+const collectionFieldTargetRef = (field: FieldDef): TypeRef => {
+  const base = scalarTypeRef(field.type);
+  if (!field.collection) return base;
+  // Collection-typed properties store JSON (`field.type === "json"`), but the
+  // logical type is `array<…>` / `tuple<…>`. Carry the collection marker so
+  // downstream (e.g. polymorphic `len`) can distinguish element-count from
+  // character-length semantics.
+  return { ...base, collection: field.collection.kind };
+};
+
 const pointerRefFromField = (source: TypeRef, field: FieldDef): PointerRef => ({
   kind: "pointer_ref",
   id: `${source.id}.field::${field.name}`,
   name: field.name,
   shortName: field.name,
   outSource: source,
-  outTarget: scalarTypeRef(field.type),
+  outTarget: collectionFieldTargetRef(field),
   outCardinality: field.multi
     ? (field.required ? "at_least_one" : "many")
     : (field.required ? "one" : "at_most_one"),
@@ -1915,6 +1935,23 @@ const BUILTIN_SCALAR_NAMES: Record<string, string> = {
 };
 
 const normalizeScalarCastName = (ctx: IRCompileContext, name: string): string => {
+  // Parametric collection casts (`tuple<str, str>`, `array<int64>`) must be
+  // normalized through the structured TypeRef so element scalars are fully
+  // qualified (`tuple<std::str, std::str>`). Naively prepending the active
+  // module yields a bogus `default::tuple<str, str>` that mismatches the
+  // canonical `std::*`-qualified form used elsewhere (type-compat checks etc).
+  {
+    const trimmed = name.trim();
+    const open = trimmed.indexOf("<");
+    if (open > 0 && trimmed.endsWith(">")) {
+      const head = trimmed.slice(0, open).trim();
+      const bare = head.includes("::") ? (head.split("::").pop() ?? head) : head;
+      if (bare === "tuple") {
+        const tupleRef = parseTupleStructuredTypeRef(ctx, name);
+        if (tupleRef) return tupleRef.id;
+      }
+    }
+  }
   if (name.includes("::")) {
     // `cal::*` casts (`<cal::local_date>...`) keep their short form coming out
     // of the parser; promote them to fully-qualified `std::cal::*` so

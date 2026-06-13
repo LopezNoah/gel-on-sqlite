@@ -1563,12 +1563,23 @@ const buildInsertLinkDefaults = (
     const usesLinkTable = Boolean(link.multi) || (link.properties?.length ?? 0) > 0;
     const properties = (link.properties ?? []).map(linkPropertyIR);
     const ownerTable = tableNameForType(qualifiedTypeName(typeDef));
+    // A link `default` that is itself an INSERT (`default := (INSERT T { … })`)
+    // has no lookup filter; carry the nested INSERT text so the runtime
+    // executes it and links the freshly-created row.
+    const trimmedDefault = link.defaultExprText?.trim();
+    const insertExprText = !parsedFilter
+      && (link.defaultTargetValues?.length ?? 0) === 0
+      && trimmedDefault
+      && /^\(?\s*insert\b/i.test(trimmedDefault)
+      ? trimmedDefault
+      : undefined;
     const base = {
       linkName: link.name,
       ownerTable,
       targetTable: tableNameForType(targetQualified),
       defaultTargetValues: parsedFilter ? [...parsedFilter.values] : [...(link.defaultTargetValues ?? [])],
       lookupColumn,
+      insertExprText,
     };
     if (usesLinkTable) {
       defaults.push({
