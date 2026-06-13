@@ -21,6 +21,8 @@ const cloneConstraint = (constraint: ConstraintDef): ConstraintDef => ({
   annotations: constraint.annotations.map((annotation) => ({ ...annotation })),
   delegated: constraint.delegated,
   params: constraint.params ? constraint.params.map((param) => ({ ...param })) : undefined,
+  onExpr: constraint.onExpr,
+  exceptExpr: constraint.exceptExpr,
 });
 
 const cloneConstraints = (constraints: ConstraintDef[]): ConstraintDef[] => constraints.map(cloneConstraint);
@@ -256,6 +258,8 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
                   annotations: mergeConstraintAnnotations(constraint.name, constraint.annotations),
                   delegated: constraint.delegated,
                   params: constraint.params ? constraint.params.map((param) => ({ ...param })) : undefined,
+                  onExpr: constraint.onExpr,
+                  exceptExpr: constraint.exceptExpr,
                 }))
             : [];
 

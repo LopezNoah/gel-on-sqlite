@@ -870,6 +870,7 @@ const registerDynamicTypeDDL = (schema: SchemaSnapshot, statement: string, defau
     module,
     name,
     abstract: isAbstract || undefined,
+    ddlSynthesized: true,
     fields,
     links: links.length ? links : undefined,
     computeds: computeds.length ? computeds : undefined,
@@ -11451,6 +11452,33 @@ const typeDefForTable = (schema: SchemaSnapshot, table: string): TypeDef | undef
 const typeDefForInsertIR = (schema: SchemaSnapshot, table: string): TypeDef | undefined =>
   typeDefForTable(schema, table);
 
+// Translate SQLite's "UNIQUE constraint failed: <table>.<col>" into the Gel
+// exclusivity-constraint vocabulary. Cross-type/inherited exclusive
+// constraints are enforced through shared bookkeeping tables named
+// `__gel_excl__<owner>__col__<prop>` (see materializeExclusivity in
+// database.ts); same-type constraints trip a normal `<table>.<col>` index.
+const parseExclusivityViolation = (
+  message: string,
+): { property: string; crossType: boolean } | undefined => {
+  if (!message.includes("UNIQUE constraint failed")) return undefined;
+  // Shared cross-type tables are named `__gel_excl__<owner>__col__<prop>`,
+  // and their unique index appends `__excl__<prop>`. SQLite reports either the
+  // `<table>.v` column (plain index) or the index name (expression index), so
+  // recover the property as the segment after the last `__col__`, stopping at
+  // `__excl__`, `.`, or end-of-string.
+  const shared = /__col__([A-Za-z0-9_]+?)(?:__excl__|\.|$)/.exec(message);
+  if (shared) {
+    return { property: shared[1], crossType: true };
+  }
+  const direct = /UNIQUE constraint failed: [^.]+\.([A-Za-z0-9_]+)/.exec(message);
+  if (direct) {
+    const col = direct[1];
+    const property = col.endsWith("_id") ? col.slice(0, -3) : col;
+    return { property, crossType: false };
+  }
+  return undefined;
+};
+
 const resolveConflictField = (ast: InsertStatement, typeDef: TypeDef): string | undefined => {
   if (ast.conflict?.onField) {
     return ast.conflict.onField;
@@ -11916,6 +11944,41 @@ const runWriteWithAccessPolicies = (
 
       enforceInsertPolicies(subjectType, insertValues, context, ast.pos.line, ast.pos.column);
 
+      // Validate an explicit `UNLESS CONFLICT ON .prop` target: the property
+      // must exist on the inserted type and carry exactly one exclusive
+      // constraint (mirroring the Gel compiler's checks). Skip for
+      // DDL-synthesized types, whose constraint metadata isn't fully tracked
+      // (the runtime CREATE TYPE pre-pass drops `CREATE CONSTRAINT`), to avoid
+      // false positives.
+      const ddlTracked = subjectType.ddlSynthesized
+        || (subjectType.extends ?? []).some((b) => schema.getType(b)?.ddlSynthesized);
+      if (!ddlTracked && ast.kind === "insert" && ast.conflict?.onField !== undefined && ast.conflict.onFields === undefined) {
+        const onProp = ast.conflict.onField;
+        const fieldDef = subjectType.fields.find((f) => f.name === onProp);
+        if (!fieldDef) {
+          throw new AppError(
+            "E_SEMANTIC",
+            "UNLESS CONFLICT argument must be a property of the type being inserted",
+            ast.pos.line,
+            ast.pos.column,
+          );
+        }
+        const fieldExclusive = ((fieldDef as { constraints?: Array<{ name: string }> }).constraints ?? []).some(
+          (c) => c.name === "std::exclusive" || c.name === "exclusive",
+        );
+        const typeExclusive = (subjectType.typeConstraints ?? []).some(
+          (c) => (c.name === "std::exclusive" || c.name === "exclusive") && c.fieldRefs.length === 1 && c.fieldRefs[0] === onProp,
+        );
+        if (!fieldExclusive && !typeExclusive) {
+          throw new AppError(
+            "E_SEMANTIC",
+            "UNLESS CONFLICT property must have a single exclusive constraint",
+            ast.pos.line,
+            ast.pos.column,
+          );
+        }
+      }
+
       if (ast.kind === "insert" && ast.conflict) {
         const conflictField = resolveConflictField(ast, subjectType);
         if (conflictField) {
@@ -11970,10 +12033,23 @@ const runWriteWithAccessPolicies = (
       try {
         writeResult = db.prepare(sqlArtifact.sql).run(...sqlArtifact.params);
       } catch (writeErr) {
+        const exclusivity = parseExclusivityViolation(String((writeErr as Error).message ?? writeErr));
         // UNLESS CONFLICT (without ELSE) suppresses conflicts the static
         // pre-check above couldn't resolve — the UNIQUE failure IS the
-        // conflict, so the insert quietly does nothing.
-        if (ast.kind === "insert" && ast.conflict && !ast.conflict.else
+        // conflict, so the insert quietly does nothing. Plain UNLESS CONFLICT
+        // (no ON target) only covers conflicts on the inserted type itself; a
+        // shared cross-type constraint clash still surfaces as an error.
+        if (ast.kind === "insert" && ast.conflict && !ast.conflict.else && exclusivity) {
+          const sameTypeConflict = !exclusivity.crossType
+            || (ast.conflict.onField !== undefined || ast.conflict.onFields !== undefined);
+          if (sameTypeConflict) {
+            db.prepare(dmlUsesSavepoint ? "RELEASE gel_dml" : "COMMIT").run();
+            return { changes: 0, rows: [] };
+          }
+        }
+        // A plain UNIQUE failure with no parsed exclusivity metadata still
+        // suppresses under UNLESS CONFLICT (no ELSE).
+        if (ast.kind === "insert" && ast.conflict && !ast.conflict.else && !exclusivity
             && String((writeErr as Error).message ?? writeErr).includes("UNIQUE constraint failed")) {
           db.prepare(dmlUsesSavepoint ? "RELEASE gel_dml" : "COMMIT").run();
           return { changes: 0, rows: [] };
@@ -11989,6 +12065,14 @@ const runWriteWithAccessPolicies = (
           throw new AppError(
             "E_VALIDATION",
             "id violates exclusivity constraint",
+            ast.pos.line,
+            ast.pos.column,
+          );
+        }
+        if (exclusivity) {
+          throw new AppError(
+            "E_VALIDATION",
+            `${exclusivity.property} violates exclusivity constraint`,
             ast.pos.line,
             ast.pos.column,
           );
