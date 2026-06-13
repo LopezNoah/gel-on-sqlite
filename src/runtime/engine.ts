@@ -8725,6 +8725,39 @@ const substituteBindingRefFields = (node: unknown, varName: string, row: Record<
   return out;
 };
 
+// Push a loop-variable WITH binding (`sub := (select … by id)`) onto every
+// nested `select_expr_subquery`'s own WITH clause, so a body whose nested
+// selects are compiled standalone (the runtime coalesce evaluator does this)
+// can still resolve bare references to the loop variable. Nested mutations are
+// left untouched — those resolve the loop variable through the binding the
+// caller threads onto the statement directly.
+const attachLoopVarToNestedSelects = (node: unknown, binding: WithBinding): unknown => {
+  if (Array.isArray(node)) return node.map((item) => attachLoopVarToNestedSelects(item, binding));
+  if (node === null || typeof node !== "object") return node;
+  const n = node as Record<string, unknown> & { kind?: string };
+  if (n.kind === "insert" || n.kind === "update" || n.kind === "delete" || n.kind === "mutation_expr") {
+    return n;
+  }
+  if (n.kind === "select_expr_subquery") {
+    const inner = n.expr as { kind?: string; clauses?: { _withBindings?: WithBinding[] } } | undefined;
+    if (inner?.kind === "select") {
+      const clauses = (inner.clauses ?? {}) as Record<string, unknown> & { _withBindings?: WithBinding[] };
+      const existing = clauses._withBindings ?? [];
+      if (!existing.some((b) => b.name === binding.name)) {
+        // Recurse into the inner select's clauses (filter etc.) first, then
+        // attach the binding at this level — without recursing into the binding
+        // value itself (which would re-attach forever).
+        const recursedInner = attachLoopVarToNestedSelects(inner, binding) as typeof inner & { clauses?: Record<string, unknown> & { _withBindings?: WithBinding[] } };
+        const recursedClauses = (recursedInner.clauses ?? {}) as Record<string, unknown> & { _withBindings?: WithBinding[] };
+        return { ...n, expr: { ...recursedInner, clauses: { ...recursedClauses, _withBindings: [binding, ...(recursedClauses._withBindings ?? [])] } } };
+      }
+    }
+  }
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(n)) out[k] = attachLoopVarToNestedSelects(v, binding);
+  return out;
+};
+
 // A FOR iterator written as a set of tuple literals (`{('a','1'), ('b','2')}`).
 // Returns one scalar-element array per tuple, or undefined when the iterator
 // isn't a set of (constant-foldable) tuples — leaving the scalar/object paths
@@ -9506,6 +9539,67 @@ const executeForWithDmlBodyExpr = (
   // Only handle bodies that are value expressions carrying embedded DML.
   if (body.kind !== "select_expr") return undefined;
   if (!nodeContainsMutationExpr(body.expr)) return undefined;
+
+  // Object-set iterator (`FOR x IN {Subordinate, Subordinate} UNION ((x {…}),
+  // (INSERT … subject := x)))`): materialise the iterated objects (with the
+  // fields the body reads off `x`), then run the body once per object with `x`
+  // bound to a by-id select (so `subject := x` resolves) and its read fields
+  // substituted as literals. The embedded INSERT runs through the standard path
+  // each iteration; the tuple/shape is returned alongside. The FOR iterates
+  // each set element separately (`{T, T}` yields each extent twice).
+  const isObjectIterator = ast.iteratorExpr.kind === "select_expr_subquery"
+    || ast.iteratorExpr.kind === "select"
+    || ast.iteratorExpr.kind === "set_expr";
+  if (accumWith.length === 0 && isObjectIterator) {
+    const setVals = ast.iteratorExpr.kind === "set_expr"
+      ? (ast.iteratorExpr as { values: Array<{ kind?: string }> }).values
+      : [ast.iteratorExpr as { kind?: string }];
+    const allObjectSelects = setVals.length > 0
+      && setVals.every((v) => v?.kind === "select" || v?.kind === "select_expr_subquery");
+    if (allObjectSelects) {
+      const referencedFields = collectBindingRefFields(body.expr, ast.variable);
+      const forStatementWith0 = ((ast as { with?: WithBinding[] }).with ?? [])
+        .filter((b) => b.name !== ast.variable);
+      const out: unknown[] = [];
+      for (const selNode of setVals) {
+        const rows = evaluateForObjectIteratorRows(
+          selNode as ForStatement["iteratorExpr"], referencedFields, schema, db, context,
+        );
+        if (rows === undefined) return undefined;
+        const iterSel = (selNode as { kind?: string; expr?: { typeName?: string }; typeName?: string });
+        const iterTypeName = iterSel.kind === "select_expr_subquery" ? iterSel.expr?.typeName : iterSel.typeName;
+        for (const row of rows) {
+          let substituted = substituteBindingRefFields(body.expr, ast.variable, row);
+          const objBinding: WithBinding[] = typeof row.id === "string" && iterTypeName
+            ? [{
+                name: ast.variable,
+                value: { kind: "subquery_expr", expr: { kind: "select_expr_subquery", expr: chainByIdSelect({ typeName: iterTypeName, ids: [row.id as string] }) } },
+              } as WithBinding]
+            : [];
+          // A coalesce / nested select inside the body reads the loop variable
+          // by name (`.subject = sub`); the runtime coalesce evaluator compiles
+          // those nested selects standalone (without the outer WITH), so push
+          // the loop-variable binding onto each nested select's own WITH clause.
+          if (objBinding.length > 0) {
+            substituted = attachLoopVarToNestedSelects(substituted, objBinding[0]);
+          }
+          const iterWith = [...forStatementWith0, ...objBinding];
+          const bodyStmt: Statement = {
+            kind: "select_expr",
+            expr: substituted as FreeObjectExpr,
+            orderBy: body.orderBy,
+            with: iterWith.length > 0 ? iterWith : undefined,
+            withModule: ast.withModule,
+            withModuleAliases: ast.withModuleAliases,
+            pos: ast.pos,
+          } as unknown as Statement;
+          const trace = executeQueryWithTraceImpl(db, schema, "", context, bodyStmt);
+          if (trace.result.kind === "select" && trace.result.rows) out.push(...trace.result.rows);
+        }
+      }
+      return out;
+    }
+  }
 
   // Scalar iterator values, evaluated with any enclosing loop bindings in
   // scope (so a nested FOR's iterator may reference outer variables).
