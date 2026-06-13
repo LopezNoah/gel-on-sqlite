@@ -1,6 +1,6 @@
 import { getCompilerService, type CompilerCacheMeta } from "../compiler/service.js";
 import { validateParsedStatement } from "../compiler/ast_to_ir.js";
-import { PENDING_INSERT_SQL_EXPR_VALUE, rewriteDunderDefaults } from "../compiler/dml_lowering.js";
+import { PENDING_INSERT_SEQUENCE_VALUE, PENDING_INSERT_SQL_EXPR_VALUE, rewriteDunderDefaults } from "../compiler/dml_lowering.js";
 import { AppError, asAppError, isQueryFailure, tryResult } from "../errors.js";
 import { decorateErrorWithUnsupportedTag } from "../diagnostics/unsupported.js";
 import { parseEdgeQL, parseEdgeQLScript, type ParseEdgeQLOptions } from "../edgeql/parser.js";
@@ -14,7 +14,7 @@ import { assertTargetSqlCompatibility, type RuntimeTarget } from "./target.js";
 import type { ShapeElement as GelIRShapeElement, Set as GelIRSet, Statement as GelIRStatement, TypeRef as GelIRTypeRef } from "../ir/gel_ir.js";
 import type { GroupIR, InsertIR, InsertLinkDefaultIR, InsertLinkPropertyIR, IRStatement, OverlayIR, SelectIR, UpdateIR, UpdateLinkAssignmentIR } from "../ir/model.js";
 import type { AccessPolicyCondition, AccessPolicyDef, ComputedLinkPropertyExpr, ConstraintDef, FieldDef, FunctionDef, FunctionExprDef, FunctionVolatility, LinkPropertyDef, ScalarType, ScalarValue, TypeDef } from "../types.js";
-import { normalizeLinkTargetNames, qualifiedTypeName } from "../schema/schema.js";
+import { fieldSequenceName, normalizeLinkTargetNames, qualifiedTypeName } from "../schema/schema.js";
 import { tableNameForType } from "../codegen/sql.js";
 import { populateSchemaIntrospection } from "../schema/schema_introspection.js";
 import { materializeSchema, type SQLiteDatabase } from "../runtime/database.js";
@@ -12937,6 +12937,28 @@ const extractOverlays = (ir: IRStatement): OverlayIR[] => {
 const PENDING_INLINE_LINK_VALUE = "__gel_pending_inline_link__";
 const PENDING_INSERT_REWRITE_VALUE = "__gel_pending_insert_rewrite__";
 
+// Allocate the next value for a named sequence (a user scalar type extending
+// `sequence`). Values persist in a counter table so they keep climbing across
+// statements and never reuse a value after deletes — matching Gel's sequence
+// semantics. The atomic `UPSERT … RETURNING` increments and reads in one step.
+const sequenceTableReady = new WeakSet<SQLiteDatabase>();
+const nextSequenceValue = (db: SQLiteDatabase, sequenceName: string): number => {
+  if (!sequenceTableReady.has(db)) {
+    db.prepare(
+      "CREATE TABLE IF NOT EXISTS __gel_sequences (seq_name TEXT PRIMARY KEY NOT NULL, last_value INTEGER NOT NULL)",
+    ).run();
+    sequenceTableReady.add(db);
+  }
+  const rows = db
+    .prepare(
+      "INSERT INTO __gel_sequences (seq_name, last_value) VALUES (?, 1) "
+      + "ON CONFLICT(seq_name) DO UPDATE SET last_value = last_value + 1 RETURNING last_value",
+    )
+    .all(sequenceName) as Array<{ last_value?: unknown }>;
+  const value = rows[0]?.last_value;
+  return typeof value === "number" ? value : 1;
+};
+
 const assignableTargetTablesForTargets = (
   schema: SchemaSnapshot,
   targetTypeNames: string[],
@@ -13742,6 +13764,15 @@ const runWriteWithAccessPolicies = (
     if (ir.kind === "insert") {
       const insertValues: Record<string, ScalarValue> = { ...ir.values };
       applyPendingInsertDefaults(insertValues);
+
+      // Fill sequence-backed properties left pending by the planner with the
+      // sequence's next value (a fresh allocation per inserted row).
+      for (const field of subjectType.fields) {
+        if (insertValues[field.name] !== PENDING_INSERT_SEQUENCE_VALUE) continue;
+        const sequenceName = fieldSequenceName(schema, field);
+        if (sequenceName === undefined) continue;
+        insertValues[field.name] = nextSequenceValue(db, sequenceName);
+      }
 
       if (ast.kind === "insert") {
         for (const link of subjectType.links ?? []) {

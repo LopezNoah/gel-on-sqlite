@@ -12,7 +12,7 @@ import type {
   UpdateIR,
   UpdateLinkAssignmentIR,
 } from "../ir/model.js";
-import { normalizeLinkTargetNames, qualifiedTypeName, type SchemaSnapshot } from "../schema/schema.js";
+import { fieldSequenceName, normalizeLinkTargetNames, qualifiedTypeName, type SchemaSnapshot } from "../schema/schema.js";
 import { tableNameForType } from "../codegen/sql.js";
 import type { ScalarType, ScalarValue, TypeDef } from "../types.js";
 import { checkScopeTreeViolations } from "./scope_tree_check.js";
@@ -46,6 +46,11 @@ export type DmlStatement = Extract<Statement, { kind: "insert" | "update" | "del
 // (GelIRSQLArtifact.insertColumns), so arbitrary EdgeQL expressions still
 // lower fully to SQL.
 export const PENDING_INSERT_SQL_EXPR_VALUE = "__gel_pending_insert_sql_expr__";
+
+// Sentinel for a required property backed by a `sequence` scalar type and left
+// unassigned by the INSERT. The runtime mutation executor replaces it with the
+// sequence's next value (from the per-sequence counter table) at write time.
+export const PENDING_INSERT_SEQUENCE_VALUE = "__gel_pending_insert_sequence__";
 
 export interface DmlCompileContext {
   globals?: Record<string, ScalarValue>;
@@ -1034,6 +1039,12 @@ export const compileDmlToIR = (
             : engineEvaluable
               ? "__gel_pending_insert_rewrite__"
               : pendingGeneratedValueForField(field.name);
+          continue;
+        }
+        // A required property backed by a `sequence` scalar type auto-fills
+        // from the sequence; leave it pending for the engine to populate.
+        if (fieldSequenceName(schema, field) !== undefined) {
+          scalarValues[field.name] = PENDING_INSERT_SEQUENCE_VALUE;
           continue;
         }
         fail(`missing value for required property '${field.name}' of object type '${qualifiedTypeName(typeDef)}'`);

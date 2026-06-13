@@ -216,6 +216,34 @@ export const qualifiedTypeName = (typeDef: TypeDef): string => {
 };
 
 /**
+ * When `field`'s declared scalar type extends `sequence` (directly or through
+ * a chain of `scalar type … extending …`), returns the fully-qualified name of
+ * the user scalar type that backs it — this is the sequence's identity, so two
+ * properties declared with the same `extending sequence` scalar share one
+ * sequence (matching Gel). Returns undefined for non-sequence fields.
+ */
+export const fieldSequenceName = (schema: SchemaSnapshot, field: FieldDef): string | undefined => {
+  const start = field.targetTypeName;
+  if (!start) return undefined;
+  const seen = new Set<string>();
+  let current: string | undefined = start;
+  let topUserScalar: string | undefined;
+  while (current && !seen.has(current)) {
+    seen.add(current);
+    const baseLeaf = current.includes("::") ? current.slice(current.lastIndexOf("::") + 2) : current;
+    if (baseLeaf.toLowerCase() === "sequence") {
+      return topUserScalar;
+    }
+    const decl = schema.getScalarType(current);
+    if (!decl) return undefined;
+    topUserScalar = current;
+    const base = decl.baseTypeName;
+    current = base ? (base.includes("::") ? base : `${decl.module}::${base}`) : undefined;
+  }
+  return undefined;
+};
+
+/**
  * Splits a (possibly union, e.g. "A | B") link target type string into a list
  * of fully qualified type names, qualifying bare names with `moduleName`.
  */
