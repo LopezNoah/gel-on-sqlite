@@ -5943,6 +5943,14 @@ export const executeScript = (
 type ObjectSet = { typeName: string; ids: string[] };
 type DmlChainEnv = Map<string, ObjectSet>;
 
+// When `FOR x IN <set> UNION (INSERT T …)` is desugared into one INSERT
+// statement per iteration, all the children share a single snapshot for
+// snapshot-valued expression defaults (`default := (SELECT count(T))`) so the
+// default is evaluated once and reused for every row — matching upstream's
+// "deterministic, same for all" semantics. The shared cache is keyed by each
+// child statement object here and consulted at the write site.
+const forInsertSnapshotDefaultCaches = new WeakMap<object, Map<string, ScalarValue>>();
+
 const qualifyChainType = (name: string, defaultModule: string): string =>
   name.includes("::") ? name : `${defaultModule}::${name}`;
 
@@ -6698,6 +6706,97 @@ const preExecuteDmlBindings = (
   return out;
 };
 
+// `SELECT (INSERT …).num`, `SELECT ((INSERT …).num, …)`, etc. — a DML
+// statement embedded inside the body expression of a top-level SELECT (not as
+// a WITH binding and not as the direct `(DML){shape}` source, which the
+// dedicated handler below covers). Execute each embedded mutation once and
+// substitute a by-id SELECT, so the remaining expression lowers to plain SQL.
+// A no-op when no embedded mutation is present.
+const preExecuteMutationExprsInSelectExpr = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  ast: Statement,
+  context: SecurityContext,
+): Statement => {
+  if (ast.kind !== "select_expr" && ast.kind !== "select") return ast;
+  const expr = (ast as { expr?: unknown }).expr;
+  if (!expr || typeof expr !== "object") return ast;
+  // `(DML){shape}` and bare `(DML)` are handled by executeSelectOverMutation /
+  // the WITH-DML chain — leave those for the dedicated paths.
+  const exprKind = (expr as { kind?: string }).kind;
+  if (exprKind === "shape_projection"
+      && (expr as { expr?: { kind?: string } }).expr?.kind === "mutation_expr") {
+    return ast;
+  }
+  if (exprKind === "mutation_expr") return ast;
+
+  const containsMutationExpr = (node: unknown): boolean => {
+    if (Array.isArray(node)) return node.some(containsMutationExpr);
+    if (node === null || typeof node !== "object") return false;
+    if ((node as { kind?: unknown }).kind === "mutation_expr") return true;
+    return Object.values(node).some(containsMutationExpr);
+  };
+  if (!containsMutationExpr(expr)) return ast;
+
+  const defaultModule = (ast as { withModule?: string }).withModule ?? "default";
+  const env: DmlChainEnv = new Map();
+  const passthrough: WithBinding[] = (ast as { with?: WithBinding[] }).with ?? [];
+  // Upsert-by-coalesce: `SELECT (SELECT …) ?? (INSERT …)`. The `??` is
+  // short-circuiting — the right INSERT only runs when the left is empty — so
+  // it can't be walked leaf-by-leaf (that would always insert). Resolve the
+  // whole coalesce as an object set (resolveObjectSet honors the short-circuit)
+  // and replace the entire expression with a by-id SELECT. Also covers a shape
+  // projected over the coalesce (`(… ?? (INSERT …)) { … }`).
+  const coalesceNode = exprKind === "shape_projection" ? (expr as { expr?: unknown }).expr : expr;
+  if (coalesceNode && typeof coalesceNode === "object"
+      && (coalesceNode as { kind?: string }).kind === "coalesce"
+      && containsMutationExpr(coalesceNode)) {
+    const resolved = resolveObjectSet(
+      db,
+      schema,
+      attachWithToNestedMutations(coalesceNode, passthrough),
+      env,
+      undefined,
+      context,
+      defaultModule,
+    );
+    const byId = { kind: "select_expr_subquery", expr: chainByIdSelect(resolved) };
+    if (exprKind === "shape_projection") {
+      return { ...ast, expr: { ...(expr as object), expr: byId } } as Statement;
+    }
+    return { ...ast, expr: byId } as Statement;
+  }
+  const walk = (node: unknown): unknown => {
+    if (Array.isArray(node)) return node.map(walk);
+    if (node === null || typeof node !== "object") return node;
+    const n = node as Record<string, unknown> & { kind?: string; statement?: Statement };
+    if (n.kind === "mutation_expr" && n.statement) {
+      const mutationKind = (n.statement as { kind?: string }).kind;
+      const resolved = resolveObjectSet(
+        db,
+        schema,
+        attachWithToNestedMutations(n, passthrough),
+        env,
+        undefined,
+        context,
+        defaultModule,
+      );
+      // A DELETE removes its rows, so a by-id SELECT would find nothing — but
+      // `count((delete T))` / `exists (delete T)` must see the rows that *were*
+      // deleted. Substitute the captured ids as a literal set so the enclosing
+      // aggregate/exists sees the right cardinality.
+      if (mutationKind === "delete") {
+        return { kind: "set_literal", values: resolved.ids };
+      }
+      return { kind: "select_expr_subquery", expr: chainByIdSelect(resolved) };
+    }
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(n)) out[key] = walk(value);
+    return out;
+  };
+  return { ...ast, expr: walk(expr) } as Statement;
+};
+
 // `SELECT (UPDATE/INSERT/DELETE …) { shape }` — a DML statement used as the
 // source of a SELECT. The parser nests it as
 // `select_expr → shape_projection → mutation_expr`. There's no single SQL
@@ -6933,6 +7032,7 @@ const executeQueryWithTraceImpl = (
     // statement then compiles as a plain read over the captured ids.
     ast = preExecuteDmlBindings(db, schema, ast, context);
     ast = preExecuteMutationExprsInDmlValues(db, schema, ast, context);
+    ast = preExecuteMutationExprsInSelectExpr(db, schema, ast, context);
     const selectOverMutation = detectSelectOverMutation(ast);
     if (selectOverMutation) {
       return executeSelectOverMutation(db, schema, query, ast, selectOverMutation, context, runtimeTarget, compilerService);
@@ -7593,6 +7693,9 @@ export const executeQueryUnitWithTrace = (
         expanded[stmtIdx] = rawUnitAst;
       }
       let ast = rawUnitAst;
+      // A FOR-INSERT child (desugared below) carries a snapshot cache shared by
+      // all its siblings so snapshot-valued expression defaults resolve once.
+      const unitSnapshotDefaultCache = forInsertSnapshotDefaultCaches.get(rawUnitAst);
       if (rawUnitAst.kind === "for"
         && (rawUnitAst.body.kind === "insert" || rawUnitAst.body.kind === "for")) {
         // Desugar `FOR v IN <iter> ( … INSERT … )` — including nested FORs and
@@ -7607,6 +7710,13 @@ export const executeQueryUnitWithTrace = (
           // (`FOR … INSERT …` returns the set of all inserted objects).
           const groupId = forInsertGroupCounter++;
           for (const child of children) (child as { __forGroup?: number }).__forGroup = groupId;
+          // All children of one FOR share a snapshot for snapshot-valued
+          // expression defaults (so `default := (SELECT count(T))` is computed
+          // once against the pre-statement state and reused for every row).
+          const sharedDefaultCache = new Map<string, ScalarValue>();
+          for (const child of children) {
+            forInsertSnapshotDefaultCaches.set(child, sharedDefaultCache);
+          }
           expanded.splice(stmtIdx, 1, ...children);
           stmtIdx -= 1; // re-enter the new first child on the next loop step
           continue;
@@ -7662,6 +7772,18 @@ export const executeQueryUnitWithTrace = (
       // DML inside WITH bindings / free-object entries executes up front; the
       // statement then compiles as a plain read over the captured ids.
       ast = preExecuteDmlBindings(db, schema, ast, context);
+      // DML embedded in a SELECT's body expression (`select (INSERT …).num`,
+      // `select (SELECT …) ?? (INSERT …)`) — execute the mutation(s) and
+      // substitute by-id selects, same as the single-query path.
+      ast = preExecuteMutationExprsInSelectExpr(db, schema, ast, context);
+      // `SELECT (DML …) { shape }` — run the mutation then re-project its rows.
+      {
+        const selectOverMutation = detectSelectOverMutation(ast);
+        if (selectOverMutation) {
+          traces.push(executeSelectOverMutation(db, schema, script, ast, selectOverMutation, context, runtimeTarget, compilerService));
+          continue;
+        }
+      }
       // Fully-constant subscripts (`select "abc"[1]`, `select [1,2,3][0:9]`)
       // are evaluated directly — see tryEvalConstantSubscriptStatement.
       {
@@ -7727,7 +7849,7 @@ export const executeQueryUnitWithTrace = (
         if (!subjectType) {
           throw new Error("invariant: write IR reached execution without a resolved subject type");
         }
-        const writeResult = runWriteWithAccessPolicies(db, schema, ast, ir, sqlArtifact, subjectType, context);
+        const writeResult = runWriteWithAccessPolicies(db, schema, ast, ir, sqlArtifact, subjectType, context, unitSnapshotDefaultCache);
         result = { kind: ir.kind, changes: writeResult.changes, rows: writeResult.rows };
       }
 
@@ -8087,6 +8209,10 @@ const executeForLoop = (
     }
     const insertedRows: Record<string, unknown>[] = [];
     let lastTraceFields: Omit<QueryExecutionTrace, "result"> | undefined;
+    // Shared across all iterations so snapshot-valued expression defaults
+    // (`default := (SELECT count(T))`) are evaluated once against the
+    // pre-statement state and reused for every inserted row.
+    const snapshotDefaultCache = new Map<string, ScalarValue>();
     for (const value of iteratorValues) {
       const insertValues: Record<string, InsertValue> = {};
       for (const [key, v] of Object.entries(body.values)) {
@@ -8122,7 +8248,7 @@ const executeForLoop = (
       assertTargetSqlCompatibility(sqlArtifact.sql, runtimeTarget);
       const sqlTrail: SQLArtifact[] = [sqlArtifact];
 
-      const writeResult = runWriteWithAccessPolicies(db, schema, insertAst, ir, sqlArtifact, subjectType, context);
+      const writeResult = runWriteWithAccessPolicies(db, schema, insertAst, ir, sqlArtifact, subjectType, context, snapshotDefaultCache);
 
       const currentOverlays = extractOverlays(ir);
       if (ir.kind !== "select" && ir.kind !== "select_free" && ir.kind !== "select_expr") {
@@ -11510,6 +11636,13 @@ const runWriteWithAccessPolicies = (
   sqlArtifact: SQLArtifact,
   subjectType: TypeDef,
   context: SecurityContext,
+  // Per-statement memo for snapshot-valued expression defaults. A FOR loop that
+  // inserts N rows shares one cache so a `default := (SELECT count(T))`-style
+  // default is evaluated ONCE against the pre-statement snapshot and reused for
+  // every row (matching upstream "deterministic, same for all"). Separate
+  // top-level INSERT statements each pass their own (or none), so the snapshot
+  // advances between statements.
+  snapshotDefaultCache?: Map<string, ScalarValue>,
 ): { changes: number; rows?: Record<string, unknown>[] } => {
   validateLinkAssignments(db, schema, ir, ast);
 
@@ -11540,9 +11673,6 @@ const runWriteWithAccessPolicies = (
         // one-off SQL SELECT with `__source__.<f>` references substituted by
         // the row's assigned values.
         const text = field.defaultExprText;
-        // Restricted to `__source__`-referencing defaults: other expression
-        // defaults (e.g. `SELECT count(T)`) must see the pre-statement
-        // snapshot, which a per-row re-evaluation here would violate.
         if (text && text.includes("__source__")) {
           const substituteSourceRefs = (node: unknown): unknown => {
             if (Array.isArray(node)) return node.map(substituteSourceRefs);
@@ -11577,6 +11707,31 @@ const runWriteWithAccessPolicies = (
           }, { captureAll: true });
           if (attempt.ok && attempt.value !== undefined && attempt.value.length === 1 && isScalarValue(attempt.value[0])) {
             values[field.name] = attempt.value[0] as ScalarValue;
+          }
+        } else if (text) {
+          // A general expression-valued default that didn't fit the
+          // literal/function-call IR (`default := (SELECT count(T))`,
+          // `default := ((SELECT T ORDER BY .n DESC LIMIT 1).n + 1)`).
+          // Evaluate it via a one-off SQL SELECT against the *current* (pre-
+          // insert) state — the new row isn't written yet, so the default sees
+          // exactly the snapshot it should. Within one statement (FOR loop) the
+          // snapshot is fixed, so memoize the first evaluation per field and
+          // reuse it for every row. `captureAll` keeps the column pending if it
+          // can't lower (matching "no computable default").
+          if (snapshotDefaultCache?.has(field.name)) {
+            values[field.name] = snapshotDefaultCache.get(field.name) as ScalarValue;
+          } else {
+            const attempt = tryResult(() => {
+              const parsed = parseEdgeQL(`SELECT (${text})`);
+              const stmt = (Array.isArray(parsed) ? parsed[0] : parsed) as Statement;
+              const compiled = getCompilerService().compile(schema, stmt, { globals: context.globals, target: resolvedRuntimeTarget(context, db) });
+              if (compiled.sql.loweringMode !== "single_statement" || compiled.sql.sql.length === 0) return undefined;
+              return runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
+            }, { captureAll: true });
+            if (attempt.ok && attempt.value !== undefined && attempt.value.length === 1 && isScalarValue(attempt.value[0])) {
+              values[field.name] = attempt.value[0] as ScalarValue;
+              snapshotDefaultCache?.set(field.name, attempt.value[0] as ScalarValue);
+            }
           }
         }
         continue;

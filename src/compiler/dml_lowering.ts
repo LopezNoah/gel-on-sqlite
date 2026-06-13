@@ -1022,13 +1022,13 @@ export const compileDmlToIR = (
         }
         if (field.hasDefault) {
           // Defaults the engine can re-evaluate (literals, function calls,
-          // `__source__.…` expressions) get the rewrite sentinel so the
-          // engine's default application replaces them — typed placeholders
-          // (0/false/…) would be indistinguishable from real values there.
-          // Anything else (e.g. `SELECT count(T)` snapshot defaults) keeps
-          // the legacy typed placeholder.
+          // `__source__.…` expressions, and general expression defaults like
+          // `SELECT count(T)` evaluated against the pre-insert snapshot) get
+          // the rewrite sentinel so the engine's default application replaces
+          // them — typed placeholders (0/false/…) would be indistinguishable
+          // from real values there.
           const engineEvaluable = field.defaultExpr !== undefined
-            || (field.defaultExprText ?? "").includes("__source__");
+            || (field.defaultExprText ?? "").length > 0;
           scalarValues[field.name] = field.multi
             ? "[]"
             : engineEvaluable
