@@ -398,6 +398,12 @@ export interface Tuple extends Base {
   kind: "tuple";
   named: boolean;
   elements: TupleElement[];
+  // A free object (`SELECT { a := … }`) is represented as a named tuple but,
+  // unlike a real tuple, its fields may be empty: an empty field serializes to
+  // `null` rather than collapsing the whole object to the empty set. Set when
+  // the tuple originates from free-object syntax so the SQL stage skips the
+  // strict-tuple null propagation.
+  isFreeObject?: boolean;
 }
 
 export interface ArrayExpr extends Base {

@@ -82,9 +82,16 @@ const STDLIB_SQL_TEMPLATES = new Map<string, StdlibSqlTemplate>([
   // expectation in our test harness.
   ["std::array_get", (argSql) => {
     if (!argSql[0] || !argSql[1]) return null;
-    const idx = `CASE WHEN ${argSql[1]} < 0 THEN json_array_length(${argSql[0]}) + ${argSql[1]} ELSE ${argSql[1]} END`;
-    const lookup = `json_extract(${argSql[0]}, '$[' || (${idx}) || ']')`;
-    return argSql[2] ? `IFNULL(${lookup}, ${argSql[2]})` : lookup;
+    // Bind the array and index once each in a correlated subquery: the
+    // negative-index branch reuses the array, and re-emitting an argument that
+    // carries `?` placeholders would bind too few params. Keep the projection
+    // order (array, index, default) identical to the push order so positional
+    // params still line up.
+    const inner = `SELECT ${argSql[0]} AS a, ${argSql[1]} AS i${argSql[2] ? `, ${argSql[2]} AS d` : ""}`;
+    const idx = `CASE WHEN i < 0 THEN json_array_length(a) + i ELSE i END`;
+    const lookup = `json_extract(a, '$[' || (${idx}) || ']')`;
+    const body = argSql[2] ? `IFNULL(${lookup}, d)` : lookup;
+    return `(SELECT ${body} FROM (${inner}))`;
   }],
   // Bitwise functions. AND/OR/NOT sign-extend cleanly from any width to
   // 64-bit (the ops are homomorphic under sign extension), so SQLite's

@@ -3793,7 +3793,13 @@ class Parser {
 
     if (this.peek().kind === "kw_detached") {
       this.consume();
-      return this.parseFreeObjectPrimaryExpr();
+      const inner = this.parseFreeObjectPrimaryExpr();
+      // Preserve the DETACHED marker on a type select so the IR can give each
+      // detached reference an independent path scope (breaks path-sharing).
+      if (inner.kind === "select") {
+        return { ...inner, detached: true };
+      }
+      return inner;
     }
 
     if (this.isExistsToken(this.peek())) {
@@ -3933,11 +3939,14 @@ class Parser {
     if (this.peek().kind === "lt") {
       this.consume();
       // Cast type modifiers: `<optional X>`, `<required X>`, `<multi X>`,
-      // `<single X>`. Upstream tracks these on the cast node; for parse-only
-      // we just consume them so the type-name parse proceeds.
+      // `<single X>`. The `optional`/`required` cardinality modifier governs
+      // whether a parameter cast (`<optional str>$0`) accepts the empty set —
+      // capture it so lowering can drop the NULL/missing arg to zero rows.
+      let castOptional = false;
       while (true) {
         const k = this.peek().kind;
-        if (k === "kw_optional" || k === "kw_required" || k === "kw_multi" || k === "kw_single") {
+        if (k === "kw_optional") { this.consume(); castOptional = true; continue; }
+        if (k === "kw_required" || k === "kw_multi" || k === "kw_single") {
           this.consume();
           continue;
         }
@@ -3946,7 +3955,7 @@ class Parser {
       const castType = this.parseCastTypeName("Expected type name in cast");
       this.expect("gt", "Expected '>' after cast type");
       const expr = this.parseFreeObjectPostfixExpr();
-      return { kind: "cast", castType, expr };
+      return { kind: "cast", castType, expr, optional: castOptional || undefined };
     }
 
     if (this.peek().kind === "lbrace") {
@@ -4877,9 +4886,11 @@ class Parser {
     return false;
   }
 
-  private parseInlineSelectExpr(): { kind: "select"; typeName: string; shape: ShapeElement[]; clauses: ClauseChain } {
+  private parseInlineSelectExpr(): { kind: "select"; typeName: string; shape: ShapeElement[]; clauses: ClauseChain; detached?: boolean } {
+    let detached = false;
     if (this.peek().kind === "kw_detached") {
       this.consume();
+      detached = true;
     }
     const typeName = this.parseQualifiedName("Expected type name in inline select");
     const shape: ShapeElement[] = [{ kind: "field", name: "id", operation: "assign", origin: "default" }];
@@ -4895,6 +4906,7 @@ class Parser {
       typeName,
       shape,
       clauses: this.parseClauseChain(),
+      detached: detached || undefined,
     };
   }
 

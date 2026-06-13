@@ -473,6 +473,10 @@ export type FreeObjectExpr =
       typeName: string;
       shape: ShapeElement[];
       clauses: ClauseChain;
+      // `(DETACHED User)` — breaks path-sharing, so each occurrence is an
+      // independent set (two `(DETACHED User)` cross-multiply rather than
+      // collapsing to one correlated source).
+      detached?: boolean;
     }
   | {
       kind: "function_call";
@@ -482,6 +486,9 @@ export type FreeObjectExpr =
       kind: "cast";
       castType: string;
       expr: FreeObjectExpr;
+      // `<optional T>` cardinality modifier — a parameter cast that accepts
+      // the empty set (a missing/NULL arg lowers to zero rows, not a NULL row).
+      optional?: boolean;
     }
   | {
       kind: "introspect_typeof";
