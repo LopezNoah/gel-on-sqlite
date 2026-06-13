@@ -1750,6 +1750,8 @@ const convertConstraint = (
   annotations: node.annotations.map((annotation) => convertAnnotation(moduleName, annotation)),
   delegated: node.delegated,
   params: parseConstraintParams(moduleName, node, constraintParamNames),
+  onExpr: node.onExpr?.text.trim(),
+  exceptExpr: node.exceptExpr?.text.trim(),
 });
 
 const convertLinkProperty = (
@@ -2065,7 +2067,7 @@ const convertTypeDeclaration = (
   const annotations: AnnotationDef[] = [];
   const indexes: Array<{ expr: string }> = [];
   const members: TypeMember[] = [];
-  const typeConstraints: Array<{ name: string; exprText: string; fieldRefs: string[]; delegated?: boolean }> = [];
+  const typeConstraints: Array<{ name: string; exprText: string; fieldRefs: string[]; delegated?: boolean; exceptExpr?: string }> = [];
 
   for (const declaration of node.body?.declarations ?? []) {
     if (declaration.kind === "AnnotationAssignment") {
@@ -2104,7 +2106,7 @@ const convertTypeDeclaration = (
           fieldRefs.push(name);
         }
       }
-      typeConstraints.push({ name: constraintName, exprText, fieldRefs, delegated: declaration.delegated });
+      typeConstraints.push({ name: constraintName, exprText, fieldRefs, delegated: declaration.delegated, exceptExpr: declaration.exceptExpr?.text.trim() });
       continue;
     }
 

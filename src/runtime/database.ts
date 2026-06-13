@@ -1047,17 +1047,17 @@ export const materializeSchema = (db: SQLiteDatabase, schema: SchemaSnapshot): v
     const ddl = `CREATE TABLE IF NOT EXISTS ${quoteIdent(table)} (${fieldSQL.join(", ")})`;
     db.prepare(ddl).run();
 
-    // Same-table UNIQUE constraints for `constraint exclusive` properties.
-    // Cross-type exclusivity (a Person/DerivedPerson sharing a constraint)
-    // still requires extra coordination — this only catches within-table
-    // duplicates, which is sufficient for the common `INSERT T {x:='v'}; INSERT
-    // T {x:='v'};` test pattern.
+    // Same-table UNIQUE indexes for `constraint exclusive` properties. These
+    // catch within-table duplicates directly (and keep the query planner's
+    // ordering behaviour stable for indexed columns); cross-type/inherited
+    // exclusivity is layered on top by materializeExclusivity below. The index
+    // is skipped for constraints with an `on (<expr>)` or `except (...)`
+    // clause, which the shared-table mechanism handles instead.
     for (const field of typeDef.fields) {
-      if (field.name === "id") continue;
-      if (field.multi) continue;
-      const constraints = (field as { constraints?: Array<{ name: string }> }).constraints ?? [];
-      const isExclusive = constraints.some((c) => c.name === "std::exclusive" || c.name === "exclusive");
-      if (isExclusive) {
+      if (field.name === "id" || field.multi) continue;
+      const constraints = (field as { constraints?: Array<{ name: string; onExpr?: string; exceptExpr?: string }> }).constraints ?? [];
+      const excl = constraints.find((c) => c.name === "std::exclusive" || c.name === "exclusive");
+      if (excl && excl.onExpr === undefined && excl.exceptExpr === undefined) {
         db.prepare(
           `CREATE UNIQUE INDEX IF NOT EXISTS ${quoteIdent(`${table}__uniq_${field.name}`)} ON ${quoteIdent(table)} (${quoteIdent(field.name)})`,
         ).run();
@@ -1106,10 +1106,232 @@ export const materializeSchema = (db: SQLiteDatabase, schema: SchemaSnapshot): v
     }
   }
 
+  // Exclusivity enforcement (single-property `constraint exclusive`,
+  // including cross-type/inherited constraints and `… except (.flag)`).
+  // Done after every table exists so cross-type shared tables can be wired.
+  materializeExclusivity(db, schema);
+
   // Populate `schema::*` introspection rows once the tables for user types
   // exist. Subsequent DDL (CREATE/DROP ALIAS) re-runs the populator from
   // the alias handler so introspection tracks the live schema state.
   populateSchemaIntrospection(db, schema);
+};
+
+// ── Exclusivity constraint enforcement ──────────────────────────────────────
+//
+// Gel exclusive constraints are enforced across an entire inheritance
+// hierarchy: a `constraint exclusive` declared on a base type forbids
+// duplicate values among the base AND every descendant type, even though each
+// type lives in its own SQLite table. To enforce that purely in SQL we build,
+// for each constraint "group" (the topmost type that owns the constraint +
+// the property it covers), a shared bookkeeping table with a UNIQUE index and
+// AFTER INSERT/UPDATE/DELETE triggers on every participating type's table that
+// mirror the property value into the shared table. A duplicate then trips the
+// shared UNIQUE index regardless of which concrete type wrote the row.
+//
+// The shared table's UNIQUE index name embeds the property name as
+// `…__excl__<prop>` so the runtime can translate the SQLite "UNIQUE constraint
+// failed" error into Gel's "<prop> violates exclusivity constraint" wording.
+
+interface ExclusiveGroup {
+  ownerKey: string; // qualified name of the topmost owner type
+  field: string; // property name carrying the constraint
+  tables: string[]; // participating type tables
+  exceptField?: string; // `except (.flag)` — rows where flag is true are exempt
+  lower?: boolean; // `on (str_lower(__subject__))` — index lower(value)
+}
+
+const constraintIsExclusive = (c: { name?: string }): boolean =>
+  c.name === "std::exclusive" || c.name === "exclusive";
+
+const typeAncestors = (schema: SchemaSnapshot, typeDef: TypeDef): TypeDef[] => {
+  const seen = new Set<string>();
+  const out: TypeDef[] = [];
+  const visit = (td: TypeDef): void => {
+    for (const baseName of td.extends ?? []) {
+      const base = schema.getType(baseName);
+      if (!base) continue;
+      const key = qualifiedTypeName(base);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(base);
+      visit(base);
+    }
+  };
+  visit(typeDef);
+  return out;
+};
+
+const collectExclusiveGroups = (schema: SchemaSnapshot): ExclusiveGroup[] => {
+  const types = schema.listTypes();
+  const groups = new Map<string, ExclusiveGroup>();
+
+  // Parse `except (.flag)` → the bare field name (we only support a single
+  // own-field reference). Returns undefined when the form is unsupported.
+  const exceptFieldFrom = (exceptExpr?: string): string | undefined => {
+    if (!exceptExpr) return undefined;
+    const m = /^\(?\s*\.([A-Za-z_][A-Za-z0-9_]*)\s*\)?$/.exec(exceptExpr);
+    return m ? m[1] : undefined;
+  };
+  // `on (str_lower(__subject__))` → case-insensitive uniqueness on the column.
+  const isLowerExpr = (onExpr?: string): boolean =>
+    onExpr !== undefined && /str_lower\s*\(\s*__subject__\s*\)/.test(onExpr);
+
+  const addParticipant = (
+    keyOwner: TypeDef,
+    field: string,
+    member: TypeDef,
+    opts: { exceptField?: string; lower?: boolean },
+  ): void => {
+    const key = `${qualifiedTypeName(keyOwner)}|${field}`;
+    let group = groups.get(key);
+    if (!group) {
+      group = { ownerKey: key, field, tables: [], exceptField: opts.exceptField, lower: opts.lower };
+      groups.set(key, group);
+    }
+    const tbl = tableName(member);
+    if (!group.tables.includes(tbl)) group.tables.push(tbl);
+  };
+
+  for (const typeDef of types) {
+    if (typeDef.abstract) continue;
+
+    // ── Field-level `constraint exclusive` (incl. `on (str_lower(...))`) ──
+    for (const field of typeDef.fields) {
+      if (field.name === "id" || field.multi) continue;
+      const constraints = (field as { constraints?: Array<{ name: string; delegated?: boolean; onExpr?: string; exceptExpr?: string }> }).constraints ?? [];
+      const excl = constraints.find(constraintIsExclusive);
+      if (!excl) continue;
+      // Delegated constraints are enforced per-type only — the same-table
+      // UNIQUE index in materializeSchema already covers them, so no shared
+      // cross-type bookkeeping is needed (and adding it would be incorrect).
+      if (excl.delegated === true) continue;
+      let owner = typeDef;
+      for (const anc of typeAncestors(schema, typeDef)) {
+        const ancField = anc.fields.find((f) => f.name === field.name) as { constraints?: Array<{ name: string }> } | undefined;
+        if (ancField?.constraints?.some(constraintIsExclusive)) owner = anc;
+      }
+      addParticipant(owner, field.name, typeDef, {
+        exceptField: exceptFieldFrom(excl.exceptExpr),
+        lower: isLowerExpr(excl.onExpr),
+      });
+    }
+
+    // ── Type-level single-field `constraint exclusive on (.field) [except …]` ──
+    // (e.g. ExceptTest's `exclusive on (.name) except (.deleted)`). A type-level
+    // constraint applies to the declaring type AND all of its descendants, so
+    // we register every concrete type whose lineage carries the constraint.
+    // Tuple constraints (fieldRefs.length > 1) are not handled here.
+    const lineageTypeConstraint = (
+      field: string,
+    ): { exceptExpr?: string; exprText: string } | undefined => {
+      const own = (typeDef.typeConstraints ?? []).find(
+        (c) => constraintIsExclusive(c) && !c.delegated && c.fieldRefs.length === 1 && c.fieldRefs[0] === field,
+      );
+      if (own) return own;
+      for (const anc of typeAncestors(schema, typeDef)) {
+        const inherited = (anc.typeConstraints ?? []).find(
+          (c) => constraintIsExclusive(c) && !c.delegated && c.fieldRefs.length === 1 && c.fieldRefs[0] === field,
+        );
+        if (inherited) return inherited;
+      }
+      return undefined;
+    };
+    // Candidate fields: those referenced by any single-field type constraint in
+    // this type's lineage.
+    const candidateFields = new Set<string>();
+    for (const tc of typeDef.typeConstraints ?? []) {
+      if (constraintIsExclusive(tc) && !tc.delegated && tc.fieldRefs.length === 1) candidateFields.add(tc.fieldRefs[0]);
+    }
+    for (const anc of typeAncestors(schema, typeDef)) {
+      for (const tc of anc.typeConstraints ?? []) {
+        if (constraintIsExclusive(tc) && !tc.delegated && tc.fieldRefs.length === 1) candidateFields.add(tc.fieldRefs[0]);
+      }
+    }
+    for (const field of candidateFields) {
+      const tc = lineageTypeConstraint(field);
+      if (!tc) continue;
+      const fieldDef = typeDef.fields.find((f) => f.name === field) as { multi?: boolean } | undefined;
+      if (!fieldDef || fieldDef.multi) continue;
+      // Owner: topmost ancestor declaring the same single-field type constraint
+      // (or this type itself).
+      let owner = typeDef;
+      for (const anc of typeAncestors(schema, typeDef)) {
+        if ((anc.typeConstraints ?? []).some((c) => constraintIsExclusive(c) && !c.delegated && c.fieldRefs.length === 1 && c.fieldRefs[0] === field)) {
+          owner = anc;
+        }
+      }
+      addParticipant(owner, field, typeDef, {
+        exceptField: exceptFieldFrom(tc.exceptExpr),
+        lower: isLowerExpr(tc.exprText),
+      });
+    }
+  }
+  return [...groups.values()];
+};
+
+const materializeExclusivity = (db: SQLiteDatabase, schema: SchemaSnapshot): void => {
+  const groups = collectExclusiveGroups(schema);
+  for (const group of groups) {
+    if (group.tables.length === 0) continue;
+    // A single-table group with a plain value constraint is already fully
+    // enforced by the same-table UNIQUE index created in materializeSchema, so
+    // skip the shared-table/trigger machinery (it would only add overhead and
+    // perturb table enumeration). `lower`/`except` groups still need it because
+    // those don't get a direct same-table index.
+    if (group.tables.length === 1 && !group.lower && !group.exceptField) continue;
+    const groupId = group.ownerKey.replaceAll(/[^A-Za-z0-9_]/g, "_");
+    // The property name is embedded after the `__col__` marker so the runtime
+    // can recover it from SQLite's "UNIQUE constraint failed: <table>.v" text.
+    const sharedTable = `__gel_excl__${groupId}__col__${group.field}`;
+    db.prepare(
+      `CREATE TABLE IF NOT EXISTS ${quoteIdent(sharedTable)} (${quoteIdent("src")} TEXT PRIMARY KEY, ${quoteIdent("v")} TEXT)`,
+    ).run();
+    // UNIQUE index name carries `__excl__<prop>` so error translation can
+    // recover the property name. `lower` constraints index lower(v).
+    const indexCol = group.lower ? `lower(${quoteIdent("v")})` : quoteIdent("v");
+    const whereClause = group.exceptField
+      ? ` WHERE ${quoteIdent("ex")} IS NOT 1`
+      : "";
+    if (group.exceptField) {
+      // need the except flag in the shared table for the partial index
+      const cols = (db.prepare(`PRAGMA table_info(${quoteIdent(sharedTable)})`).all() as Array<{ name: string }>).map((r) => r.name);
+      if (!cols.includes("ex")) {
+        db.prepare(`ALTER TABLE ${quoteIdent(sharedTable)} ADD COLUMN ${quoteIdent("ex")} INTEGER`).run();
+      }
+    }
+    db.prepare(
+      `CREATE UNIQUE INDEX IF NOT EXISTS ${quoteIdent(`${sharedTable}__excl__${group.field}`)} ON ${quoteIdent(sharedTable)} (${indexCol})${whereClause}`,
+    ).run();
+
+    for (const tbl of group.tables) {
+      const col = quoteIdent(group.field);
+      const exVal = group.exceptField ? `NEW.${quoteIdent(group.exceptField)}` : "NULL";
+      const exCols = group.exceptField ? `, ${quoteIdent("ex")}` : "";
+      const exNew = group.exceptField ? `, ${exVal}` : "";
+      // INSERT trigger: mirror non-null values into the shared table.
+      db.prepare(
+        `CREATE TRIGGER IF NOT EXISTS ${quoteIdent(triggerName(tbl, `excl_ins__${groupId}`))} ` +
+          `AFTER INSERT ON ${quoteIdent(tbl)} WHEN NEW.${col} IS NOT NULL BEGIN ` +
+          `INSERT INTO ${quoteIdent(sharedTable)} (${quoteIdent("src")}, ${quoteIdent("v")}${exCols}) ` +
+          `VALUES (NEW.${quoteIdent("id")}, NEW.${col}${exNew}); END`,
+      ).run();
+      // UPDATE trigger: keep the mirror in sync (re-trips UNIQUE on conflict).
+      db.prepare(
+        `CREATE TRIGGER IF NOT EXISTS ${quoteIdent(triggerName(tbl, `excl_upd__${groupId}`))} ` +
+          `AFTER UPDATE ON ${quoteIdent(tbl)} BEGIN ` +
+          `DELETE FROM ${quoteIdent(sharedTable)} WHERE ${quoteIdent("src")} = NEW.${quoteIdent("id")}; ` +
+          `INSERT INTO ${quoteIdent(sharedTable)} (${quoteIdent("src")}, ${quoteIdent("v")}${exCols}) ` +
+          `SELECT NEW.${quoteIdent("id")}, NEW.${col}${exNew} WHERE NEW.${col} IS NOT NULL; END`,
+      ).run();
+      // DELETE trigger: drop the mirror row.
+      db.prepare(
+        `CREATE TRIGGER IF NOT EXISTS ${quoteIdent(triggerName(tbl, `excl_del__${groupId}`))} ` +
+          `AFTER DELETE ON ${quoteIdent(tbl)} BEGIN ` +
+          `DELETE FROM ${quoteIdent(sharedTable)} WHERE ${quoteIdent("src")} = OLD.${quoteIdent("id")}; END`,
+      ).run();
+    }
+  }
 };
 
 const compileCustomTriggerSQL = (
