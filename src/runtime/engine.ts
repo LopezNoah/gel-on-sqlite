@@ -7723,6 +7723,56 @@ const preExecuteMutationExprsInSelectExpr = (
   // and replace the entire expression with a by-id SELECT. Also covers a shape
   // projected over the coalesce (`(… ?? (INSERT …)) { … }`).
   const coalesceNode = exprKind === "shape_projection" ? (expr as { expr?: unknown }).expr : expr;
+  // Coalesce of two tuples (`(<select>, true) ?? (<insert>, false)`): the `??`
+  // short-circuits on the WHOLE left tuple — non-empty when its object element
+  // is non-empty. Evaluate the left object element; if present, the result is
+  // the left tuple (nothing on the right runs). Otherwise run the right tuple
+  // (executing its mutation). Each object element becomes a by-id select and
+  // each scalar element keeps its literal, so the tuple lowers to plain SQL.
+  if (coalesceNode && typeof coalesceNode === "object"
+      && (coalesceNode as { kind?: string }).kind === "coalesce"
+      && containsMutationExpr(coalesceNode)
+      && exprKind !== "shape_projection") {
+    const cn = coalesceNode as { left?: unknown; right?: unknown };
+    const asTuple = (node: unknown): unknown[] | undefined => {
+      const t = node as { kind?: string; values?: unknown[] } | undefined;
+      return t?.kind === "tuple" && Array.isArray(t.values) ? t.values : undefined;
+    };
+    const leftTuple = asTuple(cn.left);
+    const rightTuple = asTuple(cn.right);
+    if (leftTuple && rightTuple && leftTuple.length === rightTuple.length) {
+      // The object element is the one that resolves to an object set; scalars
+      // (literals) pass through. Build the result tuple element-by-element.
+      const peel = (node: unknown): unknown => {
+        const n = node as { kind?: string; expr?: unknown } | undefined;
+        return n?.kind === "expr" ? n.expr : node;
+      };
+      const isObjectElement = (node: unknown): boolean => {
+        const n = peel(node) as { kind?: string } | undefined;
+        return n?.kind === "select_expr_subquery" || n?.kind === "select"
+          || n?.kind === "mutation_expr" || n?.kind === "binding_ref";
+      };
+      // Resolve the left tuple's object element to decide the branch.
+      const leftObjIdx = leftTuple.findIndex(isObjectElement);
+      if (leftObjIdx >= 0) {
+        const leftObj = resolveObjectSet(
+          db, schema, attachWithToNestedMutations(peel(leftTuple[leftObjIdx]), passthrough),
+          env, undefined, context, defaultModule,
+        );
+        const chosen = leftObj.ids.length > 0 ? leftTuple : rightTuple;
+        const resultElements = chosen.map((el) => {
+          if (isObjectElement(el)) {
+            const resolved = (chosen === leftTuple && chosen.indexOf(el) === leftObjIdx)
+              ? leftObj
+              : resolveObjectSet(db, schema, attachWithToNestedMutations(peel(el), passthrough), env, undefined, context, defaultModule);
+            return { kind: "select_expr_subquery", expr: chainByIdSelect(resolved) };
+          }
+          return peel(el);
+        });
+        return { ...ast, expr: { kind: "tuple", values: resultElements } } as Statement;
+      }
+    }
+  }
   if (coalesceNode && typeof coalesceNode === "object"
       && (coalesceNode as { kind?: string }).kind === "coalesce"
       && containsMutationExpr(coalesceNode)) {
