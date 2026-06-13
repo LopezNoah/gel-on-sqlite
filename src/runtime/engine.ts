@@ -6866,6 +6866,49 @@ const preExecuteMutationExprsInDmlValues = (
   };
   if (!containsMutationExpr(values)) return ast;
   const defaultModule = (ast as { withModule?: string }).withModule ?? "default";
+
+  // Suppress eager nested-DML execution when the *outer* INSERT will be
+  // suppressed by UNLESS CONFLICT. Without this, `INSERT Person { note :=
+  // (INSERT Note …) } UNLESS CONFLICT` would run the nested `INSERT Note` even
+  // on the conflicting second run (so count(Note) doubles). When the outer
+  // INSERT conflicts and the ELSE (if any) doesn't re-run the values, the
+  // nested mutations must not execute. We detect the conflict statically by
+  // resolving the conflict-target value and probing the table; on a hit, the
+  // nested-DML link values are replaced with an empty set so nothing runs and
+  // the (suppressed) outer INSERT writes nothing anyway.
+  if (ast.kind === "insert" && ast.conflict) {
+    const qualified = qualifyRuntimeTypeName(ast.typeName, defaultModule);
+    const subjectType = schema.getType(qualified) ?? schema.getType(ast.typeName);
+    // A plain UNLESS CONFLICT (or UNLESS CONFLICT ON with a SELECT/empty ELSE)
+    // never re-runs the inserted values; UNLESS CONFLICT ON … ELSE (UPDATE …)
+    // also leaves the nested INSERTs of the conflicting branch unused.
+    if (subjectType) {
+      const conflictField = resolveConflictField(ast as InsertStatement, subjectType);
+      if (conflictField) {
+        const resolveBinding = makeBindingResolver(ast, context, ast.pos.line, ast.pos.column);
+        const rawValue = ast.values[conflictField];
+        const staticValue = rawValue !== undefined
+          ? tryResult(() => scalarFromInsertValue(rawValue, resolveBinding, ast.pos.line, ast.pos.column))
+          : undefined;
+        if (staticValue?.ok) {
+          const table = tableNameForType(qualified);
+          const existingId = findConflictRowId(db, table, conflictField, staticValue.value);
+          if (existingId) {
+            // Outer insert conflicts → drop every nested mutation in the
+            // values so none of them execute. Empty the assignment value.
+            const emptied: Record<string, unknown> = {};
+            for (const [field, value] of Object.entries(values)) {
+              emptied[field] = containsMutationExpr(value)
+                ? { kind: "set", values: [] }
+                : value;
+            }
+            return { ...ast, values: emptied } as Statement;
+          }
+        }
+      }
+    }
+  }
+
   const env: DmlChainEnv = new Map();
   // The outer statement's scalar bindings are shared between the enclosing
   // statement and the nested mutations — a volatile binding (`x :=
@@ -6977,6 +7020,83 @@ const preExecuteMutationExprsInDmlValues = (
     values: newValues,
     ...(withChanged ? { with: outerWith } : null),
   } as Statement;
+};
+
+// EdgeQL forbids mutations (INSERT/UPDATE/DELETE) inside a shape's computed
+// expression, and inside a free-object constructor that isn't the trivial,
+// top-level, exposed result. Such a mutation must be factored into a top-level
+// WITH binding. The pre-execution passes below would otherwise *silently run*
+// such mutations (via the generic by-id-select substitution), so we reject them
+// here first. We only flag mutations written inline as `mutation_expr` — nested
+// DML in INSERT/UPDATE *value* shapes uses the distinct `InsertValue` AST and is
+// legitimate, so it is never reached by this walk.
+const exprTreeContainsInlineMutation = (node: unknown): boolean => {
+  if (Array.isArray(node)) return node.some(exprTreeContainsInlineMutation);
+  if (node === null || typeof node !== "object") return false;
+  if ((node as { kind?: unknown }).kind === "mutation_expr") return true;
+  return Object.values(node as Record<string, unknown>).some(exprTreeContainsInlineMutation);
+};
+
+const validateNoMutationInShapeComputeds = (node: unknown, inTopLevelExposedFreeObject: boolean): void => {
+  if (Array.isArray(node)) {
+    for (const item of node) validateNoMutationInShapeComputeds(item, false);
+    return;
+  }
+  if (node === null || typeof node !== "object") return;
+  const n = node as Record<string, unknown> & { kind?: string };
+
+  // A shape applied to any expression: DML in a computed (`c := (INSERT …)`)
+  // element is rejected. Link-property computeds (`@x`) keep the same rule.
+  if (n.kind === "shape_projection" && Array.isArray((n as { shape?: unknown }).shape)) {
+    const shape = (n as { shape: Array<Record<string, unknown>> }).shape;
+    for (const el of shape) {
+      if (el && el.kind === "computed" && exprTreeContainsInlineMutation(el.expr)) {
+        throw new AppError(
+          "E_SEMANTIC",
+          "mutations are invalid in a shape's computed expression",
+          1, 1,
+        );
+      }
+    }
+  }
+
+  // A free-object *constructor* (expression form, e.g. bound in WITH or nested)
+  // is not the trivial top-level exposed free object, so inline DML in its
+  // entries is rejected.
+  if (n.kind === "free_object_constructor" && Array.isArray((n as { entries?: unknown }).entries)) {
+    if (!inTopLevelExposedFreeObject) {
+      const entries = (n as { entries: Array<Record<string, unknown>> }).entries;
+      for (const entry of entries) {
+        if (entry && exprTreeContainsInlineMutation(entry.expr)) {
+          throw new AppError(
+            "E_SEMANTIC",
+            "mutations are invalid in a shape's computed expression",
+            1, 1,
+          );
+        }
+      }
+    }
+  }
+
+  for (const value of Object.values(n)) {
+    validateNoMutationInShapeComputeds(value, false);
+  }
+};
+
+// Entry point: a `select { … }` whose entries are the exposed top-level result
+// allows trivial inline DML (handled by the dedicated free-object path), so its
+// entries are NOT treated as a forbidden free-object constructor. Any other
+// statement validates from the top with no exposed-free-object allowance.
+const validateMutationPlacement = (ast: Statement): void => {
+  if (ast.kind === "select_free") {
+    // Top-level exposed free object: entry-level inline DML is allowed, but a
+    // *shape* nested deeper inside an entry still rejects DML in its computed.
+    for (const entry of (ast as unknown as { entries: Array<{ expr: unknown }> }).entries) {
+      validateNoMutationInShapeComputeds(entry.expr, false);
+    }
+    return;
+  }
+  validateNoMutationInShapeComputeds(ast, false);
 };
 
 // SELECT statements (incl. free-object selects) whose WITH bindings or
@@ -7281,9 +7401,14 @@ const executeSelectOverMutation = (
       // executor so the bindings execute once and resolve by id.
       affectedIds = runDmlChain(db, schema, mutation, context).ids;
     } else {
-      lastCompiled = compilerService.compile(schema, mutation, { globals: context.globals, target: runtimeTarget });
-      const writeResult = runWriteWithAccessPolicies(db, schema, mutation, lastCompiled.ir, lastCompiled.sql, subjectType, context);
-      affectedIds = (writeResult.rows ?? [])
+      // Nested mutations in the INSERT's values (`note := (INSERT Note …)`)
+      // execute up front — but when the *outer* INSERT will be suppressed by
+      // UNLESS CONFLICT, this pass detects the conflict and drops the nested
+      // DML so it doesn't run (dependent_15/17/21/23/25).
+      const preparedMutation = preExecuteMutationExprsInDmlValues(db, schema, mutation, context) as typeof mutation;
+      lastCompiled = compilerService.compile(schema, preparedMutation, { globals: context.globals, target: runtimeTarget });
+      const writeResult0 = runWriteWithAccessPolicies(db, schema, preparedMutation, lastCompiled.ir, lastCompiled.sql, subjectType, context);
+      affectedIds = (writeResult0.rows ?? [])
         .map((row) => (row && typeof row === "object" ? (row as { id?: unknown }).id : undefined))
         .filter((id): id is string => typeof id === "string");
     }
@@ -7446,6 +7571,9 @@ const executeQueryWithTraceImpl = (
     // `__default__` references resolve against the assigned pointer's
     // declared default before anything compiles.
     ast = rewriteDunderDefaults(schema, ast);
+    // Reject mutations placed in a shape's computed expression / non-exposed
+    // free object before the pre-execution passes silently run them.
+    validateMutationPlacement(ast);
     // DML inside WITH bindings / free-object entries executes up front; the
     // statement then compiles as a plain read over the captured ids.
     ast = preExecuteDmlBindings(db, schema, ast, context);
@@ -8266,6 +8394,9 @@ export const executeQueryUnitWithTrace = (
 
       validateParsedStatement(ast, { schema, module: ast.withModule });
       preValidateStatementAst(schema, ast, allowUserSpecifiedId(schema));
+      // Reject mutations placed in a shape's computed expression / non-exposed
+      // free object before the pre-execution passes silently run them.
+      validateMutationPlacement(ast);
       const statementType = statementTypeOf(ast);
       enforceBuiltinPermissions(context, statementType, ast.pos.line, ast.pos.column);
       // `__default__` references resolve against the assigned pointer's
