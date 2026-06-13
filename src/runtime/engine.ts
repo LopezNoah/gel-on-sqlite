@@ -6385,6 +6385,108 @@ const evaluateScalarBindingViaSQL = (
   return undefined;
 };
 
+// A WITH binding bound to a free-object constructor with scalar entries
+// (`WITH free := { name := <str>random() }`) is materialized once by EdgeQL: a
+// reference like `free.name` resolves to the SAME value everywhere, even if the
+// entry expression is volatile. Without capture, each `free.name` use inlines
+// the entry expression and a volatile `random()` diverges between sites. Detect
+// such bindings, evaluate each referenced entry once via SQL, and substitute
+// the `free.<entry>` path references with the captured literal. Returns the
+// statement unchanged when there's nothing to capture.
+const captureFreeObjectScalarBindings = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  ast: Statement,
+  context: SecurityContext,
+): Statement => {
+  const withBindings = (ast as { with?: WithBinding[] }).with ?? [];
+  if (withBindings.length === 0) return ast;
+  // Collect free-object bindings whose entries are scalar (non-mutation) exprs.
+  const freeObjectEntries = new Map<string, Map<string, FreeObjectExpr>>();
+  for (const binding of withBindings) {
+    const value = binding.value as { kind?: string; expr?: { kind?: string; entries?: Array<{ name?: string; expr?: FreeObjectExpr }> } };
+    if (value.kind !== "subquery_expr") continue;
+    const ctor = value.expr;
+    if (ctor?.kind !== "free_object_constructor" || !Array.isArray(ctor.entries)) continue;
+    if (bindingValueContainsMutation(binding.value)) continue;
+    const entryMap = new Map<string, FreeObjectExpr>();
+    let ok = true;
+    for (const entry of ctor.entries) {
+      if (typeof entry.name !== "string" || !entry.expr) { ok = false; break; }
+      entryMap.set(entry.name, entry.expr);
+    }
+    if (ok && entryMap.size > 0) freeObjectEntries.set(binding.name, entryMap);
+  }
+  if (freeObjectEntries.size === 0) return ast;
+
+  // Determine which `<binding>.<entry>` references actually appear, so we only
+  // evaluate (and capture) the entries that are read.
+  const referenced = new Map<string, Set<string>>();
+  const noteRef = (head: string, field: string): void => {
+    if (!freeObjectEntries.has(head)) return;
+    if (!freeObjectEntries.get(head)!.has(field)) return;
+    if (!referenced.has(head)) referenced.set(head, new globalThis.Set());
+    referenced.get(head)!.add(field);
+  };
+  const scan = (node: unknown): void => {
+    if (Array.isArray(node)) { node.forEach(scan); return; }
+    if (node === null || typeof node !== "object") return;
+    const n = node as Record<string, unknown> & { kind?: string };
+    if (n.kind === "path" && typeof n.head === "string" && typeof n.tail === "string") {
+      noteRef(n.head, n.tail);
+    }
+    if (n.kind === "field_access"
+      && typeof n.field === "string"
+      && (n.expr as { kind?: string; name?: string })?.kind === "binding_ref") {
+      noteRef((n.expr as { name: string }).name, n.field);
+    }
+    for (const v of Object.values(n)) scan(v);
+  };
+  scan(ast);
+  if (referenced.size === 0) return ast;
+
+  // Evaluate each referenced entry once and record the captured literal.
+  const captured = new Map<string, Map<string, ScalarValue | null>>();
+  for (const [head, fields] of referenced) {
+    const entryMap = freeObjectEntries.get(head)!;
+    const fieldValues = new Map<string, ScalarValue | null>();
+    for (const field of fields) {
+      const evaluated = evaluateScalarBindingViaSQL(db, schema, entryMap.get(field)!, [], context, ast.pos);
+      if (evaluated === undefined || evaluated.kind !== "literal") { fieldValues.clear(); break; }
+      fieldValues.set(field, evaluated.value);
+    }
+    if (fieldValues.size > 0) captured.set(head, fieldValues);
+  }
+  if (captured.size === 0) return ast;
+
+  // Substitute the captured `<binding>.<entry>` references with literals.
+  const substitute = (node: unknown): unknown => {
+    if (Array.isArray(node)) return node.map(substitute);
+    if (node === null || typeof node !== "object") return node;
+    const n = node as Record<string, unknown> & { kind?: string };
+    if (n.kind === "path" && typeof n.head === "string" && typeof n.tail === "string") {
+      const fields = captured.get(n.head);
+      if (fields?.has(n.tail)) return { kind: "literal", value: fields.get(n.tail) };
+    }
+    if (n.kind === "field_access"
+      && typeof n.field === "string"
+      && (n.expr as { kind?: string; name?: string })?.kind === "binding_ref") {
+      const head = (n.expr as { name: string }).name;
+      const fields = captured.get(head);
+      if (fields?.has(n.field)) return { kind: "literal", value: fields.get(n.field as string) };
+    }
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(n)) out[k] = substitute(v);
+    return out;
+  };
+  // Substitute references everywhere except the WITH binding values themselves
+  // (a binding may legitimately read another). The captured bindings stay in
+  // WITH (harmless if now unreferenced); only the read sites are replaced.
+  const withClause = (ast as { with?: WithBinding[] }).with;
+  const substituted = substitute({ ...ast, with: undefined }) as Statement;
+  return { ...substituted, with: withClause } as Statement;
+};
+
 const rewriteEnvRefsInNode = (node: unknown, env: DmlChainEnv): unknown => {
   const envObjectSet = (name: unknown): ObjectSet | undefined => {
     if (typeof name !== "string") return undefined;
@@ -7999,6 +8101,9 @@ const executeQueryWithTraceImpl = (
     // `__default__` references resolve against the assigned pointer's
     // declared default before anything compiles.
     ast = rewriteDunderDefaults(schema, ast);
+    // A volatile free-object WITH binding (`WITH free := { name :=
+    // <str>random() }`) must materialize once — capture before inlining.
+    ast = captureFreeObjectScalarBindings(db, schema, ast, context);
     // Reject mutations placed in a shape's computed expression / non-exposed
     // free object before the pre-execution passes silently run them.
     validateMutationPlacement(ast);
@@ -8995,6 +9100,10 @@ export const executeQueryUnitWithTrace = (
       // `__default__` references resolve against the assigned pointer's
       // declared default before anything compiles.
       ast = rewriteDunderDefaults(schema, ast);
+      // A volatile free-object WITH binding (`WITH free := { name :=
+      // <str>random() }`) must materialize once — capture its referenced scalar
+      // entries before the values inline (and re-evaluate) the expression.
+      ast = captureFreeObjectScalarBindings(db, schema, ast, context);
       ast = preExecuteMutationExprsInDmlValues(db, schema, ast, context);
       // WITH-bound DML subquery chains (`WITH x := (INSERT …) INSERT … x.name …`)
       // — same handling as the single-query path: execute the bindings in
