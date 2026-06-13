@@ -2965,7 +2965,7 @@ class Parser {
     if (hasWrappedStatement) {
       this.consume();
     }
-    const body: InsertStatement | SelectStatement | SelectExprStatement | SelectFreeStatement
+    const body: InsertStatement | SelectStatement | SelectExprStatement | SelectFreeStatement | ForStatement
       = this.withLocalBinding(variable, () => {
       const next = this.peek();
       if (next.kind === "kw_select") {
@@ -3820,15 +3820,26 @@ class Parser {
         this.localBindings.push(variable);
 
       }
+      // After the (possibly nested) FOR binders, the body is introduced by
+      // UNION, a bare SELECT, or — for a DML-producing FOR used in an
+      // expression position (`subordinates := (FOR x IN … INSERT T {…})`) — a
+      // bare INSERT.
+      const bodyIsInsert = this.peek().kind === "kw_insert";
       if (this.peek().kind === "kw_union") {
         this.consume();
-      } else {
+      } else if (!bodyIsInsert) {
         this.expect("kw_select", "Expected 'select' after for iterator");
       }
       const parseBody = (index: number): FreeObjectExpr => {
         const binder = binders[index];
         return this.withLocalBinding(binder.variable, () => {
           if (index === binders.length - 1) {
+            if (this.peek().kind === "kw_insert") {
+              return {
+                kind: "mutation_expr",
+                statement: this.parseInsert({}, false),
+              } as unknown as FreeObjectExpr;
+            }
             return this.parseFreeObjectExpr();
           }
           const next = binders[index + 1];
@@ -4877,9 +4888,11 @@ class Parser {
     return false;
   }
 
-  private parseInlineSelectExpr(): { kind: "select"; typeName: string; shape: ShapeElement[]; clauses: ClauseChain } {
+  private parseInlineSelectExpr(): { kind: "select"; typeName: string; shape: ShapeElement[]; clauses: ClauseChain; detached?: boolean } {
+    let detached = false;
     if (this.peek().kind === "kw_detached") {
       this.consume();
+      detached = true;
     }
     const typeName = this.parseQualifiedName("Expected type name in inline select");
     const shape: ShapeElement[] = [{ kind: "field", name: "id", operation: "assign", origin: "default" }];
@@ -4895,6 +4908,7 @@ class Parser {
       typeName,
       shape,
       clauses: this.parseClauseChain(),
+      ...(detached ? { detached: true } : {}),
     };
   }
 
@@ -6296,6 +6310,17 @@ class Parser {
     }
     const typeName = this.parseQualifiedName("Expected type name");
 
+    // `INSERT Person.notes { … }` — the subject is a link/property path, not
+    // an object type. Upstream rejects this as inserting an arbitrary
+    // expression (insert.rst / test_edgeql_insert_fail_05).
+    if (this.peek().kind === "dot") {
+      throw new AppError(
+        "E_SEMANTIC",
+        "INSERT only works with object types, not arbitrary expressions",
+        ...this.posPair(this.peek()),
+      );
+    }
+
     const values: Record<string, InsertValue> = {};
     if (this.peek().kind === "lbrace") {
       this.consume();
@@ -6306,6 +6331,25 @@ class Parser {
     }
 
     const conflict = this.parseInsertConflict();
+
+    // `insert Note {…} union DerivedNote` / `… if cond else …` — the INSERT is
+    // being combined into a larger set/conditional expression. Upstream rejects
+    // these: an INSERT subject must be a plain object type, not a union
+    // (test_edgeql_insert_fail_08) or conditional (test_edgeql_insert_fail_09).
+    if (this.peek().kind === "kw_union") {
+      throw new AppError(
+        "E_SEMANTIC",
+        "INSERT only works with object types, not arbitrary expressions",
+        ...this.posPair(this.peek()),
+      );
+    }
+    if (this.peek().kind === "kw_if") {
+      throw new AppError(
+        "E_SEMANTIC",
+        "INSERT only works with object types, not conditional expressions",
+        ...this.posPair(this.peek()),
+      );
+    }
 
     // Per lexical.rst lines 400-402, ';' is idempotent — `commit;;`,
     // `select 1;;;` etc. are all valid (upstream test_edgeql_syntax_constants_02).
@@ -6329,6 +6373,16 @@ class Parser {
 
   private parseInsertAssignment(): { field: string; value: InsertValue } {
     const field = this.expectName("Expected field name").lexeme;
+    // `INSERT Person { name }` — a bare shape field with no value. Mutations
+    // (INSERT/UPDATE) require every shape element to assign a value with `:=`
+    // (test_edgeql_insert_fail_04).
+    if (this.peek().kind !== "assign") {
+      throw new AppError(
+        "E_SEMANTIC",
+        "mutation queries must specify values with ':='",
+        ...this.posPair(this.peek()),
+      );
+    }
     this.expect("assign", "Expected ':=' after field name");
     return {
       field,
@@ -6468,6 +6522,18 @@ class Parser {
       if (typeof inner === "boolean" || typeof inner === "number" || inner === null) {
         return inner;
       }
+    }
+    // Preserve the cast target on an empty-set assignment (`<datetime>{}`)
+    // so the INSERT type-checker can compare it against the declared pointer
+    // type (test_edgeql_insert_empty_02/05). Only tag empty sets — a populated
+    // set has its own element values to type-check.
+    if (
+      inner !== null &&
+      typeof inner === "object" &&
+      (inner as { kind?: string }).kind === "set" &&
+      ((inner as { values?: unknown[] }).values?.length ?? 0) === 0
+    ) {
+      return { kind: "set", values: [], castType };
     }
     return inner;
   }

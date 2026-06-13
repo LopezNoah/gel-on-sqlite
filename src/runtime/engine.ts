@@ -5,7 +5,7 @@ import { AppError, asAppError, isQueryFailure, tryResult } from "../errors.js";
 import { decorateErrorWithUnsupportedTag } from "../diagnostics/unsupported.js";
 import { parseEdgeQL, parseEdgeQLScript, type ParseEdgeQLOptions } from "../edgeql/parser.js";
 import { offsetToLineCol, tokenize, type Token } from "../edgeql/tokenizer.js";
-import type { BacklinkExpr, ComputedExpr, DDLStatement, DeleteStatement, FilterExpr, FilterValue, ForStatement, FreeObjectExpr, FunctionCallArgExpr, FunctionCallExpr, InsertStatement, InsertValue, OrderExpr, OrderExprChain, PathStep, SelectExprStatement, SelectStatement, ShapeElement, Statement, TypeExpr, UpdateStatement, WithBinding, WithBindingValue } from "../edgeql/ast.js";
+import type { BacklinkExpr, ClauseChain, ComputedExpr, DDLStatement, DeleteStatement, FilterExpr, FilterValue, ForStatement, FreeObjectExpr, FunctionCallArgExpr, FunctionCallExpr, InsertStatement, InsertValue, OrderExpr, OrderExprChain, PathStep, SelectExprStatement, SelectStatement, ShapeElement, Statement, TypeExpr, UpdateStatement, WithBinding, WithBindingValue } from "../edgeql/ast.js";
 import type { RuntimeDatabaseAdapter } from "./adapter.js";
 import type { SchemaSnapshot } from "../schema/schema.js";
 import type { GelIRSQLArtifact as SQLArtifact } from "../sql/gel_ir_compiler.js";
@@ -5799,6 +5799,47 @@ const validateRestrictedLinkPropertyTokens = (query: string): void => {
   }
 };
 
+// A *multi-level* FOR statement whose body ultimately performs an INSERT —
+// either a bare nested FOR (`FOR a … FOR b … INSERT`) or the expression-position
+// UNION form (`FOR a … UNION (FOR b … UNION (INSERT …))`, which parses as a
+// select_expr wrapping a nested `for_expr` chain). These need the script unit
+// path's FOR-INSERT expansion to flatten every loop level.
+//
+// Single-level FOR-INSERTs (`FOR x … INSERT`, `FOR x … UNION (INSERT …)`) are
+// already routed/handled elsewhere — this only flags the additional nesting so
+// the single-level UNION form keeps its existing (working) execution path.
+const forStatementYieldsInsert = (forAst: ForStatement): boolean => {
+  const body = forAst.body;
+  if (body.kind === "insert") return true;
+  if (body.kind === "for") return true;
+  if (body.kind === "select_expr") {
+    // Only a *nested* for_expr (FOR-within-FOR) needs rerouting; a bare
+    // `select_expr{ mutation_expr insert }` is the single-level UNION form
+    // handled by the existing peel + path.
+    let cur: FreeObjectExpr = body.expr;
+    if ((cur as { kind?: string }).kind === "select_expr_subquery") {
+      cur = (cur as unknown as { expr: FreeObjectExpr }).expr;
+    }
+    if ((cur as { kind?: string }).kind !== "for_expr") return false;
+    // Confirm the nested chain bottoms out in an INSERT.
+    const chainEndsInInsert = (node: FreeObjectExpr): boolean => {
+      let n: FreeObjectExpr = node;
+      if ((n as { kind?: string }).kind === "select_expr_subquery") {
+        n = (n as unknown as { expr: FreeObjectExpr }).expr;
+      }
+      if ((n as { kind?: string }).kind === "mutation_expr") {
+        return (n as unknown as { statement: Statement }).statement.kind === "insert";
+      }
+      if ((n as { kind?: string }).kind === "for_expr") {
+        return chainEndsInInsert((n as unknown as { body: FreeObjectExpr }).body);
+      }
+      return false;
+    };
+    return chainEndsInInsert((cur as unknown as { body: FreeObjectExpr }).body);
+  }
+  return false;
+};
+
 export const executeQuery = (
   db: SQLiteDatabase,
   schema: SchemaSnapshot,
@@ -5821,7 +5862,7 @@ export const executeQuery = (
   // before any execution side-effects. Mirrors `validateScriptUserDDL` for
   // the single-statement entry point.
   validateUserDDLStatement(parsedQuery, securityContext.strictUserDDL ?? false);
-  if (parsedQuery.kind === "for" && parsedQuery.body.kind === "insert") {
+  if (parsedQuery.kind === "for" && forStatementYieldsInsert(parsedQuery)) {
     const script = rewrittenQuery.trim().endsWith(";") ? rewrittenQuery : `${rewrittenQuery};`;
     return executeQueryUnitWithTrace(db, schema, script, securityContext).result;
   }
@@ -7041,6 +7082,312 @@ const expandPolymorphicMutation = (
   return concretes.map((typeName) => ({ ...ast, typeName, target: undefined }));
 };
 
+// Convert an expression-position `for_expr` chain that ends in an INSERT
+// (`FOR b … (INSERT …)`, possibly nested and/or wrapped in select_expr/UNION)
+// into a nested FOR statement so the FOR-INSERT expander can lower it. Returns
+// undefined when the chain doesn't bottom out in an INSERT.
+const forExprChainToForStatement = (
+  node: FreeObjectExpr,
+  pos: ForStatement["pos"],
+): ForStatement | undefined => {
+  // Peel a select_expr / select_expr_subquery wrapper down to the inner expr.
+  let cur: FreeObjectExpr = node;
+  if ((cur as { kind?: string }).kind === "select_expr_subquery") {
+    cur = (cur as unknown as { expr: FreeObjectExpr }).expr;
+  }
+  if ((cur as { kind?: string }).kind !== "for_expr") return undefined;
+  const forExpr = cur as unknown as { variable: string; iterator: FreeObjectExpr; optional?: boolean; body: FreeObjectExpr };
+  let bodyExpr: FreeObjectExpr = forExpr.body;
+  if ((bodyExpr as { kind?: string }).kind === "select_expr_subquery") {
+    bodyExpr = (bodyExpr as unknown as { expr: FreeObjectExpr }).expr;
+  }
+  let innerBody: ForStatement["body"];
+  if ((bodyExpr as { kind?: string }).kind === "mutation_expr"
+    && (bodyExpr as unknown as { statement: Statement }).statement.kind === "insert") {
+    innerBody = (bodyExpr as unknown as { statement: InsertStatement }).statement;
+  } else {
+    const nested = forExprChainToForStatement(bodyExpr, pos);
+    if (!nested) return undefined;
+    innerBody = nested;
+  }
+  return {
+    kind: "for",
+    variable: forExpr.variable,
+    optional: forExpr.optional ?? false,
+    iteratorExpr: forExpr.iterator,
+    body: innerBody,
+    pos,
+  };
+};
+
+// Monotonic id tagging each batch of INSERTs produced from one FOR-INSERT, so
+// their per-statement traces can be merged back into the single set the FOR
+// expression yields.
+let forInsertGroupCounter = 0;
+
+// Recursively expand `FOR v IN <iter> ( … INSERT … )` — including nested FORs
+// (`FOR a … FOR b … INSERT`) and object-set iterators (`FOR Q IN (SELECT T{…})
+// INSERT … Q.field …`) — into a flat list of concrete INSERT statements, one
+// per element of the (cartesian) iteration. Each loop variable is bound as a
+// WITH literal on every leaf INSERT so the body's references (`a`, `Q.field`,
+// `a ++ b`) resolve through the normal IR/SQL pipeline. Returns undefined when
+// any iterator level can't be materialised up front (caller falls back to the
+// unsupported-FOR error path).
+//
+// `accumWith` carries the loop-variable bindings established by enclosing FOR
+// levels so a leaf INSERT sees every variable in scope.
+const expandForInsertStatements = (
+  forAst: ForStatement,
+  schema: SchemaSnapshot,
+  db: SQLiteDatabase,
+  context: SecurityContext,
+  accumWith: WithBinding[] = [],
+): InsertStatement[] | undefined => {
+  const body = forAst.body;
+  // FOR-level WITH bindings (other than the loop variable) flow onto each leaf.
+  const forStatementWith = ((forAst as { with?: WithBinding[] }).with ?? [])
+    .filter((binding) => binding.name !== forAst.variable);
+
+  // Object-set iterator: materialise the rows (augmented with every field the
+  // body reads off the loop variable) and bind those fields per element.
+  const referencedFields = collectBindingRefFields(body, forAst.variable);
+  if (forAst.iteratorExpr.kind === "select_expr_subquery" || forAst.iteratorExpr.kind === "select") {
+    const objectRows = evaluateForObjectIteratorRows(
+      forAst.iteratorExpr, referencedFields, schema, db, context,
+    );
+    if (objectRows === undefined) return undefined;
+    // `FOR optional Q IN (<empty>) …` yields a single null iteration; the body
+    // can't read any field off the (absent) Q, so emit one row's worth of
+    // inserts with no substitution.
+    const effectiveRows: (Record<string, unknown> | null)[] = objectRows.length === 0 && forAst.optional
+      ? [null]
+      : objectRows;
+    const out: InsertStatement[] = [];
+    for (const row of effectiveRows) {
+      // Bind `var.field` references to row values by substituting the
+      // field_access nodes with literals (the loop variable is an object, so
+      // it can't be a single WITH literal — only its read fields matter).
+      const substituted = row === null
+        ? body
+        : substituteBindingRefFields(body, forAst.variable, row) as ForStatement["body"];
+      const expanded = expandBodyToInserts(substituted, schema, db, context, [...accumWith, ...forStatementWith]);
+      if (expanded === undefined) return undefined;
+      out.push(...expanded);
+    }
+    return out;
+  }
+
+  // Scalar iterator: one iteration per value, binding the variable as a WITH
+  // literal. `evaluateForIteratorValues` materialises set literals, concats,
+  // function calls, and SQL-lowerable selects.
+  let iterValues: unknown[];
+  try {
+    iterValues = forAst.iteratorExpr.kind === "set_literal"
+      ? forAst.iteratorExpr.values
+      : evaluateForIteratorValues(forAst.iteratorExpr, schema, db, context);
+  } catch {
+    iterValues = [];
+  }
+  // Iterators referencing the FOR's own WITH bindings (`WITH raw := …, FOR item
+  // IN json_array_unpack(raw)`) can't be materialised by the standalone
+  // evaluator — compile a one-off SELECT with those bindings in scope and read
+  // its scalar rows.
+  if (!iterValues.every((v) => v === null || isScalarValue(v))
+    || (iterValues.length === 0 && ((forAst as { with?: WithBinding[] }).with?.length ?? 0) > 0)) {
+    const sqlValues = evaluateForScalarIteratorViaSql(forAst, schema, db, context);
+    if (sqlValues !== undefined) iterValues = sqlValues;
+  }
+  // Object rows leaking through evaluateForIteratorValues aren't scalar-bindable.
+  if (!iterValues.every((v) => v === null || isScalarValue(v))) return undefined;
+  const effectiveValues: (ScalarValue | null)[] = iterValues.length === 0 && forAst.optional
+    ? [null]
+    : (iterValues as (ScalarValue | null)[]);
+  const out: InsertStatement[] = [];
+  for (const value of effectiveValues) {
+    // For a direct INSERT body, substitute any top-level `name := <var>` with
+    // the literal value (matching the legacy desugar) so the written value is
+    // concrete — UNLESS CONFLICT detection and constraint checks then compare
+    // the actual value, and no loop-variable WITH binding is needed. Deeper
+    // references (`name := <var> ++ "x"`) still need the WITH binding.
+    const directlySubstitutable = body.kind === "insert" && value !== null && isScalarValue(value);
+    const substitutedBody = directlySubstitutable
+      ? substituteTopLevelInsertVarRefs(body, forAst.variable, value)
+      : body;
+    const varBinding: WithBinding[] = value !== null && isScalarValue(value)
+      ? [{ name: forAst.variable, value: { kind: "literal", value } }]
+      : [];
+    const expanded = expandBodyToInserts(substitutedBody, schema, db, context, [...accumWith, ...forStatementWith, ...varBinding]);
+    if (expanded === undefined) return undefined;
+    out.push(...expanded);
+  }
+  return out;
+};
+
+// Replace `field := <var>` insert values (where the value is exactly the loop
+// variable binding ref) with the concrete literal. Mirrors the legacy scalar
+// FOR-INSERT desugar so the written value is materialised, not a binding ref.
+const substituteTopLevelInsertVarRefs = (
+  insert: InsertStatement,
+  varName: string,
+  value: ScalarValue,
+): InsertStatement => {
+  const values: Record<string, InsertValue> = {};
+  for (const [key, v] of Object.entries(insert.values)) {
+    if (typeof v === "object" && v !== null && "kind" in v
+      && (v as { kind?: unknown }).kind === "binding_ref"
+      && (v as { name?: unknown }).name === varName) {
+      values[key] = value as unknown as InsertValue;
+    } else {
+      values[key] = v;
+    }
+  }
+  return { ...insert, values };
+};
+
+// Evaluate a FOR iterator that yields scalars by compiling it as a one-off
+// SELECT with the FOR's own WITH bindings in scope (`WITH raw := …, FOR item IN
+// json_array_unpack(raw)`). Returns the scalar row values, or undefined if the
+// iterator can't be lowered to a single SQL statement or yields non-scalars.
+const evaluateForScalarIteratorViaSql = (
+  forAst: ForStatement,
+  schema: SchemaSnapshot,
+  db: SQLiteDatabase,
+  context: SecurityContext,
+): (ScalarValue | null)[] | undefined => {
+  const stmtAst = {
+    kind: "select_expr",
+    expr: forAst.iteratorExpr,
+    with: (forAst as { with?: WithBinding[] }).with,
+    withModule: forAst.withModule,
+    pos: forAst.pos,
+  } as unknown as Statement;
+  try {
+    const compiled = getCompilerService().compile(schema, stmtAst, { globals: context.globals });
+    if (compiled.sql.loweringMode !== "single_statement" || compiled.sql.sql.length === 0) return undefined;
+    const rows = runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
+    const mapped = rows.map((row) => (row !== null && typeof row === "object" ? JSON.stringify(row) : row));
+    return mapped.every((row) => row === null || isScalarValue(row)) ? (mapped as (ScalarValue | null)[]) : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+// Expand a FOR body (an INSERT leaf or a nested FOR) into concrete INSERTs,
+// threading the accumulated loop-variable WITH bindings onto the leaf.
+const expandBodyToInserts = (
+  body: ForStatement["body"],
+  schema: SchemaSnapshot,
+  db: SQLiteDatabase,
+  context: SecurityContext,
+  accumWith: WithBinding[],
+): InsertStatement[] | undefined => {
+  if (body.kind === "for") {
+    return expandForInsertStatements(body, schema, db, context, accumWith);
+  }
+  if (body.kind === "insert") {
+    // The loop-variable bindings precede the body's own bindings (which may
+    // reference them; ast_to_ir resolves bindings in declaration order).
+    const ownWith = (body.with ?? []).filter((b) => !accumWith.some((a) => a.name === b.name));
+    const mergedWith = [...accumWith, ...ownWith];
+    return [{ ...body, with: mergedWith.length > 0 ? mergedWith : undefined }];
+  }
+  return undefined;
+};
+
+// Field names referenced as `<var>.<field>` anywhere in a FOR body.
+const collectBindingRefFields = (node: unknown, varName: string, acc = new globalThis.Set<string>()): string[] => {
+  const walk = (cur: unknown): void => {
+    if (Array.isArray(cur)) { cur.forEach(walk); return; }
+    if (cur === null || typeof cur !== "object") return;
+    const n = cur as Record<string, unknown> & { kind?: string };
+    if (n.kind === "field_access"
+      && typeof n.field === "string"
+      && (n.expr as { kind?: string; name?: string })?.kind === "binding_ref"
+      && (n.expr as { name?: string }).name === varName) {
+      acc.add(n.field);
+    }
+    for (const v of Object.values(n)) walk(v);
+  };
+  walk(node);
+  return [...acc];
+};
+
+// Replace every `<var>.<field>` field-access in a node with a literal of the
+// corresponding value from `row`.
+const substituteBindingRefFields = (node: unknown, varName: string, row: Record<string, unknown>): unknown => {
+  if (Array.isArray(node)) return node.map((item) => substituteBindingRefFields(item, varName, row));
+  if (node === null || typeof node !== "object") return node;
+  const n = node as Record<string, unknown> & { kind?: string };
+  if (n.kind === "field_access"
+    && typeof n.field === "string"
+    && (n.expr as { kind?: string; name?: string })?.kind === "binding_ref"
+    && (n.expr as { name?: string }).name === varName) {
+    return { kind: "literal", value: row[n.field as string] ?? null };
+  }
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(n)) out[k] = substituteBindingRefFields(v, varName, row);
+  return out;
+};
+
+// Materialise an object-set FOR iterator as rows carrying every field the body
+// reads off the loop variable. Returns undefined if the augmented SELECT can't
+// be lowered to SQL.
+const evaluateForObjectIteratorRows = (
+  iteratorExpr: ForStatement["iteratorExpr"],
+  fields: string[],
+  schema: SchemaSnapshot,
+  db: SQLiteDatabase,
+  context: SecurityContext,
+): Record<string, unknown>[] | undefined => {
+  // Peel a select_expr_subquery wrapper down to its inner select, preserving
+  // the subquery's filter/order/pagination on the select's clauses.
+  let sel = iteratorExpr as Record<string, unknown> & { kind?: string };
+  let extraWith: WithBinding[] | undefined;
+  if (sel.kind === "select_expr_subquery") {
+    const sub = sel as unknown as { expr: Record<string, unknown> & { kind?: string }; filter?: unknown; orderBy?: unknown; limit?: unknown; offset?: unknown; clauses?: { _withBindings?: WithBinding[] } };
+    extraWith = sub.clauses?._withBindings;
+    sel = sub.expr;
+  }
+  if (sel.kind !== "select" || typeof sel.typeName !== "string") return undefined;
+  // The AST `select` expr stores its FILTER/ORDER BY/pagination on `clauses`,
+  // not as top-level SelectStatement fields — flatten them so the compiled
+  // SELECT keeps the iterator's filter (otherwise it scans the whole extent).
+  const selExpr = sel as unknown as { typeName: string; shape?: ShapeElement[]; clauses?: ClauseChain };
+  const clauses: ClauseChain = selExpr.clauses ?? {};
+  // Build a shape that includes id plus every read field (schema or computed).
+  const shape: ShapeElement[] = [...(selExpr.shape ?? [])];
+  const haveField = (name: string): boolean =>
+    shape.some((e) => (e.kind === "field" && e.name === name) || (e.kind === "computed" && (e as { name?: string }).name === name));
+  if (!haveField("id")) shape.unshift({ kind: "field", name: "id" } as ShapeElement);
+  for (const f of fields) {
+    if (!haveField(f)) shape.push({ kind: "field", name: f } as ShapeElement);
+  }
+  const augmented: SelectStatement = {
+    kind: "select",
+    typeName: selExpr.typeName,
+    shape,
+    fields: fieldsFromShape(shape),
+    filter: clauses.filter,
+    orderBy: clauses.orderBy,
+    limit: clauses.limit,
+    offset: clauses.offset,
+    limitExpr: clauses.limitExpr,
+    offsetExpr: clauses.offsetExpr,
+    with: extraWith ?? clauses._withBindings,
+    withModule: clauses._withModule,
+    withModuleAliases: clauses._withModuleAliases,
+    pos: { line: 1, column: 1 },
+  };
+  try {
+    const compiled = getCompilerService().compile(schema, augmented as unknown as Statement, { globals: context.globals });
+    if (compiled.sql.loweringMode !== "single_statement" || compiled.sql.sql.length === 0) return undefined;
+    const rows = runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
+    return rows.map((r) => (r !== null && typeof r === "object" ? r as Record<string, unknown> : { __scalar: r }));
+  } catch {
+    return undefined;
+  }
+};
+
 export const executeQueryUnitWithTrace = (
   db: SQLiteDatabase,
   schema: SchemaSnapshot,
@@ -7167,6 +7514,21 @@ export const executeQueryUnitWithTrace = (
                 withModuleAliases: mutation.withModuleAliases ?? outer.withModuleAliases,
               },
             } as Statement;
+          } else if (bodyExpr.kind === "for_expr") {
+            // Nested FOR-INSERT written as `FOR a … FOR b … INSERT` or
+            // `FOR a … UNION (FOR b … UNION (INSERT …))` — both parse as a
+            // top-level FOR whose body is a (select_expr-wrapped) `for_expr`
+            // chain ending in an `INSERT`. Rebuild that chain as nested FOR
+            // statements so the FOR-INSERT expander handles every level.
+            const nestedForBody = forExprChainToForStatement(bodyExpr, ast.pos);
+            if (nestedForBody) {
+              const mergedWith = [...(ast.with ?? []), ...innerWith];
+              expanded[stmtIdx] = {
+                ...ast,
+                with: mergedWith.length > 0 ? mergedWith : undefined,
+                body: nestedForBody,
+              } as Statement;
+            }
           }
         }
       }
@@ -7181,80 +7543,20 @@ export const executeQueryUnitWithTrace = (
         expanded[stmtIdx] = rawUnitAst;
       }
       let ast = rawUnitAst;
-      if (rawUnitAst.kind === "for" && rawUnitAst.body.kind === "insert") {
-        const forAst = rawUnitAst;
-        const forBody = rawUnitAst.body;
-        // AST-level desugar of `FOR x IN <iter> UNION (INSERT T { … })`:
-        // when the iterator yields a flat set of scalar values we can emit
-        // one cleanly-lowered INSERT per value with `binding_ref(x)` in the
-        // body values substituted by the corresponding literal.
-        //
-        // The raw set-literal case is handled inline (no schema/db touch
-        // needed); richer atom-shaped iterators (concat-of-set-literals,
-        // function calls, paren-wrapped expressions, …) get evaluated via
-        // `evaluateForIteratorValues`, which already knows how to lower
-        // those shapes through the IR/SQL pipeline.
-        const sqlIteratorValues = (): unknown[] | undefined => {
-          // Iterators referencing the FOR's WITH bindings (`raw_data := …,
-          // FOR item IN json_array_unpack(raw_data)`) — evaluate the set via
-          // a one-off SQL SELECT with those bindings in scope.
-          const stmtAst = {
-            kind: "select_expr",
-            expr: forAst.iteratorExpr,
-            with: forAst.with,
-            withModule: forAst.withModule,
-            pos: forAst.pos,
-          } as unknown as Statement;
-          // captureAll: an iterator the SQL stage can't lower simply isn't
-          // desugarable here.
-          const attempt = tryResult(() => {
-            const compiled = compilerService.compile(schema, stmtAst, { globals: context.globals, target: runtimeTarget });
-            if (compiled.sql.loweringMode !== "single_statement" || compiled.sql.sql.length === 0) return undefined;
-            return runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
-          }, { captureAll: true });
-          if (!attempt.ok || attempt.value === undefined) return undefined;
-          const rows = attempt.value.map((row) =>
-            row !== null && typeof row === "object" ? JSON.stringify(row) : row);
-          return rows.every((row) => row === null || isScalarValue(row)) ? rows : undefined;
-        };
-        const iterValues: unknown[] | undefined = forAst.iteratorExpr.kind === "set_literal"
-          ? forAst.iteratorExpr.values
-          : (tryEvaluateScalarIteratorValues(forAst.iteratorExpr, schema, db, context) ?? sqlIteratorValues());
-        if (iterValues !== undefined) {
-          const effectiveValues: (ScalarValue | null)[] = iterValues.length === 0 && forAst.optional
-            ? [null]
-            : (iterValues as (ScalarValue | null)[]);
-          const children: InsertStatement[] = [];
-          for (const value of effectiveValues) {
-            const insertValues: Record<string, InsertValue> = {};
-            for (const [key, v] of Object.entries(forBody.values)) {
-              if (typeof v === "object" && v !== null && "kind" in v
-                && (v as { kind?: unknown }).kind === "binding_ref"
-                && (v as { name?: unknown }).name === forAst.variable) {
-                insertValues[key] = value as InsertValue;
-              } else {
-                insertValues[key] = v;
-              }
-            }
-            const forStatementWith = ((forAst as { with?: WithBinding[] }).with ?? [])
-              .filter((binding) => binding.name !== forAst.variable);
-            // The variable binding precedes the body's own bindings — they may
-            // reference it, and ast_to_ir resolves bindings in declaration
-            // order.
-            children.push({
-              ...forBody,
-              with: value !== null && isScalarValue(value)
-                ? [
-                    ...forStatementWith,
-                    { name: forAst.variable, value: { kind: "literal", value } },
-                    ...(forBody.with ?? []).filter((binding) => binding.name !== forAst.variable),
-                  ]
-                : (forStatementWith.length > 0
-                    ? [...forStatementWith, ...(forBody.with ?? [])]
-                    : forBody.with),
-              values: insertValues,
-            });
-          }
+      if (rawUnitAst.kind === "for"
+        && (rawUnitAst.body.kind === "insert" || rawUnitAst.body.kind === "for")) {
+        // Desugar `FOR v IN <iter> ( … INSERT … )` — including nested FORs and
+        // object-set iterators — into one cleanly-lowered INSERT per element of
+        // the (cartesian) iteration. Each loop variable is bound as a WITH
+        // literal / its read fields substituted, so the body resolves through
+        // the normal IR/SQL pipeline.
+        const children = expandForInsertStatements(rawUnitAst, schema, db, context);
+        if (children !== undefined) {
+          // Tag every child of this one FOR-INSERT so the per-statement traces
+          // can be merged back into the single set the FOR expression yields
+          // (`FOR … INSERT …` returns the set of all inserted objects).
+          const groupId = forInsertGroupCounter++;
+          for (const child of children) (child as { __forGroup?: number }).__forGroup = groupId;
           expanded.splice(stmtIdx, 1, ...children);
           stmtIdx -= 1; // re-enter the new first child on the next loop step
           continue;
@@ -7393,9 +7695,42 @@ export const executeQueryUnitWithTrace = (
       });
     }
 
+    // Collapse the per-INSERT traces produced from one FOR-INSERT into a single
+    // trace whose result is the set of every inserted object — that's what the
+    // `FOR … INSERT …` expression returns.
+    const mergedTraces: QueryExecutionTrace[] = [];
+    for (let i = 0; i < traces.length; i += 1) {
+      const groupId = (traces[i].ast as { __forGroup?: number }).__forGroup;
+      if (groupId === undefined) {
+        mergedTraces.push(traces[i]);
+        continue;
+      }
+      const groupRows: unknown[] = [];
+      let changes = 0;
+      let j = i;
+      // UNLESS CONFLICT inserts have value-dependent results (conflict → empty
+      // / ELSE branch) that this engine doesn't yet fully detect cross-type;
+      // don't aggregate those — keep the legacy single-trace result so their
+      // observable behaviour is unchanged.
+      let hasConflict = false;
+      for (; j < traces.length && (traces[j].ast as { __forGroup?: number }).__forGroup === groupId; j += 1) {
+        const r = traces[j].result as { rows?: unknown[]; changes?: number };
+        if ((traces[j].ast as { conflict?: unknown }).conflict !== undefined) hasConflict = true;
+        if (Array.isArray(r.rows)) groupRows.push(...r.rows);
+        changes += r.changes ?? 0;
+      }
+      mergedTraces.push(hasConflict
+        ? traces[j - 1]
+        : {
+            ...traces[j - 1],
+            result: { kind: "insert", changes, rows: groupRows },
+          });
+      i = j - 1;
+    }
+
     return {
-      traces,
-      result: traces.length > 0 ? traces[traces.length - 1].result : { kind: "insert", changes: 0 },
+      traces: mergedTraces,
+      result: mergedTraces.length > 0 ? mergedTraces[mergedTraces.length - 1].result : { kind: "insert", changes: 0 },
     };
   } catch (err) {
     throw asAppError(decorateErrorWithUnsupportedTag(err, script));
@@ -7874,13 +8209,24 @@ const executeForLoop = (
   }
 
   {
+    // A nested-FOR body that reaches here (rather than the INSERT-expansion
+    // path) isn't a SELECT-producing body this runtime fallback can bind.
+    if (body.kind === "for") {
+      throw new AppError(
+        "E_UNSUPPORTED",
+        "FOR requires SQL lowering; runtime fallback disabled",
+        ast.pos.line,
+        ast.pos.column,
+      );
+    }
+    const selectBody = body;
     let iteratorValues = evaluateForIteratorValues(iteratorExpr, schema, db, context);
     if (ast.optional && iteratorValues.length === 0) {
       iteratorValues = [null];
     }
     const allRows: Record<string, unknown>[] = [];
     for (const value of iteratorValues) {
-      const selectAst = bindSelectAstVariable(body, ast.variable, value);
+      const selectAst = bindSelectAstVariable(selectBody, ast.variable, value);
 
       const compiled = compilerService.compile(schema, selectAst, { overlays, globals: context.globals, target: runtimeTarget });
       const ir = compiled.ir as SelectIR;
@@ -12460,6 +12806,42 @@ function declaredScalarTypeName(field: FieldDef): string {
   return field.targetTypeName ?? field.enumTypeName ?? STD_SCALAR_NAME_BY_TYPE[field.type] ?? `std::${field.type}`;
 }
 
+// Names of standard-library scalar/object types that, when written bare in a
+// cast (`<datetime>`, `<Object>`), live in the `std` module. Used to qualify
+// the cast target so it can be compared to a declared pointer type.
+const STD_CAST_TYPE_NAMES = new Set([
+  "str", "int16", "int32", "int64", "float32", "float64", "bool", "uuid",
+  "datetime", "duration", "json", "bytes", "decimal", "bigint", "Object",
+  "BaseObject", "FreeObject", "cal::local_date", "cal::local_time",
+  "cal::local_datetime", "cal::relative_duration", "cal::date_duration",
+]);
+
+// True when `name` resolves to a registered expression alias of any flavor
+// (schema alias, runtime typed alias, or runtime expr alias) rather than an
+// object type. Used to reject `INSERT <alias>` (test_edgeql_insert_alias).
+function isExpressionAliasName(ctx: AstPreValidationCtx, name: string): boolean {
+  const qualified = qualifyAstTypeName(name, ctx.module);
+  const bare = name.includes("::") ? name.slice(name.lastIndexOf("::") + 2) : name;
+  if (ctx.schema.getAlias(qualified) || ctx.schema.getAlias(name)) return true;
+  const typed = getRuntimeTypedAliasMap(ctx.schema);
+  if (typed.has(qualified) || typed.has(name) || typed.has(bare)) return true;
+  const expr = getRuntimeExprAliasMap(ctx.schema);
+  if (expr.has(qualified) || expr.has(name) || expr.has(bare)) return true;
+  return false;
+}
+
+// Best-effort qualification of a cast target type name written in an INSERT
+// shape value (`<datetime>{}`, `<Object>{}`). Returns a module-qualified name
+// when possible so it can be reported and compared against a declared type.
+function qualifyCastTypeName(ctx: AstPreValidationCtx, castType: string): string {
+  if (castType.includes("::")) return castType;
+  if (STD_CAST_TYPE_NAMES.has(castType)) return `std::${castType}`;
+  // A user-defined object type referenced bare in the cast.
+  const obj = lookupAstObjectType(ctx, castType);
+  if (obj) return qualifiedTypeName(obj);
+  return `std::${castType}`;
+}
+
 // Generic recursive walk over every object node carrying a string `kind`.
 function walkAstForValidation(node: unknown, visit: (n: Record<string, unknown> & { kind: string }) => void, seen: Set<unknown> = new Set()): void {
   if (!node || typeof node !== "object") return;
@@ -12910,10 +13292,458 @@ function preValidateStatementAst(schema: SchemaSnapshot, statement: Statement): 
         }
         break;
       }
+      case "insert": {
+        const typeName = node.typeName as string | undefined;
+        const values = (node.values as Record<string, unknown> | undefined) ?? undefined;
+        if (typeName && values) {
+          checkInsertStatementAst(ctx, typeName, values);
+        }
+        break;
+      }
+      case "tuple": {
+        checkCorrelatedDmlInTuple(ctx, (node.values as unknown[]) ?? []);
+        break;
+      }
       default:
         break;
     }
   });
+}
+
+// Standard-library modules whose object types cannot be the subject of an
+// INSERT (test_edgeql_insert_fail_07: `INSERT schema::Migration {…}`).
+const INSERT_STD_MODULES = new Set(["std", "schema", "sys", "cfg", "ext"]);
+
+// Static checks for an INSERT statement's subject type and shape values that
+// don't depend on row data: assigning to computed/server-generated pointers,
+// inserting std-lib types, and assigning a provably-multi expression to a
+// single link. (All additive — fall through silently when unknown.)
+function checkInsertStatementAst(
+  ctx: AstPreValidationCtx,
+  typeName: string,
+  values: Record<string, unknown>,
+): void {
+  // `INSERT schema::Migration {…}` — std-lib types are not insertable.
+  const qualified = qualifyAstTypeName(typeName, ctx.module);
+  const moduleName = qualified.includes("::") ? qualified.slice(0, qualified.lastIndexOf("::")) : ctx.module;
+  const leafName = qualified.slice(qualified.lastIndexOf("::") + 2);
+  // `std::FreeObject` has its own diagnostic (test_edgeql_insert_free_obj);
+  // leave it to the downstream check rather than the generic std-lib message.
+  if (INSERT_STD_MODULES.has(moduleName) && leafName !== "FreeObject") {
+    preValidationFail("insert standard library type");
+  }
+
+  // `INSERT Foo` where `Foo` is an expression alias, not an object type
+  // (test_edgeql_insert_alias). Aliases of every flavor (schema-registered,
+  // runtime typed, runtime expr) are rejected — you can't insert into a view.
+  if (!lookupAstObjectType(ctx, typeName) && isExpressionAliasName(ctx, typeName)) {
+    preValidationFail(`cannot insert into expression alias '${qualified}'`);
+  }
+
+  const typeDef = lookupAstObjectType(ctx, typeName);
+
+  for (const field of Object.keys(values)) {
+    // `id` is server-generated; assigning it requires the
+    // `allow_user_specified_id` config (test_edgeql_insert_explicit_id_00).
+    if (field === "id") {
+      preValidationFail("cannot assign to property 'id'");
+    }
+    // `__type__` is a system link that names the object's type and can't be
+    // written (test_edgeql_insert_specified_type).
+    if (field === "__type__") {
+      preValidationFail("cannot assign to link '__type__'");
+    }
+  }
+
+  if (!typeDef) return;
+
+  for (const [field, value] of Object.entries(values)) {
+    // `name := .name` — a partial path (`.foo`) directly in an INSERT shape
+    // value has no enclosing path scope to resolve against
+    // (test_edgeql_insert_fail_06).
+    if (insertValueHasUnscopedPartialPath(value)) {
+      preValidationFail("could not resolve partial path");
+    }
+
+    // Assigning a computed pointer is prohibited — computeds derive their
+    // value from an expression (test_edgeql_insert_fail_03).
+    const computed = (typeDef.computeds ?? []).find((c) => c.name === field);
+    if (computed) {
+      preValidationFail(
+        `modification of computed property '${field}' of object type '${qualifiedTypeName(typeDef)}' is prohibited`,
+      );
+    }
+
+    // A provably-multi expression assigned to a `single` link.
+    const link = (typeDef.links ?? []).find((l) => l.name === field);
+    if (link && !link.multi && insertValueProvablyMulti(ctx, value)) {
+      preValidationFail(
+        `possibly more than one element returned by an expression for a link '${field}' declared as 'single'`,
+      );
+    }
+
+    // An explicitly-cast empty set (`<datetime>{}`, `<Object>{}`) whose cast
+    // target type doesn't match the declared pointer type
+    // (test_edgeql_insert_empty_02/05). Resolve the pointer via inheritance so
+    // derived types are covered.
+    checkEmptyCastTargetType(ctx, typeDef, field, value);
+
+    // Empty/array-typed scalar assignments to a scalar property
+    // (test_edgeql_insert_empty_array_01/02/03): a bare `[]` has indeterminate
+    // type, and an array/element type that disagrees with the declared
+    // property type is an invalid target.
+    checkArrayValuedScalarTarget(ctx, typeDef, field, value);
+
+    // A link value that references the (non-detached) extent of the type being
+    // inserted — `INSERT SelfRef { ref := SelfRef }` and SELECT/WITH variants
+    // (test_edgeql_insert_selfref_01/02/03). DETACHED breaks the correlation
+    // and is permitted (selfref_04).
+    if (link && insertValueIsSelfReference(ctx, value, qualifiedTypeName(typeDef))) {
+      preValidationFail("self-referencing INSERTs are not allowed");
+    }
+  }
+}
+
+// True when `value` references the bare extent of `selfTypeName` (the type
+// being inserted) without DETACHED — directly (`SelfRef`), via an inline
+// SELECT (`SELECT SelfRef …`), or via a WITH binding (`WITH X := SelfRef
+// SELECT X …`). FILTER/ORDER/LIMIT clauses don't matter: any live reference
+// to the same extent during its own INSERT is disallowed.
+function insertValueIsSelfReference(ctx: AstPreValidationCtx, value: unknown, selfTypeName: string): boolean {
+  if (!value || typeof value !== "object") return false;
+  const node = value as Record<string, unknown> & { kind?: string };
+
+  // Bare extent reference: `ref := SelfRef`.
+  if (node.kind === "binding_ref" && typeof node.name === "string" && !ctx.bindings.has(node.name)) {
+    const def = lookupAstObjectType(ctx, node.name);
+    return def !== undefined && qualifiedTypeName(def) === selfTypeName;
+  }
+
+  // Inline SELECT: `(SELECT SelfRef …)` or `(WITH X := SelfRef SELECT X …)`.
+  if (node.kind === "select" && typeof node.typeName === "string") {
+    if (node.detached === true) return false;
+    const clauses = (node.clauses as Record<string, unknown> | undefined) ?? {};
+    const withBindings = (clauses._withBindings as Array<{ name: string; value: unknown }> | undefined) ?? [];
+    // Resolve the select subject through any local WITH binding.
+    let subject = node.typeName as string;
+    for (const b of withBindings) {
+      if (b.name === subject) {
+        const bv = b.value as Record<string, unknown> & { kind?: string };
+        if (bv?.kind === "binding_ref" && typeof bv.name === "string") subject = bv.name;
+        else if (bv?.kind === "select" && typeof bv.typeName === "string") subject = bv.typeName as string;
+        break;
+      }
+    }
+    const def = lookupAstObjectType(ctx, subject);
+    return def !== undefined && qualifiedTypeName(def) === selfTypeName;
+  }
+
+  return false;
+}
+
+// Type descriptor inferred for an INSERT-shape scalar value expression.
+type InferredAssignType =
+  | { kind: "indeterminate" }   // bare `[]` — no element type
+  | { kind: "array"; element: string }  // `array<element>`
+  | { kind: "scalar"; name: string }    // a plain scalar
+  | undefined;                  // not inferable / not relevant
+
+// Std scalar name for a literal node based on its runtime JS value.
+function literalScalarName(node: Record<string, unknown>): string | undefined {
+  const v = node.value;
+  if (typeof v === "string") return "std::str";
+  if (typeof v === "boolean") return "std::bool";
+  if (typeof v === "number") {
+    return node.numericKind === "float" ? "std::float64" : "std::int64";
+  }
+  return undefined;
+}
+
+// Infer the type produced by a (subset of) INSERT-shape value expressions:
+// empty/non-empty array literals, `++` concatenations of arrays, and
+// `array_unpack(...)`. Returns undefined when not one of these forms.
+function inferArrayValuedType(value: unknown, depth = 0): InferredAssignType {
+  if (!value || typeof value !== "object" || depth > 8) return undefined;
+  const node = value as Record<string, unknown> & { kind?: string };
+  switch (node.kind) {
+    case "expr":
+      return inferArrayValuedType(node.expr, depth + 1);
+    case "array_literal":
+    case "array_literal_expr": {
+      const els = (node.values as unknown[] | undefined) ?? [];
+      if (els.length === 0) return { kind: "indeterminate" };
+      const elType = inferArrayElementType(els[0], depth + 1);
+      return elType ? { kind: "array", element: elType } : undefined;
+    }
+    case "concat": {
+      // `A ++ B` of arrays: element type comes from a non-empty operand.
+      const parts = (node.parts as unknown[] | undefined) ?? [];
+      let element: string | undefined;
+      let sawArray = false;
+      for (const part of parts) {
+        const inferred = inferArrayValuedType(part, depth + 1);
+        if (!inferred) return undefined;
+        if (inferred.kind === "array") {
+          sawArray = true;
+          element = element ?? inferred.element;
+        } else if (inferred.kind === "indeterminate") {
+          sawArray = true;
+        } else {
+          return undefined;
+        }
+      }
+      if (!sawArray) return undefined;
+      return element ? { kind: "array", element } : { kind: "indeterminate" };
+    }
+    case "function_call": {
+      const call = (node.call ?? node) as { name?: string; args?: unknown[] };
+      if (call.name === "array_unpack" && (call.args?.length ?? 0) === 1) {
+        const inner = inferArrayValuedType(call.args?.[0], depth + 1);
+        if (inner?.kind === "array") return { kind: "scalar", name: inner.element };
+        if (inner?.kind === "indeterminate") return { kind: "indeterminate" };
+      }
+      return undefined;
+    }
+    default:
+      return undefined;
+  }
+}
+
+// Element scalar name of an array literal's first element.
+function inferArrayElementType(el: unknown, depth: number): string | undefined {
+  if (!el || typeof el !== "object") return undefined;
+  const node = el as Record<string, unknown> & { kind?: string };
+  if (node.kind === "literal") return literalScalarName(node);
+  if (node.kind === "expr") return inferArrayElementType(node.expr, depth + 1);
+  return undefined;
+}
+
+// Reject array-valued or indeterminate assignments to a scalar property.
+function checkArrayValuedScalarTarget(
+  ctx: AstPreValidationCtx,
+  typeDef: TypeDef,
+  field: string,
+  value: unknown,
+): void {
+  const inferred = inferArrayValuedType(value);
+  if (!inferred) return;
+
+  const pointer = findAstPointer(ctx, typeDef, field);
+  // Only meaningful for scalar properties (links can't take arrays/scalars).
+  if (!pointer || pointer.kind !== "field") return;
+  // Collection-typed properties (declared `array<...>`) legitimately take
+  // array values — leave those to downstream handling.
+  if (pointer.field.collection) return;
+
+  if (inferred.kind === "indeterminate") {
+    preValidationFail("expression returns value of indeterminate type");
+  }
+
+  const declared = declaredScalarTypeName(pointer.field);
+  const actual = inferred.kind === "array" ? `array<${inferred.element}>` : inferred.name;
+  if (actual !== declared) {
+    preValidationFail(
+      `invalid target for property '${field}' of object type ` +
+      `'${qualifiedTypeName(typeDef)}': '${actual}' (expecting '${declared}')`,
+    );
+  }
+}
+
+// Reject an `<T>{}` assignment whose cast target `T` is incompatible with the
+// declared property/link type. Empty sets without a cast are fine (they unify
+// with any type); only an explicit, mismatched cast is an error.
+function checkEmptyCastTargetType(
+  ctx: AstPreValidationCtx,
+  typeDef: TypeDef,
+  field: string,
+  value: unknown,
+): void {
+  if (!value || typeof value !== "object") return;
+  const node = value as Record<string, unknown> & { kind?: string };
+  if (node.kind !== "set" || typeof node.castType !== "string") return;
+  if (((node.values as unknown[] | undefined)?.length ?? 0) !== 0) return;
+
+  const pointer = findAstPointer(ctx, typeDef, field);
+  if (!pointer) return;
+
+  const castName = qualifyCastTypeName(ctx, node.castType);
+
+  if (pointer.kind === "field") {
+    const declared = declaredScalarTypeName(pointer.field);
+    if (castName !== declared) {
+      preValidationFail(
+        `invalid target for property '${field}' of object type ` +
+        `'${qualifiedTypeName(typeDef)}': '${castName}' (expecting '${declared}')`,
+      );
+    }
+  } else {
+    // Link: the cast target must be assignable to the link's declared target.
+    const declared = qualifyAstTypeName(pointer.link.targetType, ctx.module);
+    if (castName === declared) return;
+    const castObj = lookupAstObjectType(ctx, node.castType);
+    const declaredObj = ctx.schema.getType(declared);
+    const compatible =
+      castObj && declaredObj &&
+      ctx.schema.listConcreteTypesAssignableTo(declared)
+        .some((c) => qualifiedTypeName(c) === qualifiedTypeName(castObj));
+    if (!compatible) {
+      preValidationFail(
+        `invalid target for link '${field}' of object type ` +
+        `'${qualifiedTypeName(typeDef)}': '${castName}' (expecting '${declared}')`,
+      );
+    }
+  }
+}
+
+// A SELECT tuple `(S, (INSERT … ref-to-S))` correlates its elements: a DML
+// statement in one element may not reference (or insert into) a set that also
+// appears as a bare extent in a sibling element. Detect that and reject with
+// EdgeQL's "cannot reference correlated set" wording
+// (test_edgeql_insert_correlated_bad_01/02/03, for_bad_*).
+function checkCorrelatedDmlInTuple(ctx: AstPreValidationCtx, elements: unknown[]): void {
+  // Bare object-type extents referenced as tuple elements (`Subordinate`,
+  // `Person` — a whole-set SELECT with no narrowing clauses).
+  const correlated = new Set<string>();
+  for (const el of elements) {
+    const name = bareObjectExtentName(ctx, el);
+    if (name) correlated.add(name);
+  }
+  if (correlated.size === 0) return;
+
+  for (const el of elements) {
+    const dml = unwrapToInsert(el);
+    if (!dml) continue;
+    const referenced = insertReferencesCorrelatedSet(ctx, dml.insert, dml.forIterators, correlated);
+    if (referenced) {
+      preValidationFail(`cannot reference correlated set '${referenced}' here`);
+    }
+  }
+}
+
+// Resolve a tuple element that is a plain reference to an object type's full
+// extent (no FILTER/LIMIT/OFFSET/ORDER), returning the type name.
+function bareObjectExtentName(ctx: AstPreValidationCtx, value: unknown): string | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const node = value as Record<string, unknown> & { kind?: string };
+  if (node.kind === "select" && typeof node.typeName === "string") {
+    const clauses = (node.clauses as Record<string, unknown> | undefined) ?? {};
+    if (clauses.filter !== undefined || clauses.limit !== undefined || clauses.offset !== undefined || clauses.order !== undefined) {
+      return undefined;
+    }
+    const qn = qualifyAstTypeName(node.typeName as string, ctx.module);
+    if (lookupAstObjectType(ctx, node.typeName as string)) return qn.slice(qn.lastIndexOf("::") + 2);
+  }
+  if (node.kind === "binding_ref" && typeof node.name === "string" && !ctx.bindings.has(node.name)) {
+    if (lookupAstObjectType(ctx, node.name as string)) return node.name as string;
+  }
+  return undefined;
+}
+
+// Peel `mutation_expr` / `select` / `for_expr` wrappers off a tuple element to
+// reach an INSERT, recording any FOR iterators encountered en route (their
+// iterated sets count as correlated references too).
+function unwrapToInsert(value: unknown, iterators: unknown[] = [], depth = 0): { insert: Record<string, unknown>; forIterators: unknown[] } | undefined {
+  if (!value || typeof value !== "object" || depth > 8) return undefined;
+  const node = value as Record<string, unknown> & { kind?: string };
+  if (node.kind === "insert") return { insert: node, forIterators: iterators };
+  if (node.kind === "mutation_expr") return unwrapToInsert(node.statement, iterators, depth + 1);
+  if (node.kind === "select" || node.kind === "select_expr" || node.kind === "select_expr_subquery" || node.kind === "subquery_expr") {
+    return unwrapToInsert(node.expr ?? node.statement, iterators, depth + 1);
+  }
+  if (node.kind === "for_expr" || node.kind === "for") {
+    return unwrapToInsert(node.body, [...iterators, node.iterator], depth + 1);
+  }
+  return undefined;
+}
+
+// Does an INSERT (possibly within FOR scopes) reference a correlated set name?
+function insertReferencesCorrelatedSet(
+  ctx: AstPreValidationCtx,
+  insert: Record<string, unknown>,
+  forIterators: unknown[],
+  correlated: Set<string>,
+): string | undefined {
+  // Inserting into a type that is itself a correlated extent (bad_03).
+  const subject = insert.typeName as string | undefined;
+  if (subject && correlated.has(subject)) return subject;
+
+  // A FOR loop iterating over a correlated extent (for_bad_*).
+  for (const it of forIterators) {
+    const name = bareObjectExtentName(ctx, it);
+    if (name && correlated.has(name)) return name;
+  }
+
+  // A shape value referencing the correlated set by name (bad_01/02).
+  let hit: string | undefined;
+  walkAstForValidation(insert.values, (n) => {
+    if (hit) return;
+    if (n.kind === "binding_ref" && typeof n.name === "string" && correlated.has(n.name) && !ctx.bindings.has(n.name)) {
+      hit = n.name;
+    }
+  });
+  return hit;
+}
+
+// True when an INSERT shape value references a partial path (`.foo`, an AST
+// `current_item`) in its own scope, i.e. not nested inside a sub-query that
+// would supply the path's source. Such a path has nothing to resolve against.
+function insertValueHasUnscopedPartialPath(value: unknown, depth = 0): boolean {
+  if (!value || typeof value !== "object" || depth > 12) return false;
+  if (Array.isArray(value)) {
+    return value.some((item) => insertValueHasUnscopedPartialPath(item, depth + 1));
+  }
+  const node = value as Record<string, unknown> & { kind?: string };
+  if (node.kind === "current_item") return true;
+  // Don't descend into nested query scopes — a partial path inside them
+  // resolves against that scope's subject, not the INSERT shape.
+  if (node.kind === "select" || node.kind === "select_expr" || node.kind === "select_expr_subquery"
+      || node.kind === "subquery_expr" || node.kind === "subquery_statement"
+      || node.kind === "for" || node.kind === "insert" || node.kind === "update" || node.kind === "delete") {
+    return false;
+  }
+  return Object.values(node).some((v) => insertValueHasUnscopedPartialPath(v, depth + 1));
+}
+
+// True when an INSERT shape value is provably a multi set (more than one
+// element). Conservative: only forms we can prove multi return true; anything
+// uncertain returns false so well-formed single assignments aren't rejected.
+function insertValueProvablyMulti(ctx: AstPreValidationCtx, value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  const node = value as Record<string, unknown> & { kind?: string };
+
+  // A bare reference to an object type (`sub := Subordinate`) is a multi set
+  // unless the name is a WITH/FOR-bound (necessarily single-or-known) variable.
+  if (node.kind === "binding_ref") {
+    const name = node.name as string;
+    if (ctx.bindings.has(name)) return false;
+    return lookupAstObjectType(ctx, name) !== undefined;
+  }
+
+  // `subject := (SELECT T FILTER …)` — a filtered select over an object type
+  // is multi unless it is constrained to at most one element (a `LIMIT 1`, or
+  // an equality filter on an exclusive single property).
+  if (node.kind === "select" && typeof node.typeName === "string") {
+    const clauses = (node.clauses as Record<string, unknown> | undefined) ?? {};
+    if (clauses.filter === undefined) return false; // unfiltered: leave to runtime
+    if (clauses.limit !== undefined) return false; // LIMIT may pin to one
+    return !selectFilterGuaranteesSingle(ctx, node.typeName as string, clauses.filter);
+  }
+
+  return false;
+}
+
+// Does a SELECT's FILTER guarantee at most one row? True only for an equality
+// predicate on an exclusive-constrained single property of the subject type.
+function selectFilterGuaranteesSingle(ctx: AstPreValidationCtx, typeName: string, filter: unknown): boolean {
+  const pred = filter as Record<string, unknown> & { kind?: string };
+  if (!pred || pred.kind !== "predicate" || pred.op !== "=") return false;
+  const target = pred.target as Record<string, unknown> & { kind?: string };
+  if (!target || target.kind !== "field" || typeof target.field !== "string") return false;
+  const typeDef = lookupAstObjectType(ctx, typeName);
+  if (!typeDef) return false;
+  const fieldDef = (typeDef.fields ?? []).find((f) => f.name === target.field && !f.isLinkColumn);
+  if (!fieldDef || fieldDef.multi) return false;
+  return (fieldDef.constraints ?? []).some((c) => c.name === "std::exclusive" || c.name === "exclusive");
 }
 
 function bindingSelectShape(binding: WithBindingValue | undefined): ShapeElement[] | undefined {
