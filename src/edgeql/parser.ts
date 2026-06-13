@@ -6411,6 +6411,18 @@ class Parser {
       return { field: `@${prop}`, value: this.parseInsertAssignmentValue() };
     }
     const field = this.expectName("Expected field name").lexeme;
+    // `INSERT InsertTest { subordinates: Subordinate { … } }` — the typed-shape
+    // colon form (`link: Type { … }`) is valid in SELECT but not in a mutation
+    // shape; Gel reports the offending type token (test_edgeql_insert_nested_07).
+    if (this.peek().kind === "colon") {
+      this.consume();
+      const offending = this.peek();
+      throw new AppError(
+        "E_SEMANTIC",
+        `Unexpected '${offending.lexeme}'`,
+        ...this.posPair(offending),
+      );
+    }
     // `INSERT Person { name }` — a bare shape field with no value. Mutations
     // (INSERT/UPDATE) require every shape element to assign a value with `:=`
     // (test_edgeql_insert_fail_04).

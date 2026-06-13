@@ -807,9 +807,25 @@ const shapeRequestsLinkProperty = (shape: EdgeQLShapeElement[]): boolean => {
   return false;
 };
 
+// The Gel restriction this guards (`(select User).deck { linkprop := @count }`)
+// applies when the projection base traverses a LINK out of a subselect — the
+// implicitly-referenced object set would be interpreted differently at the
+// link path and at the shape. A bare object subselect base
+// (`(SELECT Subordinate LIMIT 1) { @comment := … }`) is the canonical way to
+// assign a link property to a selected target and is allowed.
+const baseTraversesLinkOverSubSelect = (expr: FreeObjectExpr | undefined): boolean => {
+  if (!expr || typeof expr !== "object") return false;
+  if (expr.kind === "field_access") {
+    return containsSubSelect(expr.expr) || baseTraversesLinkOverSubSelect(expr.expr);
+  }
+  if (expr.kind === "select_expr_subquery") return baseTraversesLinkOverSubSelect(expr.expr as FreeObjectExpr);
+  if (expr.kind === "shape_projection") return baseTraversesLinkOverSubSelect((expr as { expr: FreeObjectExpr }).expr);
+  return false;
+};
+
 const validateShapeProjectionLinkPropContext = (expr: Extract<FreeObjectExpr, { kind: "shape_projection" }>): void => {
   if (!shapeRequestsLinkProperty(expr.shape)) return;
-  if (containsSubSelect(expr.expr)) {
+  if (baseTraversesLinkOverSubSelect(expr.expr)) {
     throw new AppError(
       "E_SEMANTIC",
       "implicit reference to an object changes the interpretation of it elsewhere in the query",
