@@ -14188,7 +14188,28 @@ const writeLinkTableRows = (
 const resolveDefaultLinkTargets = (
   db: SQLiteDatabase,
   spec: InsertLinkDefaultIR,
+  schema?: SchemaSnapshot,
+  context?: SecurityContext,
 ): Array<{ id: string; properties: Record<string, ScalarValue> }> => {
+  // INSERT-valued link default (`default := (INSERT T { … })`): run the nested
+  // insert (which itself fills any further chained defaults) and link the row.
+  if (spec.insertExprText && schema && context) {
+    const ast = parseEdgeQL(spec.insertExprText);
+    let node: unknown = Array.isArray(ast) ? ast[0] : ast;
+    // A parenthesized `(INSERT …)` parses as select_expr → mutation_expr →
+    // statement; unwrap those wrappers down to the bare insert statement.
+    while (node && typeof node === "object") {
+      const kind = (node as { kind?: string }).kind;
+      if (kind === "select_expr") node = (node as { expr?: unknown }).expr;
+      else if (kind === "mutation_expr") node = (node as { statement?: unknown }).statement;
+      else break;
+    }
+    if (node && (node as { kind?: string }).kind === "insert") {
+      const ids = executeNestedInsert(db, schema, node as Extract<InsertValue, { kind: "insert" }>, context);
+      return ids.map((id) => ({ id, properties: {} }));
+    }
+    return [];
+  }
   if (spec.defaultTargetValues.length > 0 && spec.lookupColumn) {
     const results: Array<{ id: string; properties: Record<string, ScalarValue> }> = [];
     for (const targetValue of spec.defaultTargetValues) {
@@ -14242,7 +14263,7 @@ const applyInsertLinkAssignments = (
   }
 
   for (const spec of ir.linkDefaults ?? []) {
-    const targets = resolveDefaultLinkTargets(db, spec);
+    const targets = resolveDefaultLinkTargets(db, spec, schema, context);
     if (targets.length === 0) continue;
 
     if (spec.storage === "table") {
