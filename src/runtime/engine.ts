@@ -667,6 +667,12 @@ const applyParsedFunctionDDL = (schema: SchemaSnapshot, ast: DDLStatement, defau
       namedOnly: param.namedOnly || undefined,
       setOf: param.setOf || undefined,
       default: defaultValue,
+      // Preserve the raw default text so the inliner can substitute
+      // non-scalar defaults (array/tuple literals) that don't reduce to a
+      // ScalarValue. Only retained when no scalar reduction was available.
+      defaultExpr: hasDefaultExpr && defaultValue === undefined
+        ? param.defaultExpr
+        : undefined,
     };
   });
   const bodyQuery = ast.functionDecl.body.query.trim();

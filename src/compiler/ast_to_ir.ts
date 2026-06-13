@@ -2828,6 +2828,16 @@ const tryBuildInlinedUDFBody = (
       argExpr = functionCallArgToFreeObjectExpr(namedArg);
     } else if (param.default !== undefined) {
       argExpr = { kind: "literal", value: param.default };
+    } else if (param.defaultExpr !== undefined) {
+      // Non-scalar default (array/tuple literal like `[9]` or `(9,)`): the
+      // scalar reducer couldn't turn it into a ScalarValue, so the raw text
+      // was preserved. Parse it as an EdgeQL expression and substitute the
+      // resulting AST exactly as if it had been written at the call site.
+      const parsedDefault = tryResult(() => parseEdgeQL(`SELECT ${param.defaultExpr}`));
+      if (!parsedDefault.ok || parsedDefault.value.kind !== "select_expr") return undefined;
+      const defaultBody = unwrapTrivialSelectWrapper(parsedDefault.value.expr);
+      if (!defaultBody) return undefined;
+      argExpr = defaultBody as FreeObjectExpr;
     } else {
       // OPTIONAL param without an explicit default: substitute the empty
       // set so the body's body-level set-union behaves correctly (e.g.
