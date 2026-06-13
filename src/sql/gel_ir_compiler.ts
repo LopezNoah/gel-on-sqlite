@@ -4419,11 +4419,7 @@ const compileScalarSelectSQLInner = (
       // of `json('true')`/`json('false')`). Without wrapping them with
       // `json(...)` inside `json_array(...)`, SQLite treats them as strings
       // and the tuple serialises to `["true", …]` instead of `[true, …]`.
-      const elementType = (element.val.typeref?.id ?? element.val.typeref?.nameHint ?? "").toLowerCase();
-      const isBoolType = elementType === "std::bool"
-        || elementType === "unknown:std::bool"
-        || elementType === "bool";
-      const wrapInJson = setValueIsJson(element.val) || isBoolType;
+      const wrapInJson = setValueIsJson(element.val) || setValueIsBool(element.val);
       values.push(wrapInJson ? `json(${valueRef})` : valueRef);
     }
     const valueExpr = tuple.named
@@ -4455,11 +4451,7 @@ const compileScalarSelectSQLInner = (
       const alias = `arr_${i}`;
       arrSources.push(`(${elementSql}) ${alias}`);
       const valueRef = `${alias}.${quoteIdent("value")}`;
-      const elementType = (element.typeref?.id ?? element.typeref?.nameHint ?? "").toLowerCase();
-      const isBoolType = elementType === "std::bool"
-        || elementType === "unknown:std::bool"
-        || elementType === "bool";
-      const wrapInJson = setValueIsJson(element) || isBoolType;
+      const wrapInJson = setValueIsJson(element) || setValueIsBool(element);
       arrValues.push(wrapInJson ? `json(${valueRef})` : valueRef);
     }
     return `SELECT json_array(${arrValues.join(", ")}) AS ${quoteIdent("value")} FROM ${arrSources.join(" CROSS JOIN ")}`;
@@ -8523,6 +8515,24 @@ const setValueIsJson = (set: Set): boolean => {
     || result.typeref.collection === "tuple"
     || result.typeref.collection === "array"
     || setYieldsTupleValues(result);
+};
+
+// Whether a set's value is a boolean. Booleans are stored as the TEXT output of
+// `json('true')`/`json('false')`; embedding them in `json_array`/`json_object`
+// needs a `json()` wrap or they nest as quoted strings (`"false"`). The element
+// typeref is often a bare `std::anyscalar` placeholder for a literal, so also
+// inspect the underlying expression kind / type name.
+const setValueIsBool = (set: Set): boolean => {
+  const typeName = (set.typeref?.id ?? set.typeref?.nameHint ?? "").toLowerCase();
+  if (typeName === "std::bool" || typeName === "unknown:std::bool" || typeName === "bool") return true;
+  const unwrapped = unwrapSelectExprSet(set);
+  const expr = unwrapped.result.expr;
+  if (expr.kind === "boolean_constant") return true;
+  if (expr.kind === "coalesce_expr") {
+    const coalesce = expr as CoalesceExpr;
+    return setValueIsBool(coalesce.left) || setValueIsBool(coalesce.right);
+  }
+  return false;
 };
 
 const pathIdKey = (set: Set): string => JSON.stringify(set.pathId);
