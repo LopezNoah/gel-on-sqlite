@@ -6100,6 +6100,13 @@ export const executeQuery = (
   // normal compile pipeline.
   const rewrittenQuery = injectRuntimeAliasBinding(schema, query);
   validateRestrictedLinkPropertyTokens(rewrittenQuery);
+  // A multi-statement string passed to the single-query entry point
+  // (`insert …; select (…) {…}`) runs as an implicit script returning the
+  // final statement's result — mirroring the protocol's query() semantics.
+  const scriptStatements = tryResult(() => parseEdgeQLScript(rewrittenQuery), { captureAll: true });
+  if (scriptStatements.ok && scriptStatements.value.length > 1) {
+    return executeScript(db, schema, rewrittenQuery, securityContext);
+  }
   const parsedQuery = parseEdgeQL(rewrittenQuery);
   // Reject user-DDL targeting read-only modules (std/schema/cfg/sys/...)
   // before any execution side-effects. Mirrors `validateScriptUserDDL` for
@@ -12968,6 +12975,65 @@ type LinkTargetAssignment = {
   properties: Record<string, ScalarValue>;
 };
 
+// Compile a link-value projection (`(<select-or-subselect>) { @prop := … }`,
+// possibly with non-literal/volatile linkprop bodies) as a standalone SELECT
+// and read each `@`-prefixed column off the resulting rows. This is the
+// fully-SQL resolution path for link values whose link properties can't be
+// resolved by the literal pattern-match in the caller. Returns undefined when
+// the projection doesn't compile to a single SELECT (so the caller can fall
+// back to its other handling).
+const resolveLinkValueViaSelectSQL = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  projection: { kind: "shape_projection"; expr: FreeObjectExpr; shape: ShapeElement[] },
+  context: SecurityContext,
+  ast: InsertStatement,
+): LinkTargetAssignment[] | undefined => {
+  const hasLinkPropShape = projection.shape.some(
+    (el) => el.kind === "computed" && el.name.startsWith("@"),
+  );
+  if (!hasLinkPropShape) return undefined;
+  // Drop nested INSERT/UPDATE/DELETE targets — those are written by the
+  // mutation machinery, not a read-only SELECT compile.
+  const containsMutation = (node: unknown): boolean => {
+    if (Array.isArray(node)) return node.some(containsMutation);
+    if (node === null || typeof node !== "object") return false;
+    const k = (node as { kind?: unknown }).kind;
+    if (k === "mutation_expr" || k === "insert" || k === "update" || k === "delete") return true;
+    return Object.values(node as object).some(containsMutation);
+  };
+  if (containsMutation(projection.expr)) return undefined;
+  const stmtAst = {
+    kind: "select_expr",
+    expr: projection,
+    with: ast.with,
+    withModule: ast.withModule,
+    withModuleAliases: ast.withModuleAliases,
+    pos: ast.pos,
+  } as unknown as Statement;
+  const attempt = tryResult(() => {
+    const compiled = getCompilerService().compile(schema, stmtAst, { globals: context.globals, target: resolvedRuntimeTarget(context, db) });
+    if (compiled.sql.loweringMode !== "single_statement" || compiled.sql.sql.length === 0) return undefined;
+    if (compiled.ir.kind !== "select" && compiled.ir.kind !== "select_expr") return undefined;
+    return runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql, { keepInternalId: true })
+      .filter((row): row is Record<string, unknown> => row !== null && typeof row === "object");
+  }, { captureAll: true });
+  if (!attempt.ok || attempt.value === undefined) return undefined;
+  return attempt.value
+    .map((row) => {
+      if (typeof row.id !== "string") return undefined;
+      const properties: Record<string, ScalarValue> = {};
+      for (const [key, raw] of Object.entries(row)) {
+        if (!key.startsWith("@")) continue;
+        const scalar = coerceUnknownToScalar(raw);
+        if (scalar === undefined) continue;
+        properties[key] = scalar;
+      }
+      return { id: row.id, properties };
+    })
+    .filter((entry): entry is LinkTargetAssignment => !!entry);
+};
+
 const resolveInsertTargets = (
   db: SQLiteDatabase,
   schema: SchemaSnapshot,
@@ -13133,10 +13199,31 @@ const resolveInsertTargets = (
           properties[el.name] = litVal;
         }
       }
+      // Linkprop bodies that aren't plain literals (`@comment :=
+      // <str>uuid_generate_v1mc()`, `@comment := array_join(['a'] ++ [], '')`)
+      // and link targets wrapped in further subselects (`(SELECT (SELECT Sub
+      // LIMIT 1) { @comment := … })`) can't be resolved by the literal/inner
+      // pattern-match above. Compile the whole projection as a SELECT and read
+      // the `@`-prefixed columns off the resulting rows — the canonical,
+      // fully-SQL path that handles arbitrary linkprop expressions per target.
+      const projectionRows = resolveLinkValueViaSelectSQL(db, schema, projection, context, ast);
+      if (projectionRows !== undefined) return projectionRows;
       if (Object.keys(properties).length > 0) {
         return targets.map((t) => ({ id: t.id, properties: { ...t.properties, ...properties } }));
       }
       return targets;
+    }
+    // A link value wrapped in `select_expr_subquery` — unwrap and resolve the
+    // inner expression (which may itself be a linkprop shape projection or a
+    // plain select).
+    if (inner.kind === "select_expr_subquery") {
+      const unwrapped = (inner as { expr: FreeObjectExpr }).expr;
+      if (unwrapped.kind === "shape_projection") {
+        return resolveInsertTargets(db, schema, { kind: "expr", expr: unwrapped } as InsertValue, context, ast);
+      }
+      if (unwrapped.kind === "select") {
+        return resolveInsertTargets(db, schema, unwrapped as unknown as Extract<InsertValue, { kind: "select" }>, context, ast);
+      }
     }
   }
 
