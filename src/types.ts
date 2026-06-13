@@ -37,6 +37,11 @@ export interface ConstraintDef {
     name: string;
     value: ScalarValue;
   }>;
+  // `constraint exclusive on (<expr>)` — the subject expression text.
+  onExpr?: string;
+  // `constraint exclusive on (...) except (<expr>)` — rows where the except
+  // expression is true are exempt from the uniqueness check.
+  exceptExpr?: string;
 }
 
 export type FieldDefaultExpr =
@@ -405,6 +410,11 @@ export interface TypeDef {
   name: string;
   module?: string;
   abstract?: boolean;
+  // True when this type was registered by the runtime DDL pre-pass
+  // (`CREATE TYPE …`), whose lightweight parser does not yet capture
+  // `CREATE CONSTRAINT exclusive`. Consumers that need complete constraint
+  // metadata (e.g. UNLESS CONFLICT ON validation) skip such types.
+  ddlSynthesized?: boolean;
   extends?: string[];
   annotations?: AnnotationDef[];
   indexes?: Array<{
@@ -423,5 +433,6 @@ export interface TypeDef {
     exprText: string;
     fieldRefs: string[];
     delegated?: boolean;
+    exceptExpr?: string;
   }>;
 }

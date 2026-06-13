@@ -360,6 +360,8 @@ const cloneTypeDef = (typeDef: TypeDef): TypeDef => ({
           annotations: cloneAnnotations(constraint.annotations) ?? [],
           delegated: constraint.delegated,
           params: constraint.params ? constraint.params.map((param) => ({ ...param })) : undefined,
+          onExpr: constraint.onExpr,
+          exceptExpr: constraint.exceptExpr,
         }))
       : undefined,
     annotations: cloneAnnotations(f.annotations),
