@@ -7146,6 +7146,17 @@ const resolveObjectSet = (
     case "distinct":
     case "shape_projection":
       return resolveObjectSet(db, schema, n.expr, env, current, context, defaultModule);
+    case "cast": {
+      // `<Bar>{}` — an empty-set cast to an object type. The inner set is empty
+      // (no ids), but the cast names the type, so propagate it so an enclosing
+      // `if … else <Bar>{}` knows the result's type even on the empty branch.
+      const inner = resolveObjectSet(db, schema, n.expr, env, current, context, defaultModule);
+      if (inner.ids.length === 0 && typeof n.castType === "string") {
+        const qn = qualifyChainType(n.castType, defaultModule);
+        if (schema.getType(qn)) return { typeName: qn, ids: [] };
+      }
+      return inner;
+    }
     case "function_call": {
       // Set-identity guards (`assert_distinct`, `assert_single`,
       // `assert_exists`, `distinct`) don't change membership — resolve their
@@ -7473,9 +7484,9 @@ const bindingValueContainsMutation = (value: WithBindingValue): boolean => {
       const pair = expr as unknown as { left?: FreeObjectExpr; right?: FreeObjectExpr };
       return walk(pair.left) || walk(pair.right);
     }
+    // `t := (if <cond> then (DML) else (DML)/<T>{})` — DML may hide in either
+    // arm; resolveObjectSet's if_else case runs only the taken branch.
     if (expr.kind === "if_else") {
-      // `t := (if <cond> then (DELETE …) else <T>{})` — either arm may carry a
-      // mutation (resolveObjectSet's if_else case runs only the taken branch).
       const ie = expr as unknown as { thenExpr?: FreeObjectExpr; elseExpr?: FreeObjectExpr };
       return walk(ie.thenExpr) || walk(ie.elseExpr);
     }
@@ -8308,6 +8319,46 @@ const preExecuteMutationExprsInSelectExpr = (
   // and replace the entire expression with a by-id SELECT. Also covers a shape
   // projected over the coalesce (`(… ?? (INSERT …)) { … }`).
   const coalesceNode = exprKind === "shape_projection" ? (expr as { expr?: unknown }).expr : expr;
+  // Scalar coalesce (`(insert …).a ?? 99`, `99 ?? (insert …).a`): the result is
+  // a scalar (not an object set), and `??` short-circuits — the right side (and
+  // any DML it carries) runs only when the left side is empty. The object-set
+  // coalesce path below would mis-handle the `.a` projection / scalar literal,
+  // so detect the scalar shape here and honor the short-circuit explicitly.
+  if (coalesceNode && typeof coalesceNode === "object"
+      && (coalesceNode as { kind?: string }).kind === "coalesce"
+      && containsMutationExpr(coalesceNode)
+      && exprKind !== "shape_projection") {
+    const cn = coalesceNode as { left?: unknown; right?: unknown };
+    const peelCo = (node: unknown): unknown => {
+      const x = node as { kind?: string; expr?: unknown } | undefined;
+      if (x && (x.kind === "expr" || x.kind === "subquery_expr" || x.kind === "distinct")) return peelCo(x.expr);
+      return node;
+    };
+    const isScalarShape = (node: unknown): boolean => {
+      const x = peelCo(node) as { kind?: string } | undefined;
+      return !!x && (x.kind === "field_access" || x.kind === "literal" || x.kind === "op"
+        || x.kind === "binary_op" || x.kind === "unary_op");
+    };
+    if (isScalarShape(cn.left) || isScalarShape(cn.right)) {
+      const pos = (ast as { pos?: { line: number; column: number } }).pos ?? { line: 0, column: 0 };
+      const leftHasDml = containsMutationExpr(cn.left);
+      if (leftHasDml) {
+        // Left runs unconditionally (it's the left operand). Execute its DML via
+        // walk; the result is non-empty (the insert yields a value), so it wins
+        // and the right side never runs.
+        const leftExpr = walk(cn.left);
+        const leftRows = evaluateConditionRowsViaSQL(db, schema, leftExpr as FreeObjectExpr, passthrough, context, pos);
+        if (leftRows.length > 0) return { ...ast, expr: leftExpr } as Statement;
+        // Left turned out empty: now the right side (with its DML) runs.
+        return { ...ast, expr: walk(cn.right) } as Statement;
+      }
+      // Only the right side carries DML. Evaluate the (DML-free) left's
+      // cardinality; if non-empty the right never runs (its DML is skipped).
+      const leftRows = evaluateConditionRowsViaSQL(db, schema, cn.left as FreeObjectExpr, passthrough, context, pos);
+      if (leftRows.length > 0) return { ...ast, expr: cn.left } as Statement;
+      return { ...ast, expr: walk(cn.right) } as Statement;
+    }
+  }
   // Coalesce of two tuples (`(<select>, true) ?? (<insert>, false)`): the `??`
   // short-circuits on the WHOLE left tuple — non-empty when its object element
   // is non-empty. Evaluate the left object element; if present, the result is
@@ -8398,8 +8449,8 @@ const preExecuteMutationExprsInSelectExpr = (
     }
     return { ...ast, expr: byId } as Statement;
   }
-  // Hoisted so the scalar-coalesce short-circuit above can call it (the object-
-  // coalesce/tuple paths don't need it). Closes over db/schema/env/etc.
+  // Declared as a hoisted function so the scalar-coalesce/if_else short-circuit
+  // handlers above (which run before this point textually) can call it.
   function walk(node: unknown): unknown {
     if (Array.isArray(node)) return node.map(walk);
     if (node === null || typeof node !== "object") return node;
@@ -8445,10 +8496,22 @@ const preExecuteMutationExprsInSelectExpr = (
         }
         return { kind: "set_literal", values: allRows };
       }
+      // Object-valued loop: resolveObjectSet's for_expr case evaluates the
+      // iterator (`{x, x+1, x+2}`) with no bindings in scope, so an outer-FOR
+      // loop variable bound as a scalar-literal WITH binding (from
+      // executeForWithDmlBodyExpr) would be unresolved. Substitute those literal
+      // bindings into the for node first so the iterator resolves the loop value.
+      let forNode: unknown = n;
+      for (const b of passthrough) {
+        const bv = b.value as { kind?: string; value?: ScalarValue };
+        if (bv.kind === "literal" && (bv.value === null || isScalarValue(bv.value))) {
+          forNode = bindLoopVarInForBody(forNode, b.name, bv.value as ScalarValue);
+        }
+      }
       const resolved = resolveObjectSet(
         db,
         schema,
-        attachWithToNestedMutations(n, passthrough),
+        attachWithToNestedMutations(forNode, passthrough),
         env,
         undefined,
         context,
@@ -8466,8 +8529,8 @@ const preExecuteMutationExprsInSelectExpr = (
     if (n.kind === "if_else" && containsMutationExpr(n)) {
       const pos = (ast as { pos?: { line: number; column: number } }).pos ?? { line: 0, column: 0 };
       const condRows = evaluateConditionRowsViaSQL(db, schema, n.condition as FreeObjectExpr, passthrough, context, pos);
-      // Scalar-result conditional (`if <cond> then (DELETE …).a else 99`): the
-      // branches yield scalars, not object sets, so resolveObjectSet can't
+      // Scalar-result conditional (`if <cond> then (DELETE/INSERT …).a else 99`):
+      // the branches yield scalars, not object sets, so resolveObjectSet can't
       // collapse them. Walk only the taken branch per condition element (the
       // recursive walk runs that branch's embedded DML and substitutes the
       // captured values); the non-taken branch — and its DML — is skipped.
@@ -8809,21 +8872,47 @@ const astNodeContainsMutation = (node: unknown): boolean => {
 const cloneAstNode = <T>(node: T): T => JSON.parse(JSON.stringify(node)) as T;
 
 // Parse a UDF body and return its inner expression when it is a clause-free
-// `SELECT <expr>` wrapper (the form applyParsedFunctionDDL stores). Bodies with
-// their own WITH / ORDER BY aren't peelable this way and return undefined.
+// `SELECT <expr>` wrapper (the form applyParsedFunctionDDL stores). A body with
+// its own WITH bindings is hoisted onto a `select_expr_subquery` envelope (the
+// same shape the parser emits for `(WITH … INSERT …)`) so the embedded-DML
+// machinery resolves the bindings at the call site. ORDER BY isn't peelable.
 const trivialUdfBodyExpr = (fn: FunctionDef): FreeObjectExpr | undefined => {
   if (fn.body.kind !== "query") return undefined;
   let parsed: Statement | Statement[];
   try {
     parsed = parseEdgeQL(fn.body.query);
   } catch {
-    return undefined;
+    // The DDL pre-pass prepends `SELECT ` to a UDF body, which produces invalid
+    // syntax when the body itself begins with WITH/FOR/INSERT/… (`SELECT with …
+    // insert …`). Retry with that prefix stripped so such bodies still parse.
+    const stripped = fn.body.query.replace(/^\s*select\s+/i, "");
+    if (stripped === fn.body.query) return undefined;
+    try {
+      parsed = parseEdgeQL(stripped);
+    } catch {
+      return undefined;
+    }
   }
   const stmt = Array.isArray(parsed) ? parsed[0] : parsed;
-  if (!stmt || stmt.kind !== "select_expr") return undefined;
+  if (!stmt) return undefined;
+  // A bare top-level INSERT/UPDATE/DELETE body (possibly with WITH bindings):
+  // wrap it as a mutation_expr inside a subquery envelope carrying the WITH.
+  if (stmt.kind === "insert" || stmt.kind === "update" || stmt.kind === "delete") {
+    const withBindings = (stmt as { with?: WithBinding[] }).with;
+    const mutation = { ...(stmt as object), with: undefined } as Statement;
+    const mutExpr = { kind: "mutation_expr", statement: mutation } as unknown as FreeObjectExpr;
+    if (withBindings && withBindings.length > 0) {
+      return { kind: "select_expr_subquery", expr: mutExpr, clauses: { _withBindings: withBindings } } as unknown as FreeObjectExpr;
+    }
+    return mutExpr;
+  }
+  if (stmt.kind !== "select_expr") return undefined;
   const se = stmt as SelectExprStatement;
-  if (se.with && se.with.length > 0) return undefined;
   if (se.orderBy) return undefined;
+  // `WITH … SELECT <expr>` body: carry the bindings onto a subquery envelope.
+  if (se.with && se.with.length > 0) {
+    return { kind: "select_expr_subquery", expr: se.expr, clauses: { _withBindings: se.with } } as unknown as FreeObjectExpr;
+  }
   return se.expr;
 };
 
@@ -8933,12 +9022,17 @@ const expandInlineDmlFunctionCalls = (
     if (!fn) return undefined;
     const bodyExpr = trivialUdfBodyExpr(fn);
     if (!bodyExpr) return undefined;
-    // Only DML-bodied functions are expanded here; select-bodied UDFs lower
-    // through the SQL inliner.
-    if (!astNodeContainsMutation(bodyExpr)) return undefined;
     const subs = buildUdfParamSubstitutions(fn, call.args);
     if (!subs) return undefined;
-    return substituteParamRefs(cloneAstNode(bodyExpr), subs) as FreeObjectExpr;
+    const substituted = substituteParamRefs(cloneAstNode(bodyExpr), subs) as FreeObjectExpr;
+    // A wrapper UDF whose body is itself a DML-UDF call (`foo := inner(x)`,
+    // inner does the DML) carries no mutation node directly — expand the calls
+    // nested in the (param-substituted) body first so the wrapper's DML
+    // surfaces. Only then decide whether this is a DML-bodied function;
+    // pure-SELECT bodies are left for the SQL inliner.
+    const expandedBody = expand(substituted, depth + 1) as FreeObjectExpr;
+    if (!astNodeContainsMutation(expandedBody)) return undefined;
+    return expandedBody;
   };
   const expand = (node: unknown, depth: number): unknown => {
     if (Array.isArray(node)) return node.map((n) => expand(n, depth));
