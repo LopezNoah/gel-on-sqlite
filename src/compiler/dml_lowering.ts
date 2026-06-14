@@ -1164,6 +1164,13 @@ export const compileDmlToIR = (
       if (value.kind === "binding_ref" || value.kind === "select" || value.kind === "insert" || value.kind === "for") {
         return;
       }
+      // An object-returning expression wrapper — `assert_exists((select T …))`,
+      // `assert_single(…)`, a parenthesised subquery, or a bare expr envelope.
+      // The runtime resolves these by compiling the value as a SELECT and
+      // reading the resulting object ids.
+      if (value.kind === "function_call" || value.kind === "expr") {
+        return;
+      }
       if (value.kind === "set") {
         for (const item of value.values) {
           validateUpdateLinkExpr(linkName, item);
