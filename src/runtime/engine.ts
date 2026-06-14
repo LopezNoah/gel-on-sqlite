@@ -8806,9 +8806,29 @@ const executeSelectOverMutation = (
     values: { kind: "set_literal", values: affectedIds },
   } as unknown as FilterExpr;
   const emptyArtifact: SQLArtifact = { sql: "", params: [], loweringMode: "single_statement" };
+  // Without an explicit ORDER BY the `id IN (…)` re-projection has no pinned
+  // row order, so multiple affected rows can surface in an unstable order. The
+  // capture step read `affectedIds` in the subject's natural (rowid /
+  // insertion) order — reorder the projected rows to follow it so the result
+  // is deterministic (matching the order a non-rewritten UPDATE … returns).
+  // The requested shape may not include `id`, so project it alongside (under a
+  // reserved key) for the sort, then strip it back off.
+  const needsReorder = !orderBy && affectedIds.length > 1 && mutation.kind !== "delete";
+  // Project `id` alongside the requested shape so the rows can be reordered to
+  // the capture order; result comparison ignores the extra key.
+  const shapeHasId = shape.some((el) => (el as { name?: string }).name === "id");
+  const projectShape = needsReorder && !shapeHasId ? [...shape, idShapeElement] : shape;
   const projected = (affectedIds.length > 0 && mutation.kind !== "delete")
-    ? runShapedSelect(idFilter, shape, orderBy)
+    ? runShapedSelect(idFilter, projectShape, orderBy)
     : { rows: [], sql: lastCompiled?.sql ?? emptyArtifact };
+  if (needsReorder && projected.rows.length > 1) {
+    const rank = new Map(affectedIds.map((id, i) => [id, i] as const));
+    projected.rows = [...projected.rows].sort((a, b) => {
+      const ra = rank.get((a as Record<string, unknown>)?.id as string) ?? Number.MAX_SAFE_INTEGER;
+      const rb = rank.get((b as Record<string, unknown>)?.id as string) ?? Number.MAX_SAFE_INTEGER;
+      return ra - rb;
+    });
+  }
 
   return {
     ast,
@@ -9011,8 +9031,8 @@ const expandInlineDmlFunctionCalls = (
   defaultModule: string,
 ): Statement => {
   let changed = false;
-  const tryExpandCall = (call: FunctionCallExpr, depth: number): FreeObjectExpr | undefined => {
-    if (depth > 64) return undefined;
+  // Resolve a call to its DML-bodied UDF, returning the (unsubstituted) body.
+  const resolveDmlUdfBody = (call: FunctionCallExpr): { fn: FunctionDef; body: FreeObjectExpr } | undefined => {
     const divider = call.name.lastIndexOf("::");
     const moduleName = divider >= 0 ? call.name.slice(0, divider) : defaultModule;
     const shortName = divider >= 0 ? call.name.slice(divider + 2) : call.name;
@@ -9020,8 +9040,39 @@ const expandInlineDmlFunctionCalls = (
     const positionalCount = call.args.filter((a) => (a as { kind?: string }).kind !== "named_arg").length;
     const fn = schema.findFunction(moduleName, shortName, positionalCount);
     if (!fn) return undefined;
-    const bodyExpr = trivialUdfBodyExpr(fn);
-    if (!bodyExpr) return undefined;
+    const body = trivialUdfBodyExpr(fn);
+    if (!body) return undefined;
+    return { fn, body };
+  };
+  // Does a UDF body *ultimately* perform DML — directly, or transitively
+  // through a call to another DML-bodied UDF (`foo` body is `inner(x)`)?
+  const bodyIsDml = (body: FreeObjectExpr, seen: globalThis.Set<string>, depth: number): boolean => {
+    if (astNodeContainsMutation(body)) return true;
+    if (depth > 64) return false;
+    let found = false;
+    const walk = (node: unknown): void => {
+      if (found || !node || typeof node !== "object") return;
+      if (Array.isArray(node)) { node.forEach(walk); return; }
+      if ((node as { kind?: string }).kind === "function_call" && (node as { call?: FunctionCallExpr }).call) {
+        const inner = resolveDmlUdfBody((node as { call: FunctionCallExpr }).call);
+        if (inner && !seen.has(inner.fn.name)) {
+          seen.add(inner.fn.name);
+          if (bodyIsDml(inner.body, seen, depth + 1)) { found = true; return; }
+        }
+      }
+      for (const v of Object.values(node as object)) walk(v);
+    };
+    walk(body);
+    return found;
+  };
+  const tryExpandCall = (call: FunctionCallExpr, depth: number): FreeObjectExpr | undefined => {
+    if (depth > 64) return undefined;
+    const resolved = resolveDmlUdfBody(call);
+    if (!resolved) return undefined;
+    const { fn, body: bodyExpr } = resolved;
+    // Only DML-bodied functions are expanded here (directly or via a nested
+    // DML-UDF call); select-bodied UDFs lower through the SQL inliner.
+    if (!bodyIsDml(bodyExpr, new globalThis.Set<string>([fn.name]), 0)) return undefined;
     const subs = buildUdfParamSubstitutions(fn, call.args);
     if (!subs) return undefined;
     const substituted = substituteParamRefs(cloneAstNode(bodyExpr), subs) as FreeObjectExpr;
@@ -16075,6 +16126,38 @@ const resolveInsertTargets = (
   // and FILTER — runs it, and reads the per-row `@`-columns as link properties.
   const tupleForRows = resolveTupleForUnionSelectLinkValue(db, schema, value, context, ast);
   if (tupleForRows !== undefined) return tupleForRows;
+
+  // Generic fallback: an object-returning expression that none of the
+  // structured cases above match — `assert_exists((select T …))`,
+  // `assert_single(…)`, a parameter-substituted call, or a bare
+  // `select_expr_subquery`/`expr` wrapper. Compile it as a standalone SELECT
+  // (threading the outer WITH bindings) and read the resulting object ids.
+  if (value.kind === "function_call" || value.kind === "expr") {
+    const innerExpr = value.kind === "expr"
+      ? (value as { expr: FreeObjectExpr }).expr
+      : ({ kind: "function_call", call: (value as { call: FunctionCallExpr }).call } as unknown as FreeObjectExpr);
+    const stmtAst = {
+      kind: "select_expr",
+      expr: innerExpr,
+      with: ast.with,
+      withModule: ast.withModule,
+      withModuleAliases: ast.withModuleAliases,
+      pos: ast.pos,
+    } as unknown as Statement;
+    const attempt = tryResult(() => {
+      const compiled = getCompilerService().compile(schema, stmtAst, { globals: context.globals, params: context.params, target: resolvedRuntimeTarget(context, db) });
+      if (compiled.sql.loweringMode !== "single_statement" || compiled.sql.sql.length === 0) return undefined;
+      return runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql, { keepInternalId: true })
+        .filter((row): row is Record<string, unknown> => row !== null && typeof row === "object");
+    }, { captureAll: true });
+    if (attempt.ok && attempt.value !== undefined) {
+      return attempt.value
+        .map((row) => (typeof (row as { id?: unknown }).id === "string"
+          ? { id: (row as { id: string }).id, properties: {} }
+          : undefined))
+        .filter((entry): entry is LinkTargetAssignment => !!entry);
+    }
+  }
 
   return [];
 };
