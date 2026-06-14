@@ -8634,6 +8634,213 @@ export const executeQueryWithTrace = (
   }
 };
 
+// ---------------------------------------------------------------------------
+// Inline expansion of DML-bodied user functions.
+//
+// A user function whose body performs a mutation (`create function foo(x: int64)
+// using ((insert Bar { a := x }))`) can't lower through the SQL inliner — the
+// engine executes mutations from the AST, not the SQL compiler. We expand such
+// calls at the AST level: parse the function body, substitute each parameter
+// with its call-site argument expression, and splice the result in place of the
+// `function_call` node. `select foo(1).a` becomes `select (insert Bar{a:=1}).a`,
+// which the embedded-mutation paths (preExecuteMutationExprsInSelectExpr,
+// WITH-DML chains, FOR-over-INSERT, …) already handle. Select-bodied UDFs are
+// left untouched so the SQL inliner keeps lowering them to plain SQL.
+// ---------------------------------------------------------------------------
+
+// A parsed AST subtree contains a mutation when it carries a mutation_expr or a
+// bare insert/update/delete statement node.
+const astNodeContainsMutation = (node: unknown): boolean => {
+  if (Array.isArray(node)) return node.some(astNodeContainsMutation);
+  if (!node || typeof node !== "object") return false;
+  const k = (node as { kind?: string }).kind;
+  if (k === "mutation_expr" || k === "insert" || k === "update" || k === "delete") return true;
+  return Object.values(node as object).some(astNodeContainsMutation);
+};
+
+const cloneAstNode = <T>(node: T): T => JSON.parse(JSON.stringify(node)) as T;
+
+// Parse a UDF body and return its inner expression when it is a clause-free
+// `SELECT <expr>` wrapper (the form applyParsedFunctionDDL stores). Bodies with
+// their own WITH / ORDER BY aren't peelable this way and return undefined.
+const trivialUdfBodyExpr = (fn: FunctionDef): FreeObjectExpr | undefined => {
+  if (fn.body.kind !== "query") return undefined;
+  let parsed: Statement | Statement[];
+  try {
+    parsed = parseEdgeQL(fn.body.query);
+  } catch {
+    return undefined;
+  }
+  const stmt = Array.isArray(parsed) ? parsed[0] : parsed;
+  if (!stmt || stmt.kind !== "select_expr") return undefined;
+  const se = stmt as SelectExprStatement;
+  if (se.with && se.with.length > 0) return undefined;
+  if (se.orderBy) return undefined;
+  return se.expr;
+};
+
+// The FreeObjectExpr carried by a call-site argument envelope.
+const callArgToExpr = (arg: FunctionCallArgExpr): FreeObjectExpr | undefined => {
+  switch (arg.kind) {
+    case "expr":
+      return arg.expr;
+    case "named_arg":
+      return callArgToExpr(arg.arg);
+    case "function_call":
+      return { kind: "function_call", call: arg.call } as unknown as FreeObjectExpr;
+    default:
+      // parameter / literal / array_literal forms are valid in expr position.
+      return arg as unknown as FreeObjectExpr;
+  }
+};
+
+const parseDefaultExprAst = (text: string): FreeObjectExpr | undefined => {
+  try {
+    const parsed = parseEdgeQL(/^select\b/i.test(text.trim()) ? text : `SELECT ${text}`);
+    const stmt = Array.isArray(parsed) ? parsed[0] : parsed;
+    if (stmt && stmt.kind === "select_expr") return (stmt as SelectExprStatement).expr;
+  } catch {
+    // fall through
+  }
+  return undefined;
+};
+
+// Map each function parameter to the call-site expression that fills it
+// (positional / named / default / optional-empty / variadic-packed). Returns
+// undefined when a required parameter is left unfilled (can't expand).
+const buildUdfParamSubstitutions = (
+  fn: FunctionDef,
+  args: FunctionCallArgExpr[],
+): Map<string, FreeObjectExpr> | undefined => {
+  const positional: FunctionCallArgExpr[] = [];
+  const named = new Map<string, FunctionCallArgExpr>();
+  for (const a of args) {
+    if (a && (a as { kind?: string }).kind === "named_arg") {
+      named.set((a as { name: string }).name, (a as { arg: FunctionCallArgExpr }).arg);
+    } else {
+      positional.push(a);
+    }
+  }
+  const subs = new Map<string, FreeObjectExpr>();
+  let cursor = 0;
+  for (const param of fn.params) {
+    if (param.variadic) {
+      const packed = positional
+        .slice(cursor)
+        .map((a) => callArgToExpr(a))
+        .filter((e): e is FreeObjectExpr => e !== undefined);
+      cursor = positional.length;
+      subs.set(param.name, { kind: "array_literal_expr", values: packed } as unknown as FreeObjectExpr);
+      continue;
+    }
+    let chosen: FreeObjectExpr | undefined;
+    if (!param.namedOnly && cursor < positional.length) {
+      chosen = callArgToExpr(positional[cursor]);
+      cursor += 1;
+    } else if (named.has(param.name)) {
+      chosen = callArgToExpr(named.get(param.name)!);
+    } else if (param.default !== undefined) {
+      chosen = { kind: "literal", value: param.default } as unknown as FreeObjectExpr;
+    } else if (param.defaultExpr !== undefined) {
+      chosen = parseDefaultExprAst(param.defaultExpr);
+    } else if (param.optional) {
+      chosen = { kind: "set_literal", values: [] } as unknown as FreeObjectExpr;
+    } else {
+      return undefined;
+    }
+    if (chosen === undefined) return undefined;
+    subs.set(param.name, chosen);
+  }
+  return subs;
+};
+
+// Deep-clone an AST subtree, replacing each `binding_ref` that names a
+// substituted parameter with a fresh clone of that parameter's argument.
+const substituteParamRefs = (node: unknown, subs: Map<string, FreeObjectExpr>): unknown => {
+  if (Array.isArray(node)) return node.map((n) => substituteParamRefs(n, subs));
+  if (!node || typeof node !== "object") return node;
+  if ((node as { kind?: string }).kind === "binding_ref") {
+    const name = (node as { name?: string }).name;
+    if (name !== undefined && subs.has(name)) return cloneAstNode(subs.get(name)!);
+  }
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(node as object)) out[k] = substituteParamRefs(v, subs);
+  return out;
+};
+
+const expandInlineDmlFunctionCalls = (
+  schema: SchemaSnapshot,
+  ast: Statement,
+  defaultModule: string,
+): Statement => {
+  let changed = false;
+  const tryExpandCall = (call: FunctionCallExpr, depth: number): FreeObjectExpr | undefined => {
+    if (depth > 64) return undefined;
+    const divider = call.name.lastIndexOf("::");
+    const moduleName = divider >= 0 ? call.name.slice(0, divider) : defaultModule;
+    const shortName = divider >= 0 ? call.name.slice(divider + 2) : call.name;
+    if (moduleName === "std" || moduleName === "math" || moduleName === "cal") return undefined;
+    const positionalCount = call.args.filter((a) => (a as { kind?: string }).kind !== "named_arg").length;
+    const fn = schema.findFunction(moduleName, shortName, positionalCount);
+    if (!fn) return undefined;
+    const bodyExpr = trivialUdfBodyExpr(fn);
+    if (!bodyExpr) return undefined;
+    // Only DML-bodied functions are expanded here; select-bodied UDFs lower
+    // through the SQL inliner.
+    if (!astNodeContainsMutation(bodyExpr)) return undefined;
+    const subs = buildUdfParamSubstitutions(fn, call.args);
+    if (!subs) return undefined;
+    return substituteParamRefs(cloneAstNode(bodyExpr), subs) as FreeObjectExpr;
+  };
+  const expand = (node: unknown, depth: number): unknown => {
+    if (Array.isArray(node)) return node.map((n) => expand(n, depth));
+    if (!node || typeof node !== "object") return node;
+    if ((node as { kind?: string }).kind === "function_call" && (node as { call?: FunctionCallExpr }).call) {
+      const replacement = tryExpandCall((node as { call: FunctionCallExpr }).call, depth);
+      if (replacement !== undefined) {
+        changed = true;
+        // Recurse into the spliced body so nested DML-UDF calls expand too.
+        return expand(replacement, depth + 1);
+      }
+    }
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(node as object)) out[k] = expand(v, depth);
+    return out;
+  };
+  const result = expand(ast, 0) as Statement;
+  if (changed) {
+    // The parser stores literal insert/update value assignments as raw scalars
+    // (`a := 1` → `values.a = 1`), but parameter substitution produces a
+    // `{kind:"literal", …}` node in that slot. The DML value resolver handles
+    // raw scalars and complex expressions but not a bare literal node, so
+    // unwrap those back to the raw scalar the parser would have emitted.
+    normalizeDmlLiteralValues(result);
+  }
+  return changed ? result : ast;
+};
+
+const normalizeDmlLiteralValues = (node: unknown): void => {
+  if (Array.isArray(node)) {
+    node.forEach(normalizeDmlLiteralValues);
+    return;
+  }
+  if (!node || typeof node !== "object") return;
+  const kind = (node as { kind?: string }).kind;
+  if ((kind === "insert" || kind === "update") && (node as { values?: unknown }).values
+      && typeof (node as { values: unknown }).values === "object") {
+    const vals = (node as { values: Record<string, unknown> }).values;
+    for (const key of Object.keys(vals)) {
+      const v = vals[key];
+      if (v && typeof v === "object"
+          && (v as { kind?: string }).kind === "literal"
+          && "value" in (v as object)) {
+        vals[key] = (v as { value: unknown }).value;
+      }
+    }
+  }
+  for (const v of Object.values(node as object)) normalizeDmlLiteralValues(v);
+};
+
 const executeQueryWithTraceImpl = (
   db: SQLiteDatabase,
   schema: SchemaSnapshot,
@@ -8679,6 +8886,10 @@ const executeQueryWithTraceImpl = (
         result: { kind: "insert", changes: 0 },
       };
     }
+    // Expand calls to DML-bodied user functions (`select foo(1)` where foo's
+    // body is `(insert Bar{a:=x})`) into the spliced body before routing, so
+    // the embedded-mutation execution paths see the mutation directly.
+    ast = expandInlineDmlFunctionCalls(schema, ast, ast.withModule ?? "default");
     context.statementInsertedIds = new Set<string>();
     validateParsedStatement(ast, { schema, module: ast.withModule });
     preValidateStatementAst(schema, ast, allowUserSpecifiedId(schema));
