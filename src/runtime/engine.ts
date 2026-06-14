@@ -49,6 +49,16 @@ export interface QueryResult {
 const SQL_TRACE_INSTALLED = Symbol.for("gel.sqlTraceInstalled");
 let activeSqlSink: SQLArtifact[] | null = null;
 
+// Embedded `SELECT (DELETE …)` (and `(DELETE …).a`, `WITH t := (DELETE …)`):
+// the outer SELECT must project the deleted rows' values, but those rows no
+// longer exist once the DELETE runs. When this queue is non-null, the DML
+// chain executor captures the rows' ids without physically removing them and
+// defers the actual row removal as closures here; the top-level query executor
+// flushes the queue *after* the outer SELECT has read the (still-live) rows.
+// Null outside an embedded-delete-in-select context, so plain `DELETE T` and
+// multi-mutation chains keep their immediate, in-line delete semantics.
+let deferredChainDeletes: Array<() => void> | null = null;
+
 const installSqlTrace = (db: SQLiteDatabase): void => {
   const marked = db as unknown as Record<symbol, unknown>;
   if (marked[SQL_TRACE_INSTALLED]) {
@@ -7375,9 +7385,19 @@ const executeDmlChainStatement = (
   if (stmt.kind === "delete") {
     for (const id of target.ids) {
       const perId = { kind: "delete", typeName: target.typeName, filter: { kind: "predicate", target: { kind: "field", field: "id" }, op: "=", value: id }, pos: { line: 1, column: 1 } } as unknown as DeleteStatement;
-      const c = compilerService.compile(schema, perId, { globals: context.globals, params: context.params, target: runtimeTarget });
-      const st = typeDefForTable(schema, (c.ir as { table?: string }).table ?? "");
-      if (st) runWriteWithAccessPolicies(db, schema, perId, c.ir, c.sql, st, context);
+      const runDelete = (): void => {
+        const c = compilerService.compile(schema, perId, { globals: context.globals, params: context.params, target: runtimeTarget });
+        const st = typeDefForTable(schema, (c.ir as { table?: string }).table ?? "");
+        if (st) runWriteWithAccessPolicies(db, schema, perId, c.ir, c.sql, st, context);
+      };
+      // In an embedded-delete-in-select context (`SELECT (DELETE …)`), defer the
+      // physical removal so the enclosing SELECT can still read the rows it is
+      // about to return; otherwise delete immediately as before.
+      if (deferredChainDeletes !== null) {
+        deferredChainDeletes.push(runDelete);
+      } else {
+        runDelete();
+      }
     }
     return target;
   }
@@ -7452,6 +7472,12 @@ const bindingValueContainsMutation = (value: WithBindingValue): boolean => {
     if (expr.kind === "coalesce") {
       const pair = expr as unknown as { left?: FreeObjectExpr; right?: FreeObjectExpr };
       return walk(pair.left) || walk(pair.right);
+    }
+    if (expr.kind === "if_else") {
+      // `t := (if <cond> then (DELETE …) else <T>{})` — either arm may carry a
+      // mutation (resolveObjectSet's if_else case runs only the taken branch).
+      const ie = expr as unknown as { thenExpr?: FreeObjectExpr; elseExpr?: FreeObjectExpr };
+      return walk(ie.thenExpr) || walk(ie.elseExpr);
     }
     if (expr.kind === "set_expr" || expr.kind === "tuple") {
       return (expr as { values: FreeObjectExpr[] }).values.some((v) => walk(v));
@@ -8047,6 +8073,14 @@ const preExecuteDmlBindings = (
       defaultModule,
     );
     env.set(binding.name, resolved);
+    // An empty result with no resolved type (`t := (if false then (DELETE …)
+    // else <T>{})` — the taken empty branch contributes no type) can't form a
+    // by-id SELECT (it would emit an unnamed table). Bind it to an empty set so
+    // the outer `t.a` / `t` projects nothing.
+    if (resolved.typeName === "" && resolved.ids.length === 0) {
+      newWith.push({ name: binding.name, value: { kind: "subquery_expr", expr: { kind: "set_literal", values: [] } } } as unknown as WithBinding);
+      continue;
+    }
     const select = chainByIdSelect(resolved) as { typeName: string; shape: ShapeElement[]; clauses: unknown };
     // A FOR statement iterating over this binding needs the value to keep its
     // object typing (so the loop variable binds as an object, not a bare id).
@@ -8326,6 +8360,28 @@ const preExecuteMutationExprsInSelectExpr = (
   }
   if (coalesceNode && typeof coalesceNode === "object"
       && (coalesceNode as { kind?: string }).kind === "coalesce"
+      && containsMutationExpr(coalesceNode)
+      && exprKind !== "shape_projection"
+      && coalesceIsScalar(coalesceNode)) {
+    const cn = coalesceNode as { left?: unknown; right?: unknown };
+    const pos = (ast as { pos?: { line: number; column: number } }).pos ?? { line: 0, column: 0 };
+    // Scalar `??` whose operand is `(DELETE …).a` (a scalar set, not an object
+    // set): `??` short-circuits on the left's emptiness, which resolveObjectSet
+    // can't model. Walk the left (running any embedded delete, substituting its
+    // captured values), then evaluate it: if non-empty, use those values and
+    // leave the right unevaluated; otherwise walk + use the right. This keeps
+    // the right's DML from running when the left is non-empty.
+    const leftExpr = containsMutationExpr(cn.left) ? walk(cn.left) : cn.left;
+    const leftRows = evaluateConditionRowsViaSQL(
+      db, schema, { ...ast, expr: leftExpr } as unknown as FreeObjectExpr, passthrough, context, pos,
+    );
+    if (leftRows.length > 0) {
+      return { ...ast, expr: { kind: "set_literal", values: leftRows } } as Statement;
+    }
+    return { ...ast, expr: walk(cn.right) } as Statement;
+  }
+  if (coalesceNode && typeof coalesceNode === "object"
+      && (coalesceNode as { kind?: string }).kind === "coalesce"
       && containsMutationExpr(coalesceNode)) {
     const resolved = resolveObjectSet(
       db,
@@ -8342,7 +8398,9 @@ const preExecuteMutationExprsInSelectExpr = (
     }
     return { ...ast, expr: byId } as Statement;
   }
-  const walk = (node: unknown): unknown => {
+  // Hoisted so the scalar-coalesce short-circuit above can call it (the object-
+  // coalesce/tuple paths don't need it). Closes over db/schema/env/etc.
+  function walk(node: unknown): unknown {
     if (Array.isArray(node)) return node.map(walk);
     if (node === null || typeof node !== "object") return node;
     const n = node as Record<string, unknown> & { kind?: string; statement?: Statement };
@@ -8351,6 +8409,42 @@ const preExecuteMutationExprsInSelectExpr = (
     // rather than descending into the inner mutation, which would run it once
     // with `v` unbound (tests _06, _17, _20b, self_01).
     if (n.kind === "for_expr" && containsMutationExpr(n)) {
+      // Scalar-bodied loop (`FOR z IN {0,1} UNION ((DELETE …).a)`): the body
+      // yields scalars, which resolveObjectSet (object-set only) can't collapse.
+      // Run each iteration's body through `walk` (executing its delete once per
+      // iteration, in order, and substituting the captured `.a` values) and
+      // union the per-iteration scalar rows into one literal set.
+      const forBody = (n as { body?: unknown }).body;
+      if (forBody && !exprIsObjectValued(forBody)) {
+        const iterator = (n as { iterator?: { kind?: string; values?: unknown[] } }).iterator;
+        const variable = (n as { variable?: string }).variable;
+        const pos = (ast as { pos?: { line: number; column: number } }).pos ?? { line: 0, column: 0 };
+        let iterValues: unknown[];
+        if (iterator?.kind === "set_literal") {
+          iterValues = iterator.values ?? [];
+        } else {
+          iterValues = evaluateConditionRowsViaSQL(db, schema, iterator as FreeObjectExpr, passthrough, context, pos);
+        }
+        const allRows: unknown[] = [];
+        for (const iterValue of iterValues) {
+          const boundBody = variable && (iterValue === null || isScalarValue(iterValue))
+            ? bindLoopVarInForBody(forBody, variable, iterValue as ScalarValue)
+            : forBody;
+          const rows = evaluateConditionRowsViaSQL(
+            db, schema, { ...ast, expr: walk(boundBody) } as unknown as FreeObjectExpr, passthrough, context, pos,
+          );
+          allRows.push(...rows);
+          // A FOR loop sees each prior iteration's deletes: flush the deferred
+          // removals now (the rows this iteration projected are already read)
+          // so a later iteration's `.a <= x` filter no longer matches them.
+          if (deferredChainDeletes !== null && deferredChainDeletes.length > 0) {
+            const queued = deferredChainDeletes;
+            deferredChainDeletes = [];
+            for (const run of queued) run();
+          }
+        }
+        return { kind: "set_literal", values: allRows };
+      }
       const resolved = resolveObjectSet(
         db,
         schema,
@@ -8372,6 +8466,23 @@ const preExecuteMutationExprsInSelectExpr = (
     if (n.kind === "if_else" && containsMutationExpr(n)) {
       const pos = (ast as { pos?: { line: number; column: number } }).pos ?? { line: 0, column: 0 };
       const condRows = evaluateConditionRowsViaSQL(db, schema, n.condition as FreeObjectExpr, passthrough, context, pos);
+      // Scalar-result conditional (`if <cond> then (DELETE …).a else 99`): the
+      // branches yield scalars, not object sets, so resolveObjectSet can't
+      // collapse them. Walk only the taken branch per condition element (the
+      // recursive walk runs that branch's embedded DML and substitutes the
+      // captured values); the non-taken branch — and its DML — is skipped.
+      const thenIsObject = n.thenExpr ? exprIsObjectValued(n.thenExpr) : false;
+      const elseIsObject = n.elseExpr ? exprIsObjectValued(n.elseExpr) : false;
+      if (!thenIsObject && !elseIsObject) {
+        const parts: unknown[] = [];
+        for (const condRow of condRows) {
+          const taken = condRow === true || condRow === 1 ? n.thenExpr : n.elseExpr;
+          if (!taken) continue;
+          parts.push(walk(taken));
+        }
+        if (parts.length === 0) return { kind: "set_literal", values: [] };
+        return parts.length === 1 ? parts[0] : { kind: "set_expr", values: parts };
+      }
       const branchIds: string[] = [];
       const branchTypes: string[] = [];
       for (const condRow of condRows) {
@@ -8408,11 +8519,17 @@ const preExecuteMutationExprsInSelectExpr = (
         context,
         defaultModule,
       );
-      // A DELETE removes its rows, so a by-id SELECT would find nothing — but
-      // `count((delete T))` / `exists (delete T)` must see the rows that *were*
-      // deleted. Substitute the captured ids as a literal set so the enclosing
-      // aggregate/exists sees the right cardinality.
+      // A DELETE removes its rows, so a by-id SELECT would normally find
+      // nothing. When the removal is deferred (embedded-delete-in-select), the
+      // rows are still live, so project them by id like UPDATE/INSERT — this
+      // lets the outer SELECT read `(delete …).a`, the bare object set, or a
+      // shape over the deleted rows. When *not* deferred, fall back to the
+      // captured-ids literal so `count((delete T))` / `exists (delete T)` still
+      // see the right cardinality after the rows are gone.
       if (mutationKind === "delete") {
+        if (deferredChainDeletes !== null) {
+          return { kind: "select_expr_subquery", expr: chainByIdSelect(resolved) };
+        }
         return { kind: "set_literal", values: resolved.ids };
       }
       return { kind: "select_expr_subquery", expr: chainByIdSelect(resolved) };
@@ -8420,7 +8537,7 @@ const preExecuteMutationExprsInSelectExpr = (
     const out: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(n)) out[key] = walk(value);
     return out;
-  };
+  }
   // When a SELECT contains more than one mutation sub-expression
   // (`select { (insert …), (insert …) }`), the siblings execute sequentially
   // and each individual write commits on its own. If a later sibling violates a
@@ -8450,6 +8567,37 @@ const preExecuteMutationExprsInSelectExpr = (
     db.prepare(`RELEASE ${savepoint}`).run();
     throw err;
   }
+};
+
+// True when an expression resolves to an object set (a bare mutation, a nested
+// select/binding) rather than a scalar like `(DELETE …).a`. Wrappers are
+// peeled; control-flow nodes (FOR/if/??) recurse into their body/branches/
+// operands so that `FOR z … UNION ((DELETE …).a)` is recognised as scalar even
+// though a FOR over a bare mutation is object-valued. Used to route embedded-
+// delete projections away from the object-set resolver when they are scalar.
+const exprIsObjectValued = (node: unknown): boolean => {
+  let cur = node as { kind?: string; expr?: unknown } | undefined;
+  while (cur && (cur.kind === "expr" || cur.kind === "distinct" || cur.kind === "shape_projection")) {
+    cur = cur.expr as { kind?: string; expr?: unknown } | undefined;
+  }
+  const k = cur?.kind;
+  if (k === "for_expr") return exprIsObjectValued((cur as { body?: unknown }).body);
+  if (k === "if_else") {
+    const ie = cur as { thenExpr?: unknown; elseExpr?: unknown };
+    return exprIsObjectValued(ie.thenExpr) || exprIsObjectValued(ie.elseExpr);
+  }
+  if (k === "coalesce") {
+    const cn = cur as { left?: unknown; right?: unknown };
+    return exprIsObjectValued(cn.left) || exprIsObjectValued(cn.right);
+  }
+  return k === "mutation_expr" || k === "subquery_statement"
+    || k === "binding_ref" || k === "select" || k === "select_expr_subquery";
+};
+
+// A `??` is scalar-valued when neither operand resolves to an object set.
+const coalesceIsScalar = (coalesceNode: unknown): boolean => {
+  const cn = coalesceNode as { left?: unknown; right?: unknown };
+  return !exprIsObjectValued(cn.left) && !exprIsObjectValued(cn.right);
 };
 
 // Count mutation_expr nodes anywhere in a tree (used to decide whether a
@@ -8858,6 +9006,9 @@ const executeQueryWithTraceImpl = (
   securityContext: SecurityContext = DEFAULT_SECURITY_CONTEXT,
   presetAst?: Statement,
 ): QueryExecutionTrace => {
+  // Declared outside the try so the finally can flush deferred deletes (see
+  // statementEmbedsDeleteInSelect). Set true only when this call owns the queue.
+  let ownsDeferredDeletes = false;
   try {
     query = injectRuntimeAliasBinding(schema, query);
     // Merge any session globals stored on this schema (from prior CREATE/SET
@@ -8900,6 +9051,17 @@ const executeQueryWithTraceImpl = (
     // body is `(insert Bar{a:=x})`) into the spliced body before routing, so
     // the embedded-mutation execution paths see the mutation directly.
     ast = expandInlineDmlFunctionCalls(schema, ast, ast.withModule ?? "default");
+    // `SELECT (DELETE …)` / `WITH t := (DELETE …) …`: the deleted rows must stay
+    // readable until the enclosing SELECT projects them. Activate the deferred-
+    // delete queue (the DML chain executor will queue removals instead of running
+    // them inline) and flush it after the result is built. Only the outermost
+    // such statement owns the queue — nested executeQueryWithTrace calls inherit
+    // it. Plain `DELETE T` and embedded INSERT/UPDATE are unaffected.
+    ownsDeferredDeletes = deferredChainDeletes === null
+      && statementEmbedsDeleteInSelect(ast);
+    if (ownsDeferredDeletes) {
+      deferredChainDeletes = [];
+    }
     context.statementInsertedIds = new Set<string>();
     validateParsedStatement(ast, { schema, module: ast.withModule });
     preValidateStatementAst(schema, ast, allowUserSpecifiedId(schema));
@@ -9060,7 +9222,42 @@ const executeQueryWithTraceImpl = (
     };
   } catch (err) {
     throw asAppError(decorateErrorWithUnsupportedTag(err, query));
+  } finally {
+    if (ownsDeferredDeletes) {
+      const queued = deferredChainDeletes ?? [];
+      deferredChainDeletes = null;
+      // Flush the deferred row removals now that the SELECT has read its rows.
+      for (const run of queued) run();
+    }
   }
+};
+
+// A select/for statement embeds a DELETE-in-select when it carries a
+// `mutation_expr` whose statement is a delete somewhere in its body (but is not
+// itself a bare top-level DELETE — those keep immediate semantics).
+const statementEmbedsDeleteInSelect = (ast: Statement): boolean => {
+  // A top-level `FOR … UNION (SELECT (DELETE …))` is intentionally excluded: the
+  // FOR executor runs each iteration body as its own nested SELECT, and that
+  // nested SELECT owns (and flushes) the deferral. Letting the FOR own the queue
+  // instead would defer every iteration's delete to the very end, so a later
+  // iteration would re-see — and re-delete — rows an earlier one already removed.
+  if (ast.kind !== "select" && ast.kind !== "select_expr" && ast.kind !== "select_free") {
+    return false;
+  }
+  // The DELETE shows up as a `mutation_expr` (`SELECT (DELETE …)`) or a
+  // `subquery_statement` (`WITH t := (DELETE …)`), each wrapping a delete
+  // statement. Either form means the outer SELECT needs the rows kept alive.
+  const containsDeleteMutationExpr = (node: unknown): boolean => {
+    if (Array.isArray(node)) return node.some(containsDeleteMutationExpr);
+    if (node === null || typeof node !== "object") return false;
+    const n = node as { kind?: string; statement?: { kind?: string } };
+    if ((n.kind === "mutation_expr" || n.kind === "subquery_statement")
+        && n.statement?.kind === "delete") {
+      return true;
+    }
+    return Object.values(node).some(containsDeleteMutationExpr);
+  };
+  return containsDeleteMutationExpr(ast);
 };
 
 const extractTargetTypeExpr = (target: FreeObjectExpr): TypeExpr | undefined => {
