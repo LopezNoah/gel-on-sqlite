@@ -8819,6 +8819,15 @@ const expandInlineDmlFunctionCalls = (
   return changed ? result : ast;
 };
 
+// A bare `{kind:"literal", value:V}` node sitting where the parser emits a raw
+// scalar (insert/update value assignments, filter predicate comparison values).
+// Parameter substitution produces such nodes; the DML resolver handles raw
+// scalars and complex expressions but not the bare literal node, so unwrap it.
+const unwrapBareLiteral = (v: unknown): unknown =>
+  v && typeof v === "object" && (v as { kind?: string }).kind === "literal" && "value" in (v as object)
+    ? (v as { value: unknown }).value
+    : v;
+
 const normalizeDmlLiteralValues = (node: unknown): void => {
   if (Array.isArray(node)) {
     node.forEach(normalizeDmlLiteralValues);
@@ -8830,13 +8839,14 @@ const normalizeDmlLiteralValues = (node: unknown): void => {
       && typeof (node as { values: unknown }).values === "object") {
     const vals = (node as { values: Record<string, unknown> }).values;
     for (const key of Object.keys(vals)) {
-      const v = vals[key];
-      if (v && typeof v === "object"
-          && (v as { kind?: string }).kind === "literal"
-          && "value" in (v as object)) {
-        vals[key] = (v as { value: unknown }).value;
-      }
+      vals[key] = unwrapBareLiteral(vals[key]);
     }
+  }
+  // `FILTER .a <= 1` stores the comparison value as a raw scalar; a substituted
+  // parameter leaves a bare literal node there, which the predicate resolver
+  // can't compare. Unwrap it (complex predicate values keep their node form).
+  if (kind === "predicate" && "value" in (node as object)) {
+    (node as { value: unknown }).value = unwrapBareLiteral((node as { value: unknown }).value);
   }
   for (const v of Object.values(node as object)) normalizeDmlLiteralValues(v);
 };
