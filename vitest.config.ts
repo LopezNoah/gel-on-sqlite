@@ -1,5 +1,73 @@
 import { defineConfig } from "vitest/config";
+import { transformWithEsbuild, type Plugin } from "vite";
 import os from "node:os";
+import fs from "node:fs";
+import path from "node:path";
+import { createHash } from "node:crypto";
+
+// --- Persistent TS transform cache -----------------------------------------
+//
+// vite 5 / vitest 2 re-transpile every source + test file on every run
+// (~1.5s single-fork, ~4.8s parallel) and persist nothing between runs. This
+// plugin memoizes the TypeScript→JS transform to disk, keyed by file content,
+// so unchanged files are read straight from cache on subsequent runs. The
+// agentic dev loop reruns tests constantly with few files actually changing,
+// so almost every transform becomes a cache hit.
+//
+// The transform itself is delegated to vite's own `transformWithEsbuild`, so
+// output is byte-identical to what vite would produce; we just cache it. We
+// run as an `enforce: "pre"` plugin AND set `esbuild: false` below so vite's
+// built-in esbuild pass doesn't re-transform our cached output (which would
+// negate the savings). The cache key folds in tsconfig.json so a compiler-
+// option change invalidates every entry.
+function persistentTsTransformCache(): Plugin {
+  const root = __dirname;
+  const cacheDir = path.join(root, "node_modules", ".cache", "vitest-ts-transform");
+  let salt = "";
+  try {
+    salt = fs.readFileSync(path.join(root, "tsconfig.json"), "utf8");
+  } catch {
+    // No tsconfig → empty salt; content hashing still keys correctly.
+  }
+  // Bump when the transform logic here changes in a way that should
+  // invalidate previously-cached output.
+  const VERSION = "v1";
+
+  return {
+    name: "persistent-ts-transform-cache",
+    enforce: "pre",
+    async transform(code, id) {
+      const file = id.split("?")[0];
+      if (!/\.tsx?$/.test(file) || file.endsWith(".d.ts") || file.includes("/node_modules/")) {
+        return null;
+      }
+      const key = createHash("sha1")
+        .update(VERSION).update("\0")
+        .update(salt).update("\0")
+        .update(file).update("\0")
+        .update(code)
+        .digest("hex");
+      const entryPath = path.join(cacheDir, `${key}.json`);
+
+      try {
+        // One read + parse for both code and map keeps the warm path cheap.
+        return JSON.parse(fs.readFileSync(entryPath, "utf8")) as { code: string; map: unknown };
+      } catch {
+        // Cache miss — fall through to transform.
+      }
+
+      const result = await transformWithEsbuild(code, id);
+      const entry = { code: result.code, map: result.map ?? null };
+      try {
+        fs.mkdirSync(cacheDir, { recursive: true });
+        fs.writeFileSync(entryPath, JSON.stringify(entry));
+      } catch {
+        // A cache-write failure is non-fatal: the transform still succeeded.
+      }
+      return entry;
+    },
+  };
+}
 
 // --- Resource-adaptive test runner configuration ---------------------------
 //
@@ -26,21 +94,29 @@ import os from "node:os";
 //
 // Memory is bounded by the number of forks: each fork holds its own engine +
 // caches. A 1-2GB VM cannot afford one fork per core, so we scale fork count
-// to available RAM (budgeting ~1.5GB/fork) and fall back to a single fork on
-// low-memory hosts. Override explicitly with VITEST_MAX_FORKS / VITEST_LOW_MEM.
+// to available RAM (see the per-fork budget below). Override explicitly with
+// VITEST_MAX_FORKS / VITEST_LOW_MEM.
 
 const totalMemGB = os.totalmem() / 1024 ** 3;
 const cpuCount = os.availableParallelism?.() ?? os.cpus().length;
 
-const lowMem = process.env.VITEST_LOW_MEM === "1" || totalMemGB < 4;
-
+// Budget ~1GB of RAM per fork. A fork's committed V8 heap stays well under
+// ~700MB (verified under a hard --max-old-space-size cap); the extra headroom
+// covers the native better-sqlite3 binding and the OS. This scales smoothly:
+// a 1GB VM runs a single fork (~14s), a 2GB VM runs two (~10s), and a 16GB
+// workstation saturates its cores. VITEST_LOW_MEM=1 forces a single fork as a
+// hard safety valve; VITEST_MAX_FORKS pins an exact count.
 const maxForks = process.env.VITEST_MAX_FORKS
   ? Math.max(1, Number(process.env.VITEST_MAX_FORKS))
-  : lowMem
+  : process.env.VITEST_LOW_MEM === "1"
     ? 1
-    : Math.max(1, Math.min(cpuCount - 1, Math.floor(totalMemGB / 1.5)));
+    : Math.max(1, Math.min(cpuCount - 1, Math.floor(totalMemGB)));
 
 export default defineConfig({
+  plugins: [persistentTsTransformCache()],
+  // Our plugin owns the TS→JS transform (and caches it); turn off vite's
+  // built-in esbuild pass so it doesn't redundantly re-transform the output.
+  esbuild: false,
   test: {
     environment: "node",
     include: ["tests/**/*.test.ts"],

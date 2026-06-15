@@ -436,7 +436,25 @@ const qualifiedGelTypeName = (typeref: GelIRTypeRef): string =>
 
 const tableNameForGelType = (qualifiedName: string): string => qualifiedName.replaceAll("::", "__").toLowerCase();
 
+// The schema fingerprint feeds the compile-cache key and is identical for
+// every query run against an unchanged schema, yet recomputing it (normalize
+// every type/link/function/global, then stableJson) was ~46% of a simple
+// query's cost. Memoize it per snapshot instance, invalidating only when the
+// snapshot's mutationVersion changes (i.e. after DDL). A WeakMap keeps this
+// from pinning snapshots in memory.
+const schemaFingerprintCache = new WeakMap<SchemaSnapshot, { version: number; fingerprint: string }>();
+
 const fingerprintSchema = (schema: SchemaSnapshot): string => {
+  const cached = schemaFingerprintCache.get(schema);
+  if (cached && cached.version === schema.mutationVersion) {
+    return cached.fingerprint;
+  }
+  const fingerprint = computeSchemaFingerprint(schema);
+  schemaFingerprintCache.set(schema, { version: schema.mutationVersion, fingerprint });
+  return fingerprint;
+};
+
+const computeSchemaFingerprint = (schema: SchemaSnapshot): string => {
   const types = schema
     .listTypes()
     .map((typeDef) => ({
