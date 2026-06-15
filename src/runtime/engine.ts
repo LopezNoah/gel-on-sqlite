@@ -68,6 +68,13 @@ const installSqlTrace = (db: SQLiteDatabase): void => {
   const origPrepare = db.prepare.bind(db);
   db.prepare = (sql: string) => {
     const stmt = origPrepare(sql);
+    // Fast path: when no trace sink is active (the normal query path doesn't
+    // record a SQL trail), hand back the statement unwrapped. This avoids
+    // allocating the recording closures and reassigning run/all/get on every
+    // prepared statement — pure overhead when nothing consumes the trail.
+    if (!activeSqlSink) {
+      return stmt;
+    }
     const record = (params: ScalarValue[]): void => {
       if (activeSqlSink) {
         activeSqlSink.push({ sql, params: [...params], loweringMode: "single_statement" });
@@ -6684,8 +6691,9 @@ export const executeQuery = (
     const script = rewrittenQuery.trim().endsWith(";") ? rewrittenQuery : `${rewrittenQuery};`;
     return executeQueryUnitWithTrace(db, schema, script, securityContext).result;
   }
-  // Reuse the AST parsed above instead of re-parsing inside the trace impl.
-  return executeQueryWithTrace(db, schema, rewrittenQuery, securityContext, parsedQuery).result;
+  // Reuse the AST parsed above instead of re-parsing inside the trace impl, and
+  // skip SQL-trail recording — this entry point only returns `.result`.
+  return executeQueryWithTrace(db, schema, rewrittenQuery, securityContext, parsedQuery, false).result;
 };
 
 export const executeScript = (
@@ -8856,7 +8864,17 @@ export const executeQueryWithTrace = (
   // string; injectRuntimeAliasBinding is idempotent, so an alias-injected
   // query parsed once upstream matches what the impl would re-parse.
   presetAst?: Statement,
+  // The live `sqlTrail` (actual executed SQL, including nested/runtime SQL) is
+  // only consumed by explain/debug paths. The normal query() path discards the
+  // trace and keeps only `.result`, so it passes false to skip the per-query
+  // sink setup and the prepared-statement wrapping (see installSqlTrace's fast
+  // path). The impl still populates a static `sqlTrail` from the artifact, so
+  // callers that read it without recording get the compiled (not live) trail.
+  recordSqlTrail = true,
 ): QueryExecutionTrace => {
+  if (!recordSqlTrail) {
+    return executeQueryWithTraceImpl(db, schema, query, securityContext, presetAst);
+  }
   // Record the full ordered sequence of SQL statements executed for this
   // query and surface it as `sqlTrail`. Nested executeQueryWithTrace calls
   // get their own sink (restored on exit), so each reports its own sequence.
