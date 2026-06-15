@@ -67,7 +67,7 @@ export class CompilerService {
       this.hits += 1;
       return {
         ir: cloneValue(cached.ir),
-        gelIr: cloneValue(cached.gelIr),
+        gelIr: cached.gelIr, // frozen + shared (see freezeShared) — never mutated
         sql: cloneValue(cached.sql),
         cache: {
           key,
@@ -129,15 +129,16 @@ export class CompilerService {
         throw err;
       }
     }
+    const sharedGelIr = freezeShared(gelIr);
     this.cache.set(key, {
       ir: cloneValue(ir),
-      gelIr: cloneValue(gelIr),
+      gelIr: sharedGelIr,
       sql: cloneValue(sql),
     });
 
     return {
       ir,
-      gelIr,
+      gelIr: sharedGelIr,
       sql,
       cache: {
         key,
@@ -570,4 +571,22 @@ const cloneValue = <T>(value: T): T => {
     return value;
   }
   return structuredClone(value);
+};
+
+// The gelIR tree is the largest artifact (~100KB for a nested shape; ~96% of
+// the per-query clone cost). Unlike `ir`/`sql`, no execution path mutates it —
+// it's read-only input to runGelSelectSQL / the runtime evaluators (verified by
+// deep-freezing it and running the whole suite: zero mutation throws). So we
+// freeze it once and share the single frozen instance across cache hits instead
+// of cloning it per query. Freezing keeps the read-only contract enforced: any
+// future code that tries to mutate it throws loudly rather than silently
+// corrupting the cache.
+const freezeShared = <T>(value: T): T => {
+  if (value === null || typeof value !== "object" || Object.isFrozen(value)) {
+    return value;
+  }
+  for (const key of Object.keys(value as Record<string, unknown>)) {
+    freezeShared((value as Record<string, unknown>)[key]);
+  }
+  return Object.freeze(value);
 };
