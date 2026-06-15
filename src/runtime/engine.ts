@@ -14,7 +14,7 @@ import { assertTargetSqlCompatibility, type RuntimeTarget } from "./target.js";
 import type { ShapeElement as GelIRShapeElement, Set as GelIRSet, Statement as GelIRStatement, TypeRef as GelIRTypeRef } from "../ir/gel_ir.js";
 import type { GroupIR, InsertIR, InsertLinkDefaultIR, InsertLinkPropertyIR, IRStatement, OverlayIR, SelectIR, UpdateIR, UpdateLinkAssignmentIR } from "../ir/model.js";
 import type { AccessPolicyCondition, AccessPolicyDef, ComputedLinkPropertyExpr, ConstraintDef, FieldDef, FieldDefaultExpr, FunctionDef, FunctionExprDef, FunctionVolatility, LinkPropertyDef, ScalarType, ScalarValue, TypeDef } from "../types.js";
-import { fieldSequenceName, normalizeLinkTargetNames, qualifiedTypeName } from "../schema/schema.js";
+import { cloneTypeDef, fieldSequenceName, normalizeLinkTargetNames, qualifiedTypeName } from "../schema/schema.js";
 import { parseDeclarativeSchema } from "../schema/sdl_adapter.js";
 import { schemaSnapshotFromDeclarative } from "../schema/uiSchema.js";
 import { tableNameForType } from "../codegen/sql.js";
@@ -1322,8 +1322,11 @@ const applyAlterTypeDDL = (schema: SchemaSnapshot, statement: string, defaultMod
   const parsed = parseAlterTypeStatement(statement.trim());
   if (!parsed || parsed.ops.length === 0) return false;
   const { module, name } = dynamicQualifiedNameParts(parsed.rawName, defaultModule);
-  const typeDef = schema.getType(`${module}::${name}`);
-  if (!typeDef) return false;
+  const stored = schema.getType(`${module}::${name}`);
+  if (!stored) return false;
+  // Schema reads return frozen, shared definitions; this routine mutates the
+  // type in place before writing it back via addType, so work on a clone.
+  const typeDef = cloneTypeDef(stored);
 
   let mutated = false;
   for (const op of parsed.ops) {
