@@ -174,7 +174,14 @@ export const getCompilerService = (): CompilerService => {
 
 export const buildCompileCacheKey = (schema: SchemaSnapshot, statement: Statement, context: CompileContext = {}): string => {
   const schemaFingerprint = fingerprintSchema(schema);
-  const statementFingerprint = stableJson(statement);
+  // A parsed statement always has deterministic key order (same query text →
+  // same parse path → same object shape), so plain JSON.stringify is a stable
+  // fingerprint here — no need for the recursive key-sorting stableJson, which
+  // was ~10x slower and dominated this function. (Runtime-built objects like
+  // globals/params below still use stableJson: their key order can vary.) The
+  // key only affects cache hit/miss, never correctness — distinct ASTs still
+  // produce distinct strings.
+  const statementFingerprint = JSON.stringify(statement);
   const overlaysFingerprint = stableJson((context.overlays ?? []).map((overlay) => ({
     table: overlay.table,
     sourcePathId: overlay.sourcePathId,
