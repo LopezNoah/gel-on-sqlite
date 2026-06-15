@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { QueryHarness } from "./utils.js";
 import {
   assertQueryResult,
@@ -9,7 +9,9 @@ import {
 describe("TestEdgeQLLinkToScalarTypes", () => {
   let h: QueryHarness;
 
-  beforeEach(async () => {
+  // Read-only suite (no test mutates the DB or session state), so the harness
+  // is built once instead of per test.
+  beforeAll(async () => {
     h = await QueryHarness.create({
       schema: "inventory",
       setup: "inventory_setup",
