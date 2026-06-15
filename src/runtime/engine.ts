@@ -9206,6 +9206,15 @@ const executeQueryWithTraceImpl = (
     // body is `(insert Bar{a:=x})`) into the spliced body before routing, so
     // the embedded-mutation execution paths see the mutation directly.
     ast = expandInlineDmlFunctionCalls(schema, ast, ast.withModule ?? "default");
+    // Single sweep for all the embedded-DML / mutation handling below. Each of
+    // those passes (statementEmbedsDeleteInSelect, validateMutationPlacement,
+    // preExecute*, detectSelectOverMutation, isWithDmlChain) is a no-op unless
+    // the statement contains a mutation, and each previously re-walked the whole
+    // AST to discover that. Detect it once here — after inline-DML expansion,
+    // which is the only step that can introduce a mutation — and gate them on
+    // the result. The intervening group/dunder/free-object rewrites never add
+    // mutations, so this flag stays valid for the passes that follow them.
+    const astHasMutation = astNodeContainsMutation(ast);
     // `SELECT (DELETE …)` / `WITH t := (DELETE …) …`: the deleted rows must stay
     // readable until the enclosing SELECT projects them. Activate the deferred-
     // delete queue (the DML chain executor will queue removals instead of running
@@ -9213,6 +9222,7 @@ const executeQueryWithTraceImpl = (
     // such statement owns the queue — nested executeQueryWithTrace calls inherit
     // it. Plain `DELETE T` and embedded INSERT/UPDATE are unaffected.
     ownsDeferredDeletes = deferredChainDeletes === null
+      && astHasMutation
       && statementEmbedsDeleteInSelect(ast);
     if (ownsDeferredDeletes) {
       deferredChainDeletes = [];
@@ -9285,19 +9295,21 @@ const executeQueryWithTraceImpl = (
     // A volatile free-object WITH binding (`WITH free := { name :=
     // <str>random() }`) must materialize once — capture before inlining.
     ast = captureFreeObjectScalarBindings(db, schema, ast, context);
-    // Reject mutations placed in a shape's computed expression / non-exposed
-    // free object before the pre-execution passes silently run them.
-    validateMutationPlacement(ast);
-    // DML inside WITH bindings / free-object entries executes up front; the
-    // statement then compiles as a plain read over the captured ids.
-    ast = preExecuteDmlBindings(db, schema, ast, context);
-    ast = preExecuteMutationExprsInDmlValues(db, schema, ast, context);
-    ast = preExecuteMutationExprsInSelectExpr(db, schema, ast, context);
-    const selectOverMutation = detectSelectOverMutation(ast);
+    if (astHasMutation) {
+      // Reject mutations placed in a shape's computed expression / non-exposed
+      // free object before the pre-execution passes silently run them.
+      validateMutationPlacement(ast);
+      // DML inside WITH bindings / free-object entries executes up front; the
+      // statement then compiles as a plain read over the captured ids.
+      ast = preExecuteDmlBindings(db, schema, ast, context);
+      ast = preExecuteMutationExprsInDmlValues(db, schema, ast, context);
+      ast = preExecuteMutationExprsInSelectExpr(db, schema, ast, context);
+    }
+    const selectOverMutation = astHasMutation ? detectSelectOverMutation(ast) : undefined;
     if (selectOverMutation) {
       return executeSelectOverMutation(db, schema, query, ast, selectOverMutation, context, runtimeTarget, compilerService);
     }
-    if (isWithDmlChain(ast)) {
+    if (astHasMutation && isWithDmlChain(ast)) {
       return executeWithDmlChain(db, schema, ast, context);
     }
     const compiled = compilerService.compile(schema, ast, { globals: context.globals, params: context.params, target: runtimeTarget, allowUserSpecifiedId: allowUserSpecifiedId(schema) });
