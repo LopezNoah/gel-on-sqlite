@@ -6684,7 +6684,8 @@ export const executeQuery = (
     const script = rewrittenQuery.trim().endsWith(";") ? rewrittenQuery : `${rewrittenQuery};`;
     return executeQueryUnitWithTrace(db, schema, script, securityContext).result;
   }
-  return executeQueryWithTrace(db, schema, rewrittenQuery, securityContext).result;
+  // Reuse the AST parsed above instead of re-parsing inside the trace impl.
+  return executeQueryWithTrace(db, schema, rewrittenQuery, securityContext, parsedQuery).result;
 };
 
 export const executeScript = (
@@ -8849,6 +8850,12 @@ export const executeQueryWithTrace = (
   schema: SchemaSnapshot,
   query: string,
   securityContext: SecurityContext = DEFAULT_SECURITY_CONTEXT,
+  // When the caller has already parsed `query` (e.g. executeQuery parses it to
+  // detect DDL/FOR-INSERT routing), it threads the AST through here so the
+  // impl skips a redundant re-parse. Must be the AST of this exact `query`
+  // string; injectRuntimeAliasBinding is idempotent, so an alias-injected
+  // query parsed once upstream matches what the impl would re-parse.
+  presetAst?: Statement,
 ): QueryExecutionTrace => {
   // Record the full ordered sequence of SQL statements executed for this
   // query and surface it as `sqlTrail`. Nested executeQueryWithTrace calls
@@ -8858,7 +8865,7 @@ export const executeQueryWithTrace = (
   const sink: SQLArtifact[] = [];
   activeSqlSink = sink;
   try {
-    const trace = executeQueryWithTraceImpl(db, schema, query, securityContext);
+    const trace = executeQueryWithTraceImpl(db, schema, query, securityContext, presetAst);
     if (sink.length > 0) {
       trace.sqlTrail = [...sink];
     }
