@@ -9186,8 +9186,14 @@ const makeGroupStmt = (parts: GroupAstParts, scoped: IRCompileContext): GroupStm
   } as GroupStmt;
 };
 
-const compileGroupStatement = (statement: GroupStatementAst, ctx: IRCompileContext): GroupStmt =>
-  makeGroupStmt(statement, withBindings(ctx, statement.with));
+const compileGroupStatement = (statement: GroupStatementAst, ctx: IRCompileContext): GroupStmt => {
+  // BY-clause name-collision diagnostics (`group … using x := … by .x, x`) used
+  // to be raised by the legacy compileToIR; the gelIR path now owns them.
+  validateGroupByAtomCollisions(statement.by, (message) => {
+    throw new AppError("E_SEMANTIC", message, statement.pos?.line ?? 1, statement.pos?.column ?? 1);
+  });
+  return makeGroupStmt(statement, withBindings(ctx, statement.with));
+};
 
 // Parse a trailing shape over group rows (`(GROUP …) { element := .key.element,
 // cnt := count(.elements), key: {cost}, elements: {name} }`) into the
