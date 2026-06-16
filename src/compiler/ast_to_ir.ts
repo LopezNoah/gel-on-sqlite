@@ -8514,6 +8514,18 @@ const containsBindingRef = (node: unknown, seen = new globalThis.Set<unknown>())
   return Object.values(node).some((value) => containsBindingRef(value, seen));
 };
 
+// Whether `node` references a binding_ref with the given name — used to tell a
+// USING self-reference to the subject (`group X using z := X`) apart from a
+// reference to an unrelated WITH binding (`using z := N <= 1`).
+const containsBindingRefNamed = (node: unknown, name: string, seen = new globalThis.Set<unknown>()): boolean => {
+  if (!node || typeof node !== "object" || seen.has(node)) return false;
+  seen.add(node);
+  const obj = node as { kind?: unknown; name?: unknown };
+  if (obj.kind === "binding_ref" && obj.name === name) return true;
+  if (Array.isArray(node)) return node.some((item) => containsBindingRefNamed(item, name, seen));
+  return Object.values(node).some((value) => containsBindingRefNamed(value, name, seen));
+};
+
 // Add schema fields to an ALREADY-COMPILED group subject's shape (peeling
 // no-op select wrappers down to the type root) — used when an AST rebuild
 // isn't possible because the group's WITH bindings live on an inner scope.
@@ -8820,7 +8832,18 @@ const buildGroupStmtParts = (
             usingExpr = rewritten as typeof usingExpr;
           }
         }
-        if (containsBindingRef(usingExpr)) {
+        // A self-reference to the subject binding (`group X using z := X`)
+        // means "group on the whole element" — the shaped fold can't model
+        // that, so it stays on the runtime grouper. Any OTHER binding reference
+        // (`using z := N <= 1` where N := random()) is inlined: it resolves
+        // against the surrounding scope when the subject shape compiles below.
+        if (subjectBindingName && containsBindingRefNamed(usingExpr, subjectBindingName)) {
+          lowerable = false;
+          continue;
+        }
+        if (containsBindingRef(usingExpr) && !subjectBindingName) {
+          // No identifiable subject binding to disambiguate a self-reference —
+          // keep the conservative bail (e.g. `group <tuple set> using z := X`).
           lowerable = false;
           continue;
         }
