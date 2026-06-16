@@ -8697,7 +8697,7 @@ const usingNameOfBindingRef = (expr: unknown): string | undefined =>
 const buildGroupStmtParts = (
   statement: GroupAstParts,
   scoped: IRCompileContext,
-): Pick<GroupStmt, "byAtoms" | "groupingSets" | "hiddenByFields" | "elementValueField"> & { subject: Set } => {
+): Pick<GroupStmt, "byAtoms" | "groupingSets" | "hiddenByFields" | "elementValueField" | "selfKeyAliases"> & { subject: Set } => {
   let lowerable = true;
 
   // --- Expand BY into the atom-name union + grouping sets. ---
@@ -8790,6 +8790,39 @@ const buildGroupStmtParts = (
       scoped = withBindings(scoped, wb);
     }
     sourceAst = inner;
+  }
+  // `group X using z := X by z` — group a value/tuple set by the element value
+  // itself. The subject is plain value rows; the self-alias keys (and the
+  // displayed elements) read the whole `value`, so there is no object shape to
+  // fold and no per-element tuple to build (which would cross-join the value
+  // against itself). Handled here, before the shaped / scalar-element paths.
+  const subjectName = sourceAst.kind === "select"
+    ? sourceAst.typeName
+    : sourceAst.kind === "shape_projection" && sourceAst.expr.kind === "binding_ref"
+      ? sourceAst.expr.name
+      : sourceAst.kind === "binding_ref"
+        ? (sourceAst as { name?: string }).name
+        : undefined;
+  const selfAliasNames = subjectName
+    ? (statement.using ?? [])
+        .filter((u) => u.expr.kind === "binding_ref" && (u.expr as { name?: string }).name === subjectName)
+        .map((u) => u.alias)
+    : [];
+  if (selfAliasNames.length > 0
+      && (statement.using ?? []).length === selfAliasNames.length
+      && atomOrder.length > 0 && atomOrder.every((a) => selfAliasNames.includes(a))
+      && fieldAtoms.length === 0) {
+    const compiled = tryResult(() => compileFreeObjectExpr(sourceAst, scoped));
+    if (compiled.ok) {
+      return {
+        subject: compiled.value,
+        byAtoms: atomOrder,
+        groupingSets,
+        hiddenByFields: undefined,
+        elementValueField: undefined,
+        selfKeyAliases: atomOrder,
+      };
+    }
   }
   const hiddenByFields: string[] = [];
   if (sourceAst.kind === "shape_projection" || sourceAst.kind === "select") {
@@ -9134,6 +9167,7 @@ const makeGroupStmt = (parts: GroupAstParts, scoped: IRCompileContext): GroupStm
     groupingSets: core.groupingSets,
     hiddenByFields: core.hiddenByFields,
     elementValueField: core.elementValueField,
+    selfKeyAliases: core.selfKeyAliases,
     ...statementBase(scoped),
     span: parts.pos ?? { line: 1, column: 1 },
   } as GroupStmt;
