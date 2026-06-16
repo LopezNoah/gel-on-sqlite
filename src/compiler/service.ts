@@ -27,7 +27,10 @@ export interface CompilerCacheMeta {
 }
 
 export interface CompileArtifact {
-  ir: IRStatement;
+  // The DML IR — defined only for insert/update/delete (consumed by the
+  // engine's write path). For SELECT / GROUP the engine routes on
+  // `statement.kind` and executes off `gelIr` + `sql`, so no legacy IR is built.
+  ir: IRStatement | undefined;
   gelIr: GelIRStatement;
   sql: GelIRSQLArtifact;
   cache: CompilerCacheMeta;
@@ -46,7 +49,7 @@ export interface CompileContext {
 }
 
 interface CachedCompile {
-  ir: IRStatement;
+  ir: IRStatement | undefined;
   gelIr: GelIRStatement;
   sql: GelIRSQLArtifact;
 }
@@ -99,16 +102,16 @@ export class CompilerService {
       gelIr = { kind: "statement", expr: { kind: "set", expr: { kind: "type_root", typeref: { kind: "type_ref", id: "schema::Type", isScalar: false } }, pathId: { kind: "path_id", namespace: [], isPointerPath: false, steps: [] }, typeref: { kind: "type_ref", id: "schema::Type", isScalar: false }, shape: [], isBinding: false, isMaterializedRef: false, isSchemaAlias: false } } as unknown as GelIRStatement;
     }
     // Mutations compile through the standalone DML lowering (the runtime
-    // mutation plan). Every other statement — SELECT and GROUP alike — runs
-    // entirely off the gelIR SQL artifact; the engine only reads `ir.kind` to
-    // route, so a kind-only shim suffices. Groups that don't lower to SQL no
-    // longer fall back to the legacy runtime grouper: the engine raises
+    // mutation plan — the DML IR the engine's write path consumes). Every other
+    // statement — SELECT and GROUP alike — runs entirely off the gelIR SQL
+    // artifact; the engine routes on `statement.kind` and never reads a legacy
+    // IR for them, so none is produced. Groups that don't lower to SQL raise
     // E_UNSUPPORTED (see the group dispatch in engine.ts). DML lowering errors
     // (validation) propagate as before.
-    const ir: ReturnType<typeof traceIRFromGelIR> =
+    const ir: IRStatement | undefined =
       statement.kind === "insert" || statement.kind === "update" || statement.kind === "delete"
         ? compileDmlToIR(schema, statement, { globals: context.globals, allowUserSpecifiedId: context.allowUserSpecifiedId })
-        : traceIRFromGelIR(statement, gelIr);
+        : undefined;
     const sharedGelIr = freezeShared(gelIr);
     this.cache.set(key, {
       ir: cloneValue(ir),
@@ -357,75 +360,6 @@ const selectExprContainsGroup = (
   }
   return false;
 };
-
-const traceIRFromGelIR = (statement: Statement, gelIr: GelIRStatement): IRStatement => {
-  if (statement.kind === "select") {
-    const sourceSet = unwrapGelSelectResultSet(gelIr.expr);
-    const sourceType = sourceSet.typeref && !sourceSet.typeref.isScalar
-      ? qualifiedGelTypeName(sourceSet.typeref)
-      : "std::Object";
-    return {
-      kind: "select",
-      sourceType,
-      table: tableNameForGelType(sourceType),
-      columns: ["id"],
-      shape: [],
-      filter: undefined,
-      orderBy: undefined,
-      limit: undefined,
-      offset: undefined,
-      pathId: { id: sourceType, steps: [] },
-      scopeTree: { id: "trace", children: [] },
-      appliedOverlays: [],
-    } as unknown as IRStatement;
-  }
-
-  if (statement.kind === "select_free") {
-    return {
-      kind: "select_free",
-      entries: [],
-      pathId: { id: "select_free", steps: [] },
-      scopeTree: { id: "trace", children: [] },
-    } as unknown as IRStatement;
-  }
-
-  if (statement.kind === "group") {
-    // A SQL-complete top-level GROUP: the engine's group dispatch (and
-    // runCompiledGroup / preEvaluateGroupBindings) only checks `kind === "group"`
-    // and then runs the gelIR artifact — the GroupIR body is read solely on the
-    // runGroupIR fallback path, which this statement doesn't take. Synthesize a
-    // minimal group-kind shim so the legacy GroupIR is never built for it.
-    return {
-      kind: "group",
-      source: { kind: "select", typeName: "std::Object", shape: [], pos: statement.pos },
-      byAtoms: [],
-      groupingSets: [],
-      hiddenByFields: [],
-    } as unknown as IRStatement;
-  }
-
-  return {
-    kind: "select_expr",
-    entries: [],
-    pathId: { id: "select_expr", steps: [] },
-    scopeTree: { id: "trace", children: [] },
-  } as unknown as IRStatement;
-};
-
-const unwrapGelSelectResultSet = (set: GelIRSet): GelIRSet => {
-  let current = set;
-  while (current.expr.kind === "select_expr") {
-    const result = (current.expr as { result?: GelIRSet }).result;
-    if (!result) break;
-    current = result;
-  }
-  return current;
-};
-
-const qualifiedGelTypeName = (typeref: GelIRTypeRef): string =>
-  typeref.nameHint.includes("::") ? typeref.nameHint : `${typeref.module}::${typeref.nameHint}`;
-
-const tableNameForGelType = (qualifiedName: string): string => qualifiedName.replaceAll("::", "__").toLowerCase();
 
 // The compiler cache hands out a private deep copy of each artifact (consumers
 // mutate the IR during execution, so the cached copy must stay pristine).

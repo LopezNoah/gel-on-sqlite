@@ -1,6 +1,5 @@
 import { AppError, tryResult } from "../errors.js";
 import { parseEdgeQL } from "../edgeql/parser.js";
-import { validateGroupByAtomCollisions } from "./semantic.js";
 import type {
   Statement as EdgeQLStatement,
   ComputedExpr,
@@ -74,6 +73,42 @@ import type { FieldDef, FunctionDef, LinkDef, LinkPropertyDef, ScalarType, Scala
 import { qualifiedTypeName, type SchemaSnapshot } from "../schema/schema.js";
 import type { GeneratedSchema, GeneratedSchemaType } from "../codegen/schema.js";
 import { resolveSchemaModelForCompile } from "../codegen/schema_loader.js";
+
+// Reject a GROUP BY clause that uses one name in conflicting roles (a USING
+// alias vs a direct field, or a link property vs an object property). Relocated
+// here from the retired legacy semantic pipeline; this is the only live
+// consumer.
+export const validateGroupByAtomCollisions = (
+  by: GroupByElement[],
+  fail: (message: string) => never,
+): void => {
+  // (`Set` is shadowed by the gel_ir `Set` type in this module, so track
+  // origins with a plain flag record instead.)
+  const origins = new Map<string, { field: boolean; using: boolean; linkProperty: boolean }>();
+  const record = (atom: GroupByAtom): void => {
+    const name = atom.kind === "field_ref" ? atom.field : atom.name;
+    const origin: "field" | "using" | "linkProperty" =
+      atom.kind === "field_ref" ? "field" : atom.kind === "link_property_ref" ? "linkProperty" : "using";
+    const seen = origins.get(name) ?? { field: false, using: false, linkProperty: false };
+    seen[origin] = true;
+    origins.set(name, seen);
+    if (seen.field && seen.using) {
+      fail(`the name '${name}' cannot be used both as a USING alias and used directly in the BY clause`);
+    }
+    if (seen.field && seen.linkProperty) {
+      fail(`BY clause cannot refer to link property and object property with the same name '${name}'`);
+    }
+  };
+  for (const element of by) {
+    if (element.kind === "field_ref" || element.kind === "name_ref" || element.kind === "link_property_ref") {
+      record(element);
+    } else if (element.kind === "sets") {
+      for (const list of element.sets) for (const atom of list) record(atom);
+    } else if (element.kind === "cube" || element.kind === "rollup") {
+      for (const atom of element.atoms) record(atom);
+    }
+  }
+};
 
 export interface IRCompileOptions {
   module?: string;
