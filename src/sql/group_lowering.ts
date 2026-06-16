@@ -104,9 +104,22 @@ export const compileGroupRowsSQL = (
       while (tupleCursor.expr.kind === "select_expr") {
         tupleCursor = (tupleCursor.expr as SelectExpr).result;
       }
+      // A multi field aggregates into a JSON array: a `union` (`b := {2,3,4}`)
+      // or a FOR over a plain value (`b := (for n in {8,9} select n)`) — both
+      // produce many rows for the one free-object element. A FOR whose body is
+      // an OBJECT (`union ({c, d})`) is NOT aggregated here: it lowers through
+      // the generic shaped-subject path, so leave the trigger off for it.
+      const isMultiField = (s: Set): boolean => {
+        if (s.expr.kind === "operator_call" && (s.expr as OperatorCall).operator === "union") return true;
+        if (s.expr.kind === "for_expr") {
+          let body = (s.expr as { body: Set }).body;
+          while (body.expr.kind === "select_expr") body = (body.expr as SelectExpr).result;
+          return body.expr.kind !== "tuple" && (body.shape?.length ?? 0) === 0;
+        }
+        return false;
+      };
       if (tupleCursor.expr.kind === "tuple" && (tupleCursor.expr as Tuple).named
-          && (tupleCursor.expr as Tuple).elements.some((el) =>
-            el.val.expr.kind === "operator_call" && (el.val.expr as OperatorCall).operator === "union")) {
+          && (tupleCursor.expr as Tuple).elements.some((el) => isMultiField(el.val))) {
         const cp = params.length;
         const pairs: string[] = [];
         let ok = true;
@@ -114,8 +127,7 @@ export const compileGroupRowsSQL = (
           if (!element.name) { ok = false; break; }
           const rows = deps.compileScalarSelectSQL(element.val, params, target, options, []);
           if (!rows) { ok = false; break; }
-          const isMulti = element.val.expr.kind === "operator_call"
-            && (element.val.expr as OperatorCall).operator === "union";
+          const isMulti = isMultiField(element.val);
           const inner = deps.setValueIsJson(element.val) ? `json(${quoteIdent("value")})` : quoteIdent("value");
           const valueSql = isMulti
             ? `json((SELECT COALESCE(json_group_array(${inner}), '[]') FROM (${rows})))`
