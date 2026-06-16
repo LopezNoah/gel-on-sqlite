@@ -9368,20 +9368,17 @@ const executeQueryWithTraceImpl = (
         rows: runGelSelectSQL(db, schema, compiled.gelIr, context, sqlArtifact),
       };
     } else if (ir.kind === "group") {
-      // Top-level `GROUP <subject> BY …`. When the GelIR→SQL stage produced a
-      // real statement (compileGroupStmtToSQL supports the single-grouping-set
-      // case), run it: each row's `value` column is the group object
-      // `{ key, grouping, elements }`, decoded by runGelSelectSQL. Otherwise
-      // (grouping sets, CUBE/ROLLUP, USING aggregates, …) the artifact is
-      // empty and we fall back to the runtime grouper.
+      // Top-level `GROUP <subject> BY …` — run the GelIR→SQL artifact (each
+      // row's `value` column is the group object `{ key, grouping, elements }`,
+      // decoded by runGelSelectSQL). Group shapes the SQL stage can't lower are
+      // unsupported: the legacy runtime grouper has been retired.
       if (sqlArtifact.loweringMode === "single_statement" && sqlArtifact.sql.length > 0) {
         result = {
           kind: "select",
           rows: runGelSelectSQL(db, schema, compiled.gelIr, context, sqlArtifact),
         };
       } else {
-        const rows = runGroupIR(db, schema, ir, context, sqlTrail);
-        result = { kind: "select", rows };
+        throw new AppError("E_UNSUPPORTED", "GROUP statement could not be lowered to SQL", ast.pos.line, ast.pos.column);
       }
     } else {
       if (!subjectType) {

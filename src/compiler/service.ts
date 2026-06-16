@@ -10,7 +10,6 @@ import type { RuntimeTarget } from "../runtime/target.js";
 import { stableJson, type SchemaSnapshot } from "../schema/schema.js";
 import { compileGelIRToSQL, type GelIRSQLArtifact } from "../sql/gel_ir_compiler.js";
 import type { ScalarValue } from "../types.js";
-import { compileToIR } from "./semantic.js";
 import { compileDmlToIR } from "./dml_lowering.js";
 import type { GeneratedSchema } from "../codegen/schema.js";
 import { compileASTToGelIR, expandSchemaAliasesInStatement, isGelIRCompatibleStatement } from "./ast_to_ir.js";
@@ -99,45 +98,17 @@ export class CompilerService {
       sql = { sql: "", params: [], loweringMode: "fallback_multi_query" } as GelIRSQLArtifact;
       gelIr = { kind: "statement", expr: { kind: "set", expr: { kind: "type_root", typeref: { kind: "type_ref", id: "schema::Type", isScalar: false } }, pathId: { kind: "path_id", namespace: [], isPointerPath: false, steps: [] }, typeref: { kind: "type_ref", id: "schema::Type", isScalar: false }, shape: [], isBinding: false, isMaterializedRef: false, isSchemaAlias: false } } as unknown as GelIRStatement;
     }
-    // When the gelIR pipeline lowered the statement to a single SQL statement,
-    // the engine executes that artifact directly and only reads `ir.kind` (see
-    // the group/select_expr dispatch in engine.ts, and runCompiledGroup /
-    // preEvaluateGroupBindings — all single_statement branches use `gelIr`, not
-    // the GroupIR). So we don't need the legacy semantic.ts GroupIR for these:
-    // synthesize a kind-only shim and skip compileToIR entirely. Only when the
-    // SQL falls back (multi-query) does the runtime grouper actually consume a
-    // real GroupIR, so compileToIR runs only in that case.
-    const sqlIsComplete = sql.loweringMode === "single_statement" && sql.sql.length > 0;
-    let ir: ReturnType<typeof traceIRFromGelIR>;
-    try {
-      // Mutations compile through the standalone DML lowering (runtime
-      // mutation plan) — the legacy semantic.ts pipeline is group-only now.
-      // Keep this after compileSqlFromGelIR so gelIR compile errors retain
-      // precedence over plan validation errors, matching the legacy order.
-      ir = statement.kind === "insert" || statement.kind === "update" || statement.kind === "delete"
+    // Mutations compile through the standalone DML lowering (the runtime
+    // mutation plan). Every other statement — SELECT and GROUP alike — runs
+    // entirely off the gelIR SQL artifact; the engine only reads `ir.kind` to
+    // route, so a kind-only shim suffices. Groups that don't lower to SQL no
+    // longer fall back to the legacy runtime grouper: the engine raises
+    // E_UNSUPPORTED (see the group dispatch in engine.ts). DML lowering errors
+    // (validation) propagate as before.
+    const ir: ReturnType<typeof traceIRFromGelIR> =
+      statement.kind === "insert" || statement.kind === "update" || statement.kind === "delete"
         ? compileDmlToIR(schema, statement, { globals: context.globals, allowUserSpecifiedId: context.allowUserSpecifiedId })
-        : needsLegacyRuntimeIR(statement) && !sqlIsComplete
-          ? compileToIR(schema, statement, {
-              overlays: context.overlays,
-              globals: context.globals,
-              schemaModel: context.schemaModel,
-              schemaModelName: context.schemaModelName,
-            })
-          : traceIRFromGelIR(statement, gelIr);
-    } catch (err) {
-      // The legacy pipeline can't model some group statements the gelIR
-      // pipeline lowers fully (e.g. chained group-rows bindings). When the
-      // SQL artifact is complete, the engine executes it directly and only
-      // reads the IR's kind — synthesize it from the gelIR instead of
-      // failing the whole compile. Scoped to group-wrapping selects: for
-      // everything else (DML validation in particular) the legacy error is
-      // the intended behavior.
-      if (isSelectExprWrappingGroup && sql.loweringMode === "single_statement" && sql.sql.length > 0) {
-        ir = traceIRFromGelIR(statement, gelIr);
-      } else {
-        throw err;
-      }
-    }
+        : traceIRFromGelIR(statement, gelIr);
     const sharedGelIr = freezeShared(gelIr);
     this.cache.set(key, {
       ir: cloneValue(ir),
@@ -352,20 +323,6 @@ const compileSqlFromGelIR = (
     gelIr,
     sql,
   };
-};
-
-const needsLegacyRuntimeIR = (statement: Statement): boolean => {
-  if (statement.kind === "group") {
-    return true;
-  }
-  // `SELECT (GROUP X BY Y) [FILTER … ORDER BY …]` — peelGroupExprFromSelectExpr
-  // in compileToIR rewrites this to a GroupIR; routing it through the legacy
-  // IR builder is the only way the runtime grouper (runGroupIR) gets a
-  // GroupIR for this AST shape.
-  if (statement.kind === "select_expr") {
-    return selectExprContainsGroup(statement);
-  }
-  return false;
 };
 
 // Detect a `group_expr` anywhere inside a select_expr statement — directly in
