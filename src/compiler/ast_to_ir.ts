@@ -880,6 +880,26 @@ const containsSubSelect = (expr: FreeObjectExpr): boolean => {
   return false;
 };
 
+// The "effective" output shape of a set, peeling binding wrappers so a
+// re-projection (`select X { …, b }` where `X := (for n in {…} select T { b := n })`)
+// can adopt a computed pointer the binding materialised inside a FOR body or a
+// nested select. A bare binding ref's own `.shape` is empty — the shape lives
+// on the for_expr's body / select_expr's result / the first union arm.
+function gatherBindingShape(set: Set, depth = 0): ShapeElement[] {
+  if (set.shape && set.shape.length > 0) return set.shape;
+  if (depth > 8) return [];
+  const ex = set.expr;
+  if (ex.kind === "select_expr") return gatherBindingShape((ex as SelectExpr).result, depth + 1);
+  if (ex.kind === "for_expr") return gatherBindingShape((ex as ForExpr).body, depth + 1);
+  if (ex.kind === "operator_call" && (ex as OperatorCall).operator === "union") {
+    for (const arg of Object.values((ex as OperatorCall).args)) {
+      const s = gatherBindingShape((arg as CallArg).expr, depth + 1);
+      if (s.length > 0) return s;
+    }
+  }
+  return [];
+}
+
 const shapeRequestsLinkProperty = (shape: EdgeQLShapeElement[]): boolean => {
   for (const el of shape) {
     if (el.kind === "field" && el.name.startsWith("@")) return true;
@@ -7304,7 +7324,7 @@ const compileShape = (
         // where X := User { …, b := … }): the field isn't on the schema type,
         // but the binding's compiled shape carries the element — adopt it so
         // the projection keeps the computed value.
-        const carried = (subject.shape ?? []).find((s) => {
+        const carried = gatherBindingShape(subject).find((s) => {
           const carriedName = s.name
             ?? (s.expr.expr.kind === "pointer" ? (s.expr.expr as Pointer).ptrref.shortName : undefined);
           return carriedName === el.name;
@@ -7471,7 +7491,7 @@ const compileShape = (
         // Re-projecting a WITH binding's computed pointer with a sub-shape
         // (`select X { b: {c, d} }` where X := User { b := {…} }): adopt the
         // binding's carried element, as in the field branch above.
-        const carried = (subject.shape ?? []).find((s) => {
+        const carried = gatherBindingShape(subject).find((s) => {
           const carriedName = s.name
             ?? (s.expr.expr.kind === "pointer" ? (s.expr.expr as Pointer).ptrref.shortName : undefined);
           return carriedName === el.name;
