@@ -7,7 +7,7 @@ import { AppError } from "../errors.js";
 import type { Set as GelIRSet, Statement as GelIRStatement, TypeRef as GelIRTypeRef } from "../ir/gel_ir.js";
 import type { IRStatement, OverlayIR } from "../ir/model.js";
 import type { RuntimeTarget } from "../runtime/target.js";
-import { qualifiedTypeName, type SchemaSnapshot } from "../schema/schema.js";
+import { stableJson, type SchemaSnapshot } from "../schema/schema.js";
 import { compileGelIRToSQL, type GelIRSQLArtifact } from "../sql/gel_ir_compiler.js";
 import type { ScalarValue } from "../types.js";
 import { compileToIR } from "./semantic.js";
@@ -174,7 +174,9 @@ export const getCompilerService = (): CompilerService => {
 };
 
 export const buildCompileCacheKey = (schema: SchemaSnapshot, statement: Statement, context: CompileContext = {}): string => {
-  const schemaFingerprint = fingerprintSchema(schema);
+  // Memoized on the snapshot instance (and inherited by clones), so this is a
+  // cache hit for every query on an unchanged schema — see contentFingerprint.
+  const schemaFingerprint = schema.contentFingerprint();
   // A parsed statement always has deterministic key order (same query text →
   // same parse path → same object shape), so plain JSON.stringify is a stable
   // fingerprint here — no need for the recursive key-sorting stableJson, which
@@ -443,123 +445,6 @@ const qualifiedGelTypeName = (typeref: GelIRTypeRef): string =>
   typeref.nameHint.includes("::") ? typeref.nameHint : `${typeref.module}::${typeref.nameHint}`;
 
 const tableNameForGelType = (qualifiedName: string): string => qualifiedName.replaceAll("::", "__").toLowerCase();
-
-// The schema fingerprint feeds the compile-cache key and is identical for
-// every query run against an unchanged schema, yet recomputing it (normalize
-// every type/link/function/global, then stableJson) was ~46% of a simple
-// query's cost. Memoize it per snapshot instance, invalidating only when the
-// snapshot's mutationVersion changes (i.e. after DDL). A WeakMap keeps this
-// from pinning snapshots in memory.
-const schemaFingerprintCache = new WeakMap<SchemaSnapshot, { version: number; fingerprint: string }>();
-
-const fingerprintSchema = (schema: SchemaSnapshot): string => {
-  const cached = schemaFingerprintCache.get(schema);
-  if (cached && cached.version === schema.mutationVersion) {
-    return cached.fingerprint;
-  }
-  const fingerprint = computeSchemaFingerprint(schema);
-  schemaFingerprintCache.set(schema, { version: schema.mutationVersion, fingerprint });
-  return fingerprint;
-};
-
-const computeSchemaFingerprint = (schema: SchemaSnapshot): string => {
-  const types = schema
-    .listTypes()
-    .map((typeDef) => ({
-      name: qualifiedTypeName(typeDef),
-      fields: typeDef.fields
-        .map((field) => ({
-          name: field.name,
-          type: field.type,
-          required: Boolean(field.required),
-          multi: Boolean(field.multi),
-        }))
-        .sort((a, b) => a.name.localeCompare(b.name)),
-      links: (typeDef.links ?? [])
-        .map((link) => ({
-          name: link.name,
-          targetType: link.targetType,
-          multi: Boolean(link.multi),
-          properties: (link.properties ?? []).map((property) => ({
-            name: property.name,
-            type: property.type,
-            required: Boolean(property.required),
-          })),
-        }))
-        .sort((a, b) => a.name.localeCompare(b.name)),
-      mutationRewrites: (typeDef.mutationRewrites ?? [])
-        .map((rewrite) => ({
-          field: rewrite.field,
-          onInsert: rewrite.onInsert,
-          onUpdate: rewrite.onUpdate,
-        }))
-        .sort((a, b) => a.field.localeCompare(b.field)),
-      triggers: (typeDef.triggers ?? [])
-        .map((trigger) => ({
-          name: trigger.name,
-          event: trigger.event,
-          scope: trigger.scope ?? "each",
-          when: trigger.when,
-          actions: trigger.actions,
-        }))
-        .sort((a, b) => a.name.localeCompare(b.name)),
-      accessPolicies: (typeDef.accessPolicies ?? [])
-        .map((policy) => ({
-          name: policy.name,
-          effect: policy.effect,
-          operations: [...policy.operations].sort(),
-          condition: policy.condition,
-          errmessage: policy.errmessage,
-        }))
-        .sort((a, b) => a.name.localeCompare(b.name)),
-    }))
-    .sort((a, b) => a.name.localeCompare(b.name));
-
-  // Functions participate in the cache key: an inlined UDF's body is spliced
-  // into the compiled SQL, so two schemas that share types but define a
-  // different `foo` (e.g. across tests that each `CREATE FUNCTION foo …`) must
-  // not collide on the same cached artifact. Include signature + body.
-  const functions = schema
-    .listFunctions()
-    .map((fn) => ({
-      module: fn.module,
-      name: fn.name,
-      params: fn.params.map((p) => ({ name: p.name, type: p.type, optional: Boolean(p.optional), variadic: Boolean(p.variadic), setOf: Boolean(p.setOf), default: p.default })),
-      returnType: fn.returnType,
-      returnOptional: Boolean(fn.returnOptional),
-      returnSetOf: Boolean(fn.returnSetOf),
-      body: fn.body,
-    }))
-    .sort((a, b) => `${a.module}::${a.name}`.localeCompare(`${b.module}::${b.name}`));
-
-  // Globals likewise: a computed global's default text (or its very existence
-  // as a settable global) affects how `global x` lowers.
-  const globals = schema
-    .listGlobals()
-    .map((g) => ({ module: g.module, name: g.name, exprText: g.exprText }))
-    .sort((a, b) => `${a.module}::${a.name}`.localeCompare(`${b.module}::${b.name}`));
-
-  return stableJson({ types, functions, globals });
-};
-
-const stableJson = (value: unknown): string => JSON.stringify(sortValue(value));
-
-const sortValue = (value: unknown): unknown => {
-  if (Array.isArray(value)) {
-    return value.map((item) => sortValue(item));
-  }
-
-  if (value && typeof value === "object") {
-    const out: Record<string, unknown> = {};
-    const entries = Object.entries(value).sort(([left], [right]) => left.localeCompare(right));
-    for (const [key, entryValue] of entries) {
-      out[key] = sortValue(entryValue);
-    }
-    return out;
-  }
-
-  return value;
-};
 
 // The compiler cache hands out a private deep copy of each artifact (consumers
 // mutate the IR during execution, so the cached copy must stay pristine).
