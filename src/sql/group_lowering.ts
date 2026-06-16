@@ -16,36 +16,7 @@ import type {
 import type { RuntimeTarget } from "../runtime/target.js";
 import type { ScalarValue } from "../types.js";
 import { ShapeLoweringMiss, type GelIRCompileOptions, type GelIRSQLArtifact } from "./compiler_types.js";
-
-export interface GroupLoweringDeps {
-  compileScalarSelectSQL(
-    sourceSet: Set,
-    params: ScalarValue[],
-    target: RuntimeTarget,
-    options: GelIRCompileOptions,
-    outerWheres?: Set[],
-  ): string | null;
-  compileValueSetSQL(
-    set: Set,
-    sourceAlias: string,
-    params: ScalarValue[],
-    target: RuntimeTarget,
-    options: GelIRCompileOptions,
-    linkPropertyAlias?: string,
-  ): string | null;
-  compilePredicateSetSQL(
-    set: Set,
-    sourceAlias: string,
-    params: ScalarValue[],
-    target: RuntimeTarget,
-    options: GelIRCompileOptions,
-    linkPropertyAlias?: string,
-  ): string | null;
-  extractNumericLiteral(set: Set | undefined): number | undefined;
-  orderedCallArgs(args: Record<string, CallArg>): CallArg[];
-  setValueIsJson(set: Set): boolean;
-  unwrapSelectExprSet(set: Set): { result: Set; selectExpr?: SelectExpr };
-}
+import type { SqlLoweringContext } from "./function_lowering.js";
 
 // Lower a top-level `GROUP <subject> BY <fields>` to a single SQL statement
 // producing one row per group, each row's `value` column holding the group
@@ -61,7 +32,7 @@ export interface GroupLoweringDeps {
 export const compileGroupStmtToSQL = (
   statement: GroupStmt,
   options: GelIRCompileOptions,
-  deps: GroupLoweringDeps,
+  deps: SqlLoweringContext,
 ): GelIRSQLArtifact => {
   const target = options.target ?? "sqlite";
   const params: ScalarValue[] = [];
@@ -81,7 +52,7 @@ export const compileGroupRowsSQL = (
   params: ScalarValue[],
   target: RuntimeTarget,
   options: GelIRCompileOptions,
-  deps: GroupLoweringDeps,
+  deps: SqlLoweringContext,
 ): string | null => {
   const byAtoms = statement.byAtoms;
   const groupingSets = statement.groupingSets ?? (byAtoms ? [byAtoms] : undefined);
@@ -232,7 +203,7 @@ export const compileGroupRowsValueSQL = (
   target: RuntimeTarget,
   options: GelIRCompileOptions,
   alias: string,
-  deps: GroupLoweringDeps,
+  deps: SqlLoweringContext,
 ): string | null => {
   if (groupRows.unlowerable) {
     if (process.env.DBG_GROUP_SQL) console.error("[group-sql] group rows unlowerable flag");
@@ -362,7 +333,7 @@ export const compileGroupRowsStatementSQL = (
   params: ScalarValue[],
   target: RuntimeTarget,
   options: GelIRCompileOptions,
-  deps: GroupLoweringDeps,
+  deps: SqlLoweringContext,
 ): GelIRSQLArtifact => {
   const fallback: GelIRSQLArtifact = { sql: "", params, loweringMode: "fallback_multi_query" };
   const alias = "grw";
@@ -425,7 +396,7 @@ const compileGroupRowSortSQL = (
   params: ScalarValue[],
   target: RuntimeTarget,
   options: GelIRCompileOptions,
-  deps: GroupLoweringDeps,
+  deps: SqlLoweringContext,
 ): string | null => {
   const unwrapped = deps.unwrapSelectExprSet(path).result;
   if (unwrapped.expr.kind === "function_call") {

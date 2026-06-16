@@ -8,13 +8,12 @@ import {
   compileGroupRowsValueSQL,
   compileGroupStmtToSQL,
   groupProjectionHead,
-  type GroupLoweringDeps,
 } from "./group_lowering.js";
 import {
   compileFunctionCallSQL,
   scalarArgTypeHint,
   SET_CONSUMING_FUNCTIONS,
-  type FunctionLoweringDeps,
+  type SqlLoweringContext,
 } from "./function_lowering.js";
 import type {
   ArrayExpr,
@@ -55,7 +54,12 @@ import type {
 import type { ScalarValue } from "../types.js";
 export type { GelIRCompileOptions, GelIRSQLArtifact } from "./compiler_types.js";
 
-const groupLoweringDeps = (): GroupLoweringDeps => ({
+let _sqlLoweringContext: SqlLoweringContext | undefined;
+// The SQL compiler's internal lowering context (see SqlLoweringContext). Built
+// once, lazily — its members reference module functions declared below, so it
+// can't be a top-level const. Shared by the function- and group-lowering
+// sub-modules; replaces the former per-call groupLoweringDeps/functionLoweringDeps.
+const sqlLoweringContext = (): SqlLoweringContext => (_sqlLoweringContext ??= {
   compileScalarSelectSQL,
   compileValueSetSQL,
   compilePredicateSetSQL,
@@ -63,11 +67,6 @@ const groupLoweringDeps = (): GroupLoweringDeps => ({
   orderedCallArgs,
   setValueIsJson,
   unwrapSelectExprSet,
-});
-
-const functionLoweringDeps = (): FunctionLoweringDeps => ({
-  compileValueSetSQL,
-  compileScalarSelectSQL,
   compileSelectSource,
   compileWhereClause,
   compilePolymorphicSource,
@@ -82,8 +81,6 @@ const functionLoweringDeps = (): FunctionLoweringDeps => ({
   pickSourcePathAlias,
   resetPointerSourceToRoot,
   narrowedLinkTarget,
-  setValueIsJson,
-  unwrapSelectExprSet,
   qualifyTypeName,
 });
 
@@ -101,7 +98,7 @@ export const compileGelIRToSQL = (
     return compileDeleteStmtToSQL(statement, options);
   }
   if (statement.kind === "group_stmt") {
-    return compileGroupStmtToSQL(statement, options, groupLoweringDeps());
+    return compileGroupStmtToSQL(statement, options, sqlLoweringContext());
   }
   if (statement.kind === "config_stmt") {
     return compileConfigStmtToSQL(statement, options);
@@ -162,7 +159,7 @@ export const compileGelIRToSQL = (
       params,
       target,
       options,
-      groupLoweringDeps(),
+      sqlLoweringContext(),
     );
   }
 
@@ -196,7 +193,7 @@ export const compileGelIRToSQL = (
     if (rowsCursor.expr.kind === "group_rows") {
       const artifact = compileGroupRowsStatementSQL(
         rowsCursor.expr as GroupRowsExpr, rowsWhere, rowsOrderBy, rowsLimit, rowsOffset,
-        params, target, options, groupLoweringDeps(),
+        params, target, options, sqlLoweringContext(),
       );
       if (artifact.loweringMode === "single_statement" && artifact.sql.length > 0) {
         const val = `gsr.${quoteIdent("value")}`;
@@ -2789,7 +2786,7 @@ const compileScalarSelectSQLInner = (
       groupCursor = wrapper.result;
     }
     if (groupCursor.expr.kind === "group_rows") {
-      return compileGroupRowsValueSQL(groupCursor.expr as GroupRowsExpr, params, target, options, "grw_src", groupLoweringDeps());
+      return compileGroupRowsValueSQL(groupCursor.expr as GroupRowsExpr, params, target, options, "grw_src", sqlLoweringContext());
     }
   }
   // Element-wise paths off a group row (`g.elements`, `g.elements.name`
@@ -2834,7 +2831,7 @@ const compileScalarSelectSQLInner = (
         const cp = params.length;
         const artifact = compileGroupRowsStatementSQL(
           rowsCursor.expr as GroupRowsExpr, rowsWhere, rowsOrderBy, rowsLimit, rowsOffset,
-          params, target, options, groupLoweringDeps(),
+          params, target, options, sqlLoweringContext(),
         );
         if (artifact.loweringMode === "single_statement" && artifact.sql.length > 0) {
           const elemsJson = `COALESCE(json_extract(gsr.${quoteIdent("value")}, '$."elements"'), '[]')`;
@@ -2922,7 +2919,7 @@ const compileScalarSelectSQLInner = (
         const groupRows = iterCursor.expr as GroupRowsExpr;
         const cp = params.length;
         const alias = "gfr";
-        const rowsSql = compileGroupRowsValueSQL(groupRows, params, target, options, "grw_src", groupLoweringDeps());
+        const rowsSql = compileGroupRowsValueSQL(groupRows, params, target, options, "grw_src", sqlLoweringContext());
         if (rowsSql) {
           const projections = new Map<string, GroupRowProjection>();
           for (const proj of groupRows.projection ?? []) projections.set(proj.name, proj);
@@ -11343,7 +11340,7 @@ const compileValueSetSQL = (
   }
 
   if (expr.kind === "function_call") {
-    const compiled = compileFunctionCallSQL(expr as FunctionCall, sourceAlias, params, target, options, functionLoweringDeps(), linkPropertyAlias);
+    const compiled = compileFunctionCallSQL(expr as FunctionCall, sourceAlias, params, target, options, sqlLoweringContext(), linkPropertyAlias);
     if (!compiled) {
       params.length = checkpoint;
       return null;
