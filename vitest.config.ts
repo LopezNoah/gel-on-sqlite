@@ -33,6 +33,19 @@ function persistentTsTransformCache(): Plugin {
   // invalidate previously-cached output.
   const VERSION = "v1";
 
+  // Sourcemaps are ~33% of transform CPU and ~2/3 of the cache size, and on a
+  // RAM-constrained box that extra memory churn during the cold transpile is
+  // what tips the first run into swapping. Drop them in low-memory mode (where
+  // run speed matters more than exact stack-trace line mapping); keep them on
+  // otherwise for debuggable failure traces. `VITEST_NO_SOURCEMAP=1|0` forces
+  // it either way. The choice is folded into the cache key so the two variants
+  // don't clobber each other's entries.
+  const emitSourcemap = process.env.VITEST_NO_SOURCEMAP === "1"
+    ? false
+    : process.env.VITEST_NO_SOURCEMAP === "0"
+      ? true
+      : process.env.VITEST_LOW_MEM !== "1";
+
   return {
     name: "persistent-ts-transform-cache",
     enforce: "pre",
@@ -43,6 +56,7 @@ function persistentTsTransformCache(): Plugin {
       }
       const key = createHash("sha1")
         .update(VERSION).update("\0")
+        .update(emitSourcemap ? "map" : "nomap").update("\0")
         .update(salt).update("\0")
         .update(file).update("\0")
         .update(code)
@@ -56,8 +70,8 @@ function persistentTsTransformCache(): Plugin {
         // Cache miss — fall through to transform.
       }
 
-      const result = await transformWithEsbuild(code, id);
-      const entry = { code: result.code, map: result.map ?? null };
+      const result = await transformWithEsbuild(code, id, { sourcemap: emitSourcemap });
+      const entry = { code: result.code, map: emitSourcemap ? (result.map ?? null) : null };
       try {
         fs.mkdirSync(cacheDir, { recursive: true });
         fs.writeFileSync(entryPath, JSON.stringify(entry));
@@ -68,6 +82,41 @@ function persistentTsTransformCache(): Plugin {
     },
   };
 }
+
+// --- Run against prebuilt dist/ (VITEST_USE_DIST=1) -------------------------
+//
+// Redirects every `../src/**.js` import to the matching prebuilt
+// `dist/src/**.js` (see scripts/build-dist.mjs). Because the transform-cache
+// plugin only handles `.tsx?` and `esbuild` is off globally, those `.js`
+// modules are served untransformed — so the heavy engine/compiler graph isn't
+// transpiled at test time at all, only the (small) test files are. This is the
+// fix for the slow *first* run on RAM-constrained boxes: build dist once (ideally
+// on a capable machine, then ship it), and the cold TS transpile disappears.
+//
+// The source test files themselves keep running through vitest (so `__dirname`
+// and `tests/schemas/` paths still resolve), only their src imports are
+// redirected. Falls back to the source `.ts` for any file not present in dist,
+// so a partial/missing build degrades gracefully instead of failing.
+function resolveSrcToDist(): Plugin {
+  const srcPrefix = path.join(__dirname, "src") + path.sep;
+  const distPrefix = path.join(__dirname, "dist", "src") + path.sep;
+  return {
+    name: "resolve-src-to-dist",
+    enforce: "pre",
+    async resolveId(source, importer, options) {
+      const resolved = await this.resolve(source, importer, { ...options, skipSelf: true });
+      if (!resolved) return null;
+      const id = resolved.id.split("?")[0];
+      if (id.startsWith(srcPrefix) && id.endsWith(".ts")) {
+        const distId = distPrefix + id.slice(srcPrefix.length).replace(/\.ts$/, ".js");
+        if (fs.existsSync(distId)) return { id: distId };
+      }
+      return resolved;
+    },
+  };
+}
+
+const useDist = process.env.VITEST_USE_DIST === "1";
 
 // --- Resource-adaptive test runner configuration ---------------------------
 //
@@ -113,7 +162,7 @@ const maxForks = process.env.VITEST_MAX_FORKS
     : Math.max(1, Math.min(cpuCount - 1, Math.floor(totalMemGB)));
 
 export default defineConfig({
-  plugins: [persistentTsTransformCache()],
+  plugins: useDist ? [resolveSrcToDist(), persistentTsTransformCache()] : [persistentTsTransformCache()],
   // Our plugin owns the TS→JS transform (and caches it); turn off vite's
   // built-in esbuild pass so it doesn't redundantly re-transform the output.
   esbuild: false,

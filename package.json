@@ -9,6 +9,8 @@
     "test": "vitest run",
     "test:changed": "vitest run --changed",
     "test:watch": "vitest",
+    "build:dist": "node scripts/build-dist.mjs",
+    "test:dist": "node scripts/build-dist.mjs && VITEST_USE_DIST=1 vitest run",
     "test:convert-py": "python3 scripts/convert_py_query_test.py",
     "db:materialize": "tsx scripts/materialize-test-schema.ts",
     "codegen:schema-model": "tsx scripts/generate-schema-model.ts",
