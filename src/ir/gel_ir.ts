@@ -274,6 +274,12 @@ export interface GroupStmt extends Statement {
   // under this field plus each USING alias; the SQL stage reads `elements`
   // back from this field instead of stripping hidden ones.
   elementValueField?: string;
+  // USING aliases that ARE the whole subject element (`group X using z := X
+  // by z` — grouping a value/tuple set by the value itself). The subject
+  // compiles to plain value rows; the SQL stage reads these keys (and the
+  // displayed elements) straight off the row's `value`, and GROUP BYs the
+  // whole value rather than a sub-field.
+  selfKeyAliases?: string[];
 }
 
 export interface ConfigStmt extends Statement {

@@ -156,20 +156,27 @@ export const compileGroupRowsSQL = (
   const valueCol = `${subjectAlias}.${quoteIdent("value")}`;
   // SQLite JSON path for a (quoted) object field — `$."name"`.
   const fieldPath = (name: string): string => `'$."${name.replaceAll('"', '""')}"'`;
-  const keyExtract = (name: string): string => `json_extract(${valueCol}, ${fieldPath(name)})`;
+  // A self-key alias (`group X using z := X by z`) groups on the WHOLE element
+  // value, not a sub-field — its key/group-by read `value` directly.
+  const selfKeys = new globalThis.Set<string>(statement.selfKeyAliases ?? []);
+  const keyExtract = (name: string): string =>
+    selfKeys.has(name) ? valueCol : `json_extract(${valueCol}, ${fieldPath(name)})`;
 
   // Strip the key-only (hidden) BY fields from the displayed elements so the
   // output shape stays as written. `json()` re-asserts the JSON subtype so
   // json_group_array embeds the object rather than quoting it as text.
   // Scalar-element subjects instead re-read the raw element value the
   // desugared FOR carried along (json_extract keeps the subtype for nested
-  // arrays/objects and passes scalars through).
+  // arrays/objects and passes scalars through). A self-key subject's element
+  // IS the whole value.
   const hidden = statement.hiddenByFields ?? [];
-  const elementExpr = statement.elementValueField
-    ? `json_extract(${valueCol}, ${fieldPath(statement.elementValueField)})`
-    : hidden.length > 0
-      ? `json(json_remove(${valueCol}, ${hidden.map((n) => fieldPath(n)).join(", ")}))`
-      : `json(${valueCol})`;
+  const elementExpr = selfKeys.size > 0
+    ? `json(${valueCol})`
+    : statement.elementValueField
+      ? `json_extract(${valueCol}, ${fieldPath(statement.elementValueField)})`
+      : hidden.length > 0
+        ? `json(json_remove(${valueCol}, ${hidden.map((n) => fieldPath(n)).join(", ")}))`
+        : `json(${valueCol})`;
 
   const distinctAtoms = [...new Set<string>(byAtoms)];
   const branches: string[] = [];
@@ -182,7 +189,7 @@ export const compileGroupRowsSQL = (
     // `->` (not json_extract) so JSON booleans survive into the key object —
     // json_extract flattens `true` to integer 1.
     const keyPairs = distinctAtoms.map((name) =>
-      `${quoteLiteral(name)}, ${inSet.has(name) ? `${valueCol} -> ${fieldPath(name)}` : "NULL"}`);
+      `${quoteLiteral(name)}, ${inSet.has(name) ? (selfKeys.has(name) ? `json(${valueCol})` : `${valueCol} -> ${fieldPath(name)}`) : "NULL"}`);
     const groupingArr = `json_array(${set.map((n) => quoteLiteral(n)).join(", ")})`;
     const groupObj = `json_object(`
       + `${quoteLiteral("key")}, json_object(${keyPairs.join(", ")}), `
