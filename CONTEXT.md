@@ -61,3 +61,21 @@ _Avoid_: schema AST, schema doc.
 **Runtime evaluator**:
 The TypeScript expression interpreter (`tryRuntimeSelectExprEvaluationAst` in `src/runtime/engine.ts`) required for constructs that do not lower to SQL — free objects, FOR iteration, runtime aliases, inlined UDFs. A required component, not a fallback for the SQL path.
 _Avoid_: interpreter fallback, the slow path.
+
+## Tooling & test seams
+
+**Compile inspection**:
+`src/compiler/inspect.ts` — the seam that runs the compile pipeline (parse → Live IR → SQL artifact) **without executing against SQLite**, and projects a stable set of Compile facts plus Canonical SQL. Purely additive over `CompilerService`; reachable from the golden tests (`tests/inspect.test.ts`) and the dev CLI (`bin/inspect.ts`), which together replace the ad-hoc root runners (`qast`/`qir`/`qsql`/…). `inspect(schema, query)` returns a result that never throws on a query problem — parse/compile failures are captured as `{ ok:false, error }`. `inspectorFor(schema)` binds a schema once for terse per-query calls (no hidden global).
+_Avoid_: compile probe, the inspector (for the runtime).
+
+**Compile facts**:
+The stable, artifact-derived projection that is the compiler's **test surface**: `statementKind`, `loweringMode`, `lowersToSingleSql`, `paramCount`, `subqueryCount`, `cteCount`, and the `irKindTree` (the Live IR node-kind skeleton, ids/names/literals stripped). Every field is true of the artifact as compiled — no heuristics that can lie.
+_Avoid_: compile summary, inspection facts.
+
+**Canonical SQL**:
+The alias- and whitespace-normalized form of an artifact's SQL (`canonicalizeSql`). Generated aliases (`g0`/`p1`/`j1`/`grp_src`/`tuple_n`/`g_agg`…) are renamed to positional tokens (`a0`, `a1`, …) by first appearance, so a golden changes only when the lowering changes, not when an unrelated alias counter shifts.
+_Avoid_: normalized SQL, stable SQL.
+
+**lowersToSingleSql**:
+The honest, artifact-derived Compile fact `loweringMode === "single_statement" && sql.length > 0` — the engine's SQL gate **verbatim** (the predicate `src/runtime/engine.ts` checks ~15× to choose SQL vs the Runtime evaluator). Compile inspection deliberately reports *only* this gate, not a 3-way `sql | runtime | reject` strategy: the accurate strategy classifier is deferred to the lowering-strategy candidate (see `docs/adr/0002`), where it becomes the single source of truth consumed by both the engine and the inspector.
+_Avoid_: execution strategy (until 0002 lands), runs-as-sql.
