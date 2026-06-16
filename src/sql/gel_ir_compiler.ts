@@ -2999,7 +2999,34 @@ const compileScalarSelectSQLInner = (
         const bodyOptions = groupElementsIteratorAlias(forExpr, forSource) !== undefined
           ? { ...options, groupElementAlias: groupElementsIteratorAlias(forExpr, forSource) }
           : options;
-        const bodySql = compileValueSetSQLWithAliases(bodySet, forSource.bindingAliases, forSource.baseAlias, params, target, bodyOptions, forSource.linkPropertyAliases, forSource.scalarBindingAliases, forSource.tupleIterAliases);
+        // A re-projection shape on the FOR result (`(for c in T union (c { len
+        // := … })) { name, l := .len }`, e.g. a GROUP subject) must project the
+        // OUTER shape, not the body's own shape — but ONLY when the body can't
+        // already satisfy it (when every outer field is also a body field, the
+        // body projection is correct and handles multi-level FORs that the
+        // naive re-projection can't). Each outer field's expr compiles through
+        // the FOR aliases (a binding computed adopted as a key lowers to its
+        // body definition, correlated to the iterated element).
+        const elementName = (e: ShapeElement): string | undefined =>
+          e.name ?? (e.expr.expr.kind === "pointer" ? (e.expr.expr as Pointer).ptrref.shortName : undefined);
+        const bodyShapeNames = new globalThis.Set(
+          (bodySet.shape ?? []).map(elementName).filter((n): n is string => n !== undefined));
+        const needsReproject = (sourceSet.shape?.length ?? 0) > 0
+          && sourceSet.shape.some((e) => { const n = elementName(e); return n !== undefined && !bodyShapeNames.has(n); });
+        let bodySql: string | null;
+        if (needsReproject) {
+          const pairs: string[] = [];
+          bodySql = "";
+          for (const element of sourceSet.shape) {
+            const name = elementName(element);
+            const v = name ? compileValueSetSQLWithAliases(element.expr, forSource.bindingAliases, forSource.baseAlias, params, target, bodyOptions, forSource.linkPropertyAliases, forSource.scalarBindingAliases, forSource.tupleIterAliases) : null;
+            if (!name || !v) { bodySql = null; break; }
+            pairs.push(`${quoteLiteral(name)}, ${v}`);
+          }
+          if (bodySql !== null) bodySql = pairs.length > 0 ? `json_object(${pairs.join(", ")})` : null;
+        } else {
+          bodySql = compileValueSetSQLWithAliases(bodySet, forSource.bindingAliases, forSource.baseAlias, params, target, bodyOptions, forSource.linkPropertyAliases, forSource.scalarBindingAliases, forSource.tupleIterAliases);
+        }
         if (bodySql) {
           let sql = `SELECT ${bodySql} AS ${quoteIdent("value")} FROM ${forSource.fromSql}`;
           const bodyWheres: Set[] = [];
