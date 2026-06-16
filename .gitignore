@@ -16,6 +16,11 @@ ui/
 /csql.ts
 /sdbg.ts
 /dbgfree.ts
+/qfn.ts
+/qfnir.ts
+/qins.ts
+/dbg_*.ts
+/*_scratch.ts
 /debug_*.ts
 /debug-*.ts
 /inspect_*.ts
