@@ -17,13 +17,14 @@ import { expect } from "vitest";
 import { parseDeclarativeSchema } from "../src/schema/sdl_adapter.js";
 import { expectLike } from "./python_query_test_helpers.js";
 
+// Each test gets its own snapshot so test-time DDL (create function/type/…)
+// doesn't leak across tests. `cloneShared` makes that cheap: it shares the
+// source's deeply-frozen definition objects and only gives the clone fresh Map
+// containers (DDL replaces whole entries, so the shared frozen defs are never
+// mutated) plus the inherited content fingerprint — so the per-test clone no
+// longer deep-copies every type or re-hashes the schema.
 const cloneSchemaSnapshot = (schema: SchemaSnapshot): SchemaSnapshot =>
-  new SchemaSnapshot(
-    schema.listTypes(),
-    schema.listFunctions(),
-    schema.listAliases(),
-    schema.listScalarTypes(),
-  );
+  SchemaSnapshot.cloneShared(schema);
 
 export interface HarnessOptions {
   schema?: string;      // Name of .esdl file in tests/schemas/

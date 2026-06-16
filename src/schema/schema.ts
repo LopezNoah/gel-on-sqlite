@@ -14,22 +14,76 @@ export interface GlobalDef {
 }
 
 export class SchemaSnapshot {
-  private readonly typesByName: Map<string, TypeDef>;
-  private readonly functionsBySignature: Map<string, FunctionDef>;
-  private readonly aliasesByName: Map<string, AliasDef>;
-  private readonly scalarTypesByName: Map<string, ScalarTypeDeclaration>;
-  private readonly globalsByName: Map<string, GlobalDef>;
+  // Not `readonly`: `cloneShared` reassigns these to fresh Map containers that
+  // share the (deeply-frozen) definition objects of the source snapshot.
+  private typesByName: Map<string, TypeDef>;
+  private functionsBySignature: Map<string, FunctionDef>;
+  private aliasesByName: Map<string, AliasDef>;
+  private scalarTypesByName: Map<string, ScalarTypeDeclaration>;
+  private globalsByName: Map<string, GlobalDef>;
   // Active `CREATE FUTURE <flag>` directives (e.g.
   // `no_linkful_computed_splats`). They modify splat semantics without
   // changing the underlying type model.
-  private readonly futureFlagsSet: Set<string> = new Set<string>();
+  private futureFlagsSet: Set<string> = new Set<string>();
   // Bumped on every in-place mutation (addType/addFunction/…). Lets callers
   // that derive expensive values from the snapshot (e.g. the compiler's schema
   // fingerprint for its cache key) memoize them and recompute only after DDL.
   private mutationVersionCounter = 0;
+  // Memoized content fingerprint (see contentFingerprint). `…Version` records
+  // the mutationVersion the cached value was computed at, so DDL invalidates it.
+  private cachedFingerprint: string | undefined;
+  private cachedFingerprintVersion = -1;
 
   get mutationVersion(): number {
     return this.mutationVersionCounter;
+  }
+
+  /**
+   * A stable hash of the schema's *content* (types, functions, globals). It is
+   * identical for two snapshots with the same declarations, so it can serve as
+   * the schema component of the compiler's cache key. Computing it normalizes
+   * and serializes the whole schema, so it is memoized on the instance and only
+   * recomputed after a mutation (DDL) bumps `mutationVersion`.
+   *
+   * `cloneShared` propagates the cached value to clones, so the cost is paid
+   * once per distinct base schema rather than once per clone — important for the
+   * test harness, which clones the snapshot for every test.
+   */
+  contentFingerprint(): string {
+    if (this.cachedFingerprint !== undefined && this.cachedFingerprintVersion === this.mutationVersionCounter) {
+      return this.cachedFingerprint;
+    }
+    const fingerprint = computeContentFingerprint(this);
+    this.cachedFingerprint = fingerprint;
+    this.cachedFingerprintVersion = this.mutationVersionCounter;
+    return fingerprint;
+  }
+
+  /**
+   * Cheaply derive an independent snapshot that shares this one's
+   * (deeply-frozen) definition objects. Only the Map containers are fresh, so a
+   * later in-place mutation (addType/addFunction/…) on either snapshot replaces
+   * a whole entry without affecting the other — DDL isolation is preserved. The
+   * frozen defs are never mutated in place, so sharing them is safe.
+   *
+   * This avoids the per-definition deep clone the public constructor performs,
+   * and carries over the memoized content fingerprint, so a clone never repeats
+   * the schema normalization.
+   */
+  static cloneShared(base: SchemaSnapshot): SchemaSnapshot {
+    const clone = new SchemaSnapshot();
+    clone.typesByName = new Map(base.typesByName);
+    clone.functionsBySignature = new Map(base.functionsBySignature);
+    clone.aliasesByName = new Map(base.aliasesByName);
+    clone.scalarTypesByName = new Map(base.scalarTypesByName);
+    clone.globalsByName = new Map(base.globalsByName);
+    clone.futureFlagsSet = new Set(base.futureFlagsSet);
+    // Inherit the fingerprint: the clone's content equals the base's, and the
+    // clone starts at mutationVersion 0, so it stays valid until the clone's
+    // own first mutation bumps the counter past cachedFingerprintVersion.
+    clone.cachedFingerprint = base.contentFingerprint();
+    clone.cachedFingerprintVersion = clone.mutationVersionCounter;
+    return clone;
   }
 
   constructor(types: TypeDef[] = [], functions: FunctionDef[] = [], aliases: AliasDef[] = [], scalarTypes: ScalarTypeDeclaration[] = [], globals: GlobalDef[] = []) {
@@ -245,6 +299,108 @@ const deepFreeze = <T>(value: T): T => {
 export const qualifiedTypeName = (typeDef: TypeDef): string => {
   const module = typeDef.module ?? "default";
   return `${module}::${typeDef.name}`;
+};
+
+// Normalizes the schema's content (types/links/rewrites/triggers/policies,
+// functions, globals) into a canonical, sorted shape and serializes it. Used
+// by `SchemaSnapshot.contentFingerprint` as the schema component of the
+// compiler cache key: two snapshots with the same declarations hash equal, and
+// any declaration change produces a different hash. Functions are included
+// because an inlined UDF's body is spliced into compiled SQL; globals because a
+// computed global's default text affects how `global x` lowers.
+const computeContentFingerprint = (schema: SchemaSnapshot): string => {
+  const types = schema
+    .listTypes()
+    .map((typeDef) => ({
+      name: qualifiedTypeName(typeDef),
+      fields: typeDef.fields
+        .map((field) => ({
+          name: field.name,
+          type: field.type,
+          required: Boolean(field.required),
+          multi: Boolean(field.multi),
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+      links: (typeDef.links ?? [])
+        .map((link) => ({
+          name: link.name,
+          targetType: link.targetType,
+          multi: Boolean(link.multi),
+          properties: (link.properties ?? []).map((property) => ({
+            name: property.name,
+            type: property.type,
+            required: Boolean(property.required),
+          })),
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+      mutationRewrites: (typeDef.mutationRewrites ?? [])
+        .map((rewrite) => ({
+          field: rewrite.field,
+          onInsert: rewrite.onInsert,
+          onUpdate: rewrite.onUpdate,
+        }))
+        .sort((a, b) => a.field.localeCompare(b.field)),
+      triggers: (typeDef.triggers ?? [])
+        .map((trigger) => ({
+          name: trigger.name,
+          event: trigger.event,
+          scope: trigger.scope ?? "each",
+          when: trigger.when,
+          actions: trigger.actions,
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+      accessPolicies: (typeDef.accessPolicies ?? [])
+        .map((policy) => ({
+          name: policy.name,
+          effect: policy.effect,
+          operations: [...policy.operations].sort(),
+          condition: policy.condition,
+          errmessage: policy.errmessage,
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  const functions = schema
+    .listFunctions()
+    .map((fn) => ({
+      module: fn.module,
+      name: fn.name,
+      params: fn.params.map((p) => ({ name: p.name, type: p.type, optional: Boolean(p.optional), variadic: Boolean(p.variadic), setOf: Boolean(p.setOf), default: p.default })),
+      returnType: fn.returnType,
+      returnOptional: Boolean(fn.returnOptional),
+      returnSetOf: Boolean(fn.returnSetOf),
+      body: fn.body,
+    }))
+    .sort((a, b) => `${a.module}::${a.name}`.localeCompare(`${b.module}::${b.name}`));
+
+  const globals = schema
+    .listGlobals()
+    .map((g) => ({ module: g.module, name: g.name, exprText: g.exprText }))
+    .sort((a, b) => `${a.module}::${a.name}`.localeCompare(`${b.module}::${b.name}`));
+
+  return stableJson({ types, functions, globals });
+};
+
+// Deterministic JSON: object keys are recursively sorted so logically-equal
+// values serialize identically regardless of key insertion order. Exported for
+// the compiler service, which uses it for runtime-built values (globals/params)
+// whose key order can vary.
+export const stableJson = (value: unknown): string => JSON.stringify(sortValue(value));
+
+const sortValue = (value: unknown): unknown => {
+  if (Array.isArray(value)) {
+    return value.map((item) => sortValue(item));
+  }
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    const entries = Object.entries(value).sort(([left], [right]) => left.localeCompare(right));
+    for (const [key, entryValue] of entries) {
+      out[key] = sortValue(entryValue);
+    }
+    return out;
+  }
+  return value;
 };
 
 /**
