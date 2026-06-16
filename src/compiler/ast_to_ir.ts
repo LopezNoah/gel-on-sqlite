@@ -7416,8 +7416,21 @@ const compileShape = (
       }
       validateComputedShapeElement(el, subject, ctx);
       if (el.expr.kind === "field_ref") {
-        const ptrref = resolvePointerRef(ctx, subject.typeref, el.expr.field);
+        const fieldName = el.expr.field;
+        const ptrref = resolvePointerRef(ctx, subject.typeref, fieldName);
         if (!ptrref) {
+          // Not a schema pointer — may be a computed the binding materialised
+          // in its body (`l := C.len` where C := (for … select T { len := … })).
+          // Adopt the carried element so the key resolves; the FOR lowering
+          // re-projects it correlated against the iterated element.
+          const carried = gatherBindingShape(subject).find((s) => {
+            const carriedName = s.name
+              ?? (s.expr.expr.kind === "pointer" ? (s.expr.expr as Pointer).ptrref.shortName : undefined);
+            return carriedName === fieldName;
+          });
+          if (carried) {
+            out.push({ ...carried, shapeOp: el.operation, shapeOrigin: resolveShapeOrigin(el), name: el.name });
+          }
           continue;
         }
         const expr = extendPathSet(subject, ptrref);
