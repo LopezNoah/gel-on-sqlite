@@ -34,7 +34,12 @@ const BOOL_RETURNING_STDLIB = new Set<string>([
   "bounded_above", "bounded_below", "adjacent",
 ]);
 
-export interface FunctionLoweringDeps {
+// The SQL compiler's PRIVATE internal seam: the gel_ir_compiler primitives that
+// the function- and group-lowering sub-modules call back into. There is exactly
+// one adapter (gel_ir_compiler builds it), so this is NOT a public/swappable
+// extension point — it is an explicit, named cut of one algorithm across files,
+// kept here so the cross-file calls are typed rather than implicit.
+export interface SqlLoweringContext {
   compileValueSetSQL(
     set: Set,
     sourceAlias: string,
@@ -109,6 +114,17 @@ export interface FunctionLoweringDeps {
   setValueIsJson(set: Set): boolean;
   unwrapSelectExprSet(set: Set): { result: Set; selectExpr?: SelectExpr };
   qualifyTypeName(typeRef: TypeRef): string;
+  // Group-lowering primitives (consumed by group_lowering.ts):
+  compilePredicateSetSQL(
+    set: Set,
+    sourceAlias: string,
+    params: ScalarValue[],
+    target: RuntimeTarget,
+    options: GelIRCompileOptions,
+    linkPropertyAlias?: string,
+  ): string | null;
+  extractNumericLiteral(set: Set | undefined): number | undefined;
+  orderedCallArgs(args: Record<string, CallArg>): CallArg[];
 }
 
 const orderedCallArgs = (args: Record<string, CallArg>): CallArg[] => {
@@ -173,7 +189,7 @@ export const compileCountOfSetSQL = (
   params: ScalarValue[],
   target: RuntimeTarget,
   options: GelIRCompileOptions,
-  deps: FunctionLoweringDeps,
+  deps: SqlLoweringContext,
 ): string | null => {
   const expr = set.expr;
 
@@ -340,7 +356,7 @@ export const compileFunctionCallSQL = (
   params: ScalarValue[],
   target: RuntimeTarget,
   options: GelIRCompileOptions,
-  deps: FunctionLoweringDeps,
+  deps: SqlLoweringContext,
   linkPropertyAlias?: string,
 ): string | null => {
   const checkpoint = params.length;
