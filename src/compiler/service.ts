@@ -99,6 +99,15 @@ export class CompilerService {
       sql = { sql: "", params: [], loweringMode: "fallback_multi_query" } as GelIRSQLArtifact;
       gelIr = { kind: "statement", expr: { kind: "set", expr: { kind: "type_root", typeref: { kind: "type_ref", id: "schema::Type", isScalar: false } }, pathId: { kind: "path_id", namespace: [], isPointerPath: false, steps: [] }, typeref: { kind: "type_ref", id: "schema::Type", isScalar: false }, shape: [], isBinding: false, isMaterializedRef: false, isSchemaAlias: false } } as unknown as GelIRStatement;
     }
+    // When the gelIR pipeline lowered the statement to a single SQL statement,
+    // the engine executes that artifact directly and only reads `ir.kind` (see
+    // the group/select_expr dispatch in engine.ts, and runCompiledGroup /
+    // preEvaluateGroupBindings — all single_statement branches use `gelIr`, not
+    // the GroupIR). So we don't need the legacy semantic.ts GroupIR for these:
+    // synthesize a kind-only shim and skip compileToIR entirely. Only when the
+    // SQL falls back (multi-query) does the runtime grouper actually consume a
+    // real GroupIR, so compileToIR runs only in that case.
+    const sqlIsComplete = sql.loweringMode === "single_statement" && sql.sql.length > 0;
     let ir: ReturnType<typeof traceIRFromGelIR>;
     try {
       // Mutations compile through the standalone DML lowering (runtime
@@ -107,7 +116,7 @@ export class CompilerService {
       // precedence over plan validation errors, matching the legacy order.
       ir = statement.kind === "insert" || statement.kind === "update" || statement.kind === "delete"
         ? compileDmlToIR(schema, statement, { globals: context.globals, allowUserSpecifiedId: context.allowUserSpecifiedId })
-        : needsLegacyRuntimeIR(statement)
+        : needsLegacyRuntimeIR(statement) && !sqlIsComplete
           ? compileToIR(schema, statement, {
               overlays: context.overlays,
               globals: context.globals,
@@ -420,6 +429,21 @@ const traceIRFromGelIR = (statement: Statement, gelIr: GelIRStatement): IRStatem
       entries: [],
       pathId: { id: "select_free", steps: [] },
       scopeTree: { id: "trace", children: [] },
+    } as unknown as IRStatement;
+  }
+
+  if (statement.kind === "group") {
+    // A SQL-complete top-level GROUP: the engine's group dispatch (and
+    // runCompiledGroup / preEvaluateGroupBindings) only checks `kind === "group"`
+    // and then runs the gelIR artifact — the GroupIR body is read solely on the
+    // runGroupIR fallback path, which this statement doesn't take. Synthesize a
+    // minimal group-kind shim so the legacy GroupIR is never built for it.
+    return {
+      kind: "group",
+      source: { kind: "select", typeName: "std::Object", shape: [], pos: statement.pos },
+      byAtoms: [],
+      groupingSets: [],
+      hiddenByFields: [],
     } as unknown as IRStatement;
   }
 
