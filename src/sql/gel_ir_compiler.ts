@@ -166,6 +166,71 @@ export const compileGelIRToSQL = (
     );
   }
 
+  // `SELECT (GROUP …).elements / .key[.field] / .grouping` — destructuring a
+  // group directly in statement position. Handled HERE (not in the shared
+  // value compiler) so it only fires for the top-level result: an identical
+  // `g.elements` inside a FOR-over-group aggregate arg must stay correlated to
+  // the current group row, which the row-scope paths handle. Run the group rows,
+  // then project/flatten the requested virtual field over each group row.
+  if (sourceSet && sourceSet.expr.kind === "group_row_field"
+      && (sourceSet.expr as GroupRowFieldExpr).rows
+      && ["elements", "key", "grouping"].includes((sourceSet.expr as GroupRowFieldExpr).steps[0])
+      && !(sourceSet.expr as GroupRowFieldExpr).steps.some((s) => s.startsWith("<"))
+      && !selectWhere && (!selectOrderBy || selectOrderBy.length === 0)
+      && (statement.limit ?? topSelect.selectExpr?.limit) === undefined
+      && (statement.offset ?? topSelect.selectExpr?.offset) === undefined) {
+    const field = sourceSet.expr as GroupRowFieldExpr;
+    let rowsCursor: Set = field.rows as Set;
+    let rowsWhere: Set | undefined;
+    let rowsOrderBy: SortExpr[] | undefined;
+    let rowsLimit: Set | undefined;
+    let rowsOffset: Set | undefined;
+    while (rowsCursor.expr.kind === "select_expr") {
+      const se = rowsCursor.expr as SelectExpr;
+      rowsWhere = rowsWhere ?? se.where;
+      rowsOrderBy = rowsOrderBy ?? se.orderBy;
+      rowsLimit = rowsLimit ?? se.limit;
+      rowsOffset = rowsOffset ?? se.offset;
+      rowsCursor = se.result;
+    }
+    if (rowsCursor.expr.kind === "group_rows") {
+      const artifact = compileGroupRowsStatementSQL(
+        rowsCursor.expr as GroupRowsExpr, rowsWhere, rowsOrderBy, rowsLimit, rowsOffset,
+        params, target, options, groupLoweringDeps(),
+      );
+      if (artifact.loweringMode === "single_statement" && artifact.sql.length > 0) {
+        const val = `gsr.${quoteIdent("value")}`;
+        const head = field.steps[0];
+        let sql: string;
+        if (head === "elements") {
+          const elemsJson = `COALESCE(json_extract(${val}, '$."elements"'), '[]')`;
+          if (field.steps.length === 1) {
+            sql = `SELECT json(je.${quoteIdent("value")}) AS ${quoteIdent("value")}`
+              + ` FROM (${artifact.sql}) gsr CROSS JOIN json_each(${elemsJson}) je`;
+          } else {
+            const tail = field.steps.slice(1).map((s) => `."${s.replaceAll('"', '""')}"`).join("");
+            sql = `SELECT jef.${quoteIdent("value")} AS ${quoteIdent("value")}`
+              + ` FROM (${artifact.sql}) gsr CROSS JOIN json_each(${elemsJson}) je`
+              + ` CROSS JOIN json_each(je.${quoteIdent("value")}, '$${tail}') jef`
+              + ` WHERE jef.${quoteIdent("value")} IS NOT NULL`;
+          }
+        } else if (head === "grouping") {
+          // `.grouping` is a JSON array of atom names per group — flatten it.
+          const gJson = `COALESCE(json_extract(${val}, '$."grouping"'), '[]')`;
+          sql = `SELECT je.${quoteIdent("value")} AS ${quoteIdent("value")}`
+            + ` FROM (${artifact.sql}) gsr CROSS JOIN json_each(${gJson}) je`;
+        } else {
+          // `.key` (one key object per group) or `.key.field` (a scalar leaf).
+          const path = field.steps.map((s) => `."${s.replaceAll('"', '""')}"`).join("");
+          const extract = `json_extract(${val}, '$${path}')`;
+          const expr = field.steps.length === 1 ? `json(${extract})` : extract;
+          sql = `SELECT ${expr} AS ${quoteIdent("value")} FROM (${artifact.sql}) gsr`;
+        }
+        return { sql, params, loweringMode: "single_statement" };
+      }
+    }
+  }
+
   // `SELECT <T>{}` (and bare `SELECT {}`) must yield zero rows, not one
   // NULL row. The IR represents an empty set literal as a typeless
   // `string_constant` with `value: null` (see literalToSet in ast_to_ir);
