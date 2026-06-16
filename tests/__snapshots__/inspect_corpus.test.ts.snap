@@ -1,0 +1,257 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`canonical-SQL characterization (issues schema) > canonical SQL is stable for representative queries 1`] = `
+{
+  "GROUP Issue { name } BY .status": "SELECT json_object('key', json_object('status', a0."value" -> '$."status"'), 'grouping', json_array('status'), 'elements', COALESCE(json_group_array(json(json_remove(a0."value", '$."status"'))), json('[]'))) AS "value" FROM (SELECT json_object('name', a1."name", 'status', json(COALESCE(json_extract(COALESCE((SELECT json_group_array(json("item")) FROM (SELECT json_object('id', a2."id", '__source_type', a2."__source_type") AS "item" FROM (SELECT 'default::Status' AS "__source_type", "id" AS "id" FROM "default__status") a2 WHERE a2."id" = a1."status_id")), '[]'), '$[0]'), 'null'))) AS "value" FROM (SELECT 'default::Issue' AS "__source_type", "id" AS "id", "name" AS "name", "status_id" AS "status_id" FROM "default__issue") a1) a0 GROUP BY json_extract(a0."value", '$."status"')",
+  "SELECT Issue { name }": "SELECT a0."id" AS "id", a0."__source_type" AS "__source_type", a0."name" AS "name" FROM (SELECT 'default::Issue' AS "__source_type", "id" AS "id", "name" AS "name" FROM "default__issue") a0",
+  "SELECT Issue { name } FILTER .number = '1'": "SELECT a0."id" AS "id", a0."__source_type" AS "__source_type", a0."name" AS "name" FROM (SELECT 'default::Issue' AS "__source_type", "id" AS "id", "name" AS "name", "number" AS "number" FROM "default__issue") a0 WHERE (EXISTS (SELECT 1 FROM (SELECT ? AS "value") WHERE "value" = a0."number"))",
+  "SELECT Issue { name, owner: { name } }": "SELECT a0."id" AS "id", a0."__source_type" AS "__source_type", a0."name" AS "name", json(COALESCE(json_extract(COALESCE((SELECT json_group_array(json("item")) FROM (SELECT json_object('id', a1."id", '__source_type', a1."__source_type", 'name', a1."name") AS "item" FROM (SELECT 'default::User' AS "__source_type", "id" AS "id", "name" AS "name" FROM "default__user") a1 JOIN "default__issue__owner" a2 ON a2."target" = a1."id" WHERE a2."source" = a0."id" ORDER BY a2."rowid")), '[]'), '$[0]'), 'null')) AS "owner" FROM (SELECT 'default::Issue' AS "__source_type", a3."id" AS "id", a3."name" AS "name", a4."target" AS "owner_id" FROM "default__issue" a3 LEFT JOIN "default__issue__owner" a4 ON a4."source" = a3."id") a0",
+  "SELECT count(Issue)": "SELECT (SELECT count(*) FROM (SELECT 'default::Issue' AS "__source_type", "id" AS "id" FROM "default__issue") a0) AS "value"",
+  "SELECT { a := 1, b := {2,3,4} }": "SELECT json_object('a', a0."value", 'b', a1."value") AS "value" FROM (SELECT 1 AS "value") a0 CROSS JOIN (SELECT 2 AS "value" UNION ALL SELECT 3 AS "value" UNION ALL SELECT 4 AS "value") a1",
+}
+`;
+
+exports[`compile-facts characterization corpus (issues schema) > compile facts are stable across the corpus 1`] = `
+{
+  "DELETE Issue FILTER .number = '1'": {
+    "kind": "delete",
+    "loweringMode": "single_statement",
+    "lowersToSingleSql": true,
+    "params": 1,
+  },
+  "FOR n IN {1, 2} UNION (SELECT Issue { name } FILTER .number = <issue_num_t>n)": {
+    "error": "E_SEMANTIC",
+  },
+  "FOR x IN {1, 2, 3} UNION (SELECT x)": {
+    "kind": "for",
+    "loweringMode": "single_statement",
+    "lowersToSingleSql": true,
+    "params": 0,
+  },
+  "GROUP Issue BY .status": {
+    "kind": "group",
+    "loweringMode": "single_statement",
+    "lowersToSingleSql": true,
+    "params": 0,
+  },
+  "GROUP Issue { name } BY .status": {
+    "kind": "group",
+    "loweringMode": "single_statement",
+    "lowersToSingleSql": true,
+    "params": 0,
+  },
+  "INSERT Status { name := 'New' }": {
+    "kind": "insert",
+    "loweringMode": "single_statement",
+    "lowersToSingleSql": true,
+    "params": 1,
+  },
+  "SELECT 'a' ++ 'b'": {
+    "kind": "select_expr",
+    "loweringMode": "single_statement",
+    "lowersToSingleSql": true,
+    "params": 2,
+  },
+  "SELECT (1, 'a')": {
+    "kind": "select_expr",
+    "loweringMode": "single_statement",
+    "lowersToSingleSql": true,
+    "params": 1,
+  },
+  "SELECT 1 + 2": {
+    "kind": "select_expr",
+    "loweringMode": "single_statement",
+    "lowersToSingleSql": true,
+    "params": 0,
+  },
+  "SELECT <str>42": {
+    "kind": "select_expr",
+    "loweringMode": "single_statement",
+    "lowersToSingleSql": true,
+    "params": 0,
+  },
+  "SELECT DETACHED Issue { name }": {
+    "kind": "select_expr",
+    "loweringMode": "single_statement",
+    "lowersToSingleSql": true,
+    "params": 0,
+  },
+  "SELECT DISTINCT Issue.status.name": {
+    "kind": "select_expr",
+    "loweringMode": "single_statement",
+    "lowersToSingleSql": true,
+    "params": 0,
+  },
+  "SELECT Issue": {
+    "kind": "select_expr",
+    "loweringMode": "single_statement",
+    "lowersToSingleSql": true,
+    "params": 0,
+  },
+  "SELECT Issue FILTER (.time_estimate ?? 0) > 0": {
+    "kind": "select",
+    "loweringMode": "single_statement",
+    "lowersToSingleSql": true,
+    "params": 0,
+  },
+  "SELECT Issue FILTER .name IN {'a', 'b'}": {
+    "kind": "select",
+    "loweringMode": "single_statement",
+    "lowersToSingleSql": true,
+    "params": 2,
+  },
+  "SELECT Issue FILTER EXISTS .priority": {
+    "kind": "select",
+    "loweringMode": "single_statement",
+    "lowersToSingleSql": true,
+    "params": 0,
+  },
+  "SELECT Issue { name } FILTER .number = '1'": {
+    "kind": "select",
+    "loweringMode": "single_statement",
+    "lowersToSingleSql": true,
+    "params": 1,
+  },
+  "SELECT Issue { name } LIMIT 3": {
+    "kind": "select",
+    "loweringMode": "single_statement",
+    "lowersToSingleSql": true,
+    "params": 0,
+  },
+  "SELECT Issue { name } OFFSET 2 LIMIT 3": {
+    "kind": "select",
+    "loweringMode": "single_statement",
+    "lowersToSingleSql": true,
+    "params": 0,
+  },
+  "SELECT Issue { name } ORDER BY .number": {
+    "kind": "select",
+    "loweringMode": "single_statement",
+    "lowersToSingleSql": true,
+    "params": 0,
+  },
+  "SELECT Issue { name, number }": {
+    "kind": "select",
+    "loweringMode": "single_statement",
+    "lowersToSingleSql": true,
+    "params": 0,
+  },
+  "SELECT Issue { name, owner: { name } }": {
+    "kind": "select",
+    "loweringMode": "single_statement",
+    "lowersToSingleSql": true,
+    "params": 0,
+  },
+  "SELECT Issue { num := .num_watchers }": {
+    "kind": "select",
+    "loweringMode": "single_statement",
+    "lowersToSingleSql": true,
+    "params": 0,
+  },
+  "SELECT Issue { watchers: { name } }": {
+    "kind": "select",
+    "loweringMode": "single_statement",
+    "lowersToSingleSql": true,
+    "params": 0,
+  },
+  "SELECT Issue.name": {
+    "kind": "select_expr",
+    "loweringMode": "single_statement",
+    "lowersToSingleSql": true,
+    "params": 0,
+  },
+  "SELECT Issue.owner.name": {
+    "kind": "select_expr",
+    "loweringMode": "single_statement",
+    "lowersToSingleSql": true,
+    "params": 0,
+  },
+  "SELECT ThisTypeDoesNotExist": {
+    "error": "E_SEMANTIC",
+  },
+  "SELECT [1, 2, 3]": {
+    "kind": "select_expr",
+    "loweringMode": "single_statement",
+    "lowersToSingleSql": true,
+    "params": 0,
+  },
+  "SELECT count(Issue)": {
+    "kind": "select_expr",
+    "loweringMode": "single_statement",
+    "lowersToSingleSql": true,
+    "params": 0,
+  },
+  "SELECT count(Issue.watchers)": {
+    "kind": "select_expr",
+    "loweringMode": "fallback_multi_query",
+    "lowersToSingleSql": false,
+    "params": 0,
+  },
+  "SELECT ident('hi')": {
+    "kind": "select_expr",
+    "loweringMode": "single_statement",
+    "lowersToSingleSql": true,
+    "params": 1,
+  },
+  "SELECT len('hello')": {
+    "kind": "select_expr",
+    "loweringMode": "single_statement",
+    "lowersToSingleSql": true,
+    "params": 1,
+  },
+  "SELECT max(Issue.number)": {
+    "kind": "select_expr",
+    "loweringMode": "single_statement",
+    "lowersToSingleSql": true,
+    "params": 0,
+  },
+  "SELECT opt_test(1, 'x')": {
+    "kind": "select_expr",
+    "loweringMode": "single_statement",
+    "lowersToSingleSql": true,
+    "params": 2,
+  },
+  "SELECT sum(Issue.time_estimate)": {
+    "kind": "select_expr",
+    "loweringMode": "single_statement",
+    "lowersToSingleSql": true,
+    "params": 0,
+  },
+  "SELECT { a := 1, b := {2,3,4} }": {
+    "kind": "select_free",
+    "loweringMode": "single_statement",
+    "lowersToSingleSql": true,
+    "params": 0,
+  },
+  "SELECT { n := count(Issue) }": {
+    "kind": "select_free",
+    "loweringMode": "single_statement",
+    "lowersToSingleSql": true,
+    "params": 0,
+  },
+  "SELECT { x := Issue.name }": {
+    "kind": "select_free",
+    "loweringMode": "single_statement",
+    "lowersToSingleSql": true,
+    "params": 0,
+  },
+  "SELECT {1, 2, 3}": {
+    "kind": "select_expr",
+    "loweringMode": "single_statement",
+    "lowersToSingleSql": true,
+    "params": 0,
+  },
+  "UPDATE Issue FILTER .number = '1' SET { name := 'x' }": {
+    "kind": "update",
+    "loweringMode": "single_statement",
+    "lowersToSingleSql": true,
+    "params": 2,
+  },
+  "WITH x := Issue SELECT x { name }": {
+    "kind": "select_expr",
+    "loweringMode": "single_statement",
+    "lowersToSingleSql": true,
+    "params": 0,
+  },
+}
+`;

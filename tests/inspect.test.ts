@@ -29,6 +29,11 @@ describe("canonicalizeSql", () => {
   it("collapses whitespace", () => {
     expect(canonicalizeSql("SELECT   1\n  FROM   t")).toBe("SELECT 1 FROM t");
   });
+
+  it("normalizes underscore-prefixed projection aliases (_pb, _pl_0)", () => {
+    const sql = `FROM "t" _pb LEFT JOIN "l" _pl_0 ON _pl_0."s" = _pb."id"`;
+    expect(canonicalizeSql(sql)).toBe(`FROM "t" a0 LEFT JOIN "l" a1 ON a1."s" = a0."id"`);
+  });
 });
 
 describe("compile facts (issues schema)", () => {

@@ -173,7 +173,12 @@ export function schemaFromSdl(source: string, module = "default"): SchemaSnapsho
 // lowering actually changes, not when an unrelated alias counter shifts.
 // ---------------------------------------------------------------------------
 
-const GENERATED_ALIAS = /\b(?:g\d+|p\d+|j\d+|tuple_\d+|grp_src|g_agg|grp\d+|agg\d+|scope\d+)\b/g;
+// Generated, unquoted alias families emitted by the SQL lowering. Real columns
+// and table names are always quoted ("..."), so matching bare lowercase tokens
+// is safe. The `_[a-z]+(?:_\d+)?` arm covers projection bases / link joins
+// (`_pb`, `_pl_0`, …); the rest cover source/pointer/join/tuple/group aliases.
+const GENERATED_ALIAS =
+  /\b(?:g\d+|p\d+|j\d+|tuple_\d+|grp_src|g_agg|grp\d+|agg\d+|scope\d+|_[a-z]+(?:_\d+)?)\b/g;
 
 export function canonicalizeSql(sql: string): string {
   if (!sql) return "";
