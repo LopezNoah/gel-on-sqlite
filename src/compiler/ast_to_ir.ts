@@ -8958,9 +8958,20 @@ const buildGroupStmtParts = (
     // A multi field (`b := {2, 3, 4}`) doesn't break the one-row contract:
     // a free object is still ONE element whose field holds the whole set —
     // the SQL stage aggregates union-valued fields into JSON arrays.
+    // A FOR field over a plain value (`b := (for n in {8,9} select n)`) is also
+    // a single element whose value holds the whole produced set — the SQL stage
+    // aggregates it into a JSON array like a union-valued field. A FOR whose
+    // body produces an OBJECT (`b := (for n in {9} union ({c:=3, d:=n}))`)
+    // carries its own shape/computed pointers and stays on the runtime grouper.
+    const forBodyIsScalarish = (forExpr: ForExpr): boolean => {
+      let body: Set = forExpr.body;
+      while (body.expr.kind === "select_expr") body = (body.expr as SelectExpr).result;
+      return body.expr.kind !== "tuple" && (body.shape?.length ?? 0) === 0;
+    };
     const isTupleElementValue = (val: Set): boolean =>
       isSingleTupleElement(val)
-      || (val.expr.kind === "operator_call" && (val.expr as OperatorCall).operator === "union");
+      || (val.expr.kind === "operator_call" && (val.expr as OperatorCall).operator === "union")
+      || (val.expr.kind === "for_expr" && forBodyIsScalarish(val.expr as ForExpr));
     if (cursor.expr.kind === "tuple"
       && (cursor.expr as Tuple).named
       && (cursor.expr as Tuple).elements.every((el) => el.name && isTupleElementValue(el.val))) {
