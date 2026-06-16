@@ -27,6 +27,7 @@ import {
   validateScriptUserDDL,
   validateUserDDLStatement,
 } from "./ddl.js";
+import { installSqlTrace, runWithSqlSink } from "./sql_trace_sink.js";
 
 
 export interface QueryResult {
@@ -34,20 +35,6 @@ export interface QueryResult {
   rows?: unknown[];
   changes?: number;
 }
-
-// ── SQL execution tracing ────────────────────────────────────────────────
-// Many queries (writes, select-over-mutation, WITH-bound DML chains) fan out
-// into several SQL statements, but the trace previously surfaced only the
-// final/primary artifact. We record *every* statement actually run against the
-// backend — in order, params included — so `QueryExecutionTrace.sqlTrail`
-// reflects the complete sequence (BEGIN/COMMIT, reads, writes). The recorder
-// is installed once per db by wrapping `prepare`; it only collects while a
-// sink is active (set for the duration of one `executeQueryWithTrace` call).
-// NOTE: this hooks the synchronous better-sqlite3 `run`/`all`/`get`. An async
-// backend (e.g. Cloudflare D1) would need the same capture at its await
-// boundary instead.
-const SQL_TRACE_INSTALLED = Symbol.for("gel.sqlTraceInstalled");
-let activeSqlSink: SQLArtifact[] | null = null;
 
 // Embedded `SELECT (DELETE …)` (and `(DELETE …).a`, `WITH t := (DELETE …)`):
 // the outer SELECT must project the deleted rows' values, but those rows no
@@ -58,40 +45,6 @@ let activeSqlSink: SQLArtifact[] | null = null;
 // Null outside an embedded-delete-in-select context, so plain `DELETE T` and
 // multi-mutation chains keep their immediate, in-line delete semantics.
 let deferredChainDeletes: Array<() => void> | null = null;
-
-const installSqlTrace = (db: SQLiteDatabase): void => {
-  const marked = db as unknown as Record<symbol, unknown>;
-  if (marked[SQL_TRACE_INSTALLED]) {
-    return;
-  }
-  marked[SQL_TRACE_INSTALLED] = true;
-  const origPrepare = db.prepare.bind(db);
-  db.prepare = (sql: string) => {
-    const stmt = origPrepare(sql);
-    // Fast path: when no trace sink is active (the normal query path doesn't
-    // record a SQL trail), hand back the statement unwrapped. This avoids
-    // allocating the recording closures and reassigning run/all/get on every
-    // prepared statement — pure overhead when nothing consumes the trail.
-    if (!activeSqlSink) {
-      return stmt;
-    }
-    const record = (params: ScalarValue[]): void => {
-      if (activeSqlSink) {
-        activeSqlSink.push({ sql, params: [...params], loweringMode: "single_statement" });
-      }
-    };
-    const origRun = stmt.run.bind(stmt);
-    const origAll = stmt.all.bind(stmt);
-    stmt.run = (...params: ScalarValue[]) => { record(params); return origRun(...params); };
-    stmt.all = (...params: ScalarValue[]) => { record(params); return origAll(...params); };
-    const maybeGet = (stmt as { get?: (...p: ScalarValue[]) => unknown }).get;
-    if (maybeGet) {
-      const origGet = maybeGet.bind(stmt);
-      (stmt as { get?: (...p: ScalarValue[]) => unknown }).get = (...params: ScalarValue[]) => { record(params); return origGet(...params); };
-    }
-    return stmt;
-  };
-};
 
 export interface QueryExecutionTrace {
   ast: Statement;
@@ -6231,18 +6184,14 @@ export const executeQueryWithTrace = (
   // query and surface it as `sqlTrail`. Nested executeQueryWithTrace calls
   // get their own sink (restored on exit), so each reports its own sequence.
   installSqlTrace(db);
-  const previousSink = activeSqlSink;
   const sink: SQLArtifact[] = [];
-  activeSqlSink = sink;
-  try {
+  return runWithSqlSink(sink, () => {
     const trace = executeQueryWithTraceImpl(db, schema, query, securityContext, presetAst);
     if (sink.length > 0) {
       trace.sqlTrail = [...sink];
     }
     return trace;
-  } finally {
-    activeSqlSink = previousSink;
-  }
+  });
 };
 
 // ---------------------------------------------------------------------------
