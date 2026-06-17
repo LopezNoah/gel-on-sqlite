@@ -14,7 +14,7 @@ import type { QueryVariables } from "../src/runtime/engine.js";
 import { schemaSnapshotFromDeclarative } from "../src/schema/uiSchema.js";
 import { SchemaSnapshot } from "../src/schema/schema.js";
 import { expect } from "vitest";
-import { parseDeclarativeSchema } from "../src/schema/sdl_adapter.js";
+import { loadSchema } from "../src/schema/load.js";
 import { expectLike } from "./python_query_test_helpers.js";
 
 // Each test gets its own snapshot so test-time DDL (create function/type/…)
@@ -228,8 +228,7 @@ export class QueryHarness {
         schemaSource = loadSchemaSource(schemaDir, options.schema, options.extraModules);
       }
 
-      const decl = parseDeclarativeSchema(schemaSource, { legacySyntaxCompat: true },);
-      snapshot = schemaSnapshotFromDeclarative(decl);
+      snapshot = loadSchema(schemaSource, { legacySyntaxCompat: true });
       materializeSchema(db, snapshot);
       ensureGelSchemaTables(db);
       serializeSchemaToGelTables(db, snapshot);
@@ -289,8 +288,7 @@ export class QueryHarness {
       const schemaDir = path.join(__dirname, "schemas");
       schemaSource = loadSchemaSource(schemaDir, options.schema, options.extraModules);
     }
-    const decl = parseDeclarativeSchema(schemaSource, { legacySyntaxCompat: true });
-    const schema = schemaSnapshotFromDeclarative(decl);
+    const schema = loadSchema(schemaSource, { legacySyntaxCompat: true });
     materializeSchema(db, schema);
     ensureGelSchemaTables(db);
     serializeSchemaToGelTables(db, schema);

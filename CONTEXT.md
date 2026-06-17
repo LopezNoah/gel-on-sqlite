@@ -56,6 +56,26 @@ _Avoid_: schema model, schema state.
 The parsed SDL representation (`src/schema/declarative.ts`) produced from schema source by `parseDeclarativeSchema`, converted into a `SchemaSnapshot`.
 _Avoid_: schema AST, schema doc.
 
+**Schema representations** (the conversion graph):
+Schema exists in several forms; this is which produces which, so a reader doesn't have to trace imports across five files:
+
+```
+SDL text
+  │  parseDeclarativeSchema   (sdl_adapter.ts, tokenized by schema_tokenizer.ts;
+  ▼                            embedded computed/constraint exprs via edgeql/parser.ts)
+DeclarativeSchema             (declarative.ts — the parsed SDL shape)
+  │  schemaSnapshotFromDeclarative  (uiSchema.ts)        ◄─── loadSchema() runs these two steps
+  ▼
+SchemaSnapshot                (schema.ts — the authoritative immutable form)
+  ├─ declarativeSchemaFromTypeDefs (uiSchema.ts)  ──►  DeclarativeSchema   (reverse, for editing/round-trip)
+  ├─ generateSchemaModel (codegen/schema.ts)      ──►  GeneratedSchema  ──►  codegen/generated/schema_model.ts
+  └─ renderSchemaSQL (codegen/sql.ts)             ──►  SQL DDL (CREATE TABLE …)
+```
+
+**Schema ingestion facade** (`loadSchema`):
+`src/schema/load.ts` — the one canonical SDL → SchemaSnapshot entry (`parseDeclarativeSchema` then `schemaSnapshotFromDeclarative`). The chain was hand-rolled across 20+ call sites; new callers use `loadSchema` (see `docs/adr/0005`). Note: schema *parsing* is separate from query parsing — `schema_tokenizer.ts`/`sdl_adapter.ts` is a distinct front end from `edgeql/tokenizer.ts`/`parser.ts` (SDL declaration syntax vs the EdgeQL expression language); they intentionally do not share a tokenizer.
+_Avoid_: buildSchema, schema loader (for the runtime introspection path).
+
 ## Execution
 
 **Runtime evaluator**:
