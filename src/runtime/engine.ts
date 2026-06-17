@@ -16,7 +16,7 @@ import { assertTargetSqlCompatibility, type RuntimeTarget } from "./target.js";
 import type { ShapeElement as GelIRShapeElement, Set as GelIRSet, Statement as GelIRStatement, TypeRef as GelIRTypeRef } from "../ir/gel_ir.js";
 import type { InsertIR, InsertLinkDefaultIR, InsertLinkPropertyIR, IRStatement, OverlayIR, SelectIR, UpdateIR, UpdateLinkAssignmentIR } from "../ir/model.js";
 import type { AccessPolicyCondition, AccessPolicyDef, ComputedLinkPropertyExpr, ConstraintDef, FieldDef, FieldDefaultExpr, FunctionDef, FunctionExprDef, FunctionVolatility, LinkPropertyDef, ScalarType, ScalarValue, TypeDef } from "../types.js";
-import { cloneTypeDef, fieldSequenceName, normalizeLinkTargetNames, qualifiedTypeName } from "../schema/schema.js";
+import { cloneTypeDef, fieldSequenceName, normalizeLinkTargetNames, qualifiedTypeName, usesLinkTable } from "../schema/schema.js";
 import { parseDeclarativeSchema } from "../schema/sdl_adapter.js";
 import { schemaSnapshotFromDeclarative } from "../schema/uiSchema.js";
 import { tableNameForType } from "../codegen/sql.js";
@@ -9010,8 +9010,7 @@ const collectBacklinkSourceRows = (
     const link = (sourceType.links ?? []).find((candidate) => candidate.name === body.link);
     if (!link) continue;
     const sourceTable = tableNameForType(qualifiedTypeName(sourceType));
-    const usesLinkTable = Boolean(link.multi) || (link.properties?.length ?? 0) > 0;
-    if (usesLinkTable) {
+    if (usesLinkTable(link)) {
       const owner = resolveLinkStorageOwner(schema, sourceType, link);
       const linkTable = `${tableNameForType(qualifiedTypeName(owner))}__${link.name.toLowerCase()}`;
       const linkRows = db
@@ -11546,10 +11545,9 @@ const runWriteWithAccessPolicies = (
           continue;
         }
 
-        const usesLinkTable = Boolean(link.multi) || (link.properties?.length ?? 0) > 0;
         const sourceIds = new Set<string>();
 
-        if (usesLinkTable) {
+        if (usesLinkTable(link)) {
           const linkTable = `${sourceTable}__${link.name.toLowerCase()}`;
           const placeholders = targetIds.map(() => "?").join(", ");
           const rows = db
