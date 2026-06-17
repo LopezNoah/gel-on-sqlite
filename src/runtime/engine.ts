@@ -19,6 +19,7 @@ import type { AccessPolicyCondition, AccessPolicyDef, ComputedLinkPropertyExpr, 
 import { cloneTypeDef, fieldSequenceName, normalizeLinkTargetNames, qualifiedTypeName, usesLinkTable } from "../schema/schema.js";
 import { resolveLinkStorageOwner } from "../schema/physical_layout.js";
 import { materializeGelSQLRows, normalizeGelSQLValue } from "./row_codec.js";
+import { coIteratedBinding } from "./co_iteration.js";
 import { parseDeclarativeSchema } from "../schema/sdl_adapter.js";
 import { schemaSnapshotFromDeclarative } from "../schema/uiSchema.js";
 import { tableNameForType } from "../codegen/sql.js";
@@ -2687,33 +2688,21 @@ const tryRuntimeSelectExprEvaluationAst = (
         // values (1, 4, 9), not nine. Without this, evaluating each side
         // independently yields the full Cartesian product. (The `compare`
         // case below has a similar shortcut for `?=`/`?!=`.)
-        const findBindingRoot = (e: FreeObjectExpr | ComputedExpr): string | null => {
-          if (!e || typeof e !== "object") return null;
-          if (e.kind === "binding_ref") return e.name;
-          if (e.kind === "field_access") return findBindingRoot(e.expr);
-          if (e.kind === "index_access") return findBindingRoot(e.expr);
-          if (e.kind === "cast") return findBindingRoot(e.expr);
-          return null;
-        };
-        const leftRoot = findBindingRoot(expr.left);
-        const rightRoot = findBindingRoot(expr.right);
-        if (leftRoot && leftRoot === rightRoot && env.has(leftRoot)) {
-          const bound = env.get(leftRoot);
-          if (Array.isArray(bound)) {
-            const rows: number[] = [];
-            for (const row of bound) {
-              const rowEnv: EvalEnv = new Map(env);
-              rowEnv.set(leftRoot, row);
-              const l = evalExpr(expr.left, rowEnv);
-              const r = evalExpr(expr.right, rowEnv);
-              const value = applyMath(
-                Array.isArray(l) ? l[0] : l,
-                Array.isArray(r) ? r[0] : r,
-              );
-              if (value !== null) rows.push(value);
-            }
-            return rows;
+        const coBinding = coIteratedBinding(expr.left, expr.right, env);
+        if (coBinding) {
+          const rows: number[] = [];
+          for (const row of coBinding.rows) {
+            const rowEnv: EvalEnv = new Map(env);
+            rowEnv.set(coBinding.root, row);
+            const l = evalExpr(expr.left, rowEnv);
+            const r = evalExpr(expr.right, rowEnv);
+            const value = applyMath(
+              Array.isArray(l) ? l[0] : l,
+              Array.isArray(r) ? r[0] : r,
+            );
+            if (value !== null) rows.push(value);
           }
+          return rows;
         }
         const leftValue = evalExpr(expr.left, env);
         const rightValue = evalExpr(expr.right, env);
@@ -2741,58 +2730,46 @@ const tryRuntimeSelectExprEvaluationAst = (
         //   SELECT I.time_estimate ?!= I.time_spent_log.spent_time
         // must produce |I| booleans, one per row, not a single global value.
         if (expr.op === "?=" || expr.op === "?!=") {
-          const findBindingRoot = (e: FreeObjectExpr | ComputedExpr): string | null => {
-            if (!e || typeof e !== "object") return null;
-            if (e.kind === "binding_ref") return e.name;
-            if (e.kind === "field_access") return findBindingRoot(e.expr);
-            if (e.kind === "index_access") return findBindingRoot(e.expr);
-            if (e.kind === "cast") return findBindingRoot(e.expr);
-            return null;
-          };
-          const leftRoot = findBindingRoot(expr.left);
-          const rightRoot = findBindingRoot(expr.right);
-          if (leftRoot && leftRoot === rightRoot && env.has(leftRoot)) {
-            const bound = env.get(leftRoot);
-            if (Array.isArray(bound) && bound.length > 0) {
-              const lcpIsEmpty = (v: unknown): boolean =>
-                v === null || v === undefined || (Array.isArray(v) && v.length === 0);
-              const comparable = (v: unknown): unknown => (v && typeof v === "object" && !Array.isArray(v)
-                && typeof (v as { id?: unknown }).id === "string") ? (v as { id: string }).id : v;
-              const out: boolean[] = [];
-              for (const row of bound) {
-                const subEnv = new Map(env);
-                subEnv.set(leftRoot, [row]);
-                const lv = evalExpr(expr.left, subEnv);
-                const rv = evalExpr(expr.right, subEnv);
-                const lEmpty = lcpIsEmpty(lv);
-                const rEmpty = lcpIsEmpty(rv);
-                if (lEmpty && rEmpty) {
-                  out.push(expr.op === "?=");
-                  continue;
-                }
-                if (lEmpty) {
-                  const rItems = Array.isArray(rv) ? rv : [rv];
-                  const v = expr.op === "?!=";
-                  for (let i = 0; i < rItems.length; i++) out.push(v);
-                  continue;
-                }
-                if (rEmpty) {
-                  const lItems = Array.isArray(lv) ? lv : [lv];
-                  const v = expr.op === "?!=";
-                  for (let i = 0; i < lItems.length; i++) out.push(v);
-                  continue;
-                }
-                const lItems = Array.isArray(lv) ? lv : [lv];
+          const coBinding = coIteratedBinding(expr.left, expr.right, env);
+          if (coBinding && coBinding.rows.length > 0) {
+            const lcpIsEmpty = (v: unknown): boolean =>
+              v === null || v === undefined || (Array.isArray(v) && v.length === 0);
+            const comparable = (v: unknown): unknown => (v && typeof v === "object" && !Array.isArray(v)
+              && typeof (v as { id?: unknown }).id === "string") ? (v as { id: string }).id : v;
+            const out: boolean[] = [];
+            for (const row of coBinding.rows) {
+              const subEnv = new Map(env);
+              subEnv.set(coBinding.root, [row]);
+              const lv = evalExpr(expr.left, subEnv);
+              const rv = evalExpr(expr.right, subEnv);
+              const lEmpty = lcpIsEmpty(lv);
+              const rEmpty = lcpIsEmpty(rv);
+              if (lEmpty && rEmpty) {
+                out.push(expr.op === "?=");
+                continue;
+              }
+              if (lEmpty) {
                 const rItems = Array.isArray(rv) ? rv : [rv];
-                for (const l of lItems) {
-                  for (const r of rItems) {
-                    const eq = comparable(l) === comparable(r);
-                    out.push(expr.op === "?=" ? eq : !eq);
-                  }
+                const v = expr.op === "?!=";
+                for (let i = 0; i < rItems.length; i++) out.push(v);
+                continue;
+              }
+              if (rEmpty) {
+                const lItems = Array.isArray(lv) ? lv : [lv];
+                const v = expr.op === "?!=";
+                for (let i = 0; i < lItems.length; i++) out.push(v);
+                continue;
+              }
+              const lItems = Array.isArray(lv) ? lv : [lv];
+              const rItems = Array.isArray(rv) ? rv : [rv];
+              for (const l of lItems) {
+                for (const r of rItems) {
+                  const eq = comparable(l) === comparable(r);
+                  out.push(expr.op === "?=" ? eq : !eq);
                 }
               }
-              return out;
             }
+            return out;
           }
         }
 
