@@ -1,6 +1,7 @@
 import { AppError, tryResult } from "../errors.js";
 import { parseEdgeQL } from "../edgeql/parser.js";
 import { inferStatementCardinality, inferStatementMultiplicity, inferStatementType, inferStatementVolatility } from "./inference.js";
+import { checkScopeTreeViolations } from "./scope_tree_check.js";
 import type {
   Statement as EdgeQLStatement,
   ComputedExpr,
@@ -9730,6 +9731,15 @@ export const compileASTToGelIR = (statement: EdgeQLStatement, options: IRCompile
   };
 
   validateParametersInStatement(statement);
+
+  // Scope-tree validation: reject correlated-reference violations (a path that
+  // "changes the interpretation" of a set used elsewhere, or a correlated set
+  // referenced inside a nested mutation). This is the oracle's check, now run on
+  // the Live IR path too (the last inference dimension — ADR 0019). Unlike the
+  // additive value-inferences, this one is meant to throw, so it is NOT guarded.
+  if (ctx.schema) {
+    checkScopeTreeViolations(statement, ctx.schema);
+  }
 
   const buildResult = (): Statement => {
     switch (statement.kind) {
