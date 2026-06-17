@@ -84,15 +84,15 @@ describe("codegen/sql — inheritance-aware collection", () => {
 
 describe("codegen/sql — storage strategy", () => {
   it("usesLinkTable is true for multi links", () => {
-    expect(usesLinkTable({ name: "tags", targetType: "default::Tag", multi: true })).toBe(true);
+    expect(usesLinkTable({ multi: true })).toBe(true);
   });
 
   it("usesLinkTable is true for links with properties", () => {
-    expect(usesLinkTable({ name: "owner", targetType: "default::User", properties: [{ name: "since", type: "datetime" }] })).toBe(true);
+    expect(usesLinkTable({ properties: [{ name: "since", type: "datetime" }] })).toBe(true);
   });
 
   it("usesLinkTable is false for simple singleton links", () => {
-    expect(usesLinkTable({ name: "owner", targetType: "default::User" })).toBe(false);
+    expect(usesLinkTable({})).toBe(false);
   });
 
   it("inlineColumnName returns {name}_id", () => {

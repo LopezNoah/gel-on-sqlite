@@ -32,7 +32,7 @@ import type {
 } from "../types.js";
 import type { SchemaSnapshot } from "../schema/schema.js";
 import { scalarToSqlType } from "../schema/scalar.js";
-import { qualifiedTypeName } from "../schema/schema.js";
+import { qualifiedTypeName, usesLinkTable } from "../schema/schema.js";
 
 // ---------------------------------------------------------------------------
 // Naming helpers
@@ -117,9 +117,9 @@ export const collectLinks = (
 // Storage strategy helpers (matching compiler/semantic.ts logic)
 // ---------------------------------------------------------------------------
 
-/** Whether a link is stored in a separate junction table vs. inline column. */
-export const usesLinkTable = (link: LinkDef): boolean =>
-  !!link.multi || (link.properties != null && link.properties.length > 0);
+/** Whether a link is stored in a separate junction table vs. inline column.
+ *  Re-exported from the schema core — the rule's single home (see schema.ts). */
+export { usesLinkTable } from "../schema/schema.js";
 
 /** The inline column name for a singleton link (e.g. "owner_id"). */
 export const inlineColumnName = (link: LinkDef): string => `${link.name}_id`;

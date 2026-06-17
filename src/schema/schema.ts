@@ -301,6 +301,17 @@ export const qualifiedTypeName = (typeDef: TypeDef): string => {
   return `${module}::${typeDef.name}`;
 };
 
+// The one home for the link-storage rule: a link is stored in a separate
+// junction table (vs. an inline `<name>_id` column) iff it is `multi` or
+// carries link-properties. Structural param so both a `LinkDef` (schema) and a
+// declarative `LinkMember` satisfy it without either importing the other.
+// Note: the inference oracle (`compiler/semantic.ts`, quarantined per ADR 0001)
+// keeps its own inline copies; it is slated for wholesale deletion, not refactor.
+export const usesLinkTable = (link: {
+  multi?: boolean;
+  properties?: readonly unknown[] | null;
+}): boolean => Boolean(link.multi) || (link.properties?.length ?? 0) > 0;
+
 // Normalizes the schema's content (types/links/rewrites/triggers/policies,
 // functions, globals) into a canonical, sorted shape and serializes it. Used
 // by `SchemaSnapshot.contentFingerprint` as the schema component of the

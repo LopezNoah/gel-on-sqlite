@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import type { MutationRewriteExpr, ScalarType, ScalarValue, TriggerDef, TriggerInsertAction, TriggerValueExpr } from "../types.js";
 import type { DeclarativeSchema, LinkMember, ObjectTypeDeclaration, PropertyMember, TypeMember } from "./declarative.js";
 import { scalarToSqlType } from "./scalar.js";
+import { usesLinkTable } from "./schema.js";
 
 export interface MigrationStep {
   description: string;
@@ -135,7 +136,7 @@ const buildCreateTypeSteps = (
       continue;
     }
 
-    if (member.kind === "link" && !member.multi && member.properties.length === 0) {
+    if (member.kind === "link" && !usesLinkTable(member)) {
       columns.push(`${quoteIdent(`${member.name}_id`)} TEXT${member.required ? " NOT NULL" : ""}`);
     }
   }
@@ -169,7 +170,7 @@ const buildCreateTypeSteps = (
       continue;
     }
 
-    if (member.kind === "link" && (member.multi || member.properties.length > 0)) {
+    if (member.kind === "link" && usesLinkTable(member)) {
       const lt = linkTable(typeDecl, member);
       const linkColumns = [`${quoteIdent("source")} TEXT NOT NULL`, `${quoteIdent("target")} TEXT NOT NULL`];
       for (const property of member.properties) {
@@ -224,7 +225,7 @@ const buildAlterTypeSteps = (
       continue;
     }
 
-    if (member.kind === "link" && !member.multi && member.properties.length === 0) {
+    if (member.kind === "link" && !usesLinkTable(member)) {
       steps.push({
         description: `add link column ${qualifiedTypeName(toType)}.${member.name}`,
         sql: `ALTER TABLE ${quoteIdent(tableName(toType))} ADD COLUMN ${quoteIdent(`${member.name}_id`)} TEXT${member.required ? " NOT NULL DEFAULT ''" : ""}`,
@@ -298,7 +299,7 @@ const buildDropTypeSteps = (typeDecl: ObjectTypeDeclaration): MigrationStep[] =>
       continue;
     }
 
-    if (member.kind === "link" && (member.multi || member.properties.length > 0)) {
+    if (member.kind === "link" && usesLinkTable(member)) {
       const lt = linkTable(typeDecl, member);
       steps.push({
         description: `drop link table for ${qualifiedTypeName(typeDecl)}.${member.name}`,
@@ -339,7 +340,7 @@ const buildDropMemberStorageSteps = (typeDecl: ObjectTypeDeclaration, member: Ty
     ];
   }
 
-  if (member.kind === "link" && !member.multi && member.properties.length === 0) {
+  if (member.kind === "link" && !usesLinkTable(member)) {
     return [
       {
         description: `drop link column ${qualifiedTypeName(typeDecl)}.${member.name}`,
