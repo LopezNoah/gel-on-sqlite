@@ -69,7 +69,7 @@ _Avoid_: interpreter fallback, the slow path.
 _Avoid_: compile probe, the inspector (for the runtime).
 
 **Compile facts**:
-The stable, artifact-derived projection that is the compiler's **test surface**: `statementKind`, `loweringMode`, `lowersToSingleSql`, `paramCount`, `subqueryCount`, `cteCount`, and the `irKindTree` (the Live IR node-kind skeleton, ids/names/literals stripped). Every field is true of the artifact as compiled — no heuristics that can lie.
+The stable, artifact-derived projection that is the compiler's **test surface**: `statementKind`, `loweringMode`, `lowersToSingleSql`, `strategy` (the Execution strategy), `paramCount`, `subqueryCount`, `cteCount`, and the `irKindTree` (the Live IR node-kind skeleton, ids/names/literals stripped). Every field is true of the artifact as compiled — no heuristics that can lie.
 _Avoid_: compile summary, inspection facts.
 
 **Canonical SQL**:
@@ -77,5 +77,9 @@ The alias- and whitespace-normalized form of an artifact's SQL (`canonicalizeSql
 _Avoid_: normalized SQL, stable SQL.
 
 **SQL gate** (`lowersToSingleSql`):
-The predicate `loweringMode === "single_statement" && sql.length > 0` — did a query compile to exactly one runnable SQL statement, or must the Runtime evaluator handle it? Exported once from `src/sql/compiler_types.ts` and consumed by **both** the engine's dispatch and the Compile inspection seam; it was previously copy-pasted ~17× across `engine.ts` (collapsed by `docs/adr/0003`). The Compile fact `lowersToSingleSql` is exactly this gate. Note: this is the SQL gate *only*, not a 3-way `sql | runtime | reject` strategy — the accurate classifier (which also folds in the engine's `needsRuntimeEval` AST walk) is still deferred; when extracted, the inspector gains a `strategy` fact.
-_Avoid_: execution strategy (no 3-way classifier yet), runs-as-sql.
+The predicate `loweringMode === "single_statement" && sql.length > 0` — did a query compile to exactly one runnable SQL statement? Exported once from `src/sql/compiler_types.ts` and consumed by **both** the engine's dispatch and the Compile inspection seam; it was previously copy-pasted ~17× across `engine.ts` (collapsed by `docs/adr/0003`). The Compile fact `lowersToSingleSql` is exactly this gate.
+_Avoid_: runs-as-sql.
+
+**Execution strategy**:
+How the engine actually runs a compiled statement: `sql` (executes off the SQL artifact), `runtime` (the Runtime evaluator / write path), or `reject` (raises `E_UNSUPPORTED`). Decided by `classifyExecutionStrategy(ast, artifact, schema)` in `src/compiler/execution_strategy.ts` — the **single source of truth** the engine dispatches on (its reject sites and its `select_expr` runtime entry, via the shared `selectExprNeedsRuntime` predicate) and the Compile inspection seam reports as its `strategy` fact, so the two cannot disagree (`docs/adr/0004`). Distinct from the SQL gate: a `select_expr` can be `lowersToSingleSql: false` yet `strategy: "sql"` (the engine runs the incomplete artifact rather than rejecting).
+_Avoid_: lowering mode (that's the artifact field), the fallback path.

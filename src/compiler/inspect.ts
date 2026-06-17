@@ -7,14 +7,15 @@
 // no behaviour to the production path. It reports the honest, artifact-derived
 // `lowersToSingleSql` fact via the shared `lowersToSingleSql` helper in
 // compiler_types.ts — the same SQL gate the engine's dispatch consumes (candidate
-// #2 unified that predicate; see docs/adr/0003). The accurate 3-way strategy
-// classifier (sql / runtime / reject) — which additionally folds in the engine's
-// `needsRuntimeEval` AST walk — remains deferred; when extracted it becomes the
-// single source of truth and this seam gains a `strategy` fact.
+// #2 unified that predicate; see docs/adr/0003). It also reports the 3-way
+// `strategy` fact (sql / runtime / reject) via `classifyExecutionStrategy` — the
+// same classifier the engine dispatches on (docs/adr/0004), so the inspector's
+// verdict matches what the engine actually does.
 
 import type { Statement } from "../edgeql/ast.js";
 import { parseEdgeQLScript } from "../edgeql/parser.js";
 import { lowersToSingleSql, type GelIRSQLArtifact } from "../sql/compiler_types.js";
+import { classifyExecutionStrategy, type ExecutionStrategy } from "./execution_strategy.js";
 import { parseDeclarativeSchema } from "../schema/sdl_adapter.js";
 import { schemaSnapshotFromDeclarative } from "../schema/uiSchema.js";
 import type { SchemaSnapshot } from "../schema/schema.js";
@@ -36,8 +37,12 @@ export interface CompileFacts {
   statementKind: string;
   loweringMode: GelIRSQLArtifact["loweringMode"];
   /** The engine's SQL gate, verbatim: did this compile to one runnable statement?
-   *  This is exactly the predicate engine.ts checks ~15× to decide SQL-vs-runtime. */
+   *  This is exactly the predicate engine.ts checks to decide SQL-vs-runtime. */
   lowersToSingleSql: boolean;
+  /** How the engine runs this query: "sql" (off the artifact), "runtime" (the
+   *  runtime evaluator / write path), or "reject" (E_UNSUPPORTED). Computed via
+   *  the same classifier the engine dispatches on — guaranteed to match. */
+  strategy: ExecutionStrategy;
   /** Distinct positional placeholders bound in the SQL artifact. */
   paramCount: number;
   /** Coarse structural signatures, counted off the canonical SQL. */
@@ -125,6 +130,7 @@ export function inspect(
     statementKind: ast.kind,
     loweringMode: artifact.sql.loweringMode,
     lowersToSingleSql: lowersToSingleSql(artifact.sql),
+    strategy: classifyExecutionStrategy(ast, artifact.sql, schema),
     paramCount: artifact.sql.params.length,
     subqueryCount: countMatches(canonical, /\(\s*select\b/gi),
     cteCount: countMatches(canonical, /\bwith\b/gi),

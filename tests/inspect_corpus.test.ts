@@ -80,6 +80,7 @@ describe("compile-facts characterization corpus (issues schema)", () => {
             kind: r.facts!.statementKind,
             loweringMode: r.facts!.loweringMode,
             lowersToSingleSql: r.facts!.lowersToSingleSql,
+            strategy: r.facts!.strategy,
             params: r.facts!.paramCount,
           }
         : { error: r.error!.code };
