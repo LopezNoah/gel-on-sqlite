@@ -60,6 +60,10 @@ _Avoid_: schema model, schema state.
 The parsed SDL representation (`src/schema/declarative.ts`) produced from schema source by `parseDeclarativeSchema`, converted into a `SchemaSnapshot`.
 _Avoid_: schema AST, schema doc.
 
+**Type-member resolution** (`src/schema/type_member_resolver.ts`):
+The one home for "given a type declaration, what is its full member list once bases are folded in and `overloaded` members merged?" — `TypeMemberResolver`, constructed once per schema with `(types, annotationRegistry)`, exposes `resolveMembers(typeDecl)`. It owns the inheritance fold (first-seen-wins on name, inherited before own), the overload-compatibility checks (kind/scalar/cardinality, link target narrowing), the link-property merge, the recursion cycle guard, and the resolved-member cache (handing out deep clones). It was a nested closure inside `typeDefsFromDeclarative` (`uiSchema.ts`), which now just maps resolved members onto `TypeDef` fields/links/computeds. The constraint-clone helpers live here too; `cloneConstraints` is re-exported for `uiSchema.ts`'s mapping loop (one-directional dependency, no cycle). Pinned by `tests/type_member_resolver.test.ts` (`docs/adr/0036`).
+_Avoid_: member merger, inheritance walker.
+
 **Schema representations** (the conversion graph):
 Schema exists in several forms; this is which produces which, so a reader doesn't have to trace imports across five files:
 
@@ -111,6 +115,10 @@ _Avoid_: join helper, path join.
 **Runtime evaluator**:
 The TypeScript expression interpreter (`tryRuntimeSelectExprEvaluationAst` in `src/runtime/engine.ts`) required for constructs that do not lower to SQL — free objects, FOR iteration, runtime aliases, inlined UDFs. A required component, not a fallback for the SQL path.
 _Avoid_: interpreter fallback, the slow path.
+
+**Access-policy enforcement** (`src/runtime/access_policy.ts`):
+The one home for the policy decision — "does this security context pass the access policies declared on this type for this operation?". `evaluatePoliciesForOperation` is the core rule (superuser bypass, no-relevant-policy ⇒ deny, allow-any-then-deny-veto); `appliesToOperation` matches an operation (`update` ⇒ `update_read`+`update_write`); `evaluateCondition` evaluates one condition; `resolveGlobalValue`/`hasPermission` resolve globals/permissions; the four `enforce{Insert,UpdateRead,UpdateWrite,Delete}Policies` throw-on-deny wrappers are what the write path calls. The read-time check `evaluateSelectPolicies` stays in `engine.ts` (it needs the shared `rowSourceType`/`readRowById` row helpers) but delegates its decision here. Note: `runWriteWithAccessPolicies` (engine.ts, ~660 lines) is a write *executor* that merely calls these — its size is mutation mechanics (INSERT defaults, sequences, `UNLESS CONFLICT`, SQL assembly), not policy logic. Pinned by `tests/access_policy.test.ts` (`docs/adr/0037`).
+_Avoid_: policy checker, permission guard.
 
 **Row codec**:
 `src/runtime/row_codec.ts` — the one home for decoding a Gel-SQL result row into an EdgeQL value: `materializeGelSQLRows` (scalar-vs-object row shaping, internal-column dropping, all-internal-null→null) and `normalizeGelSQLValue` (per-column JSON decode). The final step of the SQL read path (`runGelSelectSQL`). Its `JSON.parse` fallback is **load-bearing**, not a swallowed bug: decode is type-blind, so a `str` that merely looks like JSON (`"[draft]"`) must survive verbatim (contrast the SQL-precompute probe, where defects propagate). `readRuntimeTypedAliasSourceRows` (reading source rows for the Runtime evaluator) is a distinct concern, not part of this codec. See `docs/adr/0013`.

@@ -15,11 +15,19 @@ import { executeStdlibFunction, resolveStdlibFunction, type RuntimeFunctionArg }
 import { assertTargetSqlCompatibility, type RuntimeTarget } from "./target.js";
 import type { ShapeElement as GelIRShapeElement, Set as GelIRSet, Statement as GelIRStatement, TypeRef as GelIRTypeRef } from "../ir/gel_ir.js";
 import type { InsertIR, InsertLinkDefaultIR, InsertLinkPropertyIR, IRStatement, OverlayIR, UpdateIR, UpdateLinkAssignmentIR } from "../ir/model.js";
-import type { AccessPolicyCondition, AccessPolicyDef, ComputedLinkPropertyExpr, ConstraintDef, FieldDef, FieldDefaultExpr, FunctionDef, FunctionExprDef, FunctionVolatility, LinkPropertyDef, ScalarType, ScalarValue, TypeDef } from "../types.js";
+import type { AccessPolicyCondition, ComputedLinkPropertyExpr, ConstraintDef, FieldDef, FieldDefaultExpr, FunctionDef, FunctionExprDef, FunctionVolatility, LinkPropertyDef, ScalarType, ScalarValue, TypeDef } from "../types.js";
 import { cloneTypeDef, fieldSequenceName, normalizeLinkTargetNames, qualifiedTypeName, usesLinkTable } from "../schema/schema.js";
 import { resolveLinkStorageOwner } from "../schema/physical_layout.js";
 import { materializeGelSQLRows, normalizeGelSQLValue } from "./row_codec.js";
 import { coIteratedBinding } from "./co_iteration.js";
+import {
+  enforceDeletePolicies,
+  enforceInsertPolicies,
+  enforceUpdateReadPolicies,
+  enforceUpdateWritePolicies,
+  evaluatePoliciesForOperation,
+  hasPermission,
+} from "./access_policy.js";
 import { parseDeclarativeSchema } from "../schema/sdl_adapter.js";
 import { schemaSnapshotFromDeclarative } from "../schema/uiSchema.js";
 import { linkTableName, tableNameForType } from "../codegen/sql.js";
@@ -10711,14 +10719,6 @@ const enforceBuiltinPermissions = (
   }
 };
 
-const hasPermission = (context: SecurityContext, permissionName: string): boolean => {
-  if (context.isSuperuser) {
-    return true;
-  }
-
-  return new Set(context.permissions ?? []).has(permissionName);
-};
-
 const runWriteWithAccessPolicies = (
   db: SQLiteDatabase,
   schema: SchemaSnapshot,
@@ -12367,167 +12367,6 @@ const evaluateSelectPolicies = (
   }
 
   return evaluatePoliciesForOperation(sourceTypeDef, "select", rowForEval, context, { failOnDeny: false });
-};
-
-const enforceInsertPolicies = (
-  typeDef: TypeDef,
-  values: Record<string, ScalarValue>,
-  context: SecurityContext,
-  line: number,
-  column: number,
-): void => {
-  const row: Record<string, unknown> = { ...values };
-  const ok = evaluatePoliciesForOperation(typeDef, "insert", row, context, { failOnDeny: true });
-  if (!ok) {
-    throw new AppError("E_RUNTIME", `Access policy violation on insert of ${qualifiedTypeName(typeDef)}`, line, column);
-  }
-};
-
-const enforceUpdateReadPolicies = (
-  typeDef: TypeDef,
-  rows: Record<string, unknown>[],
-  context: SecurityContext,
-  line: number,
-  column: number,
-): void => {
-  for (const row of rows) {
-    const ok = evaluatePoliciesForOperation(typeDef, "update_read", row, context, { failOnDeny: true });
-    if (!ok) {
-      throw new AppError("E_RUNTIME", `Access policy violation on update read of ${qualifiedTypeName(typeDef)}`, line, column);
-    }
-  }
-};
-
-const enforceUpdateWritePolicies = (
-  typeDef: TypeDef,
-  rows: Record<string, unknown>[],
-  context: SecurityContext,
-  line: number,
-  column: number,
-): void => {
-  for (const row of rows) {
-    const ok = evaluatePoliciesForOperation(typeDef, "update_write", row, context, { failOnDeny: true });
-    if (!ok) {
-      throw new AppError("E_RUNTIME", `Access policy violation on update write of ${qualifiedTypeName(typeDef)}`, line, column);
-    }
-  }
-};
-
-const enforceDeletePolicies = (
-  typeDef: TypeDef,
-  rows: Record<string, unknown>[],
-  context: SecurityContext,
-  line: number,
-  column: number,
-): void => {
-  for (const row of rows) {
-    const ok = evaluatePoliciesForOperation(typeDef, "delete", row, context, { failOnDeny: true });
-    if (!ok) {
-      throw new AppError("E_RUNTIME", `Access policy violation on delete of ${qualifiedTypeName(typeDef)}`, line, column);
-    }
-  }
-};
-
-const evaluatePoliciesForOperation = (
-  typeDef: TypeDef,
-  operation: "select" | "insert" | "update_read" | "update_write" | "delete",
-  row: Record<string, unknown>,
-  context: SecurityContext,
-  options: { failOnDeny: boolean },
-): boolean => {
-  const policies = typeDef.accessPolicies ?? [];
-  if (policies.length === 0 || context.isSuperuser) {
-    return true;
-  }
-
-  const relevant = policies.filter((policy) => appliesToOperation(policy, operation));
-  if (relevant.length === 0) {
-    return false;
-  }
-
-  const allows = relevant.filter((policy) => policy.effect === "allow");
-  const denies = relevant.filter((policy) => policy.effect === "deny");
-  const allowed = allows.some((policy) => evaluateCondition(policy.condition, row, context));
-  if (!allowed) {
-    return false;
-  }
-
-  for (const deny of denies) {
-    if (evaluateCondition(deny.condition, row, context)) {
-      if (options.failOnDeny) {
-        throw new Error(deny.errmessage ?? `Denied by policy '${deny.name}'`);
-      }
-      return false;
-    }
-  }
-
-  return true;
-};
-
-const appliesToOperation = (
-  policy: AccessPolicyDef,
-  operation: "select" | "insert" | "update_read" | "update_write" | "delete",
-): boolean => {
-  if (policy.operations.includes("all")) {
-    return true;
-  }
-
-  if (operation === "update_read" || operation === "update_write") {
-    return policy.operations.includes(operation) || policy.operations.includes("all");
-  }
-
-  return policy.operations.includes(operation);
-};
-
-const evaluateCondition = (
-  condition: AccessPolicyCondition,
-  row: Record<string, unknown>,
-  context: SecurityContext,
-): boolean => {
-  switch (condition.kind) {
-    case "always":
-      return condition.value;
-    case "global": {
-      const globalValue = resolveGlobalValue(context, condition.name);
-      if (typeof globalValue === "boolean") {
-        return globalValue;
-      }
-      return globalValue !== null && globalValue !== undefined;
-    }
-    case "field_eq_global": {
-      const globalValue = resolveGlobalValue(context, condition.global);
-      return row[condition.field] === globalValue;
-    }
-    case "field_eq_literal":
-      return row[condition.field] === condition.value;
-    case "and":
-      return condition.clauses.every((clause) => evaluateCondition(clause, row, context));
-    default:
-      return false;
-  }
-};
-
-const resolveGlobalValue = (context: SecurityContext, name: string): ScalarValue | undefined => {
-  if ((name.startsWith("sys::perm::") || name.startsWith("cfg::perm::") || name.includes("::perm::")) && !name.startsWith("global ")) {
-    return hasPermission(context, name);
-  }
-
-  if (Object.prototype.hasOwnProperty.call(context.globals ?? {}, name)) {
-    return context.globals?.[name];
-  }
-
-  if (name.includes("::")) {
-    const shortName = name.split("::").at(-1);
-    if (shortName && Object.prototype.hasOwnProperty.call(context.globals ?? {}, shortName)) {
-      return context.globals?.[shortName];
-    }
-  }
-
-  if (hasPermission(context, name)) {
-    return true;
-  }
-
-  return undefined;
 };
 
 const readTargetRowsForFilter = (

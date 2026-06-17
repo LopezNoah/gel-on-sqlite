@@ -1,7 +1,6 @@
 import type {
   AliasDef,
   AnnotationDef,
-  ConstraintDef,
   FunctionDef,
   FunctionExprDef,
   ScalarValue,
@@ -15,31 +14,10 @@ import { AnnotationRegistry, AnnotationResolver, AnnotationSet } from "./annos.j
 import { SchemaSnapshot, qualifiedTypeName } from "./schema.js";
 import { scalarTypeDeclarationToTypeDef } from "./scalar.js";
 import { schemaIntrospectionTypeDefs } from "./schema_introspection.js";
-
-const cloneConstraint = (constraint: ConstraintDef): ConstraintDef => ({
-  name: constraint.name,
-  annotations: constraint.annotations.map((annotation) => ({ ...annotation })),
-  delegated: constraint.delegated,
-  params: constraint.params ? constraint.params.map((param) => ({ ...param })) : undefined,
-  onExpr: constraint.onExpr,
-  exceptExpr: constraint.exceptExpr,
-});
-
-const cloneConstraints = (constraints: ConstraintDef[]): ConstraintDef[] => constraints.map(cloneConstraint);
+import { TypeMemberResolver, cloneConstraints } from "./type_member_resolver.js";
 
 const isStoredLinkProperty = (property: LinkMember["properties"][number]): property is LinkProperty =>
   property.computed !== true;
-
-const mergeConstraintSets = (base: ConstraintDef[], override: ConstraintDef[]): ConstraintDef[] => {
-  const map = new Map<string, ConstraintDef>();
-  for (const constraint of base) {
-    map.set(constraint.name, cloneConstraint(constraint));
-  }
-  for (const constraint of override) {
-    map.set(constraint.name, cloneConstraint(constraint));
-  }
-  return [...map.values()];
-};
 
 export const schemaSnapshotFromDeclarative = (schema: DeclarativeSchema): SchemaSnapshot => {
   const typeDefs = typeDefsFromDeclarative(schema);
@@ -115,7 +93,7 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
     (typeDecl) => qualifiedTypeName(typeDecl),
     (name) => typeByName.get(name),
   );
-  const resolvedMemberCache = new Map<string, TypeMember[]>();
+  const memberResolver = new TypeMemberResolver(schema.types, annotationRegistry);
 
   const constraintAnnotations = new Map<string, AnnotationSet>();
   for (const constraint of schema.constraints ?? []) {
@@ -130,117 +108,6 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
   const resolveTypeAnnotations = (typeDecl: DeclarativeSchema["types"][number]): AnnotationDef[] =>
     annotationResolver.resolve(typeDecl).toArray();
 
-  const inheritMemberAnnotations = (annotations: AnnotationDef[]): AnnotationDef[] =>
-    AnnotationSet.from(annotations).inherit(annotationRegistry).toArray();
-
-  const isSubtypeOf = (candidate: string, target: string, seen = new Set<string>()): boolean => {
-    if (candidate === target) {
-      return true;
-    }
-    if (seen.has(candidate)) {
-      return false;
-    }
-    seen.add(candidate);
-
-    const typeDecl = typeByName.get(candidate);
-    if (!typeDecl) {
-      return false;
-    }
-
-    return (typeDecl.extends ?? []).some((baseName) => isSubtypeOf(baseName, target, seen));
-  };
-
-  const cloneMemberForInheritance = (member: TypeMember): TypeMember => {
-  if (member.kind === "property") {
-    return {
-      ...member,
-      annotations: inheritMemberAnnotations(member.annotations),
-      rewrite: member.rewrite
-        ? {
-            onInsert: member.rewrite.onInsert,
-            onUpdate: member.rewrite.onUpdate,
-          }
-        : undefined,
-      constraints: cloneConstraints(member.constraints),
-    };
-  }
-
-    if (member.kind === "computed") {
-      return {
-        ...member,
-        annotations: inheritMemberAnnotations(member.annotations),
-        expr:
-          member.expr.kind === "concat"
-            ? { ...member.expr, parts: member.expr.parts.map((part) => ({ ...part })) }
-            : { ...member.expr },
-      };
-    }
-
-      return {
-        ...member,
-        annotations: inheritMemberAnnotations(member.annotations),
-        properties: member.properties.map((property) => ({
-          ...property,
-          annotations: inheritMemberAnnotations(property.annotations),
-        })),
-      };
-  };
-
-  const resolveMembers = (typeDecl: DeclarativeSchema["types"][number], stack = new Set<string>()): TypeMember[] => {
-    const typeName = qualifiedTypeName(typeDecl);
-    const cached = resolvedMemberCache.get(typeName);
-    if (cached) {
-      return cached.map((member) => cloneMemberForInheritance(member));
-    }
-
-    if (stack.has(typeName)) {
-      return [];
-    }
-    stack.add(typeName);
-
-    const inheritedMembers: TypeMember[] = [];
-    const inheritedNames = new Set<string>();
-    for (const baseName of typeDecl.extends ?? []) {
-      const baseDecl = typeByName.get(baseName);
-      if (!baseDecl) {
-        throw new Error(`Unknown base type '${baseName}' in ${typeName}`);
-      }
-      for (const member of resolveMembers(baseDecl, stack).map((member) => cloneMemberForInheritance(member))) {
-        if (!inheritedNames.has(member.name)) {
-          inheritedMembers.push(member);
-          inheritedNames.add(member.name);
-        }
-      }
-    }
-
-    const merged = [...inheritedMembers];
-    for (const ownMember of typeDecl.members) {
-      const own = cloneMember(ownMember);
-      validateMemberAnnotations(own, annotationRegistry, typeName);
-      const existingIndex = merged.findIndex((candidate) => candidate.name === own.name);
-
-      if (existingIndex < 0) {
-        if (own.overloaded) {
-          throw new Error(`'overloaded' member '${own.name}' on ${typeName} does not override an inherited member`);
-        }
-        merged.push(own);
-        continue;
-      }
-
-      if (!own.overloaded) {
-        throw new Error(`member '${own.name}' on ${typeName} must be declared as overloaded`);
-      }
-
-      const baseMember = merged[existingIndex];
-      assertOverloadCompatibility(baseMember, own, typeName, isSubtypeOf);
-      merged[existingIndex] = mergeOverloadedMember(baseMember, own, annotationRegistry);
-    }
-
-    resolvedMemberCache.set(typeName, merged.map((member) => cloneMember(member)));
-    stack.delete(typeName);
-    return merged.map((member) => cloneMember(member));
-  };
-
   return schema.types.map((typeDecl) => {
     const resolvedTypeAnnotations = resolveTypeAnnotations(typeDecl);
     const links: NonNullable<TypeDef["links"]> = [];
@@ -248,7 +115,7 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
     const computeds: NonNullable<TypeDef["computeds"]> = [];
     const mutationRewrites: NonNullable<TypeDef["mutationRewrites"]> = [];
 
-    for (const member of resolveMembers(typeDecl)) {
+    for (const member of memberResolver.resolveMembers(typeDecl)) {
       if (member.kind === "property") {
         const resolvedConstraints =
           member.constraints.length > 0
@@ -893,181 +760,6 @@ export const renderDeclarativeSchema = (schema: DeclarativeSchema): string => {
 
 export const renderDeclarativeSchemaFromSnapshot = (schema: SchemaSnapshot): string => {
   return renderDeclarativeSchema(declarativeSchemaFromTypeDefs(schema.listTypes(), schema.listFunctions()));
-};
-
-
-const cloneMember = (member: TypeMember): TypeMember => {
-  if (member.kind === "property") {
-    return {
-      ...member,
-      annotations: member.annotations.map((annotation) => ({ ...annotation })),
-      rewrite: member.rewrite
-        ? {
-            onInsert: member.rewrite.onInsert,
-            onUpdate: member.rewrite.onUpdate,
-          }
-        : undefined,
-      constraints: cloneConstraints(member.constraints),
-    };
-  }
-
-  if (member.kind === "computed") {
-    return {
-      ...member,
-      annotations: member.annotations.map((annotation) => ({ ...annotation })),
-      expr:
-        member.expr.kind === "concat"
-          ? { ...member.expr, parts: member.expr.parts.map((part) => ({ ...part })) }
-          : { ...member.expr },
-    };
-  }
-
-  return {
-    ...member,
-    annotations: member.annotations.map((annotation) => ({ ...annotation })),
-    properties: member.properties.map((property) => ({
-      ...property,
-      annotations: property.annotations.map((annotation) => ({ ...annotation })),
-    })),
-  };
-};
-
-const validateAnnotations = (
-  annotations: AnnotationDef[],
-  annotationRegistry: AnnotationRegistry,
-  context: string,
-): void => {
-  for (const annotation of annotations) {
-    annotationRegistry.ensureKnown(annotation.name, context);
-  }
-};
-
-const validateMemberAnnotations = (
-  member: TypeMember,
-  annotationRegistry: AnnotationRegistry,
-  context: string,
-): void => {
-  validateAnnotations(member.annotations, annotationRegistry, `${context}.${member.name}`);
-
-  if (member.kind === "property") {
-    for (const constraint of member.constraints) {
-      validateAnnotations(
-        constraint.annotations,
-        annotationRegistry,
-        `${context}.${member.name}@constraint`,
-      );
-    }
-  }
-
-  if (member.kind === "link") {
-    for (const property of member.properties) {
-      validateAnnotations(
-        property.annotations,
-        annotationRegistry,
-        `${context}.${member.name}@${property.name}`,
-      );
-    }
-  }
-};
-
-const assertOverloadCompatibility = (
-  baseMember: TypeMember,
-  overloadedMember: TypeMember,
-  typeName: string,
-  isSubtypeOf: (candidate: string, target: string) => boolean,
-): void => {
-  if (baseMember.kind !== overloadedMember.kind) {
-    throw new Error(`overloaded member '${overloadedMember.name}' on ${typeName} must keep member kind`);
-  }
-
-  if (baseMember.kind === "property" && overloadedMember.kind === "property") {
-    if (baseMember.scalar !== overloadedMember.scalar) {
-      throw new Error(`overloaded property '${overloadedMember.name}' on ${typeName} must keep scalar type`);
-    }
-    return;
-  }
-
-  if (baseMember.kind === "link" && overloadedMember.kind === "link") {
-    if (baseMember.multi !== overloadedMember.multi) {
-      throw new Error(`overloaded link '${overloadedMember.name}' on ${typeName} must keep cardinality`);
-    }
-
-    const baseTarget = baseMember.target;
-    const overloadedTarget = overloadedMember.target;
-    if (!isSubtypeOf(overloadedTarget, baseTarget)) {
-      throw new Error(
-        `overloaded link '${overloadedMember.name}' on ${typeName} must narrow to subtype of '${baseTarget}'`,
-      );
-    }
-    return;
-  }
-
-  if (baseMember.kind === "computed" && overloadedMember.kind === "computed") {
-    if (baseMember.computedKind !== overloadedMember.computedKind) {
-      throw new Error(`overloaded computed '${overloadedMember.name}' on ${typeName} must keep computed kind`);
-    }
-    return;
-  }
-};
-
-const mergeOverloadedMember = (
-  baseMember: TypeMember,
-  overloadedMember: TypeMember,
-  annotationRegistry: AnnotationRegistry,
-): TypeMember => {
-  const baseAnnotations = AnnotationSet.from(baseMember.annotations)
-    .inherit(annotationRegistry)
-    .merge(AnnotationSet.from(overloadedMember.annotations))
-    .toArray();
-
-  if (overloadedMember.kind === "property" && baseMember.kind === "property") {
-    return {
-      ...overloadedMember,
-      annotations: baseAnnotations,
-      constraints: mergeConstraintSets(baseMember.constraints, overloadedMember.constraints),
-    };
-  }
-
-  if (overloadedMember.kind === "link" && baseMember.kind === "link") {
-    // Merge link properties: keep base's by default, let the overload
-    // override per name. Without this, `overloaded link owner { property
-    // since: datetime }` would shadow Owned.owner's `note` property and
-    // splats over the inherited link would silently drop `@note`.
-    const propsByName = new Map<string, typeof overloadedMember.properties[number]>();
-    for (const property of baseMember.properties) {
-      propsByName.set(property.name, {
-        ...property,
-        annotations: [...property.annotations],
-      });
-    }
-    for (const property of overloadedMember.properties) {
-      propsByName.set(property.name, {
-        ...property,
-        annotations: [...property.annotations],
-      });
-    }
-    return {
-      ...overloadedMember,
-      annotations: baseAnnotations,
-      properties: [...propsByName.values()],
-    };
-  }
-
-  if (overloadedMember.kind === "computed" && baseMember.kind === "computed") {
-    return {
-      ...overloadedMember,
-      annotations: baseAnnotations,
-      expr:
-        overloadedMember.expr.kind === "concat"
-          ? {
-              ...overloadedMember.expr,
-              parts: overloadedMember.expr.parts.map((part) => ({ ...part })),
-            }
-          : { ...overloadedMember.expr },
-    };
-  }
-
-  return overloadedMember;
 };
 
 const quoteString = (value: string): string => `'${value.replaceAll("'", "\\'")}'`;
