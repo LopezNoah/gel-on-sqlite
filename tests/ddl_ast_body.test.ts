@@ -32,7 +32,27 @@ describe("parseDDL — CREATE TYPE body on the AST (Stage D1b)", () => {
     expect(body?.map((e) => e.kind)).toEqual(["property", "type_exclusive_constraint"]);
   });
 
-  it("does not (yet) populate a body for ALTER TYPE", () => {
-    expect(ddl("ALTER TYPE Foo { CREATE PROPERTY x -> str; };").createTypeBody).toBeUndefined();
+  it("CREATE TYPE has no alterTypeOps", () => {
+    expect(ddl("CREATE TYPE Foo { CREATE PROPERTY x -> str; };").alterTypeOps).toBeUndefined();
+  });
+});
+
+describe("parseDDL — ALTER TYPE ops on the AST (Stage D1d)", () => {
+  it("populates alterTypeOps for a braced ALTER TYPE", () => {
+    const stmt = ddl("ALTER TYPE Foo { CREATE CONSTRAINT exclusive ON (.name); };");
+    expect(stmt.createTypeBody).toBeUndefined();
+    expect(stmt.alterTypeOps).toEqual([
+      { kind: "create_constraint", constraint: { delegated: false, onExpr: ".name", exceptExpr: undefined } },
+    ]);
+  });
+
+  it("populates alterTypeOps for a chained ALTER TYPE", () => {
+    expect(ddl("ALTER TYPE Foo ALTER PROPERTY status SET default := 'active';").alterTypeOps).toEqual([
+      { kind: "set_default", pointerPath: ["status"], exprText: "'active'" },
+    ]);
+  });
+
+  it("is undefined for a no-op ALTER TYPE", () => {
+    expect(ddl("ALTER TYPE Foo;").alterTypeOps).toBeUndefined();
   });
 });

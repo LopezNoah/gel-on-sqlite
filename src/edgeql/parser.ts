@@ -1,5 +1,5 @@
 import { AppError } from "../errors.js";
-import { parseCreateTypeBody, type CreateTypeBodyEntry } from "./ddl_body.js";
+import { parseAlterTypeBody, parseCreateTypeBody, type AlterTypeOp, type CreateTypeBodyEntry } from "./ddl_body.js";
 import type { ScalarType, ScalarValue } from "../types.js";
 import type {
   BacklinkExpr,
@@ -2366,6 +2366,7 @@ class Parser {
     let value: DDLStatement["value"];
     let functionDecl: DDLStatement["functionDecl"];
     let createTypeBody: DDLStatement["createTypeBody"];
+    let alterTypeOps: DDLStatement["alterTypeOps"];
     const setCommands: string[] = [];
     if (action === "create" && (objectKind === "alias" || objectKind === "global") && this.peek().kind === "assign") {
       this.expect("assign", "Expected ':=' in DDL definition");
@@ -2386,6 +2387,11 @@ class Parser {
       // so the runtime reads the parsed body rather than re-parsing the source
       // (docs/adr/0029). Falls back to a plain skip when there is no body.
       createTypeBody = this.captureCreateTypeBody();
+    } else if (action === "alter" && objectKind === "type") {
+      // Parse the `ALTER TYPE …` tail (braced or chained) into structured ops
+      // onto the AST so the runtime reads them rather than re-parsing the
+      // source (docs/adr/0031).
+      alterTypeOps = this.captureAlterTypeBody();
     } else {
       this.skipDDLBody();
     }
@@ -2407,6 +2413,7 @@ class Parser {
       extendsList,
       setCommands: setCommands.length > 0 ? setCommands : undefined,
       createTypeBody,
+      alterTypeOps,
       // A bare `WITH MODULE <name>` prefix supplies the DDL name-resolution
       // default module; thread it (and any module aliases) onto the node.
       withModule: withModule !== undefined && withModule !== this.defaultModule ? withModule : undefined,
@@ -2919,6 +2926,34 @@ class Parser {
     const bodyText = rbraceOffset >= 0 ? this.sliceSource(lbraceOffset + 1, rbraceOffset) : "";
     this.skipDDLBody();
     return parseCreateTypeBody(bodyText);
+  }
+
+  // Capture and parse an `ALTER TYPE <name> …` tail — everything from the
+  // current cursor (just past the name) to the statement terminator, in either
+  // the braced (`{ … }`) or chained (`ALTER PROPERTY … SET …`) form — into
+  // structured ops, then advance past it. Returns undefined when there is no
+  // tail (bare `ALTER TYPE Foo;`).
+  private captureAlterTypeBody(): AlterTypeOp[] | undefined {
+    if (this.peek().kind === "eof" || this.peek().kind === "semi") {
+      return undefined;
+    }
+    const startOffset = this.peek().offset;
+    // Find the statement end (top-level `;` or eof) by scanning the token stream.
+    let depth = 0;
+    let endOffset = -1;
+    for (let j = this.index; j < this.tokens.length; j += 1) {
+      const k = this.tokens[j].kind;
+      if (k === "lbrace" || k === "lparen" || k === "lbracket") depth += 1;
+      else if (k === "rbrace" || k === "rparen" || k === "rbracket") depth = Math.max(0, depth - 1);
+      else if ((k === "semi" && depth === 0) || k === "eof") {
+        endOffset = this.tokens[j].offset;
+        break;
+      }
+    }
+    const tail = endOffset >= 0 ? this.sliceSource(startOffset, endOffset) : this.sliceSource(startOffset, startOffset);
+    this.skipDDLBody();
+    const ops = parseAlterTypeBody(tail);
+    return ops.length > 0 ? ops : undefined;
   }
 
   // FOR statement — see docs/reference/reference/edgeql/for.rst.
