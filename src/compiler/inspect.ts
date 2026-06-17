@@ -16,8 +16,7 @@ import type { Statement } from "../edgeql/ast.js";
 import { parseEdgeQLScript } from "../edgeql/parser.js";
 import { lowersToSingleSql, type GelIRSQLArtifact } from "../sql/compiler_types.js";
 import { classifyExecutionStrategy, type ExecutionStrategy } from "./execution_strategy.js";
-import { parseDeclarativeSchema } from "../schema/sdl_adapter.js";
-import { schemaSnapshotFromDeclarative } from "../schema/uiSchema.js";
+import { loadSchema } from "../schema/load.js";
 import type { SchemaSnapshot } from "../schema/schema.js";
 import { getCompilerService, type CompileArtifact, type CompileContext } from "./service.js";
 
@@ -167,10 +166,7 @@ export function inspectorFor(schema: SchemaSnapshot, context: CompileContext = {
  *  fixture-file reading (the local-substitutable dependency) stays in the
  *  adapters; this is just the in-process parse. */
 export function schemaFromSdl(source: string, module = "default"): SchemaSnapshot {
-  const decl = parseDeclarativeSchema(`module ${module} {\n${source}\n}`, {
-    legacySyntaxCompat: true,
-  });
-  return schemaSnapshotFromDeclarative(decl);
+  return loadSchema(`module ${module} {\n${source}\n}`, { legacySyntaxCompat: true });
 }
 
 // ---------------------------------------------------------------------------
