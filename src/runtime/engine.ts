@@ -18,6 +18,7 @@ import type { InsertIR, InsertLinkDefaultIR, InsertLinkPropertyIR, IRStatement, 
 import type { AccessPolicyCondition, AccessPolicyDef, ComputedLinkPropertyExpr, ConstraintDef, FieldDef, FieldDefaultExpr, FunctionDef, FunctionExprDef, FunctionVolatility, LinkPropertyDef, ScalarType, ScalarValue, TypeDef } from "../types.js";
 import { cloneTypeDef, fieldSequenceName, normalizeLinkTargetNames, qualifiedTypeName, usesLinkTable } from "../schema/schema.js";
 import { resolveLinkStorageOwner } from "../schema/physical_layout.js";
+import { materializeGelSQLRows, normalizeGelSQLValue } from "./row_codec.js";
 import { parseDeclarativeSchema } from "../schema/sdl_adapter.js";
 import { schemaSnapshotFromDeclarative } from "../schema/uiSchema.js";
 import { tableNameForType } from "../codegen/sql.js";
@@ -9871,58 +9872,7 @@ const evaluateGelSelectPolicies = (
   return typeDef ? evaluateSelectPolicies(schema, db, typeDef, row, context) : true;
 };
 
-const materializeGelSQLRows = (
-  rows: Record<string, unknown>[],
-  options: { keepInternalId: boolean; scalarResultIsStr?: boolean },
-): unknown[] => rows.map((row) => {
-  const keys = Object.keys(row);
-  // Scalar select: Gel SQL projects a single `value` column. Parse JSON-shaped
-  // strings while preserving plain numeric strings produced by text casts.
-  if (keys.length === 1 && Object.prototype.hasOwnProperty.call(row, "value")) {
-    if (options.scalarResultIsStr && typeof row.value === "string") {
-      if (row.value.startsWith("\"")) {
-        try {
-          return JSON.parse(row.value);
-        } catch {
-          return row.value;
-        }
-      }
-      // The statement's static type is std::str — keep JSON-looking plain
-      // text (`'false'`, `'[1]'`) verbatim instead of JSON.parsing it.
-      return row.value;
-    }
-    return normalizeGelSQLValue(row.value);
-  }
-
-  const out: Record<string, unknown> = {};
-  let hasShapeColumn = false;
-  for (const key of keys) {
-    if (key === "__source_type" || key === "__tid__" || key === "__tname__") continue;
-    if (key === "id" && !options.keepInternalId) continue;
-    hasShapeColumn = true;
-    out[key] = normalizeGelSQLValue(row[key]);
-  }
-
-  if (!hasShapeColumn) {
-    const allNull = keys.every((key) => row[key] === null || row[key] === undefined);
-    if (allNull) return null;
-  }
-  return out;
-});
-
-const normalizeGelSQLValue = (value: unknown): unknown => {
-  if (typeof value !== "string") {
-    return value ?? null;
-  }
-  if (value === "true" || value === "false" || value === "null" || value.startsWith("[") || value.startsWith("{")) {
-    try {
-      return JSON.parse(value);
-    } catch {
-      return value;
-    }
-  }
-  return value;
-};
+// materializeGelSQLRows / normalizeGelSQLValue moved to ./row_codec.ts (ADR 0013).
 
 const gelStatementProjectsId = (statement: GelIRStatement): boolean =>
   topLevelGelShape(statement).some((element) => gelShapeElementName(element) === "id");
