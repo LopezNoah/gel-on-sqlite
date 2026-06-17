@@ -6764,7 +6764,7 @@ const resolveBacklinkRowsForSubject = (
   // element, so dedupe by concrete (type, id) to avoid double-counting.
   const seen = new globalThis.Set<string>();
   const pushUnique = (concreteName: string, row: Record<string, unknown>): void => {
-    const key = `${concreteName} ${String(row.id)}`;
+    const key = JSON.stringify([concreteName, String(row.id)]);
     if (seen.has(key)) return;
     seen.add(key);
     out.push(row);
@@ -8811,8 +8811,8 @@ const exclusiveChecksFor = (
   });
 
   if (targetFields === undefined) return checks;
-  const want = [...targetFields].sort().join(" ");
-  return checks.filter((c) => [...c.fields].sort().join(" ") === want);
+  const want = JSON.stringify([...targetFields].sort());
+  return checks.filter((c) => JSON.stringify([...c.fields].sort()) === want);
 };
 
 // Given an exclusive check and the resolved storage-column values the INSERT is
