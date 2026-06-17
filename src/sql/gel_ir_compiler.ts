@@ -1,4 +1,5 @@
 import { quoteIdent, quoteLiteral, tableNameForType } from "../codegen/sql.js";
+import { pointerStepJoinSql } from "./pointer_join.js";
 import { AppError } from "../errors.js";
 import type { RuntimeTarget } from "../runtime/target.js";
 import { lowerStdlibFunctionSql } from "./stdlib_lowering.js";
@@ -5062,30 +5063,24 @@ const tryCompileScalarPointerPathSelectSQL = (
     const nextAlias = `p${index + 1}`;
     const targetType = link.direction === "inbound" ? link.ptrref.outSource : link.ptrref.outTarget;
     const targetSource = compilePolymorphicSource(targetType, false, nextAlias, aliasColumns[index + 1], options);
-    if (shouldUseLinkTable(link)) {
-      const linkAlias = `pj${index}`;
-      const linkTable = linkTableNameForPointer(link, options);
-      if (link.direction === "inbound") {
-        fromSql += ` JOIN ${quoteIdent(linkTable)} ${linkAlias}`
-          + ` ON ${linkAlias}.${quoteIdent("target")} = ${previousAlias}.${quoteIdent("id")}`
-          + ` JOIN ${targetSource}`
-          + ` ON ${nextAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("source")}`;
-      } else {
-        fromSql += ` JOIN ${quoteIdent(linkTable)} ${linkAlias}`
-          + ` ON ${linkAlias}.${quoteIdent("source")} = ${previousAlias}.${quoteIdent("id")}`
-          + ` JOIN ${targetSource}`
-          + ` ON ${nextAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("target")}`;
-      }
-    } else {
-      const inlineColumn = `${link.ptrref.shortName}_id`;
-      if (link.direction === "inbound") {
-        fromSql += ` JOIN ${targetSource}`
-          + ` ON ${nextAlias}.${quoteIdent(inlineColumn)} = ${previousAlias}.${quoteIdent("id")}`;
-      } else {
-        fromSql += ` JOIN ${targetSource}`
-          + ` ON ${nextAlias}.${quoteIdent("id")} = ${previousAlias}.${quoteIdent(inlineColumn)}`;
-      }
-    }
+    fromSql += shouldUseLinkTable(link)
+      ? pointerStepJoinSql({
+          usesLinkTable: true,
+          direction: link.direction,
+          previousAlias,
+          nextAlias,
+          targetSource,
+          linkAlias: `pj${index}`,
+          linkTable: linkTableNameForPointer(link, options),
+        })
+      : pointerStepJoinSql({
+          usesLinkTable: false,
+          direction: link.direction,
+          previousAlias,
+          nextAlias,
+          targetSource,
+          inlineColumn: `${link.ptrref.shortName}_id`,
+        });
     previousAlias = nextAlias;
   });
 
@@ -5354,29 +5349,24 @@ const tryCompileMultiScalarPointerSelectSQL = (
       }
     }
     const targetSource = compilePolymorphicSource(targetType, false, nextAlias, [...targetCols], options);
-    if (shouldUseLinkTable(link)) {
-      const linkTable = linkTableNameForPointer(link, options);
-      if (link.direction === "inbound") {
-        fromSql += ` JOIN ${quoteIdent(linkTable)} ${linkAlias}`
-          + ` ON ${linkAlias}.${quoteIdent("target")} = ${previousAlias}.${quoteIdent("id")}`
-          + ` JOIN ${targetSource}`
-          + ` ON ${nextAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("source")}`;
-      } else {
-        fromSql += ` JOIN ${quoteIdent(linkTable)} ${linkAlias}`
-          + ` ON ${linkAlias}.${quoteIdent("source")} = ${previousAlias}.${quoteIdent("id")}`
-          + ` JOIN ${targetSource}`
-          + ` ON ${nextAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("target")}`;
-      }
-    } else {
-      const inlineColumn = `${link.ptrref.shortName}_id`;
-      if (link.direction === "inbound") {
-        fromSql += ` JOIN ${targetSource}`
-          + ` ON ${nextAlias}.${quoteIdent(inlineColumn)} = ${previousAlias}.${quoteIdent("id")}`;
-      } else {
-        fromSql += ` JOIN ${targetSource}`
-          + ` ON ${nextAlias}.${quoteIdent("id")} = ${previousAlias}.${quoteIdent(inlineColumn)}`;
-      }
-    }
+    fromSql += shouldUseLinkTable(link)
+      ? pointerStepJoinSql({
+          usesLinkTable: true,
+          direction: link.direction,
+          previousAlias,
+          nextAlias,
+          targetSource,
+          linkAlias,
+          linkTable: linkTableNameForPointer(link, options),
+        })
+      : pointerStepJoinSql({
+          usesLinkTable: false,
+          direction: link.direction,
+          previousAlias,
+          nextAlias,
+          targetSource,
+          inlineColumn: `${link.ptrref.shortName}_id`,
+        });
     previousAlias = nextAlias;
   }
 
@@ -5770,28 +5760,24 @@ const tryCompileLinkPropertyPathSelectSQL = (
       }
     }
     const targetSource = compilePolymorphicSource(targetType, false, nextAlias, [...targetCols], options);
-    if (shouldUseLinkTable(link)) {
-      if (link.direction === "inbound") {
-        fromSql += ` JOIN ${quoteIdent(linkTable)} ${linkAlias}`
-          + ` ON ${linkAlias}.${quoteIdent("target")} = ${previousAlias}.${quoteIdent("id")}`
-          + ` JOIN ${targetSource}`
-          + ` ON ${nextAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("source")}`;
-      } else {
-        fromSql += ` JOIN ${quoteIdent(linkTable)} ${linkAlias}`
-          + ` ON ${linkAlias}.${quoteIdent("source")} = ${previousAlias}.${quoteIdent("id")}`
-          + ` JOIN ${targetSource}`
-          + ` ON ${nextAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("target")}`;
-      }
-    } else {
-      const inlineColumn = `${link.ptrref.shortName}_id`;
-      if (link.direction === "inbound") {
-        fromSql += ` JOIN ${targetSource}`
-          + ` ON ${nextAlias}.${quoteIdent(inlineColumn)} = ${previousAlias}.${quoteIdent("id")}`;
-      } else {
-        fromSql += ` JOIN ${targetSource}`
-          + ` ON ${nextAlias}.${quoteIdent("id")} = ${previousAlias}.${quoteIdent(inlineColumn)}`;
-      }
-    }
+    fromSql += shouldUseLinkTable(link)
+      ? pointerStepJoinSql({
+          usesLinkTable: true,
+          direction: link.direction,
+          previousAlias,
+          nextAlias,
+          targetSource,
+          linkAlias,
+          linkTable,
+        })
+      : pointerStepJoinSql({
+          usesLinkTable: false,
+          direction: link.direction,
+          previousAlias,
+          nextAlias,
+          targetSource,
+          inlineColumn: `${link.ptrref.shortName}_id`,
+        });
     previousAlias = nextAlias;
   }
 
@@ -6197,24 +6183,25 @@ const buildCorrelatedScalarPointerPath = (
     const nextAlias = `cp${i + 1}`;
     const targetType = link.direction === "inbound" ? link.ptrref.outSource : link.ptrref.outTarget;
     const targetTable = resolveTypeTableName(targetType, options);
-    if (shouldUseLinkTable(link)) {
-      const linkTable = linkTableNameForPointer(link, options);
-      const linkAlias = `cpj${i + 1}`;
-      if (link.direction === "inbound") {
-        fromSql += ` JOIN ${quoteIdent(linkTable)} ${linkAlias} ON ${linkAlias}.${quoteIdent("target")} = ${prevAlias}.${quoteIdent("id")}`
-          + ` JOIN ${quoteIdent(targetTable)} ${nextAlias} ON ${nextAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("source")}`;
-      } else {
-        fromSql += ` JOIN ${quoteIdent(linkTable)} ${linkAlias} ON ${linkAlias}.${quoteIdent("source")} = ${prevAlias}.${quoteIdent("id")}`
-          + ` JOIN ${quoteIdent(targetTable)} ${nextAlias} ON ${nextAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("target")}`;
-      }
-    } else {
-      const inlineColumn = `${link.ptrref.shortName}_id`;
-      if (link.direction === "inbound") {
-        fromSql += ` JOIN ${quoteIdent(targetTable)} ${nextAlias} ON ${nextAlias}.${quoteIdent(inlineColumn)} = ${prevAlias}.${quoteIdent("id")}`;
-      } else {
-        fromSql += ` JOIN ${quoteIdent(targetTable)} ${nextAlias} ON ${nextAlias}.${quoteIdent("id")} = ${prevAlias}.${quoteIdent(inlineColumn)}`;
-      }
-    }
+    const targetSource = `${quoteIdent(targetTable)} ${nextAlias}`;
+    fromSql += shouldUseLinkTable(link)
+      ? pointerStepJoinSql({
+          usesLinkTable: true,
+          direction: link.direction,
+          previousAlias: prevAlias,
+          nextAlias,
+          targetSource,
+          linkAlias: `cpj${i + 1}`,
+          linkTable: linkTableNameForPointer(link, options),
+        })
+      : pointerStepJoinSql({
+          usesLinkTable: false,
+          direction: link.direction,
+          previousAlias: prevAlias,
+          nextAlias,
+          targetSource,
+          inlineColumn: `${link.ptrref.shortName}_id`,
+        });
     prevAlias = nextAlias;
   }
 
@@ -6730,24 +6717,24 @@ const compileSelectSource = (
     const baseCols = isLeaf ? projectedColumns : collectChainSourceColumns(links[i + 1], "via");
     const targetCols = inlineInboundFK ? [...new Set<string>([...baseCols, inlineInboundFK])] : baseCols;
     const targetSql = compilePolymorphicSource(targetType, false, targetAlias, targetCols, options);
-    if (shouldUseLinkTable(link)) {
-      const linkTable = linkTableNameForPointer(link, options);
-      const linkAlias = `j${i}`;
-      if (link.direction === "inbound") {
-        fromSql += ` JOIN ${quoteIdent(linkTable)} ${linkAlias} ON ${linkAlias}.${quoteIdent("target")} = ${previousAlias}.${quoteIdent("id")}`
-          + ` JOIN ${targetSql} ON ${targetAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("source")}`;
-      } else {
-        fromSql += ` JOIN ${quoteIdent(linkTable)} ${linkAlias} ON ${linkAlias}.${quoteIdent("source")} = ${previousAlias}.${quoteIdent("id")}`
-          + ` JOIN ${targetSql} ON ${targetAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("target")}`;
-      }
-    } else {
-      const inlineColumn = `${link.ptrref.shortName}_id`;
-      if (link.direction === "inbound") {
-        fromSql += ` JOIN ${targetSql} ON ${targetAlias}.${quoteIdent(inlineColumn)} = ${previousAlias}.${quoteIdent("id")}`;
-      } else {
-        fromSql += ` JOIN ${targetSql} ON ${targetAlias}.${quoteIdent("id")} = ${previousAlias}.${quoteIdent(inlineColumn)}`;
-      }
-    }
+    fromSql += shouldUseLinkTable(link)
+      ? pointerStepJoinSql({
+          usesLinkTable: true,
+          direction: link.direction,
+          previousAlias,
+          nextAlias: targetAlias,
+          targetSource: targetSql,
+          linkAlias: `j${i}`,
+          linkTable: linkTableNameForPointer(link, options),
+        })
+      : pointerStepJoinSql({
+          usesLinkTable: false,
+          direction: link.direction,
+          previousAlias,
+          nextAlias: targetAlias,
+          targetSource: targetSql,
+          inlineColumn: `${link.ptrref.shortName}_id`,
+        });
     previousAlias = targetAlias;
     previousTyperef = targetType;
   }
@@ -7121,17 +7108,15 @@ const compileForExprSource = (
       const linkAlias = `j${i}`;
       const targetType = pointer.direction === "inbound" ? pointer.ptrref.outSource : pointer.ptrref.outTarget;
       const targetSource = compilePolymorphicSource(targetType, false, level.alias, projectedColumns, options);
-      if (pointer.direction === "inbound") {
-        fromSql += ` JOIN ${quoteIdent(linkTable)} ${linkAlias}`
-          + ` ON ${linkAlias}.${quoteIdent("target")} = ${previousAlias}.${quoteIdent("id")}`
-          + ` JOIN ${targetSource}`
-          + ` ON ${level.alias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("source")}`;
-      } else {
-        fromSql += ` JOIN ${quoteIdent(linkTable)} ${linkAlias}`
-          + ` ON ${linkAlias}.${quoteIdent("source")} = ${previousAlias}.${quoteIdent("id")}`
-          + ` JOIN ${targetSource}`
-          + ` ON ${level.alias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("target")}`;
-      }
+      fromSql += pointerStepJoinSql({
+        usesLinkTable: true,
+        direction: pointer.direction,
+        previousAlias,
+        nextAlias: level.alias,
+        targetSource,
+        linkAlias,
+        linkTable,
+      });
       level.linkAlias = linkAlias;
       linkPropertyAliases.set(level.iteratorPathId, linkAlias);
       continue;
@@ -7140,13 +7125,14 @@ const compileForExprSource = (
     const inlineColumn = `${pointer.ptrref.shortName}_id`;
     const targetType = pointer.direction === "inbound" ? pointer.ptrref.outSource : pointer.ptrref.outTarget;
     const targetSource = compilePolymorphicSource(targetType, false, level.alias, projectedColumns, options);
-    if (pointer.direction === "inbound") {
-      fromSql += ` JOIN ${targetSource}`
-        + ` ON ${level.alias}.${quoteIdent(inlineColumn)} = ${previousAlias}.${quoteIdent("id")}`;
-    } else {
-      fromSql += ` JOIN ${targetSource}`
-        + ` ON ${level.alias}.${quoteIdent("id")} = ${previousAlias}.${quoteIdent(inlineColumn)}`;
-    }
+    fromSql += pointerStepJoinSql({
+      usesLinkTable: false,
+      direction: pointer.direction,
+      previousAlias,
+      nextAlias: level.alias,
+      targetSource,
+      inlineColumn,
+    });
   }
 
   return { fromSql, baseAlias: firstAlias, bindingAliases, scalarBindingAliases, tupleIterAliases, linkPropertyAliases, whereSets, orderBy, paramsCheckpoint };
@@ -9761,41 +9747,45 @@ const tryCompileObjectIdentityExistsSQL = (
     if (shouldUseLinkTable(link)) {
       const linkAlias = `oej${index}`;
       const linkTable = linkTableNameForPointer(link, options);
-      if (link.direction === "inbound") {
-        if (!fromSql) {
+      if (!fromSql) {
+        // First step has no prior FROM: seed it with the junction-and-target
+        // join and correlate to the previous alias via WHERE.
+        if (link.direction === "inbound") {
           fromSql = `${quoteIdent(linkTable)} ${linkAlias} JOIN ${targetSource}`
             + ` ON ${nextAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("source")}`;
           whereSqls.push(`${linkAlias}.${quoteIdent("target")} = ${previousAlias}.${quoteIdent("id")}`);
         } else {
-          fromSql += ` JOIN ${quoteIdent(linkTable)} ${linkAlias}`
-            + ` ON ${linkAlias}.${quoteIdent("target")} = ${previousAlias}.${quoteIdent("id")}`
-            + ` JOIN ${targetSource}`
-            + ` ON ${nextAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("source")}`;
+          fromSql = `${quoteIdent(linkTable)} ${linkAlias} JOIN ${targetSource}`
+            + ` ON ${nextAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("target")}`;
+          whereSqls.push(`${linkAlias}.${quoteIdent("source")} = ${previousAlias}.${quoteIdent("id")}`);
         }
-      } else if (!fromSql) {
-        fromSql = `${quoteIdent(linkTable)} ${linkAlias} JOIN ${targetSource}`
-          + ` ON ${nextAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("target")}`;
-        whereSqls.push(`${linkAlias}.${quoteIdent("source")} = ${previousAlias}.${quoteIdent("id")}`);
       } else {
-        fromSql += ` JOIN ${quoteIdent(linkTable)} ${linkAlias}`
-          + ` ON ${linkAlias}.${quoteIdent("source")} = ${previousAlias}.${quoteIdent("id")}`
-          + ` JOIN ${targetSource}`
-          + ` ON ${nextAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("target")}`;
+        fromSql += pointerStepJoinSql({
+          usesLinkTable: true,
+          direction: link.direction,
+          previousAlias,
+          nextAlias,
+          targetSource,
+          linkAlias,
+          linkTable,
+        });
       }
     } else {
       const inlineColumn = `${link.ptrref.shortName}_id`;
-      if (link.direction === "inbound") {
-        if (!fromSql) {
-          fromSql = targetSource;
-          whereSqls.push(`${nextAlias}.${quoteIdent(inlineColumn)} = ${previousAlias}.${quoteIdent("id")}`);
-        } else {
-          fromSql += ` JOIN ${targetSource} ON ${nextAlias}.${quoteIdent(inlineColumn)} = ${previousAlias}.${quoteIdent("id")}`;
-        }
-      } else if (!fromSql) {
+      if (!fromSql) {
         fromSql = targetSource;
-        whereSqls.push(`${nextAlias}.${quoteIdent("id")} = ${previousAlias}.${quoteIdent(inlineColumn)}`);
+        whereSqls.push(link.direction === "inbound"
+          ? `${nextAlias}.${quoteIdent(inlineColumn)} = ${previousAlias}.${quoteIdent("id")}`
+          : `${nextAlias}.${quoteIdent("id")} = ${previousAlias}.${quoteIdent(inlineColumn)}`);
       } else {
-        fromSql += ` JOIN ${targetSource} ON ${nextAlias}.${quoteIdent("id")} = ${previousAlias}.${quoteIdent(inlineColumn)}`;
+        fromSql += pointerStepJoinSql({
+          usesLinkTable: false,
+          direction: link.direction,
+          previousAlias,
+          nextAlias,
+          targetSource,
+          inlineColumn,
+        });
       }
     }
     previousAlias = nextAlias;
@@ -9921,26 +9911,28 @@ const tryCompileMultiStepPointerExistsSQL = (
     } else if (shouldUseLinkTable(link)) {
       const linkAlias = `lj${index}`;
       const linkTable = linkTableNameForPointer(link, options);
-      if (link.direction === "inbound") {
-        if (!fromSql) {
+      if (!fromSql) {
+        // First step has no prior FROM: seed it with the junction-and-target
+        // join and correlate to the previous alias via WHERE.
+        if (link.direction === "inbound") {
           fromSql = `${quoteIdent(linkTable)} ${linkAlias} JOIN ${targetSource}`
             + ` ON ${nextAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("source")}`;
           whereSqls.push(`${linkAlias}.${quoteIdent("target")} = ${previousAlias}.${quoteIdent("id")}`);
         } else {
-          fromSql += ` JOIN ${quoteIdent(linkTable)} ${linkAlias}`
-            + ` ON ${linkAlias}.${quoteIdent("target")} = ${previousAlias}.${quoteIdent("id")}`
-            + ` JOIN ${targetSource}`
-            + ` ON ${nextAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("source")}`;
+          fromSql = `${quoteIdent(linkTable)} ${linkAlias} JOIN ${targetSource}`
+            + ` ON ${nextAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("target")}`;
+          whereSqls.push(`${linkAlias}.${quoteIdent("source")} = ${previousAlias}.${quoteIdent("id")}`);
         }
-      } else if (!fromSql) {
-        fromSql = `${quoteIdent(linkTable)} ${linkAlias} JOIN ${targetSource}`
-          + ` ON ${nextAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("target")}`;
-        whereSqls.push(`${linkAlias}.${quoteIdent("source")} = ${previousAlias}.${quoteIdent("id")}`);
       } else {
-        fromSql += ` JOIN ${quoteIdent(linkTable)} ${linkAlias}`
-          + ` ON ${linkAlias}.${quoteIdent("source")} = ${previousAlias}.${quoteIdent("id")}`
-          + ` JOIN ${targetSource}`
-          + ` ON ${nextAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("target")}`;
+        fromSql += pointerStepJoinSql({
+          usesLinkTable: true,
+          direction: link.direction,
+          previousAlias,
+          nextAlias,
+          targetSource,
+          linkAlias,
+          linkTable,
+        });
       }
     } else {
       const inlineColumn = `${link.ptrref.shortName}_id`;
@@ -10344,22 +10336,26 @@ const buildAnchoredObjectChainJoin = (
     if (shouldUseLinkTable(link)) {
       const linkTable = linkTableNameForPointer(link, options);
       const linkAlias = `_lj${i}`;
-      if (link.direction === "inbound") {
-        if (i === 0) {
+      if (i === 0) {
+        // First step has no prior FROM: seed it with the junction-and-target
+        // join and correlate to the previous alias via WHERE.
+        if (link.direction === "inbound") {
           fromSql += `${quoteIdent(linkTable)} ${linkAlias} JOIN ${targetSource} ON ${targetAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("source")}`;
           whereSqls.push(`${linkAlias}.${quoteIdent("target")} = ${prevAlias}.${quoteIdent("id")}`);
         } else {
-          fromSql += ` JOIN ${quoteIdent(linkTable)} ${linkAlias} ON ${linkAlias}.${quoteIdent("target")} = ${prevAlias}.${quoteIdent("id")}`
-            + ` JOIN ${targetSource} ON ${targetAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("source")}`;
-        }
-      } else {
-        if (i === 0) {
           fromSql += `${quoteIdent(linkTable)} ${linkAlias} JOIN ${targetSource} ON ${targetAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("target")}`;
           whereSqls.push(`${linkAlias}.${quoteIdent("source")} = ${prevAlias}.${quoteIdent("id")}`);
-        } else {
-          fromSql += ` JOIN ${quoteIdent(linkTable)} ${linkAlias} ON ${linkAlias}.${quoteIdent("source")} = ${prevAlias}.${quoteIdent("id")}`
-            + ` JOIN ${targetSource} ON ${targetAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("target")}`;
         }
+      } else {
+        fromSql += pointerStepJoinSql({
+          usesLinkTable: true,
+          direction: link.direction,
+          previousAlias: prevAlias,
+          nextAlias: targetAlias,
+          targetSource,
+          linkAlias,
+          linkTable,
+        });
       }
     } else {
       const inlineColumn = `${link.ptrref.shortName}_id`;
@@ -10369,9 +10365,14 @@ const buildAnchoredObjectChainJoin = (
           ? `${targetAlias}.${quoteIdent(inlineColumn)} = ${prevAlias}.${quoteIdent("id")}`
           : `${targetAlias}.${quoteIdent("id")} = ${prevAlias}.${quoteIdent(inlineColumn)}`);
       } else {
-        fromSql += ` JOIN ${targetSource} ON ${link.direction === "inbound"
-          ? `${targetAlias}.${quoteIdent(inlineColumn)} = ${prevAlias}.${quoteIdent("id")}`
-          : `${targetAlias}.${quoteIdent("id")} = ${prevAlias}.${quoteIdent(inlineColumn)}`}`;
+        fromSql += pointerStepJoinSql({
+          usesLinkTable: false,
+          direction: link.direction,
+          previousAlias: prevAlias,
+          nextAlias: targetAlias,
+          targetSource,
+          inlineColumn,
+        });
       }
     }
     prevAlias = targetAlias;
