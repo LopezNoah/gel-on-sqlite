@@ -1,4 +1,5 @@
 import { AppError } from "../errors.js";
+import { parseCreateTypeBody, type CreateTypeBodyEntry } from "./ddl_body.js";
 import type { ScalarType, ScalarValue } from "../types.js";
 import type {
   BacklinkExpr,
@@ -2364,6 +2365,7 @@ class Parser {
     }
     let value: DDLStatement["value"];
     let functionDecl: DDLStatement["functionDecl"];
+    let createTypeBody: DDLStatement["createTypeBody"];
     const setCommands: string[] = [];
     if (action === "create" && (objectKind === "alias" || objectKind === "global") && this.peek().kind === "assign") {
       this.expect("assign", "Expected ':=' in DDL definition");
@@ -2379,6 +2381,11 @@ class Parser {
       // we still discard the rest of the body, but the validator needs the
       // SET names to reject `SET fallback := ...` etc.
       this.skipFunctionAlterBody(setCommands);
+    } else if (action === "create" && objectKind === "type") {
+      // Parse the `CREATE TYPE { … }` body into structured entries onto the AST
+      // so the runtime reads the parsed body rather than re-parsing the source
+      // (docs/adr/0029). Falls back to a plain skip when there is no body.
+      createTypeBody = this.captureCreateTypeBody();
     } else {
       this.skipDDLBody();
     }
@@ -2399,6 +2406,7 @@ class Parser {
       modifiers: modifiers.length > 0 ? modifiers : undefined,
       extendsList,
       setCommands: setCommands.length > 0 ? setCommands : undefined,
+      createTypeBody,
       // A bare `WITH MODULE <name>` prefix supplies the DDL name-resolution
       // default module; thread it (and any module aliases) onto the node.
       withModule: withModule !== undefined && withModule !== this.defaultModule ? withModule : undefined,
@@ -2881,6 +2889,36 @@ class Parser {
       }
       this.consume();
     }
+  }
+
+  // Capture and parse a `CREATE TYPE { … }` body into structured entries, then
+  // advance past it (same token consumption as `skipDDLBody`). Returns
+  // undefined when the statement has no body brace (e.g. `CREATE TYPE Foo;`).
+  // The body span is located by matching the leading `{` to its `}` over the
+  // already-tokenized stream, sliced from the source, and handed to the shared
+  // `parseCreateTypeBody` (the same parser the runtime consumes).
+  private captureCreateTypeBody(): CreateTypeBodyEntry[] | undefined {
+    if (this.peek().kind !== "lbrace") {
+      this.skipDDLBody();
+      return undefined;
+    }
+    const lbraceOffset = this.peek().offset;
+    let depth = 0;
+    let rbraceOffset = -1;
+    for (let j = this.index; j < this.tokens.length; j += 1) {
+      const k = this.tokens[j].kind;
+      if (k === "lbrace" || k === "lparen" || k === "lbracket") depth += 1;
+      else if (k === "rbrace" || k === "rparen" || k === "rbracket") {
+        depth -= 1;
+        if (depth === 0) {
+          rbraceOffset = this.tokens[j].offset;
+          break;
+        }
+      }
+    }
+    const bodyText = rbraceOffset >= 0 ? this.sliceSource(lbraceOffset + 1, rbraceOffset) : "";
+    this.skipDDLBody();
+    return parseCreateTypeBody(bodyText);
   }
 
   // FOR statement — see docs/reference/reference/edgeql/for.rst.
