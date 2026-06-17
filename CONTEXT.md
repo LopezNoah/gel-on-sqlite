@@ -20,6 +20,10 @@ _Avoid_: legacy compiler, semantic IR, the old IR.
 The engine dispatches on the **AST's** `statement.kind` (not a synthetic IR kind). The earlier *routing shim* — a synthetic, kind-only `IRStatement` that `service.ts` fabricated so the engine's dispatch could read `ir.kind` — is gone; the last residue (write-only `{ kind: "select", rows: [] }` placeholders in trace records) was removed with the model.ts narrowing (`docs/adr/0021`).
 _Avoid_: stub IR, fake IR, routing shim.
 
+**DDL body parser**:
+`src/runtime/ddl_body.ts::parseCreateTypeBody(bodyText)` — the one structured parser for a `CREATE TYPE { … }` body, producing `CreateTypeBodyEntry[]` (property / link / computed_link / alter_pointer / type_exclusive_constraint). The EdgeQL DDL parser keeps the body as raw text (`skipDDLBody`); the runtime's `registerDynamicTypeDDL` used to re-parse it by hand (a token-walker + regex helpers) with no test surface — that was replaced (`docs/adr/0026`, `0027`). The runtime now only *converts* the structured entries to `TypeDef` (scalar resolution, FK synthesis, inheritance merging). Note a known parity gap preserved from the old path: `DELEGATED` tokenizes as `kw_unreserved`, so a `CREATE DELEGATED CONSTRAINT exclusive` is dropped (closing it is a separate behaviour-changing fix). A second, inline exclusive-constraint parser still lives in the engine's ALTER-statement path (not yet consolidated). Folding `parseCreateTypeBody` into `edgeql/parser.ts` (so the AST carries the body) + unifying the two tokenizers is the gated Stage D.
+_Avoid_: member header parser, DDL regex.
+
 **Compile artifact**:
 The bundle `CompilerService.compile` hands the engine: the Live IR, the SQL artifact, and (for mutations) the DML IR.
 _Avoid_: compile result, output.
