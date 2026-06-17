@@ -1,5 +1,6 @@
 import { AppError, tryResult } from "../errors.js";
 import { parseEdgeQL } from "../edgeql/parser.js";
+import { inferStatementVolatility } from "./inference.js";
 import type {
   Statement as EdgeQLStatement,
   ComputedExpr,
@@ -9730,48 +9731,46 @@ export const compileASTToGelIR = (statement: EdgeQLStatement, options: IRCompile
 
   validateParametersInStatement(statement);
 
-  if (statement.kind === "select_expr") {
-    return compileSelectExprStatement(statement, ctx);
+  const buildResult = (): Statement => {
+    switch (statement.kind) {
+      case "select_expr": return compileSelectExprStatement(statement, ctx);
+      case "select": return compileSelectStatement(statement, ctx);
+      case "select_free": return compileSelectFreeStatement(statement, ctx);
+      case "insert": return compileInsertStatement(statement, ctx);
+      case "update": return compileUpdateStatement(statement, ctx);
+      case "delete": return compileDeleteStatement(statement, ctx);
+      case "for": return compileForStatement(statement, ctx);
+      case "configure": return compileConfigureStatement(statement, ctx);
+      case "group": return compileGroupStatement(statement, ctx);
+      default:
+        throw new AppError(
+          "E_RUNTIME",
+          `AST->IR entrypoint is scaffolded, but statement '${statement.kind}' is not wired yet`,
+          statement.pos.line,
+          statement.pos.column,
+        );
+    }
+  };
+
+  const result = buildResult();
+
+  // Populate statement-level volatility inference on the Live IR. Purely
+  // additive — nothing on the execution path reads `Statement.volatility`; this
+  // brings the Live IR toward the oracle's inference (semantic.ts) so the oracle
+  // can eventually be retired (the ADR 0001 follow-up). See ADR 0015.
+  if (ctx.schema) {
+    // Inference is additive decoration (nothing on the execution path reads
+    // `Statement.volatility`), so it must never break a compile. Keep the
+    // default if the walk hits a pathological shape (e.g. a self-referential
+    // WITH binding that would recurse without bound).
+    try {
+      (result as { volatility: Volatility }).volatility = inferStatementVolatility(statement, ctx.schema, ctx.module);
+    } catch {
+      // leave default volatility
+    }
   }
 
-  if (statement.kind === "select") {
-    return compileSelectStatement(statement, ctx);
-  }
-
-  if (statement.kind === "select_free") {
-    return compileSelectFreeStatement(statement, ctx);
-  }
-
-  if (statement.kind === "insert") {
-    return compileInsertStatement(statement, ctx);
-  }
-
-  if (statement.kind === "update") {
-    return compileUpdateStatement(statement, ctx);
-  }
-
-  if (statement.kind === "delete") {
-    return compileDeleteStatement(statement, ctx);
-  }
-
-  if (statement.kind === "for") {
-    return compileForStatement(statement, ctx);
-  }
-
-  if (statement.kind === "configure") {
-    return compileConfigureStatement(statement, ctx);
-  }
-
-  if (statement.kind === "group") {
-    return compileGroupStatement(statement, ctx);
-  }
-
-  throw new AppError(
-    "E_RUNTIME",
-    `AST->IR entrypoint is scaffolded, but statement '${statement.kind}' is not wired yet`,
-    statement.pos.line,
-    statement.pos.column,
-  );
+  return result;
 };
 
 export const isGelIRCompatibleStatement = (statement: EdgeQLStatement): boolean => {
