@@ -1,6 +1,6 @@
 import { AppError, tryResult } from "../errors.js";
 import { parseEdgeQL } from "../edgeql/parser.js";
-import { inferStatementVolatility } from "./inference.js";
+import { inferStatementCardinality, inferStatementVolatility } from "./inference.js";
 import type {
   Statement as EdgeQLStatement,
   ComputedExpr,
@@ -9767,6 +9767,11 @@ export const compileASTToGelIR = (statement: EdgeQLStatement, options: IRCompile
       (result as { volatility: Volatility }).volatility = inferStatementVolatility(statement, ctx.schema, ctx.module);
     } catch {
       // leave default volatility
+    }
+    try {
+      (result as { cardinality: string }).cardinality = inferStatementCardinality(statement, ctx.schema, ctx.module);
+    } catch {
+      // leave default cardinality
     }
   }
 
