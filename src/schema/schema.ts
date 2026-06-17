@@ -315,8 +315,6 @@ export const normalizeTypeName = (name: string, moduleName = "default"): string 
 // junction table (vs. an inline `<name>_id` column) iff it is `multi` or
 // carries link-properties. Structural param so both a `LinkDef` (schema) and a
 // declarative `LinkMember` satisfy it without either importing the other.
-// Note: the inference oracle (`compiler/semantic.ts`, quarantined per ADR 0001)
-// keeps its own inline copies; it is slated for wholesale deletion, not refactor.
 export const usesLinkTable = (link: {
   multi?: boolean;
   properties?: readonly unknown[] | null;

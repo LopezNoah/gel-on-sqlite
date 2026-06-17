@@ -14,7 +14,7 @@
  *   - Custom triggers
  *   - Indexes
  *
- * Naming conventions match runtime/engine.ts and compiler/semantic.ts exactly:
+ * Naming conventions match runtime/engine.ts exactly:
  *   - tableNameForType(qn)  → qn.replaceAll("::","__").toLowerCase()
  *   - inline link column     → {link}_id
  *   - link junction table    → {parent_table}__{link_name}
@@ -59,7 +59,7 @@ const triggerName = (table: string, suffix: string): string =>
 
 // ---------------------------------------------------------------------------
 // Inheritance-aware field/link/computed collection
-// (same algorithm as compiler/semantic.ts but operating on SchemaSnapshot)
+// (inheritance-aware collection over a SchemaSnapshot)
 // ---------------------------------------------------------------------------
 
 const dedupeByName = <T extends { name: string }>(items: T[]): T[] => {
@@ -114,7 +114,7 @@ export const collectLinks = (
 };
 
 // ---------------------------------------------------------------------------
-// Storage strategy helpers (matching compiler/semantic.ts logic)
+// Storage strategy helpers
 // ---------------------------------------------------------------------------
 
 /** Whether a link is stored in a separate junction table vs. inline column.
