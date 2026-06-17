@@ -54,35 +54,42 @@ import type {
 import type { ScalarValue } from "../types.js";
 export type { GelIRCompileOptions, GelIRSQLArtifact } from "./compiler_types.js";
 
-let _sqlLoweringContext: SqlLoweringContext | undefined;
-// The SQL compiler's internal lowering context (see SqlLoweringContext). Built
-// once, lazily — its members reference module functions declared below, so it
-// can't be a top-level const. Shared by the function- and group-lowering
-// sub-modules; replaces the former per-call groupLoweringDeps/functionLoweringDeps.
-const sqlLoweringContext = (): SqlLoweringContext => (_sqlLoweringContext ??= {
-  compileScalarSelectSQL,
-  compileValueSetSQL,
-  compilePredicateSetSQL,
-  extractNumericLiteral,
-  orderedCallArgs,
-  setValueIsJson,
-  unwrapSelectExprSet,
-  compileSelectSource,
-  compileWhereClause,
-  compilePolymorphicSource,
-  compileForExprSource,
-  compilePointerArrayExpr,
-  tryCompileCorrelatedScalarPointerPathScalarSelect,
-  collectForExprProjectedColumns,
-  collectFreeTypeRoots,
-  countAliases,
-  innermostForExprBody,
-  isTopLevelEmptySetMarker,
-  pickSourcePathAlias,
-  resetPointerSourceToRoot,
-  narrowedLinkTarget,
-  qualifyTypeName,
-});
+// The SQL compiler's internal lowering context (see SqlLoweringContext): a
+// stateless, frozen dispatch table of this module's lowering functions, passed
+// as `deps` to the function- and group-lowering sub-modules. It exists to break
+// the import cycle — those sub-modules can't import gel_ir_compiler directly —
+// so it carries no per-compile state and is built once. It must stay lazy: its
+// members are const arrows declared below (TDZ at module load), so it can't be a
+// top-level const literal. The memo cell is closure-scoped, not a module-level
+// mutable binding (architecture review candidate #4; see docs/adr/0006).
+const sqlLoweringContext: () => SqlLoweringContext = (() => {
+  let cached: SqlLoweringContext | undefined;
+  return () =>
+    (cached ??= Object.freeze({
+      compileScalarSelectSQL,
+      compileValueSetSQL,
+      compilePredicateSetSQL,
+      extractNumericLiteral,
+      orderedCallArgs,
+      setValueIsJson,
+      unwrapSelectExprSet,
+      compileSelectSource,
+      compileWhereClause,
+      compilePolymorphicSource,
+      compileForExprSource,
+      compilePointerArrayExpr,
+      tryCompileCorrelatedScalarPointerPathScalarSelect,
+      collectForExprProjectedColumns,
+      collectFreeTypeRoots,
+      countAliases,
+      innermostForExprBody,
+      isTopLevelEmptySetMarker,
+      pickSourcePathAlias,
+      resetPointerSourceToRoot,
+      narrowedLinkTarget,
+      qualifyTypeName,
+    }));
+})();
 
 export const compileGelIRToSQL = (
   statement: SelectStmt | InsertStmt | UpdateStmt | DeleteStmt | GroupStmt | ConfigStmt,
