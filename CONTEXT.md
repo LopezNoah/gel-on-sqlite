@@ -122,8 +122,8 @@ _Avoid_: stdlib table, function map, the builtins list.
 
 ## Execution
 
-**Runtime evaluator**:
-The TypeScript expression interpreter (`tryRuntimeSelectExprEvaluationAst` in `src/runtime/engine.ts`) required for constructs that do not lower to SQL — free objects, FOR iteration, runtime aliases, inlined UDFs. A required component, not a fallback for the SQL path.
+**Runtime evaluator** (`src/runtime/evaluator.ts`):
+The TypeScript expression interpreter required for `select_expr` constructs that do not lower to SQL — free objects, FOR iteration, runtime aliases, inlined UDFs. A required component, not a fallback for the SQL path. Exposed as `runSelectExprEvaluation(db, schema, ast, context, deps)` behind an explicit `SelectExprEvaluatorDeps` seam: the 16 engine capabilities it reaches back into (`executeFunctionCall`, `resolveUserFunctionOverload`, link-traversal/row-read helpers, …) are **injected**, not closure-captured, so the coupling is visible. `engine.ts` keeps a thin wrapper (`tryRuntimeSelectExprEvaluationAst`) that supplies the deps via a hoisted, lazily-evaluated `selectExprEvaluatorDeps()` factory (avoids the const TDZ for functions defined later in the file); the deps type is `ReturnType<typeof>`-derived so it can't drift from the wiring. The interpreter body is byte-identical to the closure that used to live in `engine.ts` (which shed 1,641 lines). The 16 back-edges are the live coupling to the engine — growing the set means the evaluator reaches deeper, which is the cue to ask whether the construct should lower to SQL instead. Drivable directly in tests with stub deps (`tests/evaluator.test.ts`); see `docs/adr/0044`. The full `evalExpr` 62-case decomposition is still deferred (`docs/adr/0014`).
 _Avoid_: interpreter fallback, the slow path.
 
 **Access-policy enforcement** (`src/runtime/access_policy.ts`):
