@@ -37,6 +37,7 @@ import {
   literalStdTypeName,
   unwrapSubqueryWrappers,
 } from "../compiler/ast_inference.js";
+import { applyPendingInsertDefaults } from "./default_resolution.js";
 import { parseDeclarativeSchema } from "../schema/sdl_adapter.js";
 import { schemaSnapshotFromDeclarative } from "../schema/uiSchema.js";
 import { linkTableName, tableNameForType } from "../codegen/sql.js";
@@ -10762,104 +10763,6 @@ const runWriteWithAccessPolicies = (
     }
   }
 
-  const applyPendingInsertDefaults = (values: Record<string, ScalarValue>): void => {
-    for (const field of subjectType.fields) {
-      if (!field.hasDefault) {
-        continue;
-      }
-      if (Object.prototype.hasOwnProperty.call(values, field.name)
-        && values[field.name] !== PENDING_INSERT_REWRITE_VALUE) {
-        continue;
-      }
-
-      const defaultExpr = field.defaultExpr;
-      if (!defaultExpr) {
-        // Expression defaults that don't fit the literal/function-call IR
-        // (`default := __source__.a + 1`) — evaluate the declared text via a
-        // one-off SQL SELECT with `__source__.<f>` references substituted by
-        // the row's assigned values.
-        const text = field.defaultExprText;
-        if (text && text.includes("__source__")) {
-          const substituteSourceRefs = (node: unknown): unknown => {
-            if (Array.isArray(node)) return node.map(substituteSourceRefs);
-            if (node === null || typeof node !== "object") return node;
-            const n = node as Record<string, unknown> & { kind?: string };
-            if (n.kind === "field_access"
-                && typeof n.field === "string"
-                && n.expr && typeof n.expr === "object"
-                && ((n.expr as { kind?: string }).kind === "global_ref" || (n.expr as { kind?: string }).kind === "binding_ref")
-                && (n.expr as { name?: string }).name === "__source__") {
-              const sourceValue = values[n.field];
-              if (sourceValue === undefined
-                  || sourceValue === PENDING_INSERT_REWRITE_VALUE
-                  || sourceValue === PENDING_INLINE_LINK_VALUE
-                  || sourceValue === PENDING_INSERT_SQL_EXPR_VALUE) {
-                throw new AppError("E_UNSUPPORTED", `__source__.${n.field} is not statically known`);
-              }
-              return { kind: "literal", value: sourceValue };
-            }
-            const out: Record<string, unknown> = {};
-            for (const [key, value] of Object.entries(n)) out[key] = substituteSourceRefs(value);
-            return out;
-          };
-          // captureAll: a default we can't evaluate just stays pending (the
-          // column is omitted, matching "no computable default").
-          const attempt = tryResult(() => {
-            const parsed = parseEdgeQL(`SELECT (${text})`);
-            const stmt = substituteSourceRefs(Array.isArray(parsed) ? parsed[0] : parsed) as Statement;
-            const compiled = getCompilerService().compile(schema, stmt, { globals: context.globals, params: context.params, target: resolvedRuntimeTarget(context, db) });
-            if (!lowersToSingleSql(compiled.sql)) return undefined;
-            return runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
-          }, { captureAll: true });
-          if (attempt.ok && attempt.value !== undefined && attempt.value.length === 1 && isScalarValue(attempt.value[0])) {
-            values[field.name] = attempt.value[0] as ScalarValue;
-          }
-        } else if (text) {
-          // A general expression-valued default that didn't fit the
-          // literal/function-call IR (`default := (SELECT count(T))`,
-          // `default := ((SELECT T ORDER BY .n DESC LIMIT 1).n + 1)`).
-          // Evaluate it via a one-off SQL SELECT against the *current* (pre-
-          // insert) state — the new row isn't written yet, so the default sees
-          // exactly the snapshot it should. Within one statement (FOR loop) the
-          // snapshot is fixed, so memoize the first evaluation per field and
-          // reuse it for every row. `captureAll` keeps the column pending if it
-          // can't lower (matching "no computable default").
-          if (snapshotDefaultCache?.has(field.name)) {
-            values[field.name] = snapshotDefaultCache.get(field.name) as ScalarValue;
-          } else {
-            const attempt = tryResult(() => {
-              const parsed = parseEdgeQL(`SELECT (${text})`);
-              const stmt = (Array.isArray(parsed) ? parsed[0] : parsed) as Statement;
-              const compiled = getCompilerService().compile(schema, stmt, { globals: context.globals, params: context.params, target: resolvedRuntimeTarget(context, db) });
-              if (!lowersToSingleSql(compiled.sql)) return undefined;
-              return runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
-            }, { captureAll: true });
-            if (attempt.ok && attempt.value !== undefined && attempt.value.length === 1 && isScalarValue(attempt.value[0])) {
-              values[field.name] = attempt.value[0] as ScalarValue;
-              snapshotDefaultCache?.set(field.name, attempt.value[0] as ScalarValue);
-            }
-          }
-        }
-        continue;
-      }
-
-      if (defaultExpr.kind === "literal") {
-        values[field.name] = defaultExpr.value;
-        continue;
-      }
-
-      const evaluated = executeFunctionCall(schema, db, context, defaultExpr.name, defaultExpr.args as RuntimeFunctionArg[]);
-      if (isScalarValue(evaluated)) {
-        values[field.name] = evaluated;
-        continue;
-      }
-
-      if (Array.isArray(evaluated) && evaluated.length > 0 && isScalarValue(evaluated[0])) {
-        values[field.name] = evaluated[0] as ScalarValue;
-      }
-    }
-  };
-
   const applyOnTargetDeletePolicies = (targetType: TypeDef, targetIds: string[], astPos: { line: number; column: number }): void => {
     if (targetIds.length === 0) {
       return;
@@ -10952,7 +10855,19 @@ const runWriteWithAccessPolicies = (
   try {
     if (ir.kind === "insert") {
       const insertValues: Record<string, ScalarValue> = { ...ir.values };
-      applyPendingInsertDefaults(insertValues);
+      applyPendingInsertDefaults(insertValues, {
+        subjectType,
+        snapshotDefaultCache,
+        evalSelect: (stmt) => {
+          const compiled = getCompilerService().compile(schema, stmt, { globals: context.globals, params: context.params, target: resolvedRuntimeTarget(context, db) });
+          if (!lowersToSingleSql(compiled.sql)) return undefined;
+          return runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
+        },
+        evalFunctionCall: (name, args) => executeFunctionCall(schema, db, context, name, args),
+        isResolvedSourceValue: (v) =>
+          v !== undefined && v !== PENDING_INSERT_REWRITE_VALUE && v !== PENDING_INLINE_LINK_VALUE && v !== PENDING_INSERT_SQL_EXPR_VALUE,
+        isPendingRewriteValue: (v) => v === PENDING_INSERT_REWRITE_VALUE,
+      });
 
       // Fill sequence-backed properties left pending by the planner with the
       // sequence's next value (a fresh allocation per inserted row).
