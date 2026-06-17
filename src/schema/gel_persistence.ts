@@ -13,7 +13,6 @@ import type {
   LinkPropertyDef,
   MutationRewriteDef,
   MutationRewriteExpr,
-  ScalarType,
   ScalarValue,
   TriggerDef,
   TypeDef,
@@ -32,7 +31,12 @@ import type {
 import { validateMetadata } from "./gel_metadata_schemas.js";
 import { buildAnnotationsBySubject, insertAnnotationRecord, resolveAnnotations } from "./annos.js";
 import type { AnnotationRow } from "./annos.js";
-import { parseComputedSetLiteralExpr } from "./computed_expr.js";
+import {
+  GelTableDecoder,
+  parseComputedLinkExpr,
+  parseComputedPropertyExpr,
+  parseRewriteExpr,
+} from "./gel_table_decoder.js";
 import { AppError } from "../errors.js";
 
 export const ensureGelSchemaTables = (db: SQLiteDatabase): void => {
@@ -169,6 +173,7 @@ export const deserializeSchemaFromGelTables = (db: SQLiteDatabase): SchemaSnapsh
   const functionRows = rows.filter((r) => r.kind === "Function");
 
   const idToRow = new Map(rows.map((r) => [r.id, r]));
+  const dec = new GelTableDecoder(idToRow);
 
   const pointers = db.prepare(`SELECT * FROM gel_pointers`).all() as Array<{
     source_id: string;
@@ -315,7 +320,7 @@ export const deserializeSchemaFromGelTables = (db: SQLiteDatabase): SchemaSnapsh
         } else {
           const field: FieldDef = {
             name: ptrRow.name,
-            type: inferScalarType(meta.target_type_id, idToRow),
+            type: dec.scalarType(meta.target_type_id),
             required: meta.required ?? false,
             multi: meta.cardinality === "Many",
           };
@@ -356,7 +361,7 @@ export const deserializeSchemaFromGelTables = (db: SQLiteDatabase): SchemaSnapsh
               : ({} as PropertyMetadata);
             const prop: LinkPropertyDef = {
               name: childRow.name,
-              type: inferScalarType(childMeta.target_type_id, idToRow),
+              type: dec.scalarType(childMeta.target_type_id),
               required: childMeta.required ?? false,
             };
             const propAnnotations = resolveAnnotationsForSubject(childId);
@@ -379,7 +384,7 @@ export const deserializeSchemaFromGelTables = (db: SQLiteDatabase): SchemaSnapsh
           const linkAnnotations = resolveAnnotationsForSubject(ptr.pointer_id);
           const linkDef: LinkDef = {
             name: ptrRow.name,
-            targetType: resolveTargetType(meta.target_type_id, idToRow),
+            targetType: dec.targetType(meta.target_type_id),
             multi: meta.cardinality === "Many",
             properties: linkProperties.length > 0 ? linkProperties : undefined,
           };
@@ -450,7 +455,7 @@ export const deserializeSchemaFromGelTables = (db: SQLiteDatabase): SchemaSnapsh
   const functions: FunctionDef[] = [];
   for (const fnRow of functionRows) {
     const meta = fnRow.metadata ? (JSON.parse(fnRow.metadata) as FunctionMetadata) : ({} as FunctionMetadata);
-    const params = mapFunctionMetadataParams(meta.params, idToRow);
+    const params = dec.functionParams(meta.params);
     const language = (meta.language ?? "edgeql") as "edgeql";
     const body: FunctionBodyDef = meta.body
       ? { kind: "query", language, query: meta.body }
@@ -460,7 +465,7 @@ export const deserializeSchemaFromGelTables = (db: SQLiteDatabase): SchemaSnapsh
       module: fnRow.module,
       name: fnRow.name,
       params,
-      returnType: typeNameFromId(meta.return_type_id, idToRow),
+      returnType: dec.typeName(meta.return_type_id),
       returnOptional: meta.return_typemod === "OptionalType",
       returnSetOf: meta.return_typemod === "SetOfType",
       volatility: meta.volatility,
@@ -902,24 +907,6 @@ const ensureScalarTypeRow = (db: SQLiteDatabase, typeName: string): string => {
   return scalarId;
 };
 
-const inferScalarType = (
-  targetTypeId: string | undefined,
-  idToRow: Map<string, { kind: string; name: string }>,
-): ScalarType => {
-  if (!targetTypeId) return "str";
-  if (targetTypeId.startsWith("scalar_")) return targetTypeId.replace("scalar_", "") as ScalarType;
-  const row = idToRow.get(targetTypeId);
-  if (row) return row.name as ScalarType;
-  return "str";
-};
-
-const resolveTargetType = (targetTypeId: string | undefined, idToRow: Map<string, { name__internal: string }>): string => {
-  if (!targetTypeId) return "std::str";
-  const row = idToRow.get(targetTypeId);
-  if (row) return row.name__internal;
-  return targetTypeId;
-};
-
 type SerializedTypeDef = {
   qName: string;
   name: string;
@@ -1144,93 +1131,6 @@ const serializeRewriteExpr = (expr: NonNullable<MutationRewriteDef["onInsert"]>)
   );
 };
 
-const parseComputedPropertyExpr = (exprStr: string): Extract<ComputedDef, { kind: "property" }>["expr"] => {
-  const aggregateMatch = exprStr.match(/^\s*sum\(\.([A-Za-z_][\w]*)\.([A-Za-z_][\w]*)\)\s*$/i);
-  if (aggregateMatch) {
-    return {
-      kind: "link_aggregate",
-      functionName: "sum",
-      link: aggregateMatch[1],
-      field: aggregateMatch[2],
-    };
-  }
-
-  const setLiteral = parseComputedSetLiteralExpr(exprStr);
-  if (setLiteral) {
-    return setLiteral;
-  }
-
-  if (exprStr.startsWith(".")) {
-    const field = exprStr.slice(1);
-    if (field.includes(" ")) {
-      return { kind: "function_call", name: field.split("(")[0], args: [] };
-    }
-    return { kind: "field_ref", field };
-  }
-  return { kind: "literal", value: exprStr };
-};
-
-const parseComputedLinkExpr = (exprStr: string): { kind: "link_ref"; link: string; filter?: { field: string; op: "=" | "!=" | "like" | "ilike"; value: ScalarValue } } | { kind: "backlink"; link: string; sourceType?: string } => {
-  if (exprStr.startsWith(".<")) {
-    const link = exprStr.slice(2).split("[")[0];
-    const sourceType = exprStr.includes("[is ") ? exprStr.split("[is ")[1]?.split("]")[0] : undefined;
-    return { kind: "backlink", link, sourceType };
-  }
-  return { kind: "link_ref", link: exprStr.slice(1) };
-};
-
-const parseRewriteExpr = (exprStr: string): MutationRewriteExpr => {
-  if (exprStr === "datetime_of_statement()") return { kind: "datetime_of_statement" };
-  if (exprStr.startsWith("__old__.")) return { kind: "old_field", field: exprStr.slice(8) };
-  if (exprStr.startsWith(".")) return { kind: "subject_field", field: exprStr.slice(1) };
-  try {
-    return { kind: "literal", value: JSON.parse(exprStr) };
-  } catch (e) {
-    // Literal rewrite expressions are stored via JSON.stringify (see
-    // serializeRewriteExpr), so a non-JSON value is corrupt metadata.
-    throw new AppError(
-      "E_RUNTIME",
-      `corrupt rewrite expression in gel_pointer_rewrites metadata: not valid JSON: ${JSON.stringify(exprStr.slice(0, 80))}`,
-      { cause: e },
-    );
-  }
-};
-
-const parseScalarValueFromMetadata = (value: string | undefined | null): ScalarValue | undefined => {
-  if (value === undefined || value === null) {
-    return undefined;
-  }
-  try {
-    return JSON.parse(value);
-  } catch (e) {
-    // Scalar values in function-param metadata are stored via
-    // JSON.stringify (see buildFunctionParamMetadata), so a non-JSON value
-    // is corrupt metadata.
-    throw new AppError(
-      "E_RUNTIME",
-      `corrupt scalar value in function metadata: not valid JSON: ${JSON.stringify(value.slice(0, 80))}`,
-      { cause: e },
-    );
-  }
-};
-
-const typeNameFromId = (typeId: string | undefined, idToRow: Map<string, { name__internal: string }>): string => {
-  if (!typeId) {
-    return "std::str";
-  }
-
-  if (typeId.startsWith("scalar_")) {
-    return typeId.replace(/^scalar_/, "");
-  }
-
-  const row = idToRow.get(typeId);
-  if (row) {
-    return row.name__internal;
-  }
-
-  return typeId;
-};
-
 const metadataTypeIdForTypeName = (typeName: string, idMap: Map<string, string>): string => {
   const normalized = typeName.includes("::") ? typeName : `default::${typeName}`;
   const mapped = idMap.get(normalized);
@@ -1251,20 +1151,6 @@ const buildFunctionParamMetadata = (param: FunctionParamDef, idMap: Map<string, 
   typemod: param.setOf ? "SetOfType" : param.optional ? "OptionalType" : "SingletonType",
   default: param.default === undefined ? undefined : JSON.stringify(param.default),
 });
-
-const mapFunctionMetadataParams = (
-  metaParams: FunctionMetadata["params"] | undefined,
-  idToRow: Map<string, { name__internal: string }>,
-): FunctionParamDef[] =>
-  (metaParams ?? []).map((param) => ({
-    name: param.name,
-    type: typeNameFromId(param.type_id, idToRow),
-    optional: param.typemod === "OptionalType",
-    setOf: param.typemod === "SetOfType",
-    variadic: param.kind === "VariadicParam",
-    namedOnly: param.kind === "NamedOnlyParam",
-    default: parseScalarValueFromMetadata(param.default),
-  }));
 
 const computeReturnTypeMod = (fn: FunctionDef): "SingletonType" | "OptionalType" | "SetOfType" => {
   if (fn.returnSetOf) {

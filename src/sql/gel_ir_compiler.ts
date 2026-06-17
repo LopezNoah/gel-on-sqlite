@@ -5039,6 +5039,43 @@ const linkTableNameForPointer = (pointer: Pointer, options?: GelIRCompileOptions
   return `${tableNameForType(storage)}__${linkName.toLowerCase()}`;
 };
 
+// One home for the per-link choice between the two pointer-step join shapes: a
+// link-table step joins through its junction alias, an inline step through the
+// `<name>_id` FK column. The four join shapes themselves live in
+// `pointerStepJoinSql` (docs/adr/0011); this is the dispatch *into* them — the
+// `shouldUseLinkTable(link) ? …(usesLinkTable:true) : …(usesLinkTable:false)`
+// ternary that the chain-loop sites re-spelled identically, differing only in
+// the bound aliases (`previousAlias`/`nextAlias`/`targetSource`/`linkAlias`).
+// The leaf projection, terminal-link handling, and anchor/result wrapper stay
+// with each caller — those genuinely differ (scalar leaf vs link-property
+// column vs correlated subquery). See docs/adr/0035.
+const pointerStepJoinForLink = (
+  link: Pointer,
+  previousAlias: string,
+  nextAlias: string,
+  targetSource: string,
+  linkAlias: string,
+  options?: GelIRCompileOptions,
+): string =>
+  shouldUseLinkTable(link)
+    ? pointerStepJoinSql({
+        usesLinkTable: true,
+        direction: link.direction,
+        previousAlias,
+        nextAlias,
+        targetSource,
+        linkAlias,
+        linkTable: linkTableNameForPointer(link, options),
+      })
+    : pointerStepJoinSql({
+        usesLinkTable: false,
+        direction: link.direction,
+        previousAlias,
+        nextAlias,
+        targetSource,
+        inlineColumn: `${link.ptrref.shortName}_id`,
+      });
+
 const scalarResultValueSQL = (sql: string, typeRef: TypeRef): string => (
   qualifyTypeName(typeRef) === "std::str" ? `json_quote(${sql})` : sql
 );
@@ -5063,24 +5100,7 @@ const tryCompileScalarPointerPathSelectSQL = (
     const nextAlias = pointerStepTargetAlias(index);
     const targetType = link.direction === "inbound" ? link.ptrref.outSource : link.ptrref.outTarget;
     const targetSource = compilePolymorphicSource(targetType, false, nextAlias, aliasColumns[index + 1], options);
-    fromSql += shouldUseLinkTable(link)
-      ? pointerStepJoinSql({
-          usesLinkTable: true,
-          direction: link.direction,
-          previousAlias,
-          nextAlias,
-          targetSource,
-          linkAlias: pointerStepLinkAlias(index),
-          linkTable: linkTableNameForPointer(link, options),
-        })
-      : pointerStepJoinSql({
-          usesLinkTable: false,
-          direction: link.direction,
-          previousAlias,
-          nextAlias,
-          targetSource,
-          inlineColumn: `${link.ptrref.shortName}_id`,
-        });
+    fromSql += pointerStepJoinForLink(link, previousAlias, nextAlias, targetSource, pointerStepLinkAlias(index), options);
     previousAlias = nextAlias;
   });
 
@@ -5349,24 +5369,7 @@ const tryCompileMultiScalarPointerSelectSQL = (
       }
     }
     const targetSource = compilePolymorphicSource(targetType, false, nextAlias, [...targetCols], options);
-    fromSql += shouldUseLinkTable(link)
-      ? pointerStepJoinSql({
-          usesLinkTable: true,
-          direction: link.direction,
-          previousAlias,
-          nextAlias,
-          targetSource,
-          linkAlias,
-          linkTable: linkTableNameForPointer(link, options),
-        })
-      : pointerStepJoinSql({
-          usesLinkTable: false,
-          direction: link.direction,
-          previousAlias,
-          nextAlias,
-          targetSource,
-          inlineColumn: `${link.ptrref.shortName}_id`,
-        });
+    fromSql += pointerStepJoinForLink(link, previousAlias, nextAlias, targetSource, linkAlias, options);
     previousAlias = nextAlias;
   }
 
@@ -5760,24 +5763,7 @@ const tryCompileLinkPropertyPathSelectSQL = (
       }
     }
     const targetSource = compilePolymorphicSource(targetType, false, nextAlias, [...targetCols], options);
-    fromSql += shouldUseLinkTable(link)
-      ? pointerStepJoinSql({
-          usesLinkTable: true,
-          direction: link.direction,
-          previousAlias,
-          nextAlias,
-          targetSource,
-          linkAlias,
-          linkTable,
-        })
-      : pointerStepJoinSql({
-          usesLinkTable: false,
-          direction: link.direction,
-          previousAlias,
-          nextAlias,
-          targetSource,
-          inlineColumn: `${link.ptrref.shortName}_id`,
-        });
+    fromSql += pointerStepJoinForLink(link, previousAlias, nextAlias, targetSource, linkAlias, options);
     previousAlias = nextAlias;
   }
 
@@ -6184,24 +6170,7 @@ const buildCorrelatedScalarPointerPath = (
     const targetType = link.direction === "inbound" ? link.ptrref.outSource : link.ptrref.outTarget;
     const targetTable = resolveTypeTableName(targetType, options);
     const targetSource = `${quoteIdent(targetTable)} ${nextAlias}`;
-    fromSql += shouldUseLinkTable(link)
-      ? pointerStepJoinSql({
-          usesLinkTable: true,
-          direction: link.direction,
-          previousAlias: prevAlias,
-          nextAlias,
-          targetSource,
-          linkAlias: `cpj${i + 1}`,
-          linkTable: linkTableNameForPointer(link, options),
-        })
-      : pointerStepJoinSql({
-          usesLinkTable: false,
-          direction: link.direction,
-          previousAlias: prevAlias,
-          nextAlias,
-          targetSource,
-          inlineColumn: `${link.ptrref.shortName}_id`,
-        });
+    fromSql += pointerStepJoinForLink(link, prevAlias, nextAlias, targetSource, `cpj${i + 1}`, options);
     prevAlias = nextAlias;
   }
 
@@ -6717,24 +6686,7 @@ const compileSelectSource = (
     const baseCols = isLeaf ? projectedColumns : collectChainSourceColumns(links[i + 1], "via");
     const targetCols = inlineInboundFK ? [...new Set<string>([...baseCols, inlineInboundFK])] : baseCols;
     const targetSql = compilePolymorphicSource(targetType, false, targetAlias, targetCols, options);
-    fromSql += shouldUseLinkTable(link)
-      ? pointerStepJoinSql({
-          usesLinkTable: true,
-          direction: link.direction,
-          previousAlias,
-          nextAlias: targetAlias,
-          targetSource: targetSql,
-          linkAlias: `j${i}`,
-          linkTable: linkTableNameForPointer(link, options),
-        })
-      : pointerStepJoinSql({
-          usesLinkTable: false,
-          direction: link.direction,
-          previousAlias,
-          nextAlias: targetAlias,
-          targetSource: targetSql,
-          inlineColumn: `${link.ptrref.shortName}_id`,
-        });
+    fromSql += pointerStepJoinForLink(link, previousAlias, targetAlias, targetSql, `j${i}`, options);
     previousAlias = targetAlias;
     previousTyperef = targetType;
   }
