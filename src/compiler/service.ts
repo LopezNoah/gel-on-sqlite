@@ -87,8 +87,8 @@ export class CompilerService {
     // statement compiler emits a real artifact for the projections/clauses
     // it supports, or an empty fallback artifact otherwise. These statements
     // were never exercised in this pipeline before, so any compile error
-    // degrades to the fallback artifact and the runtime grouper (via the
-    // legacy IR below) keeps handling the statement.
+    // degrades to the fallback artifact and the engine's runtime grouper
+    // (preEvaluateGroupBindings) keeps handling the statement.
     const isSelectExprWrappingGroup =
       statement.kind === "select_expr" && selectExprContainsGroup(statement);
     let sql: GelIRSQLArtifact;
@@ -241,10 +241,10 @@ const compileSqlFromGelIR = (
 
 // Detect a `group_expr` anywhere inside a select_expr statement — directly in
 // the result expression (under any chain of shape_projection / subquery /
-// field-access wrappers) or inside a WITH binding's value. Any such statement
-// must route through the legacy semantic.ts pipeline (compileToIR), whose
-// peelGroupExprFromSelectExpr lowers the GROUP to a runtime GroupIR; the GelIR
-// pipeline has no model for group_expr in expression position.
+// field-access wrappers) or inside a WITH binding's value. The SQL lowering has
+// no model for group_expr in expression position, so such a statement degrades
+// to a fallback artifact and the engine runs it through the runtime grouper
+// (preEvaluateGroupBindings in engine.ts).
 const nodeContainsGroup = (node: unknown, seen: Set<unknown>): boolean => {
   if (!node || typeof node !== "object") return false;
   if (seen.has(node)) return false;

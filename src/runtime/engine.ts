@@ -14,7 +14,7 @@ import { classifyExecutionStrategy, selectExprNeedsRuntime } from "../compiler/e
 import { executeStdlibFunction, resolveStdlibFunction, type RuntimeFunctionArg } from "../stdlib/functions.js";
 import { assertTargetSqlCompatibility, type RuntimeTarget } from "./target.js";
 import type { ShapeElement as GelIRShapeElement, Set as GelIRSet, Statement as GelIRStatement, TypeRef as GelIRTypeRef } from "../ir/gel_ir.js";
-import type { InsertIR, InsertLinkDefaultIR, InsertLinkPropertyIR, IRStatement, OverlayIR, SelectIR, UpdateIR, UpdateLinkAssignmentIR } from "../ir/model.js";
+import type { InsertIR, InsertLinkDefaultIR, InsertLinkPropertyIR, IRStatement, OverlayIR, UpdateIR, UpdateLinkAssignmentIR } from "../ir/model.js";
 import type { AccessPolicyCondition, AccessPolicyDef, ComputedLinkPropertyExpr, ConstraintDef, FieldDef, FieldDefaultExpr, FunctionDef, FunctionExprDef, FunctionVolatility, LinkPropertyDef, ScalarType, ScalarValue, TypeDef } from "../types.js";
 import { cloneTypeDef, fieldSequenceName, normalizeLinkTargetNames, qualifiedTypeName, usesLinkTable } from "../schema/schema.js";
 import { resolveLinkStorageOwner } from "../schema/physical_layout.js";
@@ -4702,7 +4702,7 @@ const executeWithDmlChain = (
   const emptyArtifact: SQLArtifact = { sql: "", params: [], loweringMode: "single_statement" };
   return {
     ast,
-    ir: { kind: ast.kind, rows: [] } as unknown as IRStatement,
+    ir: undefined,
     sql: emptyArtifact,
     compiler: { key: "with-dml-chain", status: "miss", stats: { hits: 0, misses: 0, size: 0 } },
     sqlTrail: [],
@@ -5955,7 +5955,7 @@ const executeSelectOverMutation = (
 
   return {
     ast,
-    ir: lastCompiled?.ir ?? ({ kind: "select", rows: [] } as unknown as IRStatement),
+    ir: lastCompiled?.ir,
     sql: projected.sql,
     compiler: lastCompiled?.cache ?? { key: "select-over-mutation", status: "miss", stats: { hits: 0, misses: 0, size: 0 } },
     sqlTrail: lastCompiled ? [lastCompiled.sql, projected.sql] : [projected.sql],
@@ -6304,7 +6304,7 @@ const executeQueryWithTraceImpl = (
         applySessionGlobal(db, schema, ast, context);
         return {
           ast,
-          ir: { kind: "select", rows: [] } as unknown as IRStatement,
+          ir: undefined,
           sql: { sql: "", params: [], loweringMode: "single_statement" } as SQLArtifact,
           compiler: { key: "set-global-noop", status: "miss", stats: { hits: 0, misses: 0, size: 0 } },
           sqlTrail: [],
@@ -6319,7 +6319,7 @@ const executeQueryWithTraceImpl = (
       applySessionConfigure(schema, ast);
       return {
         ast,
-        ir: { kind: "select", rows: [] } as unknown as IRStatement,
+        ir: undefined,
         sql: { sql: "", params: [], loweringMode: "single_statement" } as SQLArtifact,
         compiler: { key: "configure-noop", status: "miss", stats: { hits: 0, misses: 0, size: 0 } },
         sqlTrail: [],
@@ -6364,7 +6364,7 @@ const executeQueryWithTraceImpl = (
       if (constRows !== undefined) {
         return {
           ast,
-          ir: { kind: "select", rows: [] } as unknown as IRStatement,
+          ir: undefined,
           sql: { sql: "", params: [], loweringMode: "single_statement" } as SQLArtifact,
           compiler: { key: "const-subscript", status: "miss", stats: { hits: 0, misses: 0, size: 0 } },
           sqlTrail: [],
@@ -6388,7 +6388,7 @@ const executeQueryWithTraceImpl = (
       if (rows !== undefined) {
         return {
           ast,
-          ir: { kind: "select", rows: [] } as unknown as IRStatement,
+          ir: undefined,
           sql: { sql: "", params: [], loweringMode: "single_statement" } as SQLArtifact,
           compiler: { key: "for-dml-body", status: "miss", stats: { hits: 0, misses: 0, size: 0 } },
           sqlTrail: [],
@@ -7496,7 +7496,7 @@ export const executeQueryUnitWithTrace = (
         if (constRows !== undefined) {
           traces.push({
             ast,
-            ir: { kind: "select", rows: [] } as unknown as IRStatement,
+            ir: undefined,
             sql: { sql: "", params: [], loweringMode: "single_statement" } as SQLArtifact,
             compiler: { key: "const-subscript", status: "miss", stats: { hits: 0, misses: 0, size: 0 } },
             sqlTrail: [],
@@ -8110,7 +8110,7 @@ const executeForLoop = (
       const writeResult = runWriteWithAccessPolicies(db, schema, insertAst, ir, sqlArtifact, subjectType, context, snapshotDefaultCache);
 
       const currentOverlays = extractOverlays(ir);
-      if (ir && ir.kind !== "select" && ir.kind !== "select_free" && ir.kind !== "select_expr") {
+      if (ir) {
         overlays.push(...currentOverlays);
       }
 
@@ -8266,7 +8266,7 @@ const executeForLoop = (
       const selectAst = bindSelectAstVariable(selectBody, ast.variable, value);
 
       const compiled = compilerService.compile(schema, selectAst, { overlays, globals: context.globals, params: context.params, target: runtimeTarget });
-      const ir = compiled.ir as SelectIR;
+      const ir = compiled.ir;
       const sqlArtifact = compiled.sql;
       assertTargetSqlCompatibility(sqlArtifact.sql, runtimeTarget);
       const sqlTrail: SQLArtifact[] = [sqlArtifact];
@@ -10279,23 +10279,9 @@ const rowSourceType = (row: Record<string, unknown>, fallbackType: string): stri
 };
 
 const extractOverlays = (ir: IRStatement | undefined): OverlayIR[] => {
+  // The IR is the DML IR (insert/update/delete) or undefined for
+  // SELECT / GROUP / FOR, which execute off the Live IR's SQL artifact.
   if (!ir) return [];
-  if (ir.kind === "select") {
-    return ir.appliedOverlays;
-  }
-
-  if (ir.kind === "select_free") {
-    return [];
-  }
-
-  if (ir.kind === "select_expr") {
-    return [];
-  }
-
-  if (ir.kind === "group") {
-    return [];
-  }
-
   return ir.overlays;
 };
 
