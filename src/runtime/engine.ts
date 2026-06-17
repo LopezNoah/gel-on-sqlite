@@ -25,15 +25,9 @@ import { schemaSnapshotFromDeclarative } from "../schema/uiSchema.js";
 import { linkTableName, tableNameForType } from "../codegen/sql.js";
 import { populateSchemaIntrospection } from "../schema/schema_introspection.js";
 import { materializeSchema, type SQLiteDatabase } from "../runtime/database.js";
-import {
-  parseCreateTypeHeader,
-  stripTrailingBraceBlock,
-  extractTrailingBraceBlock,
-  validateScriptUserDDL,
-  validateUserDDLStatement,
-} from "./ddl.js";
+import { validateScriptUserDDL, validateUserDDLStatement } from "./ddl.js";
 import { installSqlTrace, runWithSqlSink } from "./sql_trace_sink.js";
-import { parseCreateTypeBody, type ExclusiveConstraintSpec } from "../edgeql/ddl_body.js";
+import type { ExclusiveConstraintSpec } from "../edgeql/ddl_body.js";
 import { applyLimitOffset, dedupeRowsById, distinctValues } from "./result_clauses.js";
 
 
@@ -801,12 +795,11 @@ const applyParsedFunctionDDL = (schema: SchemaSnapshot, ast: DDLStatement, defau
   });
 };
 
-// `parseCreateTypeHeader` and `stripTrailingBraceBlock` now live in
-// `src/runtime/ddl.ts`; this module imports them above.
-
-// `parseMemberHeader` / `parseExclusiveConstraintEntry` / the `CREATE TYPE`
-// body token-walker that used to live here were retired in favour of the
-// structured `parseCreateTypeBody` (src/edgeql/ddl_body.ts); see docs/adr/0027.
+// The `CREATE TYPE` string shadow-parser that used to live here
+// (`parseMemberHeader` / `parseExclusiveConstraintEntry` / the token-walker,
+// and `parseCreateTypeHeader` in ddl.ts) was retired: the EdgeQL parser now
+// parses the body onto the AST (`createTypeBody`) and `registerDynamicTypeDDL`
+// reads it. See docs/adr/0027 (parser), 0030 (AST-driven registration).
 
 const stripBacktickName = (lexeme: string): string =>
   lexeme.startsWith("`") && lexeme.endsWith("`") ? lexeme.slice(1, -1) : lexeme;
@@ -1160,9 +1153,17 @@ const exclusiveConstraintDefs = (specs: readonly ExclusiveConstraintSpec[]): Con
 };
 
 const registerDynamicTypeDDL = (schema: SchemaSnapshot, statement: string, defaultModule = "default"): boolean => {
-  const header = parseCreateTypeHeader(statement.trim());
-  if (!header) return false;
-  const { rawName, extendsList: extendsRaw, bodyText, isAbstract } = header;
+  // Parse the statement to the AST and register off it — the parser already
+  // produced the structured `createTypeBody` (docs/adr/0029). A non-parseable
+  // or non-`CREATE TYPE` statement simply isn't ours (tryResult swallows query
+  // failures, rethrows engine defects). See docs/adr/0030.
+  const parsed = tryResult(() => parseEdgeQL(statement));
+  if (!parsed.ok) return false;
+  const ast = parsed.value;
+  if (ast.kind !== "ddl" || ast.action !== "create" || ast.objectKind !== "type") return false;
+  const rawName = ast.name;
+  const extendsRaw = ast.extendsList;
+  const isAbstract = ast.modifiers?.includes("abstract") ?? false;
   const { module, name } = dynamicQualifiedNameParts(rawName, defaultModule);
   const fields: FieldDef[] = [];
   const links: NonNullable<TypeDef["links"]> = [];
@@ -1202,7 +1203,7 @@ const registerDynamicTypeDDL = (schema: SchemaSnapshot, statement: string, defau
   // `parseCreateTypeBody` (src/edgeql/ddl_body.ts); this loop converts those
   // members to the runtime's TypeDef shape (scalar resolution, FK synthesis,
   // exclusivity). See docs/adr/0027.
-  for (const member of parseCreateTypeBody(bodyText)) {
+  for (const member of ast.createTypeBody ?? []) {
     if (member.kind === "property") {
       const scalar = dynamicScalarFromType(member.targetType);
       const constraints = exclusiveConstraintDefs(member.constraints);
