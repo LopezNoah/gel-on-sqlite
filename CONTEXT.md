@@ -9,16 +9,16 @@ The IR the production pipeline actually runs on, defined in `src/ir/gel_ir.ts` a
 _Avoid_: gel_ir (the filename), "the new IR".
 
 **DML IR**:
-The mutation-only IR (`InsertIR` / `UpdateIR` / `DeleteIR` and their link sub-IRs) emitted by `src/compiler/dml_lowering.ts` and consumed by the engine's write path. The surviving, narrowed remainder of `src/ir/model.ts`.
+The mutation-only IR (`InsertIR` / `UpdateIR` / `DeleteIR` and their link sub-IRs) emitted by `src/compiler/dml_lowering.ts` and consumed by the engine's write path. `src/ir/model.ts` is now *only* this IR: the dead SELECT/GROUP statement IR (`SelectIR` / `SelectFreeIR` / `SelectExprIR` / `GroupIR`) and their exclusive supporting types — shape/filter/order-by/expression-atom IR, ~600 lines — were deleted once the two-IR era ended (see `docs/adr/0021`). `CompileArtifact.ir` is the DML IR for mutations and `undefined` for SELECT / GROUP / FOR (which carry no IR — they run off the Live IR's SQL artifact).
 _Avoid_: legacy IR (for the DML part), "the model IR".
 
 **Inference oracle** (deleted — `docs/adr/0020`):
 `src/compiler/semantic.ts` was the interpreter-era reference implementation of EdgeQL inference, retained after the SQL pipeline replaced it (ADR 0001) solely so the 5 `edgeql_ir_*_inference` tests could pin its `volatility`/`cardinality`/`multiplicity`/`scopeTree`/`stype` output. Once the **Live IR inference** reached parity on all five dimensions (ADRs 0015–0019), the oracle (~9.6k lines) was **deleted** and those 5 tests repointed at `compileASTToGelIR`. `src/ir/model.ts` now survives only as the **DML IR**. There is no longer a separate "legacy IR" / oracle on any path.
 _Avoid_: legacy compiler, semantic IR, the old IR.
 
-**Routing shim**:
-The synthetic, kind-only `IRStatement` that `src/compiler/service.ts::traceIRFromGelIR` fabricates for non-DML statements purely so the engine's dispatch can read `ir.kind`. Slated for deletion — the engine routes on the AST's `statement.kind` instead.
-_Avoid_: stub IR, fake IR.
+**Statement routing** (no shim):
+The engine dispatches on the **AST's** `statement.kind` (not a synthetic IR kind). The earlier *routing shim* — a synthetic, kind-only `IRStatement` that `service.ts` fabricated so the engine's dispatch could read `ir.kind` — is gone; the last residue (write-only `{ kind: "select", rows: [] }` placeholders in trace records) was removed with the model.ts narrowing (`docs/adr/0021`).
+_Avoid_: stub IR, fake IR, routing shim.
 
 **Compile artifact**:
 The bundle `CompilerService.compile` hands the engine: the Live IR, the SQL artifact, and (for mutations) the DML IR.
