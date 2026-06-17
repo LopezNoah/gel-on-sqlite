@@ -114,6 +114,12 @@ The **dispatch** into those shapes — `shouldUseLinkTable(link) ? …(usesLinkT
 The **alias scheme** for a pointer chain lives in the same module — `POINTER_ROOT_ALIAS` (`"p0"`), `pointerStepTargetAlias(i)` (`p{i+1}`), `pointerStepLinkAlias(i)` (`pj{i}`) — the naming sibling of `pointerStepJoinSql`. The three pointer-path lowerings that re-spelled it inline now share these helpers (`docs/adr/0022`). The well-known single-scope anchor aliases (`g0`/`j0`/`t0`) and the single-use indexed families (cp/oe/sg/tuple/…) are **not** minted through a shared seam: a stateful global `nextAlias` minter was rejected because `g0` and friends are referenced by string literal (~50× for `g0`) and the indexed families derive from structural step/depth indices threaded across compile stages, so opaque sequence numbers would change every alias and break the literal anchors.
 _Avoid_: join helper, path join.
 
+## Standard library
+
+**Stdlib registry** (`src/stdlib/registry.ts`):
+The one home for the standard library. Each function is one `StdlibFunctionEntry { name, meta?, sql?, runtime? }` co-locating its three adapters: `meta` (arity / volatility / `returnOptional` / `paramSetOf`, read by name resolution and the inference passes), `sql` (the SQL-lowering template, read by the SQL compiler), and `runtime` (the interpreter body, read by the [[Runtime evaluator]]). Slots are independent — `math::sqrt` is sql-only, `math::mean` is meta+runtime-only, `std::str_upper` carries all three. A function **lowers to SQL iff it has a `sql` slot** (`stdlibFunctionLowersToSql`); that single fact replaced the hand-synced `BASE_SQL_NATIVE_STDLIB_LOWERING` name-set gate in `runtime/target.ts` plus the `UNREGISTERED_BUT_SUPPORTED` patch-set in `stdlib_lowering.ts`. `stdlib/functions.ts` (runtime/inference facade: `resolveStdlibFunction`/`tryResolveStdlibFunction`/`executeStdlibFunction`) and `sql/stdlib_lowering.ts` (`lowerStdlibFunctionSql`/`canLowerStdlibFunctionSql`) are now thin readers over the registry. **Operators are deliberately not in the registry**: the SQL operator lowerings (three-valued logic, JSON-wrapped booleans, CASE-`COALESCE`) and the runtime operator cases (JS LCP / co-iteration) are different semantic expressions, not a hand-synced duplicate table — so there is nothing to factor (same call as the parser/tokenizer splits, `docs/adr/0024`/`0025`). Pinned by `tests/stdlib_registry.test.ts` (`docs/adr/0043`).
+_Avoid_: stdlib table, function map, the builtins list.
+
 ## Execution
 
 **Runtime evaluator**:

@@ -2,112 +2,12 @@ import { AppError } from "../errors.js";
 
 export type RuntimeTarget = "sqlite" | "d1";
 
-export interface RuntimeTargetCapabilities {
-  target: RuntimeTarget;
-  sqlNativeStdlibLowering: ReadonlySet<string>;
-}
-
-const BASE_SQL_NATIVE_STDLIB_LOWERING = new Set<string>([
-  "math::abs",
-  "math::ceil",
-  "math::floor",
-  "math::exp",
-  "math::sqrt",
-  "math::ln",
-  "math::lg",
-  "math::log",
-  "math::pi",
-  "math::e",
-  "math::acos",
-  "math::asin",
-  "math::atan",
-  "math::atan2",
-  "math::cos",
-  "math::cot",
-  "math::sin",
-  "math::tan",
-  "std::assert",
-  "std::assert_single",
-  "std::assert_exists",
-  "std::array_set",
-  "std::array_insert",
-  "std::duration_get",
-  "std::datetime_current",
-  "std::datetime_of_transaction",
-  "std::datetime_of_statement",
-  "std::to_str",
-  "std::to_json",
-  "std::json_get",
-  "std::len",
-  "std::count",
-  "std::max",
-  "std::min",
-  "std::str_lower",
-  "std::str_upper",
-  "std::str_trim",
-  "std::str_trim_start",
-  "std::str_trim_end",
-  "std::str_pad_start",
-  "std::str_pad_end",
-  "std::str_repeat",
-  "std::str_reverse",
-  "std::str_split",
-  "std::str_replace",
-  "std::array_replace",
-  "std::to_int16",
-  "std::to_int32",
-  "std::to_int64",
-  "std::to_float32",
-  "std::to_float64",
-  "std::to_bigint",
-  "std::to_decimal",
-  "std::overlaps",
-  "std::adjacent",
-  "std::strictly_below",
-  "std::strictly_above",
-  "std::bounded_above",
-  "std::bounded_below",
-  "std::range_is_empty",
-  "std::range_is_inclusive_lower",
-  "std::range_is_inclusive_upper",
-  "std::range_get_lower",
-  "std::range_get_upper",
-  "std::multirange",
-  "std::datetime_get",
-  "std::datetime_truncate",
-  "std::round",
-  "std::find",
-  "std::contains",
-  "std::array_join",
-  "std::random",
-  "std::uuid_generate_v1mc",
-  "std::uuid_generate_v4",
-  "std::array_get",
-  "std::bit_and",
-  "std::bit_or",
-  "std::bit_xor",
-  "std::bit_not",
-  "std::bit_lshift",
-  "std::bit_rshift",
-  "std::bit_count",
-]);
-
-const RUNTIME_TARGET_CAPABILITIES: Record<RuntimeTarget, RuntimeTargetCapabilities> = {
-  sqlite: {
-    target: "sqlite",
-    sqlNativeStdlibLowering: new Set(BASE_SQL_NATIVE_STDLIB_LOWERING),
-  },
-  d1: {
-    target: "d1",
-    sqlNativeStdlibLowering: new Set(BASE_SQL_NATIVE_STDLIB_LOWERING),
-  },
-};
-
-export const targetCapabilities = (target: RuntimeTarget): RuntimeTargetCapabilities =>
-  RUNTIME_TARGET_CAPABILITIES[target];
-
-export const canLowerStdlibFunctionToSql = (target: RuntimeTarget, qualifiedName: string): boolean =>
-  targetCapabilities(target).sqlNativeStdlibLowering.has(qualifiedName);
+// NOTE: the per-target "which stdlib functions lower to SQL" gate used to live
+// here (`BASE_SQL_NATIVE_STDLIB_LOWERING` + `targetCapabilities` +
+// `canLowerStdlibFunctionToSql`). It was a name-set that hand-shadowed the SQL
+// template map in `sql/stdlib_lowering.ts` and drifted from it. That decision
+// now has one home: a function lowers to SQL iff it has a `sql` slot in
+// `stdlib/registry.ts`. See `docs/adr/0043`.
 
 const D1_ALLOWED_SQLITE_FUNCTIONS = new Set([
   "abs", "changes", "char", "coalesce", "concat", "concat_ws", "format", "glob", "hex", "ifnull", "iif", "instr",
