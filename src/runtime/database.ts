@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import { AppError } from "../errors.js";
 
 import type { SchemaSnapshot } from "../schema/schema.js";
-import { normalizeTypeName, qualifiedTypeName } from "../schema/schema.js";
+import { normalizeTypeName, qualifiedTypeName, usesLinkTable } from "../schema/schema.js";
 import { populateSchemaIntrospection } from "../schema/schema_introspection.js";
 import type { AsyncRuntimeInstance, RuntimeDatabaseAdapter, RuntimeInstance } from "./adapter.js";
 import { toAsyncAdapter } from "./adapter.js";
@@ -1072,7 +1072,7 @@ export const materializeSchema = (db: SQLiteDatabase, schema: SchemaSnapshot): v
     ).run();
 
     for (const link of typeDef.links ?? []) {
-      if (!link.multi && (link.properties?.length ?? 0) === 0) {
+      if (!usesLinkTable(link)) {
         continue;
       }
 
