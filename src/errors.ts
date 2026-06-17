@@ -185,3 +185,15 @@ export const tryResult = <T>(
     throw e;
   }
 };
+
+/**
+ * Optimistic-probe sugar over `tryResult`: run `fn` and return its value, or
+ * `undefined` when it fails as a query problem (see isQueryFailure). Engine
+ * defects (TypeError, RangeError, …) keep propagating, so a bug in a lowering
+ * path can no longer hide behind a bare `catch { return undefined }`. The home
+ * for "try this interpretation, fall back if it doesn't apply".
+ */
+export const tryProbe = <T>(fn: () => T): T | undefined => {
+  const r = tryResult(fn);
+  return r.ok ? r.value : undefined;
+};
