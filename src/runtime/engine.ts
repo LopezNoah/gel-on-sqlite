@@ -28,6 +28,15 @@ import {
   evaluatePoliciesForOperation,
   hasPermission,
 } from "./access_policy.js";
+import {
+  bindingSelectShape,
+  computedElementReferencedField,
+  computedExprIsMulti,
+  inferArrayValuedType,
+  insertValueHasUnscopedPartialPath,
+  literalStdTypeName,
+  unwrapSubqueryWrappers,
+} from "../compiler/ast_inference.js";
 import { parseDeclarativeSchema } from "../schema/sdl_adapter.js";
 import { schemaSnapshotFromDeclarative } from "../schema/uiSchema.js";
 import { linkTableName, tableNameForType } from "../codegen/sql.js";
@@ -12625,20 +12634,6 @@ function bindingUnionBranchInfo(ctx: AstPreValidationCtx, binding: WithBindingVa
   }
 }
 
-function unwrapSubqueryWrappers(expr: unknown): unknown {
-  let current = expr as Record<string, unknown> & { kind?: string };
-  let guard = 0;
-  while (current && typeof current === "object" && guard < 8) {
-    if (current.kind === "select_expr_subquery" || current.kind === "subquery_expr") {
-      current = current.expr as Record<string, unknown> & { kind?: string };
-      guard += 1;
-      continue;
-    }
-    break;
-  }
-  return current;
-}
-
 function branchHasSchemaPointer(ctx: AstPreValidationCtx, info: UnionBranchInfo, name: string): boolean {
   if (!info.typeName) return false;
   const typeDef = lookupAstObjectType(ctx, info.typeName);
@@ -12696,17 +12691,6 @@ function checkUnionFieldAccess(ctx: AstPreValidationCtx, setValues: unknown[], f
 
 // Whether a computed expression is statically known to produce more than one
 // element (a set literal / UNION with several branches).
-function computedExprIsMulti(expr: unknown, depth = 0): boolean {
-  if (!expr || typeof expr !== "object" || depth > 6) return false;
-  const node = expr as Record<string, unknown> & { kind?: string };
-  if (node.kind === "set_literal") return ((node.values as unknown[]) ?? []).length > 1;
-  if (node.kind === "set_expr") return ((node.values as unknown[]) ?? []).length > 1;
-  if (node.kind === "select_expr" || node.kind === "select_expr_subquery" || node.kind === "subquery_expr") {
-    return computedExprIsMulti(node.expr, depth + 1);
-  }
-  return false;
-}
-
 // `SELECT V { single foo := .foo }` where V's `foo` is a multi computed.
 function checkSingleDeclaredComputeds(ctx: AstPreValidationCtx, shape: ShapeElement[], sourceShape: ShapeElement[] | undefined): void {
   if (!sourceShape) return;
@@ -12724,20 +12708,6 @@ function checkSingleDeclaredComputeds(ctx: AstPreValidationCtx, shape: ShapeElem
       );
     }
   }
-}
-
-function computedElementReferencedField(expr: unknown, depth = 0): string | undefined {
-  if (!expr || typeof expr !== "object" || depth > 4) return undefined;
-  const node = expr as Record<string, unknown> & { kind?: string };
-  if (node.kind === "field_ref") return node.field as string;
-  if (node.kind === "select_expr" || node.kind === "select_expr_subquery") {
-    return computedElementReferencedField(node.expr, depth + 1);
-  }
-  if (node.kind === "field_access") {
-    const base = node.expr as Record<string, unknown> & { kind?: string };
-    if (base?.kind === "current_item") return node.field as string;
-  }
-  return undefined;
 }
 
 // Resolve a `current_item`-rooted field-access chain to its final pointer,
@@ -12842,17 +12812,6 @@ function bindingLiteralValue(ctx: AstPreValidationCtx, name: string): { value: S
   if (binding.kind === "subquery_expr") {
     const inner = binding.expr as Record<string, unknown> & { kind?: string };
     if (inner?.kind === "literal") return { value: inner.value as ScalarValue };
-  }
-  return undefined;
-}
-
-function literalStdTypeName(literal: { value: ScalarValue; numericKind?: string }): string | undefined {
-  const { value, numericKind } = literal;
-  if (typeof value === "string") return "std::str";
-  if (typeof value === "boolean") return "std::bool";
-  if (typeof value === "number") {
-    if (numericKind === "float" || !Number.isInteger(value)) return "std::float64";
-    return "std::int64";
   }
   return undefined;
 }
@@ -13143,82 +13102,6 @@ function insertValueIsSelfReference(ctx: AstPreValidationCtx, value: unknown, se
 }
 
 // Type descriptor inferred for an INSERT-shape scalar value expression.
-type InferredAssignType =
-  | { kind: "indeterminate" }   // bare `[]` — no element type
-  | { kind: "array"; element: string }  // `array<element>`
-  | { kind: "scalar"; name: string }    // a plain scalar
-  | undefined;                  // not inferable / not relevant
-
-// Std scalar name for a literal node based on its runtime JS value.
-function literalScalarName(node: Record<string, unknown>): string | undefined {
-  const v = node.value;
-  if (typeof v === "string") return "std::str";
-  if (typeof v === "boolean") return "std::bool";
-  if (typeof v === "number") {
-    return node.numericKind === "float" ? "std::float64" : "std::int64";
-  }
-  return undefined;
-}
-
-// Infer the type produced by a (subset of) INSERT-shape value expressions:
-// empty/non-empty array literals, `++` concatenations of arrays, and
-// `array_unpack(...)`. Returns undefined when not one of these forms.
-function inferArrayValuedType(value: unknown, depth = 0): InferredAssignType {
-  if (!value || typeof value !== "object" || depth > 8) return undefined;
-  const node = value as Record<string, unknown> & { kind?: string };
-  switch (node.kind) {
-    case "expr":
-      return inferArrayValuedType(node.expr, depth + 1);
-    case "array_literal":
-    case "array_literal_expr": {
-      const els = (node.values as unknown[] | undefined) ?? [];
-      if (els.length === 0) return { kind: "indeterminate" };
-      const elType = inferArrayElementType(els[0], depth + 1);
-      return elType ? { kind: "array", element: elType } : undefined;
-    }
-    case "concat": {
-      // `A ++ B` of arrays: element type comes from a non-empty operand.
-      const parts = (node.parts as unknown[] | undefined) ?? [];
-      let element: string | undefined;
-      let sawArray = false;
-      for (const part of parts) {
-        const inferred = inferArrayValuedType(part, depth + 1);
-        if (!inferred) return undefined;
-        if (inferred.kind === "array") {
-          sawArray = true;
-          element = element ?? inferred.element;
-        } else if (inferred.kind === "indeterminate") {
-          sawArray = true;
-        } else {
-          return undefined;
-        }
-      }
-      if (!sawArray) return undefined;
-      return element ? { kind: "array", element } : { kind: "indeterminate" };
-    }
-    case "function_call": {
-      const call = (node.call ?? node) as { name?: string; args?: unknown[] };
-      if (call.name === "array_unpack" && (call.args?.length ?? 0) === 1) {
-        const inner = inferArrayValuedType(call.args?.[0], depth + 1);
-        if (inner?.kind === "array") return { kind: "scalar", name: inner.element };
-        if (inner?.kind === "indeterminate") return { kind: "indeterminate" };
-      }
-      return undefined;
-    }
-    default:
-      return undefined;
-  }
-}
-
-// Element scalar name of an array literal's first element.
-function inferArrayElementType(el: unknown, depth: number): string | undefined {
-  if (!el || typeof el !== "object") return undefined;
-  const node = el as Record<string, unknown> & { kind?: string };
-  if (node.kind === "literal") return literalScalarName(node);
-  if (node.kind === "expr") return inferArrayElementType(node.expr, depth + 1);
-  return undefined;
-}
-
 // Reject a link-property computed body whose value type is indeterminate —
 // `subordinates := (SELECT Sub { @comment := [] })`
 // (test_edgeql_insert_empty_array_04). A bare empty array `[]` in a linkprop
@@ -13430,23 +13313,6 @@ function insertReferencesCorrelatedSet(
 // True when an INSERT shape value references a partial path (`.foo`, an AST
 // `current_item`) in its own scope, i.e. not nested inside a sub-query that
 // would supply the path's source. Such a path has nothing to resolve against.
-function insertValueHasUnscopedPartialPath(value: unknown, depth = 0): boolean {
-  if (!value || typeof value !== "object" || depth > 12) return false;
-  if (Array.isArray(value)) {
-    return value.some((item) => insertValueHasUnscopedPartialPath(item, depth + 1));
-  }
-  const node = value as Record<string, unknown> & { kind?: string };
-  if (node.kind === "current_item") return true;
-  // Don't descend into nested query scopes — a partial path inside them
-  // resolves against that scope's subject, not the INSERT shape.
-  if (node.kind === "select" || node.kind === "select_expr" || node.kind === "select_expr_subquery"
-      || node.kind === "subquery_expr" || node.kind === "subquery_statement"
-      || node.kind === "for" || node.kind === "insert" || node.kind === "update" || node.kind === "delete") {
-    return false;
-  }
-  return Object.values(node).some((v) => insertValueHasUnscopedPartialPath(v, depth + 1));
-}
-
 // True when an INSERT shape value is provably a multi set (more than one
 // element). Conservative: only forms we can prove multi return true; anything
 // uncertain returns false so well-formed single assignments aren't rejected.
@@ -13487,20 +13353,6 @@ function selectFilterGuaranteesSingle(ctx: AstPreValidationCtx, typeName: string
   const fieldDef = (typeDef.fields ?? []).find((f) => f.name === target.field && !f.isLinkColumn);
   if (!fieldDef || fieldDef.multi) return false;
   return (fieldDef.constraints ?? []).some((c) => c.name === "std::exclusive" || c.name === "exclusive");
-}
-
-function bindingSelectShape(binding: WithBindingValue | undefined): ShapeElement[] | undefined {
-  if (!binding) return undefined;
-  if (binding.kind === "subquery") return binding.query.shape;
-  if (binding.kind === "subquery_expr") {
-    const inner = unwrapSubqueryWrappers(binding.expr) as Record<string, unknown> & { kind?: string };
-    if (inner?.kind === "select") return inner.shape as ShapeElement[];
-    return undefined;
-  }
-  if (binding.kind === "subquery_statement" && binding.statement.kind === "select") {
-    return binding.statement.shape;
-  }
-  return undefined;
 }
 
 // ── constant index/slice evaluation (bigint_index_01/02/03) ────────────────
