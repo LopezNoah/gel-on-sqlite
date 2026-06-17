@@ -96,6 +96,10 @@ _Avoid_: join helper, path join.
 The TypeScript expression interpreter (`tryRuntimeSelectExprEvaluationAst` in `src/runtime/engine.ts`) required for constructs that do not lower to SQL — free objects, FOR iteration, runtime aliases, inlined UDFs. A required component, not a fallback for the SQL path.
 _Avoid_: interpreter fallback, the slow path.
 
+**Row codec**:
+`src/runtime/row_codec.ts` — the one home for decoding a Gel-SQL result row into an EdgeQL value: `materializeGelSQLRows` (scalar-vs-object row shaping, internal-column dropping, all-internal-null→null) and `normalizeGelSQLValue` (per-column JSON decode). The final step of the SQL read path (`runGelSelectSQL`). Its `JSON.parse` fallback is **load-bearing**, not a swallowed bug: decode is type-blind, so a `str` that merely looks like JSON (`"[draft]"`) must survive verbatim (contrast the SQL-precompute probe, where defects propagate). `readRuntimeTypedAliasSourceRows` (reading source rows for the Runtime evaluator) is a distinct concern, not part of this codec. See `docs/adr/0013`.
+_Avoid_: deserializer, row mapper.
+
 **SQL-precompute probe**:
 `tryRunSingleSqlRows` in `src/runtime/engine.ts` — "compile this statement; if it lowers to a single SQL statement, run it and return the rows, else `undefined`" — the shared home for "try SQL, else fall back to the Runtime evaluator". Built on `tryProbe` (`src/errors.ts`), so a query problem (`isQueryFailure`) falls back but an engine defect (TypeError, E_RUNTIME) propagates rather than hiding behind a bare `catch`. Used by computed-global defaults and FOR scalar iterators. Other swallowing catches (raw-SQLite missing-column probes, JSON-decode fallbacks, parse retries) are deliberately *not* routed through it — there the swallowed error is expected, not a defect (see `docs/adr/0012`).
 _Avoid_: the fallback, try-sql.
