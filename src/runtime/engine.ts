@@ -10,6 +10,7 @@ import type { RuntimeDatabaseAdapter } from "./adapter.js";
 import type { SchemaSnapshot } from "../schema/schema.js";
 import type { GelIRSQLArtifact as SQLArtifact } from "../sql/gel_ir_compiler.js";
 import { lowersToSingleSql } from "../sql/compiler_types.js";
+import { classifyExecutionStrategy, selectExprNeedsRuntime } from "../compiler/execution_strategy.js";
 import { executeStdlibFunction, resolveStdlibFunction, type RuntimeFunctionArg } from "../stdlib/functions.js";
 import { assertTargetSqlCompatibility, type RuntimeTarget } from "./target.js";
 import type { ShapeElement as GelIRShapeElement, Set as GelIRSet, Statement as GelIRStatement, TypeRef as GelIRTypeRef } from "../ir/gel_ir.js";
@@ -1876,160 +1877,9 @@ const tryRuntimeSelectExprEvaluationAst = (
 ): QueryResult | undefined => {
   type EvalEnv = Map<string, unknown>;
 
-  const needsRuntimeEval = (expr: FreeObjectExpr): boolean => {
-    switch (expr.kind) {
-      case "binding_ref": {
-        const alias = schema.getAlias(qualifiedRuntimeAliasName(expr.name));
-        return Boolean(alias?.exprText && !alias.values && !alias.sourceType);
-      }
-      case "function_call": {
-        const shortName = expr.call.name.split("::").at(-1) ?? expr.call.name;
-        const argWrapsShapedSelect = expr.call.args.some((arg) => arg.kind === "expr"
-          && arg.expr.kind === "select_expr_subquery"
-          && arg.expr.expr.kind === "select"
-          && Array.isArray(arg.expr.expr.shape)
-          && arg.expr.expr.shape.length > 1);
-        if (argWrapsShapedSelect && (shortName === "assert_exists" || shortName === "assert_single" || shortName === "assert_distinct")) {
-          return false;
-        }
-        return Boolean(schema.findFunction(ast.withModule ?? "default", shortName, expr.call.args.length))
-          || ["array_unpack", "range_unpack", "range", "max", "assert_exists", "assert_single", "enumerate"].includes(shortName)
-          || expr.call.args.some((arg) => arg.kind === "expr" ? needsRuntimeEval(arg.expr) : arg.kind === "function_call" ? needsRuntimeEval({ kind: "function_call", call: arg.call }) : arg.kind === "binding_ref" ? needsRuntimeEval({ kind: "binding_ref", name: arg.name }) : false);
-      }
-      case "for_expr":
-        return true;
-      case "free_object_constructor":
-        // Top-level free objects (`{a:=1, b:={2,3,4}, c:={d:=5}}`) must
-        // materialise at runtime as a single row whose multi-valued entries
-        // are arrays — SQL lowering can't express the free-object set shape.
-        return true;
-      case "field_access":
-        return needsRuntimeEval(expr.expr);
-      case "distinct":
-      case "exists":
-        return needsRuntimeEval(expr.expr);
-      case "cast":
-        return needsRuntimeEval(expr.expr);
-      case "select": {
-        const alias = schema.getAlias(qualifiedRuntimeAliasName(expr.typeName));
-        return Boolean(alias?.values);
-      }
-      case "select_expr_subquery":
-        if (expr.expr.kind === "shape_projection") return false;
-        return Boolean(expr.orderBy) || needsRuntimeEval(expr.expr);
-      case "set_expr":
-      case "tuple":
-        return expr.values.some((value) => needsRuntimeEval(value));
-      case "math":
-      case "compare":
-      case "and":
-      case "or":
-        return needsRuntimeEval(expr.left) || needsRuntimeEval(expr.right);
-      case "not":
-        return needsRuntimeEval(expr.expr);
-      case "if_else":
-        return needsRuntimeEval(expr.thenExpr) || needsRuntimeEval(expr.condition) || needsRuntimeEval(expr.elseExpr);
-      case "shape_projection":
-        return needsRuntimeEval(expr.expr);
-      case "index_access":
-      case "is_type":
-        return needsRuntimeEval(expr.expr);
-      case "concat":
-        // A concat containing a user-defined function call must take the
-        // runtime path so the per-source-row LCP iteration handles the
-        // function correctly (OPTIONAL parameters etc.).
-        return expr.parts.some((part) => needsRuntimeEval(part));
-      default:
-        return false;
-    }
-  };
-
-  const isEnumScalarTypeDef = (typeName: string | undefined): boolean => {
-    if (!typeName) return false;
-    const qualified = typeName.includes("::") ? typeName : qualifiedRuntimeAliasName(typeName);
-    const typeDef = schema.getType(qualified) ?? schema.getType(typeName);
-    if (!typeDef) return false;
-    const first = typeDef.fields[0];
-    return typeDef.fields.length === 1
-      && first?.name === "__enum__"
-      && Boolean(first?.enumValues?.length);
-  };
-
-  const bindingNeedsRuntime = (binding: WithBinding): boolean => {
-    const value = binding.value;
-    if (value.kind === "enum_path") return false;
-    if (value.kind === "path") return !isEnumScalarTypeDef(value.head);
-    if (value.kind === "path_chain") return !isEnumScalarTypeDef(value.parts?.[0]);
-    if (value.kind === "binding_ref") return !isEnumScalarTypeDef(value.name);
-    if (value.kind === "subquery") {
-      // Defer only when the subquery has no link-property shape, AND the outer
-      // query doesn't access link properties on a shape-redefined link.
-      const computedHasForExpr = (expr: ComputedExpr | FreeObjectExpr | WithBindingValue | undefined): boolean => {
-        if (!expr || typeof expr !== "object") return false;
-        if (expr.kind === "for_expr") return true;
-        if (expr.kind === "select_expr" || expr.kind === "subquery_expr" || expr.kind === "select_expr_subquery") {
-          return computedHasForExpr(expr.expr);
-        }
-        return false;
-      };
-      const shapeHasForExpr = (shape: ShapeElement[] | undefined): boolean => Boolean(
-        shape?.some((el) => el.kind === "computed" && computedHasForExpr(el.expr)),
-      );
-      if (shapeHasForExpr(value.query.shape)) return true;
-      const shapeHasLinkProperty = (shape: ShapeElement[] | undefined): boolean => Boolean(
-        shape?.some((el) => (el.kind === "computed" || el.kind === "field") && el.name.startsWith("@")
-          || (el.kind === "link" && shapeHasLinkProperty(el.shape))
-          || (el.kind === "computed" && el.expr.kind === "select_expr" && el.expr.expr.kind === "select_expr_subquery"
-              && (() => {
-                let inner: FreeObjectExpr = el.expr.expr;
-                while (inner && inner.kind === "select_expr_subquery") inner = inner.expr;
-                if (inner?.kind === "select") return shapeHasLinkProperty(inner.shape);
-                return false;
-              })())
-        ),
-      );
-      if (shapeHasLinkProperty(value.query.shape)) return true;
-      // Check the outer ast for link-property access on this binding name.
-      const outerNeedsLinkProps = (expr: FreeObjectExpr): boolean => {
-        if (!expr || typeof expr !== "object") return false;
-        if (expr.kind === "shape_projection") {
-          if (shapeHasLinkProperty(expr.shape)) return true;
-          return outerNeedsLinkProps(expr.expr);
-        }
-        if (
-          expr.kind === "distinct"
-          || expr.kind === "cast"
-          || expr.kind === "field_access"
-          || expr.kind === "index_access"
-          || expr.kind === "slice_access"
-          || expr.kind === "exists"
-          || expr.kind === "not"
-          || expr.kind === "unary"
-          || expr.kind === "is_type"
-          || expr.kind === "select_expr_subquery"
-        ) {
-          return outerNeedsLinkProps(expr.expr);
-        }
-        return false;
-      };
-      if (outerNeedsLinkProps(ast.expr)) return true;
-      return false;
-    }
-    // Defer to the regular compile path for raw path-based subqueries; the
-    // runtime fallback below cannot traverse link junctions on plain paths.
-    if (value.kind === "subquery_expr") {
-      // Only defer when the inner is a pure field_access chain (no shape).
-      let inner: FreeObjectExpr = value.expr;
-      while (inner.kind === "select_expr_subquery") {
-        inner = inner.expr;
-      }
-      if (inner.kind === "field_access") return false;
-    }
-    return true;
-  };
-
-  const withRequiresRuntime = (ast.with ?? []).some(bindingNeedsRuntime);
-  if (!withRequiresRuntime && !needsRuntimeEval(ast.expr)) {
+  // The SQL-vs-runtime predicate now lives in src/compiler/execution_strategy.ts
+  // (shared with the compile-inspection seam's `strategy` fact; see ADR 0003).
+  if (!selectExprNeedsRuntime(ast, schema)) {
     return undefined;
   }
 
@@ -6662,7 +6512,7 @@ const executeQueryWithTraceImpl = (
       // gelIR SQL artifact via runGelSelectSQL. select_free and top-level GROUP
       // require a complete single-statement lowering — the legacy runtime
       // grouper has been retired, so an incomplete lowering is unsupported.
-      if (ast.kind === "select_free" && sqlArtifact.loweringMode !== "single_statement") {
+      if (ast.kind === "select_free" && classifyExecutionStrategy(ast, sqlArtifact, schema) === "reject") {
         throw new AppError(
           "E_UNSUPPORTED",
           "select_free requires SQL lowering; runtime fallback disabled",
@@ -6670,7 +6520,7 @@ const executeQueryWithTraceImpl = (
           ast.pos.column,
         );
       }
-      if (ast.kind === "group" && !(lowersToSingleSql(sqlArtifact))) {
+      if (ast.kind === "group" && classifyExecutionStrategy(ast, sqlArtifact, schema) === "reject") {
         throw new AppError("E_UNSUPPORTED", "GROUP statement could not be lowered to SQL", ast.pos.line, ast.pos.column);
       }
       result = {
@@ -7742,7 +7592,7 @@ export const executeQueryUnitWithTrace = (
       } else {
         // SELECT / SELECT-expr / SELECT-free / FOR execute off the gelIR SQL
         // artifact. select_free requires a complete single-statement lowering.
-        if (ast.kind === "select_free" && sqlArtifact.loweringMode !== "single_statement") {
+        if (ast.kind === "select_free" && classifyExecutionStrategy(ast, sqlArtifact, schema) === "reject") {
           throw new AppError(
             "E_UNSUPPORTED",
             "select_free requires SQL lowering; runtime fallback disabled",
