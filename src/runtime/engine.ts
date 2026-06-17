@@ -21,6 +21,7 @@ import { resolveLinkStorageOwner } from "../schema/physical_layout.js";
 import { materializeGelSQLRows, normalizeGelSQLValue } from "./row_codec.js";
 import { coIteratedBinding } from "./co_iteration.js";
 import { runSelectExprEvaluation } from "./evaluator.js";
+import { buildInsertRowSql } from "./dml_sql.js";
 import {
   enforceDeletePolicies,
   enforceInsertPolicies,
@@ -9241,41 +9242,15 @@ const runWriteWithAccessPolicies = (
         return true;
       });
 
-      // Assignments the plan deferred to SQL (function calls, subqueries,
-      // paths into WITH bindings, …) splice in the gelIR artifact's compiled
-      // column expression — each carries its own parameter slice.
+      // The final column set is known only now — after defaults, sequences,
+      // and inline-link targets resolve — so the INSERT row SQL is emitted at
+      // write time by the pure builder in runtime/dml_sql.ts. See docs/adr/0046.
+      const builtInsert = buildInsertRowSql(ir.table, normalizedEntries, sqlArtifact.insertColumns ?? [], ast.pos);
+      sqlArtifact.sql = builtInsert.sql;
+      sqlArtifact.params = builtInsert.params;
+      // The compiled SQL expressions for planner-deferred columns, reused by
+      // the UNLESS CONFLICT resolved-value probe further below.
       const sqlExprByColumn = new Map((sqlArtifact.insertColumns ?? []).map((entry) => [entry.column, entry]));
-
-      if (normalizedEntries.length === 0) {
-        sqlArtifact.sql = `INSERT INTO ${quoteIdent(ir.table)} DEFAULT VALUES`;
-        sqlArtifact.params = [];
-      } else {
-        const columns: string[] = [];
-        const valueExprs: string[] = [];
-        const params: ScalarValue[] = [];
-        for (const [column, value] of normalizedEntries) {
-          if (value === PENDING_INSERT_SQL_EXPR_VALUE) {
-            const compiled = sqlExprByColumn.get(column);
-            if (!compiled) {
-              throw new AppError(
-                "E_UNSUPPORTED",
-                `INSERT assignment for '${column}' requires SQL lowering; runtime fallback disabled`,
-                ast.pos.line,
-                ast.pos.column,
-              );
-            }
-            columns.push(column);
-            valueExprs.push(compiled.sql);
-            params.push(...compiled.params);
-            continue;
-          }
-          columns.push(column);
-          valueExprs.push("?");
-          params.push(typeof value === "boolean" ? (value ? 1 : 0) : value);
-        }
-        sqlArtifact.sql = `INSERT INTO ${quoteIdent(ir.table)} (${columns.map((column) => quoteIdent(column)).join(", ")}) VALUES (${valueExprs.join(", ")})`;
-        sqlArtifact.params = params;
-      }
 
       enforceInsertPolicies(subjectType, insertValues, context, ast.pos.line, ast.pos.column);
 
