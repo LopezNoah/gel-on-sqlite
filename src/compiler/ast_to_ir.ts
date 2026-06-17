@@ -8542,9 +8542,8 @@ const compileForStatement = (statement: ForStatement, ctx: IRCompileContext): Se
 // the lowering metadata the SQL stage turns into `{ key, grouping, elements }`
 // rows — one GROUP BY branch per expanded grouping set. USING bindings are
 // folded into the subject's projection as hidden computed fields so each
-// alias is evaluated once per element (the runtime grouper does the same on
-// the legacy IR — see compileGroupIR in compiler/semantic.ts; the BY
-// expansion below mirrors its grouping-set algebra so both paths agree).
+// alias is evaluated once per element. The BY expansion below implements the
+// grouping-set algebra directly.
 // Features the SQL stage can't express (link-property keys, USING whole-set
 // references, free-object subjects, lossy projections) leave `byAtoms`
 // undefined so the engine falls back to the runtime grouper.

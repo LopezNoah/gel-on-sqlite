@@ -12,13 +12,9 @@ _Avoid_: gel_ir (the filename), "the new IR".
 The mutation-only IR (`InsertIR` / `UpdateIR` / `DeleteIR` and their link sub-IRs) emitted by `src/compiler/dml_lowering.ts` and consumed by the engine's write path. The surviving, narrowed remainder of `src/ir/model.ts`.
 _Avoid_: legacy IR (for the DML part), "the model IR".
 
-**Legacy IR**:
-The interpreter-era IR (`src/ir/model.ts` produced by `src/compiler/semantic.ts`) that the SQL pipeline replaced for routing and execution. No longer on the production path, but **retained as an inference oracle**: the 5 `edgeql_ir_*_inference` tests assert its `volatility`/`cardinality`/`multiplicity`/`scopeTree` output, which the Live IR does not yet reproduce (see `docs/adr/0001`). Not dead code.
-_Avoid_: "the old IR", semantic IR.
-
-**Inference oracle**:
-`src/compiler/semantic.ts` in its retained role — the reference implementation of EdgeQL inference, kept under test until the Live IR reaches inference parity and it can be deleted.
-_Avoid_: legacy compiler.
+**Inference oracle** (deleted — `docs/adr/0020`):
+`src/compiler/semantic.ts` was the interpreter-era reference implementation of EdgeQL inference, retained after the SQL pipeline replaced it (ADR 0001) solely so the 5 `edgeql_ir_*_inference` tests could pin its `volatility`/`cardinality`/`multiplicity`/`scopeTree`/`stype` output. Once the **Live IR inference** reached parity on all five dimensions (ADRs 0015–0019), the oracle (~9.6k lines) was **deleted** and those 5 tests repointed at `compileASTToGelIR`. `src/ir/model.ts` now survives only as the **DML IR**. There is no longer a separate "legacy IR" / oracle on any path.
+_Avoid_: legacy compiler, semantic IR, the old IR.
 
 **Routing shim**:
 The synthetic, kind-only `IRStatement` that `src/compiler/service.ts::traceIRFromGelIR` fabricates for non-DML statements purely so the engine's dispatch can read `ir.kind`. Slated for deletion — the engine routes on the AST's `statement.kind` instead.

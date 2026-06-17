@@ -1,8 +1,7 @@
 import fs from "node:fs";
 import { beforeAll, describe, expect, it } from "vitest";
 import { parseEdgeQL } from "../src/edgeql/parser.js";
-import { compileToIR } from "../src/compiler/semantic.js";
-import { expandSchemaAliasesInStatement } from "../src/compiler/ast_to_ir.js";
+import { compileASTToGelIR, expandSchemaAliasesInStatement } from "../src/compiler/ast_to_ir.js";
 import { parseDeclarativeSchema } from "../src/schema/sdl_adapter.js";
 import { schemaSnapshotFromDeclarative } from "../src/schema/uiSchema.js";
 import type { SchemaSnapshot } from "../src/schema/schema.js";
@@ -19,7 +18,7 @@ const loadSchema = (): SchemaSnapshot => {
 const compileQuery = (schema: SchemaSnapshot, query: string) => {
   const ast = parseEdgeQL(query) as unknown;
   const stmt = (Array.isArray(ast) ? (ast as Statement[])[0] : (ast as Statement)) as Statement;
-  return compileToIR(schema, expandSchemaAliasesInStatement(stmt, schema));
+  return compileASTToGelIR(expandSchemaAliasesInStatement(stmt, schema), { module: (stmt as { withModule?: string }).withModule, schema });
 };
 
 const expectVolatility = (
@@ -28,8 +27,7 @@ const expectVolatility = (
   expected: Volatility,
 ): void => {
   const ir = compileQuery(schema, source);
-  const inference = (ir as { inference?: { volatility?: Volatility } }).inference;
-  expect(inference?.volatility).toBe(expected);
+  expect((ir as { volatility?: Volatility }).volatility).toBe(expected);
 };
 
 // The Python suite checks `ir.volatility` directly on the top-level statement
