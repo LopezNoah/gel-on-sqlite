@@ -9,6 +9,7 @@ import type { BacklinkExpr, ClauseChain, ComputedExpr, ConfigureStatement, DDLSt
 import type { RuntimeDatabaseAdapter } from "./adapter.js";
 import type { SchemaSnapshot } from "../schema/schema.js";
 import type { GelIRSQLArtifact as SQLArtifact } from "../sql/gel_ir_compiler.js";
+import { lowersToSingleSql } from "../sql/compiler_types.js";
 import { executeStdlibFunction, resolveStdlibFunction, type RuntimeFunctionArg } from "../stdlib/functions.js";
 import { assertTargetSqlCompatibility, type RuntimeTarget } from "./target.js";
 import type { ShapeElement as GelIRShapeElement, Set as GelIRSet, Statement as GelIRStatement, TypeRef as GelIRTypeRef } from "../ir/gel_ir.js";
@@ -254,7 +255,7 @@ const evaluateGlobalExpr = (
   } as unknown as SelectExprStatement;
   try {
     const compiled = getCompilerService().compile(schema, stmtAst as unknown as Statement, { globals: context.globals });
-    if (compiled.sql.loweringMode !== "single_statement" || compiled.sql.sql.length === 0) return undefined;
+    if (!lowersToSingleSql(compiled.sql)) return undefined;
     const rows = runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
     if (rows.length === 0) return undefined;
     const first = rows[0];
@@ -4166,7 +4167,7 @@ const evaluateScalarBindingViaSQL = (
   // the downstream compile to handle".
   const attempt = tryResult(() => {
     const compiled = getCompilerService().compile(schema, stmtAst, { globals: context.globals, params: context.params, target: resolvedRuntimeTarget(context, db) });
-    if (compiled.sql.loweringMode !== "single_statement" || compiled.sql.sql.length === 0) return undefined;
+    if (!lowersToSingleSql(compiled.sql)) return undefined;
     return runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
   }, { captureAll: true });
   if (!attempt.ok || attempt.value === undefined) return undefined;
@@ -4300,7 +4301,7 @@ const evaluateConditionRowsViaSQL = (
   } as unknown as Statement;
   const attempt = tryResult(() => {
     const compiled = getCompilerService().compile(schema, stmtAst, { globals: context.globals, params: context.params, target: resolvedRuntimeTarget(context, db) });
-    if (compiled.sql.loweringMode !== "single_statement" || compiled.sql.sql.length === 0) return undefined;
+    if (!lowersToSingleSql(compiled.sql)) return undefined;
     return runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
   }, { captureAll: true });
   return attempt.ok && Array.isArray(attempt.value) ? attempt.value : [];
@@ -6597,7 +6598,7 @@ const executeQueryWithTraceImpl = (
     // runtime FOR-group executor.
     if (ast.kind === "for" && unwrapGroupIteratorExpr(ast.iteratorExpr) && ast.body.kind === "select_expr") {
       const probe = compilerService.compile(schema, ast, { globals: context.globals, params: context.params, target: runtimeTarget });
-      const sqlIsComplete = probe.sql.loweringMode === "single_statement" && probe.sql.sql.length > 0;
+      const sqlIsComplete = lowersToSingleSql(probe.sql);
       if (!sqlIsComplete) {
         const traces: QueryExecutionTrace[] = [];
         executeForLoop(db, schema, ast, context, runtimeTarget, compilerService, [], traces);
@@ -6669,7 +6670,7 @@ const executeQueryWithTraceImpl = (
           ast.pos.column,
         );
       }
-      if (ast.kind === "group" && !(sqlArtifact.loweringMode === "single_statement" && sqlArtifact.sql.length > 0)) {
+      if (ast.kind === "group" && !(lowersToSingleSql(sqlArtifact))) {
         throw new AppError("E_UNSUPPORTED", "GROUP statement could not be lowered to SQL", ast.pos.line, ast.pos.column);
       }
       result = {
@@ -7178,7 +7179,7 @@ const evaluateForScalarIteratorViaSql = (
   } as unknown as Statement;
   try {
     const compiled = getCompilerService().compile(schema, stmtAst, { globals: context.globals, params: context.params });
-    if (compiled.sql.loweringMode !== "single_statement" || compiled.sql.sql.length === 0) return undefined;
+    if (!lowersToSingleSql(compiled.sql)) return undefined;
     const rows = runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
     const mapped = rows.map((row) => (row !== null && typeof row === "object" ? JSON.stringify(row) : row));
     return mapped.every((row) => row === null || isScalarValue(row)) ? (mapped as (ScalarValue | null)[]) : undefined;
@@ -7399,7 +7400,7 @@ const evaluateForObjectIteratorRows = (
   };
   try {
     const compiled = getCompilerService().compile(schema, augmented as unknown as Statement, { globals: context.globals, params: context.params });
-    if (compiled.sql.loweringMode !== "single_statement" || compiled.sql.sql.length === 0) return undefined;
+    if (!lowersToSingleSql(compiled.sql)) return undefined;
     const rows = runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
     return rows.map((r) => (r !== null && typeof r === "object" ? r as Record<string, unknown> : { __scalar: r }));
   } catch {
@@ -7924,7 +7925,7 @@ const runCompiledGroup = (
   context: SecurityContext,
   sqlTrail: SQLArtifact[],
 ): Record<string, unknown>[] => {
-  if (compiled.sql.loweringMode === "single_statement" && compiled.sql.sql.length > 0) {
+  if (lowersToSingleSql(compiled.sql)) {
     return runGelSelectSQL(
       db,
       schema,
@@ -7960,7 +7961,7 @@ const preEvaluateGroupBindings = (
       globals: context.globals, params: context.params,
       target: resolvedRuntimeTarget(context, db),
     });
-    if (compiled.sql.loweringMode === "single_statement" && compiled.sql.sql.length > 0) {
+    if (lowersToSingleSql(compiled.sql)) {
       return ast;
     }
   } catch (e) {
@@ -8370,7 +8371,7 @@ const executeForLoop = (
     // evaluator, which doesn't model group rows.
     const iteratesGroupRows = iteratorExpr.kind === "group_expr"
       || (iteratorExpr.kind === "select_expr_subquery" && iteratorExpr.expr.kind === "group_expr");
-    const sqlIsComplete = sqlArtifact.loweringMode === "single_statement" && sqlArtifact.sql.length > 0;
+    const sqlIsComplete = lowersToSingleSql(sqlArtifact);
     const runtimeResult = iteratesGroupRows && sqlIsComplete
       ? undefined
       : tryRuntimeSelectExprEvaluationAst(db, schema, syntheticAst, context);
@@ -11214,7 +11215,7 @@ const resolveSiblingReferencingDefaults = (
         const parsed = parseEdgeQL(`SELECT (${exprText})`);
         const stmt = (Array.isArray(parsed) ? parsed[0] : parsed) as Statement;
         const compiled = getCompilerService().compile(schema, stmt, { globals: context.globals, target: resolvedRuntimeTarget(context, db) });
-        if (compiled.sql.loweringMode !== "single_statement" || compiled.sql.sql.length === 0) return undefined;
+        if (!lowersToSingleSql(compiled.sql)) return undefined;
         return runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
       }, { captureAll: true });
       if (attempt.ok && attempt.value !== undefined && attempt.value.length === 1 && isScalarValue(attempt.value[0])) {
@@ -12139,7 +12140,7 @@ const runWriteWithAccessPolicies = (
             const parsed = parseEdgeQL(`SELECT (${text})`);
             const stmt = substituteSourceRefs(Array.isArray(parsed) ? parsed[0] : parsed) as Statement;
             const compiled = getCompilerService().compile(schema, stmt, { globals: context.globals, params: context.params, target: resolvedRuntimeTarget(context, db) });
-            if (compiled.sql.loweringMode !== "single_statement" || compiled.sql.sql.length === 0) return undefined;
+            if (!lowersToSingleSql(compiled.sql)) return undefined;
             return runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
           }, { captureAll: true });
           if (attempt.ok && attempt.value !== undefined && attempt.value.length === 1 && isScalarValue(attempt.value[0])) {
@@ -12162,7 +12163,7 @@ const runWriteWithAccessPolicies = (
               const parsed = parseEdgeQL(`SELECT (${text})`);
               const stmt = (Array.isArray(parsed) ? parsed[0] : parsed) as Statement;
               const compiled = getCompilerService().compile(schema, stmt, { globals: context.globals, params: context.params, target: resolvedRuntimeTarget(context, db) });
-              if (compiled.sql.loweringMode !== "single_statement" || compiled.sql.sql.length === 0) return undefined;
+              if (!lowersToSingleSql(compiled.sql)) return undefined;
               return runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
             }, { captureAll: true });
             if (attempt.ok && attempt.value !== undefined && attempt.value.length === 1 && isScalarValue(attempt.value[0])) {
@@ -12889,7 +12890,7 @@ const resolveLinkValueViaSelectSQL = (
   } as unknown as Statement;
   const attempt = tryResult(() => {
     const compiled = getCompilerService().compile(schema, stmtAst, { globals: context.globals, params: context.params, target: resolvedRuntimeTarget(context, db) });
-    if (compiled.sql.loweringMode !== "single_statement" || compiled.sql.sql.length === 0) return undefined;
+    if (!lowersToSingleSql(compiled.sql)) return undefined;
     if (compiled.ir !== undefined) return undefined;
     return runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql, { keepInternalId: true })
       .filter((row): row is Record<string, unknown> => row !== null && typeof row === "object");
@@ -12938,7 +12939,7 @@ const resolveInsertTargets = (
       // link targets.
       const attempt = tryResult(() => {
         const compiled = getCompilerService().compile(schema, stmtAst, { globals: context.globals, params: context.params, target: resolvedRuntimeTarget(context, db) });
-        if (compiled.sql.loweringMode !== "single_statement" || compiled.sql.sql.length === 0) return undefined;
+        if (!lowersToSingleSql(compiled.sql)) return undefined;
         return runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
       }, { captureAll: true });
       if (attempt.ok && attempt.value !== undefined) {
@@ -13197,7 +13198,7 @@ const resolveInsertTargets = (
     } as unknown as Statement;
     const attempt = tryResult(() => {
       const compiled = getCompilerService().compile(schema, stmtAst, { globals: context.globals, params: context.params, target: resolvedRuntimeTarget(context, db) });
-      if (compiled.sql.loweringMode !== "single_statement" || compiled.sql.sql.length === 0) return undefined;
+      if (!lowersToSingleSql(compiled.sql)) return undefined;
       return runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql, { keepInternalId: true })
         .filter((row): row is Record<string, unknown> => row !== null && typeof row === "object");
     }, { captureAll: true });
@@ -15162,7 +15163,7 @@ function countFunctionArgRows(
   } as unknown as Statement;
   try {
     const compiled = getCompilerService().compile(schema, innerStatement, { globals: context.globals, params: context.params, target: runtimeTarget });
-    if (compiled.sql.loweringMode !== "single_statement" || compiled.sql.sql.length === 0) return undefined;
+    if (!lowersToSingleSql(compiled.sql)) return undefined;
     const rows = runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
     return rows.length;
   } catch (e) {

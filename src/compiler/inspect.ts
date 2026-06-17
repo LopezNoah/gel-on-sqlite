@@ -4,16 +4,17 @@
 // "Compile facts", "Canonical SQL") and the architecture review (candidate #1).
 //
 // This module is purely additive: it reads the existing CompilerService and adds
-// no behaviour to the production path. The execution-strategy decision (SQL vs
-// runtime evaluator vs reject) deliberately lives in the engine, not here — this
-// seam reports only the honest, artifact-derived `lowersToSingleSql` fact, which
-// is the engine's SQL gate verbatim. The accurate 3-way strategy classifier is
-// deferred to candidate #2, where it becomes the single source of truth consumed
-// by both the engine and this module.
+// no behaviour to the production path. It reports the honest, artifact-derived
+// `lowersToSingleSql` fact via the shared `lowersToSingleSql` helper in
+// compiler_types.ts — the same SQL gate the engine's dispatch consumes (candidate
+// #2 unified that predicate; see docs/adr/0003). The accurate 3-way strategy
+// classifier (sql / runtime / reject) — which additionally folds in the engine's
+// `needsRuntimeEval` AST walk — remains deferred; when extracted it becomes the
+// single source of truth and this seam gains a `strategy` fact.
 
 import type { Statement } from "../edgeql/ast.js";
 import { parseEdgeQLScript } from "../edgeql/parser.js";
-import type { GelIRSQLArtifact } from "../sql/compiler_types.js";
+import { lowersToSingleSql, type GelIRSQLArtifact } from "../sql/compiler_types.js";
 import { parseDeclarativeSchema } from "../schema/sdl_adapter.js";
 import { schemaSnapshotFromDeclarative } from "../schema/uiSchema.js";
 import type { SchemaSnapshot } from "../schema/schema.js";
@@ -123,8 +124,7 @@ export function inspect(
   const facts: CompileFacts = {
     statementKind: ast.kind,
     loweringMode: artifact.sql.loweringMode,
-    lowersToSingleSql:
-      artifact.sql.loweringMode === "single_statement" && artifact.sql.sql.length > 0,
+    lowersToSingleSql: lowersToSingleSql(artifact.sql),
     paramCount: artifact.sql.params.length,
     subqueryCount: countMatches(canonical, /\(\s*select\b/gi),
     cteCount: countMatches(canonical, /\bwith\b/gi),

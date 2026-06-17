@@ -14,6 +14,17 @@ export interface GelIRSQLArtifact {
   insertColumns?: Array<{ column: string; sql: string; params: ScalarValue[] }>;
 }
 
+/**
+ * The SQL gate: did this artifact compile to exactly one runnable SQL statement?
+ * Single source of truth for the SQL-vs-runtime-evaluator decision — both the
+ * engine's dispatch and the compile-inspection seam (src/compiler/inspect.ts)
+ * consume this instead of re-deriving the predicate. Replaces the
+ * `loweringMode !== "single_statement" || sql.length === 0` check that was
+ * previously copy-pasted across the engine (architecture review candidate #2).
+ */
+export const lowersToSingleSql = (artifact: GelIRSQLArtifact): boolean =>
+  artifact.loweringMode === "single_statement" && artifact.sql.length > 0;
+
 export interface GelIRCompileOptions {
   resolveTableName?: (typeName: string) => string;
   resolveTypeColumns?: (typeName: string) => globalThis.Set<string> | undefined;

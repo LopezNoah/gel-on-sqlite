@@ -76,6 +76,6 @@ _Avoid_: compile summary, inspection facts.
 The alias- and whitespace-normalized form of an artifact's SQL (`canonicalizeSql`). Generated aliases (`g0`/`p1`/`j1`/`grp_src`/`tuple_n`/`g_agg`…) are renamed to positional tokens (`a0`, `a1`, …) by first appearance, so a golden changes only when the lowering changes, not when an unrelated alias counter shifts.
 _Avoid_: normalized SQL, stable SQL.
 
-**lowersToSingleSql**:
-The honest, artifact-derived Compile fact `loweringMode === "single_statement" && sql.length > 0` — the engine's SQL gate **verbatim** (the predicate `src/runtime/engine.ts` checks ~15× to choose SQL vs the Runtime evaluator). Compile inspection deliberately reports *only* this gate, not a 3-way `sql | runtime | reject` strategy: the accurate strategy classifier is deferred to the lowering-strategy candidate (see `docs/adr/0002`), where it becomes the single source of truth consumed by both the engine and the inspector.
-_Avoid_: execution strategy (until 0002 lands), runs-as-sql.
+**SQL gate** (`lowersToSingleSql`):
+The predicate `loweringMode === "single_statement" && sql.length > 0` — did a query compile to exactly one runnable SQL statement, or must the Runtime evaluator handle it? Exported once from `src/sql/compiler_types.ts` and consumed by **both** the engine's dispatch and the Compile inspection seam; it was previously copy-pasted ~17× across `engine.ts` (collapsed by `docs/adr/0003`). The Compile fact `lowersToSingleSql` is exactly this gate. Note: this is the SQL gate *only*, not a 3-way `sql | runtime | reject` strategy — the accurate classifier (which also folds in the engine's `needsRuntimeEval` AST walk) is still deferred; when extracted, the inspector gains a `strategy` fact.
+_Avoid_: execution strategy (no 3-way classifier yet), runs-as-sql.
