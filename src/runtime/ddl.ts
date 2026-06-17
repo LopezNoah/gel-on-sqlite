@@ -460,80 +460,8 @@ export const parseCreateTypeHeader = (
   return { rawName: nameParsed.name, extendsList, bodyText, isAbstract };
 };
 
-// Strip a trailing `{ … }` block (e.g. inline link-property declarations)
-// from a body entry so the existing link/property header regexes match the
-// declaration on its own. Token offsets are used to slice — no regex needed.
-// Return the text inside the entry's trailing `{ … }` block, if any.
-// Mirrors `stripTrailingBraceBlock` but returns the body content (excluding
-// the surrounding braces) rather than the prefix. Returns `undefined` when
-// no balanced trailing block exists.
-export const extractTrailingBraceBlock = (entry: string): string | undefined => {
-  // Probe: untokenizable entries have no trailing block by definition.
-  // tryResult rethrows non-syntax errors so tokenizer bugs surface.
-  const tokenized = tryResult(() => tokenize(entry));
-  if (!tokenized.ok) return undefined;
-  const tokens: readonly Token[] = tokenized.value;
-  for (let i = tokens.length - 1; i >= 0; i -= 1) {
-    const t = tokens[i];
-    if (t.kind === "rbrace") {
-      let trailingOk = true;
-      for (let k = i + 1; k < tokens.length; k += 1) {
-        const next = tokens[k];
-        if (next.kind === "eof" || next.kind === "semi") continue;
-        trailingOk = false;
-        break;
-      }
-      if (!trailingOk) return undefined;
-      let depth = 1;
-      for (let j = i - 1; j >= 0; j -= 1) {
-        const u = tokens[j];
-        if (u.kind === "rbrace") depth += 1;
-        else if (u.kind === "lbrace") {
-          depth -= 1;
-          if (depth === 0) {
-            const inner = entry.slice(u.offset + 1, t.offset).trim();
-            return inner;
-          }
-        }
-      }
-      return undefined;
-    }
-    if (t.kind === "eof" || t.kind === "semi") continue;
-    return undefined;
-  }
-  return undefined;
-};
+// The brace-block text helpers moved to the edgeql layer (so `parser.ts` can
+// parse DDL bodies without a cycle); re-exported here for existing callers.
+// See docs/adr/0028.
+export { extractTrailingBraceBlock, stripTrailingBraceBlock } from "../edgeql/ddl_body.js";
 
-export const stripTrailingBraceBlock = (entry: string): string => {
-  // Probe: untokenizable entries are returned unmodified; downstream
-  // parsing reports the real error. Non-syntax errors propagate.
-  const tokenized = tryResult(() => tokenize(entry));
-  if (!tokenized.ok) return entry;
-  const tokens: readonly Token[] = tokenized.value;
-  for (let i = tokens.length - 1; i >= 0; i -= 1) {
-    const t = tokens[i];
-    if (t.kind === "rbrace") {
-      let trailingOk = true;
-      for (let k = i + 1; k < tokens.length; k += 1) {
-        const next = tokens[k];
-        if (next.kind === "eof" || next.kind === "semi") continue;
-        trailingOk = false;
-        break;
-      }
-      if (!trailingOk) return entry;
-      let depth = 1;
-      for (let j = i - 1; j >= 0; j -= 1) {
-        const u = tokens[j];
-        if (u.kind === "rbrace") depth += 1;
-        else if (u.kind === "lbrace") {
-          depth -= 1;
-          if (depth === 0) return entry.slice(0, u.offset).trimEnd();
-        }
-      }
-      return entry;
-    }
-    if (t.kind === "eof" || t.kind === "semi") continue;
-    return entry;
-  }
-  return entry;
-};

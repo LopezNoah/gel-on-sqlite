@@ -1,18 +1,84 @@
-// Structured parser for a `CREATE TYPE { … }` body.
+// Structured parser for a `CREATE TYPE { … }` body, and the brace-block text
+// helpers it (and the runtime DDL path) rely on. Lives in the edgeql layer so
+// `parser.ts` can parse DDL bodies into the AST without a cycle (the runtime's
+// `ddl.ts` imports `parser.ts`); `ddl.ts` re-exports the brace helpers for its
+// callers. See docs/adr/0026 (structured parser), 0028 (relocation).
 //
-// The EdgeQL DDL parser (`edgeql/parser.ts`) keeps a `CREATE TYPE` body as raw
-// text (`skipDDLBody`); the runtime used to re-parse that text by hand in
-// `registerDynamicTypeDDL` via a token-walker plus regex helpers, with no test
-// surface but executed rows. This module is the one structured home for that
-// body grammar: it turns the body text into a list of `CreateTypeBodyEntry`
-// nodes, which the runtime then converts to `TypeDef` (the conversion — scalar
-// resolution, FK synthesis, inheritance merging — stays in the runtime). It
-// reuses the EdgeQL tokenizer (as the old token-walker did) and the brace
-// helpers in `ddl.ts`; it is parse-only, so it has a real unit-test surface
-// (`tests/ddl_body.test.ts`). See docs/adr/0026.
-import { tokenize, type Token } from "../edgeql/tokenizer.js";
+// `parseCreateTypeBody` turns the body text into a list of `CreateTypeBodyEntry`
+// nodes, which the runtime converts to `TypeDef` (scalar resolution, FK
+// synthesis, inheritance merging stay in the runtime). It reuses the EdgeQL
+// tokenizer; it is parse-only, so it has a real unit-test surface
+// (`tests/ddl_body.test.ts`).
+import { tokenize, type Token } from "./tokenizer.js";
 import { tryResult } from "../errors.js";
-import { extractTrailingBraceBlock, stripTrailingBraceBlock } from "./ddl.js";
+
+// Return the text inside an entry's trailing `{ … }` block (excluding the
+// braces), or undefined when no balanced trailing block exists.
+export const extractTrailingBraceBlock = (entry: string): string | undefined => {
+  const tokenized = tryResult(() => tokenize(entry));
+  if (!tokenized.ok) return undefined;
+  const tokens: readonly Token[] = tokenized.value;
+  for (let i = tokens.length - 1; i >= 0; i -= 1) {
+    const t = tokens[i];
+    if (t.kind === "rbrace") {
+      let trailingOk = true;
+      for (let k = i + 1; k < tokens.length; k += 1) {
+        const next = tokens[k];
+        if (next.kind === "eof" || next.kind === "semi") continue;
+        trailingOk = false;
+        break;
+      }
+      if (!trailingOk) return undefined;
+      let depth = 1;
+      for (let j = i - 1; j >= 0; j -= 1) {
+        const u = tokens[j];
+        if (u.kind === "rbrace") depth += 1;
+        else if (u.kind === "lbrace") {
+          depth -= 1;
+          if (depth === 0) return entry.slice(u.offset + 1, t.offset).trim();
+        }
+      }
+      return undefined;
+    }
+    if (t.kind === "eof" || t.kind === "semi") continue;
+    return undefined;
+  }
+  return undefined;
+};
+
+// Return the entry with its trailing `{ … }` block removed (the prefix), or the
+// entry unchanged when no balanced trailing block exists.
+export const stripTrailingBraceBlock = (entry: string): string => {
+  const tokenized = tryResult(() => tokenize(entry));
+  if (!tokenized.ok) return entry;
+  const tokens: readonly Token[] = tokenized.value;
+  for (let i = tokens.length - 1; i >= 0; i -= 1) {
+    const t = tokens[i];
+    if (t.kind === "rbrace") {
+      let trailingOk = true;
+      for (let k = i + 1; k < tokens.length; k += 1) {
+        const next = tokens[k];
+        if (next.kind === "eof" || next.kind === "semi") continue;
+        trailingOk = false;
+        break;
+      }
+      if (!trailingOk) return entry;
+      let depth = 1;
+      for (let j = i - 1; j >= 0; j -= 1) {
+        const u = tokens[j];
+        if (u.kind === "rbrace") depth += 1;
+        else if (u.kind === "lbrace") {
+          depth -= 1;
+          if (depth === 0) return entry.slice(0, u.offset).trimEnd();
+        }
+      }
+      return entry;
+    }
+    if (t.kind === "eof" || t.kind === "semi") continue;
+    return entry;
+  }
+  return entry;
+};
 
 /** A `CREATE [DELEGATED] CONSTRAINT exclusive [ON (…)] [EXCEPT (…)]` descriptor. */
 export interface ExclusiveConstraintSpec {

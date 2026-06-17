@@ -1,0 +1,13 @@
+# Relocate the DDL-body parser into the edgeql layer (Stage D1a)
+
+The user opted into the full front-end unification (the `unified-bubbling-moon` plan, Stage D): collapse the runtime's string-based shadow DDL parser by having `edgeql/parser.ts` parse DDL bodies into the AST and the runtime read the AST. The first, enabling step is purely structural and is recorded here.
+
+**The blocker.** `parseCreateTypeBody` (ADR 0026) lived in `src/runtime/ddl_body.ts` and depended on the brace-block text helpers `extractTrailingBraceBlock` / `stripTrailingBraceBlock`, which lived in `src/runtime/ddl.ts`. But `runtime/ddl.ts` **imports `edgeql/parser.ts`** (`parseEdgeQLScript`). So for `parser.ts::parseDDL` to call `parseCreateTypeBody` (Stage D1b), the body parser and its brace helpers must not live behind a module that imports the parser — otherwise `parser → ddl_body → ddl → parser` is a cycle.
+
+**Decision (done):** move `parseCreateTypeBody`, its entry types (`CreateTypeBodyEntry`, `ExclusiveConstraintSpec`, `DdlLinkProperty`), its local helpers, **and** the two brace helpers into a new `src/edgeql/ddl_body.ts`. The module now depends only on `edgeql/tokenizer.ts` and `errors.ts` — a leaf in the edgeql layer, so `parser.ts` can use it with no cycle. `runtime/ddl.ts` **re-exports** the brace helpers (`export { … } from "../edgeql/ddl_body.js"`) so its existing callers (`engine.ts`) are unchanged; `engine.ts` imports `parseCreateTypeBody` from the new path; `tests/ddl_body.test.ts` follows. `runtime/ddl_body.ts` is deleted (moved via `git mv`, preserving history).
+
+**Verification.** Pure relocation — the code is byte-identical, only its home changed. `npx tsc` 0 errors; `tests/ddl_body.test.ts` 24/24 green; the DDL slice (`edgeql_userddl` / `edgeql_insert` / `ddl_body`) ran `55 failed / 321 passed` **identically** before and after (the failures are the pre-existing partial-conformance baseline).
+
+**Consequences.** DDL-body parsing now lives in the edgeql layer where the parser can own it, and the brace helpers are co-located with the body parser that needs them (their single real consumer). This unblocks Stage D1b (`parseDDL` populates the AST body) and D1c (the runtime pre-pass reads the AST, deleting the string shadow parser).
+
+**Why record it:** a future reader will see `extractTrailingBraceBlock` / `stripTrailingBraceBlock` re-exported from `runtime/ddl.ts` but defined in `edgeql/ddl_body.ts`, and `parseCreateTypeBody` in the edgeql layer despite being a runtime concern historically. That is deliberate — the parser layer owns DDL-body grammar so it can be folded into `parseDDL` without an import cycle; the re-export keeps the move behaviour-neutral for existing callers.
