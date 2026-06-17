@@ -4453,7 +4453,16 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
       if (expr.expr.kind === "group_expr") {
         return compileGroupExprSet(expr.expr, expr.shape, ctx);
       }
-      const base = compileFreeObjectExpr(expr.expr, ctx);
+      const base = (() => {
+        if (expr.expr.kind === "is_type") {
+          const narrowedBase = compileFreeObjectExpr(expr.expr.expr, ctx);
+          const narrowedType = resolveTypeRef(ctx, expr.expr.typeName);
+          if (!narrowedBase.typeref.isScalar && !narrowedType.isScalar) {
+            return { ...narrowedBase, typeref: narrowedType };
+          }
+        }
+        return compileFreeObjectExpr(expr.expr, ctx);
+      })();
       // `GR { … }` over a WITH-bound group (possibly through no-op select
       // wrappers, `select (select GR) {…}`): rebuild the group-rows set with
       // this projection (the subject may need extra fields for an
@@ -5378,7 +5387,32 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
       const innerCtx = (expr as { clauses?: { _withBindings?: WithBinding[] } }).clauses?._withBindings
         ? withBindings(ctx, (expr as { clauses?: { _withBindings?: WithBinding[] } }).clauses?._withBindings)
         : ctx;
-      return compileFreeObjectExpr(expr.expr, innerCtx);
+      const inner = compileFreeObjectExpr(expr.expr, innerCtx);
+      const clauses = (expr as { clauses?: { filter?: FreeObjectExpr; orderBy?: OrderExpr; limit?: number; offset?: number } }).clauses;
+      if (!clauses?.filter && !clauses?.orderBy && clauses?.limit === undefined && clauses?.offset === undefined) {
+        return inner;
+      }
+      const clauseCtx = childScope(innerCtx);
+      bindValue(clauseCtx, "__current__", inner);
+      bindValue(clauseCtx, "__subject__", inner);
+      return {
+        kind: "set",
+        expr: {
+          kind: "select_expr",
+          result: inner,
+          where: clauses.filter ? compileFreeObjectExpr(clauses.filter, clauseCtx) : undefined,
+          orderBy: clauses.orderBy ? compileSelectOrderExprChain(clauses.orderBy, clauseCtx) : undefined,
+          offset: clauses.offset === undefined ? undefined : literalToSet(clauses.offset),
+          limit: clauses.limit === undefined ? undefined : literalToSet(clauses.limit),
+          implicitWrapper: false,
+        },
+        pathId: defaultPathId("select_expr"),
+        typeref: inner.typeref,
+        shape: inner.shape,
+        isBinding: false,
+        isMaterializedRef: false,
+        isSchemaAlias: false,
+      };
     }
 
     case "array_literal_expr": {

@@ -2343,9 +2343,28 @@ const executeDmlChainStatement = (
   const runtimeTarget = resolvedRuntimeTarget(context, db);
 
   if (stmt.kind === "insert") {
-    const rewritten = env.size > 0
+    let rewritten = env.size > 0
       ? ({ ...stmt, values: rewriteEnvRefsInNode(stmt.values, env) } as typeof stmt)
       : stmt;
+    const capturedWith: WithBinding[] = [];
+    let withChanged = false;
+    for (const binding of (rewritten as { with?: WithBinding[] }).with ?? []) {
+      if (binding.value.kind === "subquery_expr" && !bindingValueContainsMutation(binding.value)) {
+        const expr = env.size > 0
+          ? rewriteEnvRefsInNode(binding.value.expr, env) as FreeObjectExpr
+          : binding.value.expr;
+        const evaluated = evaluateScalarBindingViaSQL(db, schema, expr, capturedWith, context, stmt.pos);
+        if (evaluated !== undefined) {
+          capturedWith.push({ name: binding.name, value: evaluated } as WithBinding);
+          withChanged = true;
+          continue;
+        }
+      }
+      capturedWith.push(binding);
+    }
+    if (withChanged) {
+      rewritten = { ...rewritten, with: capturedWith } as typeof stmt;
+    }
     const compiled = compilerService.compile(schema, rewritten, { globals: context.globals, params: context.params, target: runtimeTarget });
     const subjectType = typeDefForTable(schema, (compiled.ir as { table?: string }).table ?? "");
     if (!subjectType) return { typeName: "", ids: [] };
@@ -2768,11 +2787,23 @@ const preExecuteMutationExprsInDmlValues = (
     }
     return linkPropElements.length > 0 ? linkPropElements : undefined;
   };
-  const runNested = (stmt: Statement & { with?: WithBinding[] }, extraWith: WithBinding[]): unknown => {
+  const runNestedObjectSet = (stmt: Statement & { with?: WithBinding[] }, extraWith: WithBinding[]): ObjectSet => {
     const mergedWith = [...outerWith, ...extraWith, ...(stmt.with ?? [])];
     const merged = mergedWith.length > 0 ? ({ ...stmt, with: mergedWith } as Statement) : (stmt as Statement);
-    const resolved = executeDmlChainStatement(db, schema, merged, env, undefined, context, defaultModule);
+    return executeDmlChainStatement(db, schema, merged, env, undefined, context, defaultModule);
+  };
+  const runNested = (stmt: Statement & { with?: WithBinding[] }, extraWith: WithBinding[]): unknown => {
+    const resolved = runNestedObjectSet(stmt, extraWith);
     return { kind: "select_expr_subquery", expr: chainByIdSelect(resolved) };
+  };
+  const resolveDeleteWithoutDeleting = (stmt: Statement & { with?: WithBinding[] }, extraWith: WithBinding[]): ObjectSet => {
+    const previousDeferredDeletes = deferredChainDeletes;
+    deferredChainDeletes = [];
+    try {
+      return runNestedObjectSet(stmt, extraWith);
+    } finally {
+      deferredChainDeletes = previousDeferredDeletes;
+    }
   };
   const walk = (node: unknown): unknown => {
     if (Array.isArray(node)) return node.map(walk);
@@ -2892,7 +2923,13 @@ const preExecuteMutationExprsInDmlValues = (
     };
   };
 
-  const rewriteValue = (value: unknown): unknown => {
+  const qualifiedSubject = ast.kind === "insert" || ast.kind === "update"
+    ? qualifyRuntimeTypeName(ast.typeName, defaultModule)
+    : "";
+  const subjectType = qualifiedSubject ? schema.getType(qualifiedSubject) ?? schema.getType((ast as { typeName?: string }).typeName ?? "") : undefined;
+  const linkNames = new Set((subjectType?.links ?? []).map((link) => link.name));
+
+  const rewriteValue = (field: string, value: unknown): unknown => {
     const forReplaced = runForInsertValue(value);
     if (forReplaced !== undefined) return forReplaced;
     if (value !== null && typeof value === "object" && (value as { kind?: string }).kind === "expr") {
@@ -2904,6 +2941,18 @@ const preExecuteMutationExprsInDmlValues = (
       }
       if (inner?.kind === "mutation_expr" && inner.statement) {
         const innerStmt = inner.statement as Statement & { with?: WithBinding[]; values?: Record<string, unknown> };
+        if (innerStmt.kind === "delete" && linkNames.has(field)) {
+          const resolved = resolveDeleteWithoutDeleting(innerStmt, innerBindings);
+          if (resolved.ids.length > 0) {
+            throw new AppError(
+              "E_SEMANTIC",
+              `deletion of ${resolved.typeName} object is prohibited by link target policy`,
+              ast.pos.line,
+              ast.pos.column,
+            );
+          }
+          return chainByIdSelect(resolved);
+        }
         // Hoist `@prop` link-property assignments out of the nested insert so
         // the inner INSERT compiles against only the target type's own fields;
         // re-attach them as a shape projection over the by-id select so the
@@ -2921,7 +2970,7 @@ const preExecuteMutationExprsInDmlValues = (
   };
   const newValues: Record<string, unknown> = {};
   for (const [field, value] of Object.entries(values)) {
-    newValues[field] = rewriteValue(value);
+    newValues[field] = rewriteValue(field, value);
   }
   return {
     ...ast,
@@ -9815,6 +9864,46 @@ const resolveInsertTargets = (
     return typeof value === "string" ? [{ id: value, properties: {} }] : [];
   }
 
+  const valueAsRecord = value as Record<string, unknown> & { kind?: string };
+  const resolveIdentityFunctionTargets = (node: unknown): LinkTargetAssignment[] | undefined => {
+    if (node === null || typeof node !== "object") return undefined;
+    const n = node as { kind?: string; call?: { name?: string; args?: unknown[] } };
+    if (n.kind !== "function_call") return undefined;
+    const fnName = (n.call?.name ?? "").split("::").pop();
+    if (!fnName || !["assert_distinct", "assert_single", "assert_exists", "distinct"].includes(fnName)) {
+      return undefined;
+    }
+    const arg = n.call?.args?.[0];
+    if (arg === undefined) return [];
+    return resolveInsertTargets(db, schema, arg as InsertValue, context, ast);
+  };
+
+  const directIdentityTargets = resolveIdentityFunctionTargets(value);
+  if (directIdentityTargets !== undefined) return directIdentityTargets;
+
+  if (valueAsRecord.kind === "set_expr") {
+    return ((valueAsRecord.values as InsertValue[] | undefined) ?? [])
+      .flatMap((item) => resolveInsertTargets(db, schema, item, context, ast));
+  }
+
+  if (valueAsRecord.kind === "select_expr_subquery") {
+    const unwrapped = valueAsRecord.expr as (FreeObjectExpr | undefined);
+    if (unwrapped && typeof unwrapped === "object") {
+      const identityTargets = resolveIdentityFunctionTargets(unwrapped);
+      if (identityTargets !== undefined) return identityTargets;
+      if ((unwrapped as { kind?: string }).kind === "set_expr") {
+        return (((unwrapped as { values?: InsertValue[] }).values) ?? [])
+          .flatMap((item) => resolveInsertTargets(db, schema, item, context, ast));
+      }
+      if (unwrapped.kind === "shape_projection") {
+        return resolveInsertTargets(db, schema, { kind: "expr", expr: unwrapped } as InsertValue, context, ast);
+      }
+      if (unwrapped.kind === "select") {
+        return resolveInsertTargets(db, schema, unwrapped as unknown as Extract<InsertValue, { kind: "select" }>, context, ast);
+      }
+    }
+  }
+
   if (value.kind === "binding_ref") {
     const withValue = (ast.with ?? []).find((binding) => binding.name === value.name)?.value;
     // Expression bindings (`sub := <Subordinate>{}`, `sub := (SELECT … ++ …)`)
@@ -9940,6 +10029,12 @@ const resolveInsertTargets = (
   // them up.
   if (value.kind === "expr") {
     const inner = (value as { kind: "expr"; expr: FreeObjectExpr }).expr;
+    const identityTargets = resolveIdentityFunctionTargets(inner);
+    if (identityTargets !== undefined) return identityTargets;
+    if ((inner as { kind?: string }).kind === "set_expr") {
+      return (((inner as { values?: InsertValue[] }).values) ?? [])
+        .flatMap((item) => resolveInsertTargets(db, schema, item, context, ast));
+    }
     // `link := (INSERT T {…} UNLESS CONFLICT …)` — a bare nested mutation
     // (no shape projection). Run it and link the resulting (inserted or
     // conflict-resolved) row id (test unless_conflict_08).
