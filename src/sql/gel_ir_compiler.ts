@@ -1,5 +1,5 @@
 import { quoteIdent, quoteLiteral, tableNameForType } from "../codegen/sql.js";
-import { pointerStepJoinSql } from "./pointer_join.js";
+import { POINTER_ROOT_ALIAS, pointerStepJoinSql, pointerStepLinkAlias, pointerStepTargetAlias } from "./pointer_join.js";
 import { AppError } from "../errors.js";
 import type { RuntimeTarget } from "../runtime/target.js";
 import { lowerStdlibFunctionSql } from "./stdlib_lowering.js";
@@ -5055,12 +5055,12 @@ const tryCompileScalarPointerPathSelectSQL = (
 
   const checkpoint = params.length;
   const aliasColumns = pointerPathAliasColumns(path);
-  const rootAlias = "p0";
+  const rootAlias = POINTER_ROOT_ALIAS;
   let fromSql = compilePolymorphicSource(path.root.typeref, false, rootAlias, aliasColumns[0], options);
   let previousAlias = rootAlias;
 
   path.links.forEach((link, index) => {
-    const nextAlias = `p${index + 1}`;
+    const nextAlias = pointerStepTargetAlias(index);
     const targetType = link.direction === "inbound" ? link.ptrref.outSource : link.ptrref.outTarget;
     const targetSource = compilePolymorphicSource(targetType, false, nextAlias, aliasColumns[index + 1], options);
     fromSql += shouldUseLinkTable(link)
@@ -5070,7 +5070,7 @@ const tryCompileScalarPointerPathSelectSQL = (
           previousAlias,
           nextAlias,
           targetSource,
-          linkAlias: `pj${index}`,
+          linkAlias: pointerStepLinkAlias(index),
           linkTable: linkTableNameForPointer(link, options),
         })
       : pointerStepJoinSql({
@@ -5316,7 +5316,7 @@ const tryCompileMultiScalarPointerSelectSQL = (
     fromSql = "";
     previousAlias = outerMatch.alias;
   } else {
-    const rootAlias = "p0";
+    const rootAlias = POINTER_ROOT_ALIAS;
     const rootCols = new Set<string>(["id"]);
     if (links.length === 0) {
       rootCols.add(leafColumn);
@@ -5334,8 +5334,8 @@ const tryCompileMultiScalarPointerSelectSQL = (
   links.reverse();
   for (let index = 0; index < links.length; index += 1) {
     const link = links[index];
-    const linkAlias = `pj${index}`;
-    const nextAlias = `p${index + 1}`;
+    const linkAlias = pointerStepLinkAlias(index);
+    const nextAlias = pointerStepTargetAlias(index);
     const targetType = link.direction === "inbound" ? link.ptrref.outSource : link.ptrref.outTarget;
     const isLast = index === links.length - 1;
     const targetCols = new Set<string>(["id"]);
@@ -5729,7 +5729,7 @@ const tryCompileLinkPropertyPathSelectSQL = (
   if (!shouldUseLinkTable(terminalLink)) return null;
 
   const checkpoint = params.length;
-  const rootAlias = "p0";
+  const rootAlias = POINTER_ROOT_ALIAS;
   const rootCols = new Set<string>(["id"]);
   let fromSql = compilePolymorphicSource(path.root.typeref, false, rootAlias, [...rootCols], options);
   let previousAlias = rootAlias;
@@ -5737,7 +5737,7 @@ const tryCompileLinkPropertyPathSelectSQL = (
   for (let index = 0; index < path.links.length; index += 1) {
     const link = path.links[index];
     const isTerminal = index === path.links.length - 1;
-    const linkAlias = `pj${index}`;
+    const linkAlias = pointerStepLinkAlias(index);
     const linkTable = linkTableNameForPointer(link, options);
     if (isTerminal) {
       if (link.direction === "inbound") {
@@ -5750,7 +5750,7 @@ const tryCompileLinkPropertyPathSelectSQL = (
       previousAlias = linkAlias;
       break;
     }
-    const nextAlias = `p${index + 1}`;
+    const nextAlias = pointerStepTargetAlias(index);
     const targetType = link.direction === "inbound" ? link.ptrref.outSource : link.ptrref.outTarget;
     const targetCols = new Set<string>(["id"]);
     if (!shouldUseLinkTable(link)) {
