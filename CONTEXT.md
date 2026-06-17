@@ -73,7 +73,7 @@ SchemaSnapshot                (schema.ts — the authoritative immutable form)
 ```
 
 **Schema ingestion facade** (`loadSchema`):
-`src/schema/load.ts` — the one canonical SDL → SchemaSnapshot entry (`parseDeclarativeSchema` then `schemaSnapshotFromDeclarative`). The chain was hand-rolled across 20+ call sites; new callers use `loadSchema` (see `docs/adr/0005`). Note: schema *parsing* is separate from query parsing — `schema_tokenizer.ts`/`sdl_adapter.ts` is a distinct front end from `edgeql/tokenizer.ts`/`parser.ts` (SDL declaration syntax vs the EdgeQL expression language); they intentionally do not share a tokenizer.
+`src/schema/load.ts` — the one canonical SDL → SchemaSnapshot entry (`parseDeclarativeSchema` then `schemaSnapshotFromDeclarative`). The chain was hand-rolled across 20+ call sites; new callers use `loadSchema` (see `docs/adr/0005`). Note: schema *parsing* is separate from query parsing — `schema_tokenizer.ts`/`sdl_adapter.ts` is a distinct front end from `edgeql/tokenizer.ts`/`parser.ts` (SDL declaration syntax vs the EdgeQL expression language); they intentionally do not share a tokenizer. The two tokenizers also differ in *implementation kind*, not just grammar: `edgeql/tokenizer.ts` is a charCode hot-path scanner (`CC_*` constants, `isAlphaCC(cc)`, `charCodeAt`, precomputed `lineStarts`), `schema_tokenizer.ts` is a class with regex-on-strings (`/[A-Za-z_]/.test(ch)`, incremental line/column). There is no shared char-classification leaf to extract — `docs/adr/0025`.
 _Avoid_: buildSchema, schema loader (for the runtime introspection path).
 
 **Physical storage layout**:
