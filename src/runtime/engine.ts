@@ -33,7 +33,7 @@ import {
   validateUserDDLStatement,
 } from "./ddl.js";
 import { installSqlTrace, runWithSqlSink } from "./sql_trace_sink.js";
-import { parseCreateTypeBody, type ExclusiveConstraintSpec } from "./ddl_body.js";
+import { parseCreateTypeBody, type ExclusiveConstraintSpec } from "../edgeql/ddl_body.js";
 import { applyLimitOffset, dedupeRowsById, distinctValues } from "./result_clauses.js";
 
 
@@ -806,7 +806,7 @@ const applyParsedFunctionDDL = (schema: SchemaSnapshot, ast: DDLStatement, defau
 
 // `parseMemberHeader` / `parseExclusiveConstraintEntry` / the `CREATE TYPE`
 // body token-walker that used to live here were retired in favour of the
-// structured `parseCreateTypeBody` (src/runtime/ddl_body.ts); see docs/adr/0027.
+// structured `parseCreateTypeBody` (src/edgeql/ddl_body.ts); see docs/adr/0027.
 
 const stripBacktickName = (lexeme: string): string =>
   lexeme.startsWith("`") && lexeme.endsWith("`") ? lexeme.slice(1, -1) : lexeme;
@@ -1199,7 +1199,7 @@ const registerDynamicTypeDDL = (schema: SchemaSnapshot, statement: string, defau
   }
 
   // The `CREATE TYPE` body is parsed into structured members by
-  // `parseCreateTypeBody` (src/runtime/ddl_body.ts); this loop converts those
+  // `parseCreateTypeBody` (src/edgeql/ddl_body.ts); this loop converts those
   // members to the runtime's TypeDef shape (scalar resolution, FK synthesis,
   // exclusivity). See docs/adr/0027.
   for (const member of parseCreateTypeBody(bodyText)) {

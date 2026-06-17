@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseCreateTypeBody, type CreateTypeBodyEntry } from "../src/runtime/ddl_body.js";
+import { parseCreateTypeBody, type CreateTypeBodyEntry } from "../src/edgeql/ddl_body.js";
 
 // Parse one body and return the single entry (asserts exactly one).
 const one = (body: string): CreateTypeBodyEntry => {
