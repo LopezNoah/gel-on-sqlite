@@ -828,13 +828,9 @@ const literalDefaultFromText = (exprText: string): FieldDefaultExpr | undefined 
 // Apply the operations parsed from a top-level `ALTER TYPE …` statement to the
 // schema in place. Returns true when the statement was a (recognised) ALTER
 // TYPE, so the caller re-materialises and clears the compiler cache.
-const applyAlterTypeDDL = (schema: SchemaSnapshot, statement: string, defaultModule = "default"): boolean => {
-  // Parse to the AST and read the structured ALTER ops off it (docs/adr/0031).
-  // A non-parseable or non-`ALTER TYPE` statement simply isn't ours.
-  const parsed = tryResult(() => parseEdgeQL(statement));
-  if (!parsed.ok) return false;
-  const ast = parsed.value;
-  if (ast.kind !== "ddl" || ast.action !== "alter" || ast.objectKind !== "type") return false;
+const applyAlterTypeDDL = (schema: SchemaSnapshot, ast: DDLStatement, defaultModule = "default"): boolean => {
+  // Read the structured ALTER ops off the DDL AST node (docs/adr/0031, 0032).
+  if (ast.action !== "alter" || ast.objectKind !== "type") return false;
   const ops = ast.alterTypeOps ?? [];
   if (ops.length === 0) return false;
   const { module, name } = dynamicQualifiedNameParts(ast.name, defaultModule);
@@ -951,15 +947,10 @@ const exclusiveConstraintDefs = (specs: readonly ExclusiveConstraintSpec[]): Con
   }));
 };
 
-const registerDynamicTypeDDL = (schema: SchemaSnapshot, statement: string, defaultModule = "default"): boolean => {
-  // Parse the statement to the AST and register off it — the parser already
-  // produced the structured `createTypeBody` (docs/adr/0029). A non-parseable
-  // or non-`CREATE TYPE` statement simply isn't ours (tryResult swallows query
-  // failures, rethrows engine defects). See docs/adr/0030.
-  const parsed = tryResult(() => parseEdgeQL(statement));
-  if (!parsed.ok) return false;
-  const ast = parsed.value;
-  if (ast.kind !== "ddl" || ast.action !== "create" || ast.objectKind !== "type") return false;
+const registerDynamicTypeDDL = (schema: SchemaSnapshot, ast: DDLStatement, defaultModule = "default"): boolean => {
+  // Register off the DDL AST node the pre-pass already parsed — the parser
+  // produced the structured `createTypeBody` (docs/adr/0029, 0030, 0032).
+  if (ast.action !== "create" || ast.objectKind !== "type") return false;
   const rawName = ast.name;
   const extendsRaw = ast.extendsList;
   const isAbstract = ast.modifiers?.includes("abstract") ?? false;
@@ -1108,41 +1099,22 @@ const registerDynamicTypeDDL = (schema: SchemaSnapshot, statement: string, defau
   return true;
 };
 
-// Pre-pass for CREATE TYPE only. CREATE FUNCTION goes through the proper
-// parser → AST → runtime path (see `applyParsedFunctionDDL`).
-// `create future <flag>` toggles a schema-wide future flag. Currently only
-// `no_linkful_computed_splats` is honoured (it drops `count(.x)`-style
-// computeds from deep splat expansion).
-const parseCreateFutureFlag = (statement: string): string | undefined => {
-  // Probe: untokenizable statements are not `create future …`.
-  // tryResult rethrows non-syntax errors so tokenizer bugs surface.
-  const tokenized = tryResult(() => tokenize(statement.trim()));
-  if (!tokenized.ok) return undefined;
-  const tokens: readonly Token[] = tokenized.value;
-  let i = 0;
-  if (tokens[i]?.kind !== "kw_create") return undefined;
-  i += 1;
-  // `future` isn't a reserved keyword in our tokenizer; the lexeme arrives
-  // as a regular identifier.
-  if (!tokens[i] || tokens[i].lower !== "future") return undefined;
-  i += 1;
-  const nameTok = tokens[i];
-  if (!nameTok || (nameTok.kind !== "identifier" && nameTok.kind !== "backtick_name")) return undefined;
-  return nameTok.kind === "backtick_name"
-    ? (nameTok.lexeme.startsWith("`") && nameTok.lexeme.endsWith("`")
-        ? nameTok.lexeme.slice(1, -1)
-        : nameTok.lexeme)
-    : nameTok.lexeme;
-};
 
 const maybeRegisterDynamicDDLScript = (db: SQLiteDatabase, schema: SchemaSnapshot, script: string, defaultModule = "default"): boolean => {
+  // Parse the script once and drive the CREATE TYPE / ALTER TYPE / CREATE
+  // FUTURE pre-registration off the DDL AST nodes — the parser already produced
+  // `createTypeBody` / `alterTypeOps`. A parse failure means there's nothing to
+  // pre-register; the main execution path reports the real error. See
+  // docs/adr/0032.
+  const parsed = tryResult(() => parseEdgeQLScript(script));
+  if (!parsed.ok) return false;
   let registeredType = false;
-  for (const statement of splitTopLevelScriptStatements(script)) {
-    registeredType = registerDynamicTypeDDL(schema, statement, defaultModule) || registeredType;
-    registeredType = applyAlterTypeDDL(schema, statement, defaultModule) || registeredType;
-    const futureFlag = parseCreateFutureFlag(statement);
-    if (futureFlag) {
-      schema.setFutureFlag(futureFlag, true);
+  for (const stmt of parsed.value) {
+    if (stmt.kind !== "ddl") continue;
+    registeredType = registerDynamicTypeDDL(schema, stmt, defaultModule) || registeredType;
+    registeredType = applyAlterTypeDDL(schema, stmt, defaultModule) || registeredType;
+    if (stmt.action === "create" && stmt.objectKind === "future") {
+      schema.setFutureFlag(stmt.name, true);
       registeredType = true;
     }
   }

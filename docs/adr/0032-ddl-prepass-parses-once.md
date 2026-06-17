@@ -1,0 +1,16 @@
+# The DDL pre-pass parses once off the AST; the string shadow-parser is gone (Stage D1e)
+
+This completes the DDL front-end unification (Stage D1). With CREATE TYPE (ADR 0030) and ALTER TYPE (ADR 0031) AST-driven, the runtime's type-registration pre-pass still string-split the script and each handler re-parsed its statement. This step parses the script once and drives everything off the AST, and removes the last custom string parser.
+
+**Decision (done):**
+- `maybeRegisterDynamicDDLScript` (`runtime/engine.ts`) now parses the script **once** via `parseEdgeQLScript` (guarded by `tryResult` — a parse failure means nothing to pre-register, and the main execution path reports the real error), then iterates the `DDLStatement` nodes: `registerDynamicTypeDDL` for CREATE TYPE, `applyAlterTypeDDL` for ALTER TYPE, and `schema.setFutureFlag(stmt.name, true)` for `CREATE FUTURE` (read directly from `objectKind === "future"`).
+- `registerDynamicTypeDDL` and `applyAlterTypeDDL` now take a `DDLStatement` (parsed by the caller) instead of a statement string; their internal `parseEdgeQL` calls are gone — eliminating the per-statement re-parse (previously up to 3× per statement).
+- `parseCreateFutureFlag` is deleted. With `parseCreateTypeHeader` (0030), the `CREATE TYPE` token-walker (0027), and `parseAlterTypeStatement` (0031) already gone, **the runtime's string-based shadow DDL parser no longer exists** — the EdgeQL parser is the single DDL parser, producing the AST the runtime reads.
+
+**Why this is safe.** The main execution path already parses the whole script with `parseEdgeQLScript`, so parsing it once in the pre-pass is consistent (not new capability, just earlier and shared). The pre-pass is a no-op for non-DDL scripts (the handlers return false, nothing materialises) exactly as before. The only behavioural shift is all-or-nothing parsing vs the old per-statement resilience — immaterial, because a script with an unparseable statement fails in the main path regardless, so pre-registering earlier types wouldn't help.
+
+**Verification.** `npx tsc` 0 errors. Behaviour-neutral on the deterministic DDL suites: `edgeql_userddl` `2 failed / 26 passed` and `edgeql_triggers` `39 passed` ran **identically** before and after; the combined `userddl` + `insert` + `triggers` count varied 54↔55 purely from the `insert` suite's documented order-flakiness (the same post-D1e code produced both). `parseEdgeQL` / `parseEdgeQLScript` remain imported (used elsewhere); `splitTopLevelScriptStatements` and `tokenize` keep their other engine callers.
+
+**Consequences.** Stage D1 is complete: DDL (`CREATE TYPE` / `ALTER TYPE` / `CREATE FUTURE`) is parsed once by the EdgeQL parser onto the AST, and the runtime reads it — no shadow parser, no double-parse. What remains of the broader unification is Stage D2 (point the SDL block parser + DDL at the one EdgeQL tokenizer and retire `schema_tokenizer`'s lexer), which is independent and lower-value.
+
+**Why record it:** a future reader will find the runtime registering schema off `DDLStatement` AST nodes with no string parsing in sight. That is the end state of Stage D1 — the EdgeQL parser owns DDL, the runtime consumes the AST. The four string parsers (`parseCreateTypeHeader`, the member token-walker, `parseAlterTypeStatement`, `parseCreateFutureFlag`) were deleted across ADRs 0027–0032, not moved.
