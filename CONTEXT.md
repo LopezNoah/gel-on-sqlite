@@ -84,6 +84,10 @@ _Avoid_: schema layout, storage model.
 A type name in `module::name` form. The rule that produces one is the single home in `src/schema/schema.ts`: `qualifiedTypeName(decl)` builds it from a declaration-shaped value (`TypeDef`, `ObjectTypeDeclaration`, …); `normalizeTypeName(name, moduleName = "default")` qualifies a bare name, leaving an already-qualified name untouched. Canonical argument order is `(name, moduleName)`. The rule used to be re-derived across `pathid.ts` / `database.ts` / `sdl_adapter.ts` / `migrations.ts` under three different argument orders. Two same-named functions are deliberately **not** copies and are left in place: the union-aware variant in `uiSchema.ts` (splits `A | B`) and the `TypeRef`-aware variant in `client/codec.ts`. The inference oracle (`semantic.ts`) keeps its own closure copy per `docs/adr/0001`.
 _Avoid_: full name, fq name.
 
+**Computed-expression parsing** (two deliberate parsers):
+The same-named `parseComputedPropertyExpr` / `parseComputedLinkExpr` in `sdl_adapter.ts` and `gel_persistence.ts` are **not** duplicates — they parse different languages. `sdl_adapter`'s parse arbitrary user SDL (aggregates, concat, cast literals, calls, and a full `parseEdgeQL` fallback); `gel_persistence`'s parse the narrow canonical output of its own `serializeComputedExpr` (a closed round-trip). The one genuinely-shared rule, `parseComputedSetLiteralExpr`, already lives in `src/schema/computed_expr.ts` and both import it. Merging the two would couple persistence to the SDL front-end and change behaviour — see `docs/adr/0024` (same pattern as the `normalizeTypeName` variants above).
+_Avoid_: computed parser, expr parser.
+
 ## SQL lowering
 
 **Pointer-step join**:
