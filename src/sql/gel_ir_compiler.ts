@@ -2747,169 +2747,75 @@ const compileScalarSelectSQL = (
   return result;
 };
 
-const compileScalarSelectSQLInner = (
+// One source-kind branch of `compileScalarSelectSQLInner`: lower a `type_cast`
+// scalar source. Returns the SQL, or null to fall through to the next branch
+// (when the cast's inner source itself doesn't lower to a scalar select).
+const compileTypeCastScalarSource = (
   sourceSet: Set,
   params: ScalarValue[],
   target: RuntimeTarget,
   options: GelIRCompileOptions,
   outerWheres: Set[],
 ): string | null => {
-  // An optional parameter (`<optional str>$0`) accepts the empty set: a
-  // missing/NULL arg is zero rows, not a NULL-valued row. Emit a row source
-  // that filters out the NULL binding so a surrounding union/LIMIT sees the
-  // empty set. (A required parameter keeps its single—possibly NULL—row.)
-  if (sourceSet.expr.kind === "parameter" && (sourceSet.expr as { required?: boolean }).required === false) {
-    const v = compileValueSetSQL(sourceSet, "g0", params, target, options);
-    if (v) {
-      return `SELECT ${quoteIdent("value")} FROM (SELECT ${v} AS ${quoteIdent("value")}) WHERE ${quoteIdent("value")} IS NOT NULL`;
-    }
+  const castExpr = sourceSet.expr as TypeCast;
+  // `<T>{}` (cast applied to the empty-set marker) yields zero rows, not
+  // a single `CAST(NULL AS T)` row. Without this guard `<int64>{}` lowers
+  // to `SELECT ? AS value` (one NULL row) and any surrounding union picks
+  // up that phantom row.
+  if (isTopLevelEmptySetMarker(castExpr.expr)) {
+    return `SELECT NULL AS ${quoteIdent("value")} WHERE 0`;
   }
-  // Pointer chains rooted at the empty-set marker (`(<Bar>{}).a`, often the
-  // result of inlining a UDF called with an empty arg) yield zero rows —
-  // without this the pointer lowering emits a column ref with no FROM.
-  {
-    let emptyRootCursor: Set = sourceSet;
-    let sawPointerStep = false;
-    while (emptyRootCursor.expr.kind === "pointer" || emptyRootCursor.expr.kind === "select_expr") {
-      if (emptyRootCursor.expr.kind === "pointer") {
-        sawPointerStep = true;
-        emptyRootCursor = (emptyRootCursor.expr as Pointer).source;
-      } else {
-        emptyRootCursor = (emptyRootCursor.expr as SelectExpr).result;
+  const innerScalarSql = compileScalarSelectSQL(castExpr.expr, params, target, options, outerWheres);
+  if (innerScalarSql) {
+    // `<json>X` JSON-encodes a scalar source via json_quote (`'RED'` →
+    // `"RED"`, `42` → `42`); collections, object shapes (already `json_object`
+    // text), and already-JSON values pass through (json_quote would
+    // double-encode them).
+    if (qualifyTypeName(castExpr.toType) === "std::json") {
+      const srcType = castExpr.expr.typeref;
+      const srcIsObjectShape = castSourceIsObjectShape(castExpr.expr);
+      const srcIsJsonAlready = srcType.collection !== undefined
+        || qualifyTypeName(srcType) === "std::json"
+        || srcIsObjectShape;
+      const jsonExpr = srcIsJsonAlready ? quoteIdent("value") : `json_quote(${quoteIdent("value")})`;
+      return `SELECT ${jsonExpr} AS ${quoteIdent("value")} FROM (${innerScalarSql})`;
+    }
+    // Casting FROM std::json: a JSON `null` is the EMPTY SET in EdgeQL
+    // (`<array<str>>to_json('null')` ≡ `{}`), and scalar payloads must be
+    // unwrapped from their JSON encoding (`'"hi"'` → `'hi'`), not CAST on
+    // the raw JSON text. json_extract(j, '$') does both: it returns the
+    // decoded scalar and maps JSON null to SQL NULL.
+    if (qualifyTypeName(castExpr.expr.typeref) === "std::json") {
+      if (castTargetIsCollection(castExpr.toType)) {
+        return `SELECT CASE WHEN json_type(json(${quoteIdent("value")})) = 'null' THEN NULL ELSE json(${quoteIdent("value")}) END AS ${quoteIdent("value")} FROM (${innerScalarSql})`;
       }
+      const jsonCastTarget = sqlCastTarget(castExpr.toType);
+      const extracted = `json_extract(${quoteIdent("value")}, '$')`;
+      const jsonValueExpr = isFloatTypeName(qualifyTypeName(castExpr.toType))
+        ? `_gel_float_cast(${extracted})`
+        : jsonCastTarget ? `CAST(${extracted} AS ${jsonCastTarget})` : extracted;
+      return `SELECT CASE WHEN json_type(json(${quoteIdent("value")})) = 'null' THEN NULL ELSE ${jsonValueExpr} END AS ${quoteIdent("value")} FROM (${innerScalarSql})`;
     }
-    if (sawPointerStep && isTopLevelEmptySetMarker(emptyRootCursor)) {
-      return `SELECT NULL AS ${quoteIdent("value")} WHERE 0`;
-    }
+    const castTarget = sqlCastTarget(castExpr.toType);
+    const valueExpr = isFloatTypeName(qualifyTypeName(castExpr.toType))
+      ? `_gel_float_cast(${quoteIdent("value")})`
+      : castTarget ? `CAST(${quoteIdent("value")} AS ${castTarget})` : quoteIdent("value");
+    return `SELECT ${valueExpr} AS ${quoteIdent("value")} FROM (${innerScalarSql})`;
   }
-  // Expression-position group rows (`group_rows`) as a value source — one
-  // `value` row per group, with any attached projection applied. Lets an
-  // outer GROUP use an inner (projected) group as its subject. Peel no-op
-  // select wrappers (`SELECT ( WITH MODULE … GROUP … )`) to find it.
-  {
-    let groupCursor: Set = sourceSet;
-    while (groupCursor.expr.kind === "select_expr") {
-      const wrapper = groupCursor.expr as SelectExpr;
-      if (wrapper.where || wrapper.limit || wrapper.offset || (wrapper.orderBy && wrapper.orderBy.length > 0)) break;
-      groupCursor = wrapper.result;
-    }
-    if (groupCursor.expr.kind === "group_rows") {
-      return compileGroupRowsValueSQL(groupCursor.expr as GroupRowsExpr, params, target, options, "grw_src", sqlLoweringContext());
-    }
-  }
-  // Element-wise paths off a group row (`g.elements`, `g.elements.name`
-  // inside `FOR g IN (GROUP …) UNION …`) — one row per element / leaf value,
-  // correlated against the group-row alias the surrounding FOR established
-  // via options.groupRowProjection. `json_each` with a path argument
-  // iterates arrays and yields a scalar as a single row, which matches
-  // EdgeQL set semantics for multi vs single leaves (missing → empty set).
-  {
-    let fieldCursor: Set = sourceSet;
-    while (fieldCursor.expr.kind === "select_expr") {
-      const wrapper = fieldCursor.expr as SelectExpr;
-      if (wrapper.where || wrapper.limit || wrapper.offset || (wrapper.orderBy && wrapper.orderBy.length > 0)) break;
-      fieldCursor = wrapper.result;
-    }
-    // Standalone elements flatten — `(select (group …) order by … limit 1)
-    // .elements` with no enclosing row scope: run the (claused) group rows
-    // statement, then json_each each row's elements.
-    if (fieldCursor.expr.kind === "group_row_field" && !options.groupRowProjection
-        && (fieldCursor.expr as GroupRowFieldExpr).rows
-        && (fieldCursor.expr as GroupRowFieldExpr).steps[0] === "elements"
-        && !(fieldCursor.expr as GroupRowFieldExpr).steps.some((s) => s.startsWith("<"))) {
-      const field = fieldCursor.expr as GroupRowFieldExpr;
-      let rowsCursor: Set = field.rows as Set;
-      let rowsWhere: Set | undefined;
-      let rowsOrderBy: SortExpr[] | undefined;
-      let rowsLimit: Set | undefined;
-      let rowsOffset: Set | undefined;
-      while (rowsCursor.expr.kind === "select_expr") {
-        const se = rowsCursor.expr as SelectExpr;
-        rowsWhere = rowsWhere ?? se.where;
-        rowsOrderBy = rowsOrderBy ?? se.orderBy;
-        rowsLimit = rowsLimit ?? se.limit;
-        rowsOffset = rowsOffset ?? se.offset;
-        rowsCursor = se.result;
-      }
-      // Only for CLAUSED group selects — a bare `g.elements` belongs to an
-      // enclosing per-row iteration and is handled by the row-scope paths.
-      const hasRowClauses = rowsWhere !== undefined || (rowsOrderBy && rowsOrderBy.length > 0)
-        || rowsLimit !== undefined || rowsOffset !== undefined;
-      if (rowsCursor.expr.kind === "group_rows" && hasRowClauses) {
-        const cp = params.length;
-        const artifact = compileGroupRowsStatementSQL(
-          rowsCursor.expr as GroupRowsExpr, rowsWhere, rowsOrderBy, rowsLimit, rowsOffset,
-          params, target, options, sqlLoweringContext(),
-        );
-        if (artifact.loweringMode === "single_statement" && artifact.sql.length > 0) {
-          const elemsJson = `COALESCE(json_extract(gsr.${quoteIdent("value")}, '$."elements"'), '[]')`;
-          if (field.steps.length === 1) {
-            return `SELECT json(je.${quoteIdent("value")}) AS ${quoteIdent("value")}`
-              + ` FROM (${artifact.sql}) gsr CROSS JOIN json_each(${elemsJson}) je`;
-          }
-          const tail = field.steps.slice(1).map((s) => `."${s.replaceAll('"', '""')}"`).join("");
-          return `SELECT jef.${quoteIdent("value")} AS ${quoteIdent("value")}`
-            + ` FROM (${artifact.sql}) gsr CROSS JOIN json_each(${elemsJson}) je`
-            + ` CROSS JOIN json_each(je.${quoteIdent("value")}, '$${tail}') jef`
-            + ` WHERE jef.${quoteIdent("value")} IS NOT NULL`;
-        }
-        params.length = cp;
-      }
-    }
-    if (fieldCursor.expr.kind === "group_row_field" && options.groupRowProjection
-        && !(fieldCursor.expr as GroupRowFieldExpr).steps.some((s) => s.startsWith("<"))) {
-      const field = fieldCursor.expr as GroupRowFieldExpr;
-      const raw = `${options.groupRowProjection.alias}.${quoteIdent("value")}`;
-      const head = groupProjectionHead(options.groupRowProjection, field.steps);
-      const baseSteps = head && head.kind === "path" ? [...head.steps, ...field.steps.slice(1)] : field.steps;
-      if (baseSteps[0] === "elements") {
-        const elemsJson = `COALESCE(json_extract(${raw}, '$."elements"'), '[]')`;
-        // A shaped elements set (`z.elements{name, cost}`) re-projects each
-        // element row to exactly the written fields.
-        if (baseSteps.length === 1 && fieldCursor.shape && fieldCursor.shape.length > 0) {
-          const cpShape = params.length;
-          const elemOptions: GelIRCompileOptions = { ...options, groupElementAlias: "je" };
-          const pairs: string[] = [];
-          let ok = true;
-          for (const element of fieldCursor.shape) {
-            const name = element.name
-              ?? (element.expr.expr.kind === "pointer" ? (element.expr.expr as Pointer).ptrref.shortName : undefined);
-            const v = name ? compileValueSetSQL(element.expr, "je", params, target, elemOptions) : null;
-            if (!v || !name) { ok = false; break; }
-            pairs.push(`${quoteLiteral(name)}, ${v}`);
-          }
-          if (ok) {
-            return `SELECT json_object(${pairs.join(", ")}) AS ${quoteIdent("value")} FROM json_each(${elemsJson}) je`;
-          }
-          params.length = cpShape;
-        }
-        if (baseSteps.length === 1) {
-          return `SELECT json(je.${quoteIdent("value")}) AS ${quoteIdent("value")} FROM json_each(${elemsJson}) je`;
-        }
-        const tail = baseSteps.slice(1).map((s) => `."${s.replaceAll('"', '""')}"`).join("");
-        // A missing/null leaf is the empty set, not a NULL element.
-        return `SELECT jef.${quoteIdent("value")} AS ${quoteIdent("value")}`
-          + ` FROM json_each(${elemsJson}) je CROSS JOIN json_each(je.${quoteIdent("value")}, '$${tail}') jef`
-          + ` WHERE jef.${quoteIdent("value")} IS NOT NULL`;
-      }
-      // `.grouping` is a SET of key names (a JSON array on the row).
-      if (baseSteps[0] === "grouping" && baseSteps.length === 1) {
-        return `SELECT je.${quoteIdent("value")} AS ${quoteIdent("value")}`
-          + ` FROM json_each(COALESCE(json_extract(${raw}, '$."grouping"'), '[]')) je`;
-      }
-      // key/projected scalar paths — one value per group row.
-      const path = `'$${baseSteps.map((s) => `."${s.replaceAll('"', '""')}"`).join("")}'`;
-      return `SELECT json_extract(${raw}, ${path}) AS ${quoteIdent("value")}`;
-    }
-  }
-  // `FOR X IN iter UNION X` is the upstream sugar the engine wraps every plain
-  // FOR with — the body substitutes back to the iterator. After the AST→IR
-  // pass the for_expr's body equals (or contains) the iterator expression, so
-  // the for_expr itself is a no-op wrapper and we can compile the body
-  // directly. The non-trivial branches (joined FORs over type/pointer
-  // iterators) are still handled earlier in compileSelectStmtToSQL via
-  // compileForExprSource.
-  if (sourceSet.expr.kind === "for_expr") {
+  return null;
+};
+
+// One source-kind branch of `compileScalarSelectSQLInner`: lower a `for_expr`
+// scalar source (`FOR g IN (GROUP …) UNION <body>` and the general
+// iterator × body cross-join). Always returns SQL when entered; `null` is the
+// unreachable fall-through that keeps the return type honest.
+const compileForExprScalarSource = (
+  sourceSet: Set,
+  params: ScalarValue[],
+  target: RuntimeTarget,
+  options: GelIRCompileOptions,
+  outerWheres: Set[],
+): string | null => {
     const forExpr = sourceSet.expr as ForExpr;
     // `FOR g IN (GROUP …) UNION <body>` — one body evaluation per group row.
     // The rows compile via the group-rows lowering; the body compiles as a
@@ -3139,6 +3045,259 @@ const compileScalarSelectSQLInner = (
     // SQL ordering puts iter first, then body — params must match.
     params.push(...iterParams, ...bodyParams);
     return wrapIndependentGate(`SELECT ${quoteIdent("body")}.${quoteIdent("value")} AS ${quoteIdent("value")} FROM (${iterSql}) ${quoteIdent("iter")} CROSS JOIN (${bodySql}) ${quoteIdent("body")}`);
+  return null;
+};
+
+const compileSelectExprScalarSource = (
+  sourceSet: Set,
+  params: ScalarValue[],
+  target: RuntimeTarget,
+  options: GelIRCompileOptions,
+  outerWheres: Set[],
+): string | null => {
+    const selectExpr = sourceSet.expr as SelectExpr;
+    const innerWheres = selectExpr.where ? [...outerWheres, selectExpr.where] : outerWheres;
+    const result = sourceSet.shape.length > 0
+      ? { ...selectExpr.result, shape: sourceSet.shape }
+      : selectExpr.result;
+    const inner = compileScalarSelectSQL(result, params, target, options, innerWheres);
+    if (!inner) return null;
+    let sql = `SELECT ${quoteIdent("value")} AS ${quoteIdent("value")} FROM (${inner})`;
+    const orderSql = compileValueSortExprs(selectExpr.orderBy, quoteIdent("value"), target, options.resolveEnumMembers, options.resolveFieldEnumMembers);
+    if (orderSql) {
+      sql += ` ORDER BY ${orderSql}`;
+    } else if (selectExpr.orderBy && selectExpr.orderBy.length > 0) {
+      // The order paths refer to the iteration source itself (the common
+      // `SELECT X ORDER BY X` shape used by `array_agg(... ORDER BY ...)`
+      // over multi scalar pointers). compileValueSortPath returns null for
+      // those because it doesn't know the path equals the row's value;
+      // fall back to ordering by `value` for any path whose serialized
+      // identity matches the iteration source.
+      const sourceKey = pathIdKey(result);
+      const orderParts = selectExpr.orderBy
+        .map((sort) => pathIdKey(sort.path) === sourceKey
+          ? `${quoteIdent("value")} ${sort.direction.toUpperCase()}`
+          : "")
+        .filter((part) => part.length > 0);
+      if (orderParts.length > 0) {
+        sql += ` ORDER BY ${orderParts.join(", ")}`;
+      }
+    }
+    const limit = extractNumericLiteral(selectExpr.limit);
+    if (limit !== undefined) {
+      sql += " LIMIT ?";
+      params.push(limit);
+    }
+    const offset = extractNumericLiteral(selectExpr.offset);
+    if (offset !== undefined) {
+      // SQLite requires a LIMIT before OFFSET; `LIMIT -1` means unbounded.
+      if (limit === undefined) sql += " LIMIT -1";
+      sql += " OFFSET ?";
+      params.push(offset);
+    }
+    return sql;
+};
+
+const compileIfElseScalarSource = (
+  sourceSet: Set,
+  params: ScalarValue[],
+  target: RuntimeTarget,
+  options: GelIRCompileOptions,
+  outerWheres: Set[],
+): string | null => {
+    const ifElse = sourceSet.expr as IfElseExpr;
+    const ifElseCheckpoint = params.length;
+    // Only handle source-free conditions (`IF false`, `IF <param>`) here —
+    // a condition over row paths needs the correlated lowerings below, and
+    // compiling it against a phantom alias would emit dangling references.
+    const condSources = new Map<string, TypeRef>();
+    collectScalarPointerSources(ifElse.condition, condSources);
+    if (condSources.size > 0) {
+      params.length = ifElseCheckpoint;
+    }
+    const condSql = condSources.size === 0
+      ? compileValueSetSQL(ifElse.condition, "g0", params, target, options)
+      : null;
+    const ifRows = condSql ? compileScalarSelectSQL(ifElse.ifExpr, params, target, options, outerWheres) : null;
+    const elseRows = ifRows ? compileScalarSelectSQL(ifElse.elseExpr, params, target, options, outerWheres) : null;
+    if (condSql && ifRows && elseRows) {
+      // Conditions arrive as either native SQL booleans (0/1) or JSON-text
+      // booleans ('true'/'false') — normalize once so WHERE doesn't cast
+      // the text 'true' to 0.
+      return `WITH cond_raw AS (SELECT ${condSql} AS ${quoteIdent("r")}),`
+        + ` cond_q AS (SELECT (CASE WHEN ${quoteIdent("r")} IN (1, 'true') THEN 1 WHEN ${quoteIdent("r")} IN (0, 'false') THEN 0 ELSE NULL END) AS ${quoteIdent("c")} FROM cond_raw)`
+        + ` SELECT ${quoteIdent("value")} FROM (${ifRows}) WHERE (SELECT ${quoteIdent("c")} FROM cond_q)`
+        + ` UNION ALL SELECT ${quoteIdent("value")} FROM (${elseRows}) WHERE NOT (SELECT ${quoteIdent("c")} FROM cond_q)`;
+    }
+    params.length = ifElseCheckpoint;
+  return null;
+};
+
+const compileScalarSelectSQLInner = (
+  sourceSet: Set,
+  params: ScalarValue[],
+  target: RuntimeTarget,
+  options: GelIRCompileOptions,
+  outerWheres: Set[],
+): string | null => {
+  // An optional parameter (`<optional str>$0`) accepts the empty set: a
+  // missing/NULL arg is zero rows, not a NULL-valued row. Emit a row source
+  // that filters out the NULL binding so a surrounding union/LIMIT sees the
+  // empty set. (A required parameter keeps its single—possibly NULL—row.)
+  if (sourceSet.expr.kind === "parameter" && (sourceSet.expr as { required?: boolean }).required === false) {
+    const v = compileValueSetSQL(sourceSet, "g0", params, target, options);
+    if (v) {
+      return `SELECT ${quoteIdent("value")} FROM (SELECT ${v} AS ${quoteIdent("value")}) WHERE ${quoteIdent("value")} IS NOT NULL`;
+    }
+  }
+  // Pointer chains rooted at the empty-set marker (`(<Bar>{}).a`, often the
+  // result of inlining a UDF called with an empty arg) yield zero rows —
+  // without this the pointer lowering emits a column ref with no FROM.
+  {
+    let emptyRootCursor: Set = sourceSet;
+    let sawPointerStep = false;
+    while (emptyRootCursor.expr.kind === "pointer" || emptyRootCursor.expr.kind === "select_expr") {
+      if (emptyRootCursor.expr.kind === "pointer") {
+        sawPointerStep = true;
+        emptyRootCursor = (emptyRootCursor.expr as Pointer).source;
+      } else {
+        emptyRootCursor = (emptyRootCursor.expr as SelectExpr).result;
+      }
+    }
+    if (sawPointerStep && isTopLevelEmptySetMarker(emptyRootCursor)) {
+      return `SELECT NULL AS ${quoteIdent("value")} WHERE 0`;
+    }
+  }
+  // Expression-position group rows (`group_rows`) as a value source — one
+  // `value` row per group, with any attached projection applied. Lets an
+  // outer GROUP use an inner (projected) group as its subject. Peel no-op
+  // select wrappers (`SELECT ( WITH MODULE … GROUP … )`) to find it.
+  {
+    let groupCursor: Set = sourceSet;
+    while (groupCursor.expr.kind === "select_expr") {
+      const wrapper = groupCursor.expr as SelectExpr;
+      if (wrapper.where || wrapper.limit || wrapper.offset || (wrapper.orderBy && wrapper.orderBy.length > 0)) break;
+      groupCursor = wrapper.result;
+    }
+    if (groupCursor.expr.kind === "group_rows") {
+      return compileGroupRowsValueSQL(groupCursor.expr as GroupRowsExpr, params, target, options, "grw_src", sqlLoweringContext());
+    }
+  }
+  // Element-wise paths off a group row (`g.elements`, `g.elements.name`
+  // inside `FOR g IN (GROUP …) UNION …`) — one row per element / leaf value,
+  // correlated against the group-row alias the surrounding FOR established
+  // via options.groupRowProjection. `json_each` with a path argument
+  // iterates arrays and yields a scalar as a single row, which matches
+  // EdgeQL set semantics for multi vs single leaves (missing → empty set).
+  {
+    let fieldCursor: Set = sourceSet;
+    while (fieldCursor.expr.kind === "select_expr") {
+      const wrapper = fieldCursor.expr as SelectExpr;
+      if (wrapper.where || wrapper.limit || wrapper.offset || (wrapper.orderBy && wrapper.orderBy.length > 0)) break;
+      fieldCursor = wrapper.result;
+    }
+    // Standalone elements flatten — `(select (group …) order by … limit 1)
+    // .elements` with no enclosing row scope: run the (claused) group rows
+    // statement, then json_each each row's elements.
+    if (fieldCursor.expr.kind === "group_row_field" && !options.groupRowProjection
+        && (fieldCursor.expr as GroupRowFieldExpr).rows
+        && (fieldCursor.expr as GroupRowFieldExpr).steps[0] === "elements"
+        && !(fieldCursor.expr as GroupRowFieldExpr).steps.some((s) => s.startsWith("<"))) {
+      const field = fieldCursor.expr as GroupRowFieldExpr;
+      let rowsCursor: Set = field.rows as Set;
+      let rowsWhere: Set | undefined;
+      let rowsOrderBy: SortExpr[] | undefined;
+      let rowsLimit: Set | undefined;
+      let rowsOffset: Set | undefined;
+      while (rowsCursor.expr.kind === "select_expr") {
+        const se = rowsCursor.expr as SelectExpr;
+        rowsWhere = rowsWhere ?? se.where;
+        rowsOrderBy = rowsOrderBy ?? se.orderBy;
+        rowsLimit = rowsLimit ?? se.limit;
+        rowsOffset = rowsOffset ?? se.offset;
+        rowsCursor = se.result;
+      }
+      // Only for CLAUSED group selects — a bare `g.elements` belongs to an
+      // enclosing per-row iteration and is handled by the row-scope paths.
+      const hasRowClauses = rowsWhere !== undefined || (rowsOrderBy && rowsOrderBy.length > 0)
+        || rowsLimit !== undefined || rowsOffset !== undefined;
+      if (rowsCursor.expr.kind === "group_rows" && hasRowClauses) {
+        const cp = params.length;
+        const artifact = compileGroupRowsStatementSQL(
+          rowsCursor.expr as GroupRowsExpr, rowsWhere, rowsOrderBy, rowsLimit, rowsOffset,
+          params, target, options, sqlLoweringContext(),
+        );
+        if (artifact.loweringMode === "single_statement" && artifact.sql.length > 0) {
+          const elemsJson = `COALESCE(json_extract(gsr.${quoteIdent("value")}, '$."elements"'), '[]')`;
+          if (field.steps.length === 1) {
+            return `SELECT json(je.${quoteIdent("value")}) AS ${quoteIdent("value")}`
+              + ` FROM (${artifact.sql}) gsr CROSS JOIN json_each(${elemsJson}) je`;
+          }
+          const tail = field.steps.slice(1).map((s) => `."${s.replaceAll('"', '""')}"`).join("");
+          return `SELECT jef.${quoteIdent("value")} AS ${quoteIdent("value")}`
+            + ` FROM (${artifact.sql}) gsr CROSS JOIN json_each(${elemsJson}) je`
+            + ` CROSS JOIN json_each(je.${quoteIdent("value")}, '$${tail}') jef`
+            + ` WHERE jef.${quoteIdent("value")} IS NOT NULL`;
+        }
+        params.length = cp;
+      }
+    }
+    if (fieldCursor.expr.kind === "group_row_field" && options.groupRowProjection
+        && !(fieldCursor.expr as GroupRowFieldExpr).steps.some((s) => s.startsWith("<"))) {
+      const field = fieldCursor.expr as GroupRowFieldExpr;
+      const raw = `${options.groupRowProjection.alias}.${quoteIdent("value")}`;
+      const head = groupProjectionHead(options.groupRowProjection, field.steps);
+      const baseSteps = head && head.kind === "path" ? [...head.steps, ...field.steps.slice(1)] : field.steps;
+      if (baseSteps[0] === "elements") {
+        const elemsJson = `COALESCE(json_extract(${raw}, '$."elements"'), '[]')`;
+        // A shaped elements set (`z.elements{name, cost}`) re-projects each
+        // element row to exactly the written fields.
+        if (baseSteps.length === 1 && fieldCursor.shape && fieldCursor.shape.length > 0) {
+          const cpShape = params.length;
+          const elemOptions: GelIRCompileOptions = { ...options, groupElementAlias: "je" };
+          const pairs: string[] = [];
+          let ok = true;
+          for (const element of fieldCursor.shape) {
+            const name = element.name
+              ?? (element.expr.expr.kind === "pointer" ? (element.expr.expr as Pointer).ptrref.shortName : undefined);
+            const v = name ? compileValueSetSQL(element.expr, "je", params, target, elemOptions) : null;
+            if (!v || !name) { ok = false; break; }
+            pairs.push(`${quoteLiteral(name)}, ${v}`);
+          }
+          if (ok) {
+            return `SELECT json_object(${pairs.join(", ")}) AS ${quoteIdent("value")} FROM json_each(${elemsJson}) je`;
+          }
+          params.length = cpShape;
+        }
+        if (baseSteps.length === 1) {
+          return `SELECT json(je.${quoteIdent("value")}) AS ${quoteIdent("value")} FROM json_each(${elemsJson}) je`;
+        }
+        const tail = baseSteps.slice(1).map((s) => `."${s.replaceAll('"', '""')}"`).join("");
+        // A missing/null leaf is the empty set, not a NULL element.
+        return `SELECT jef.${quoteIdent("value")} AS ${quoteIdent("value")}`
+          + ` FROM json_each(${elemsJson}) je CROSS JOIN json_each(je.${quoteIdent("value")}, '$${tail}') jef`
+          + ` WHERE jef.${quoteIdent("value")} IS NOT NULL`;
+      }
+      // `.grouping` is a SET of key names (a JSON array on the row).
+      if (baseSteps[0] === "grouping" && baseSteps.length === 1) {
+        return `SELECT je.${quoteIdent("value")} AS ${quoteIdent("value")}`
+          + ` FROM json_each(COALESCE(json_extract(${raw}, '$."grouping"'), '[]')) je`;
+      }
+      // key/projected scalar paths — one value per group row.
+      const path = `'$${baseSteps.map((s) => `."${s.replaceAll('"', '""')}"`).join("")}'`;
+      return `SELECT json_extract(${raw}, ${path}) AS ${quoteIdent("value")}`;
+    }
+  }
+  // `FOR X IN iter UNION X` is the upstream sugar the engine wraps every plain
+  // FOR with — the body substitutes back to the iterator. After the AST→IR
+  // pass the for_expr's body equals (or contains) the iterator expression, so
+  // the for_expr itself is a no-op wrapper and we can compile the body
+  // directly. The non-trivial branches (joined FORs over type/pointer
+  // iterators) are still handled earlier in compileSelectStmtToSQL via
+  // compileForExprSource.
+  if (sourceSet.expr.kind === "for_expr") {
+    const r = compileForExprScalarSource(sourceSet, params, target, options, outerWheres);
+    if (r !== null) return r;
   }
   // A user-defined function call whose AST→IR pass attached a substituted
   // body inlines at the statement level: lower the body as if it were
@@ -3165,51 +3324,8 @@ const compileScalarSelectSQLInner = (
   // as `CAST(json_group_array(value) AS TEXT)` and returns one row holding
   // `'[a,b]'`, instead of two rows holding `'a'` and `'b'`.
   if (sourceSet.expr.kind === "type_cast") {
-    const castExpr = sourceSet.expr as TypeCast;
-    // `<T>{}` (cast applied to the empty-set marker) yields zero rows, not
-    // a single `CAST(NULL AS T)` row. Without this guard `<int64>{}` lowers
-    // to `SELECT ? AS value` (one NULL row) and any surrounding union picks
-    // up that phantom row.
-    if (isTopLevelEmptySetMarker(castExpr.expr)) {
-      return `SELECT NULL AS ${quoteIdent("value")} WHERE 0`;
-    }
-    const innerScalarSql = compileScalarSelectSQL(castExpr.expr, params, target, options, outerWheres);
-    if (innerScalarSql) {
-      // `<json>X` JSON-encodes a scalar source via json_quote (`'RED'` →
-      // `"RED"`, `42` → `42`); collections, object shapes (already `json_object`
-      // text), and already-JSON values pass through (json_quote would
-      // double-encode them).
-      if (qualifyTypeName(castExpr.toType) === "std::json") {
-        const srcType = castExpr.expr.typeref;
-        const srcIsObjectShape = castSourceIsObjectShape(castExpr.expr);
-        const srcIsJsonAlready = srcType.collection !== undefined
-          || qualifyTypeName(srcType) === "std::json"
-          || srcIsObjectShape;
-        const jsonExpr = srcIsJsonAlready ? quoteIdent("value") : `json_quote(${quoteIdent("value")})`;
-        return `SELECT ${jsonExpr} AS ${quoteIdent("value")} FROM (${innerScalarSql})`;
-      }
-      // Casting FROM std::json: a JSON `null` is the EMPTY SET in EdgeQL
-      // (`<array<str>>to_json('null')` ≡ `{}`), and scalar payloads must be
-      // unwrapped from their JSON encoding (`'"hi"'` → `'hi'`), not CAST on
-      // the raw JSON text. json_extract(j, '$') does both: it returns the
-      // decoded scalar and maps JSON null to SQL NULL.
-      if (qualifyTypeName(castExpr.expr.typeref) === "std::json") {
-        if (castTargetIsCollection(castExpr.toType)) {
-          return `SELECT CASE WHEN json_type(json(${quoteIdent("value")})) = 'null' THEN NULL ELSE json(${quoteIdent("value")}) END AS ${quoteIdent("value")} FROM (${innerScalarSql})`;
-        }
-        const jsonCastTarget = sqlCastTarget(castExpr.toType);
-        const extracted = `json_extract(${quoteIdent("value")}, '$')`;
-        const jsonValueExpr = isFloatTypeName(qualifyTypeName(castExpr.toType))
-          ? `_gel_float_cast(${extracted})`
-          : jsonCastTarget ? `CAST(${extracted} AS ${jsonCastTarget})` : extracted;
-        return `SELECT CASE WHEN json_type(json(${quoteIdent("value")})) = 'null' THEN NULL ELSE ${jsonValueExpr} END AS ${quoteIdent("value")} FROM (${innerScalarSql})`;
-      }
-      const castTarget = sqlCastTarget(castExpr.toType);
-      const valueExpr = isFloatTypeName(qualifyTypeName(castExpr.toType))
-        ? `_gel_float_cast(${quoteIdent("value")})`
-        : castTarget ? `CAST(${quoteIdent("value")} AS ${castTarget})` : quoteIdent("value");
-      return `SELECT ${valueExpr} AS ${quoteIdent("value")} FROM (${innerScalarSql})`;
-    }
+    const r = compileTypeCastScalarSource(sourceSet, params, target, options, outerWheres);
+    if (r !== null) return r;
   }
   if (sourceSet.expr.kind === "function_call") {
     const call = sourceSet.expr as FunctionCall;
@@ -3592,78 +3708,15 @@ const compileScalarSelectSQLInner = (
     }
   }
   if (sourceSet.expr.kind === "select_expr") {
-    const selectExpr = sourceSet.expr as SelectExpr;
-    const innerWheres = selectExpr.where ? [...outerWheres, selectExpr.where] : outerWheres;
-    const result = sourceSet.shape.length > 0
-      ? { ...selectExpr.result, shape: sourceSet.shape }
-      : selectExpr.result;
-    const inner = compileScalarSelectSQL(result, params, target, options, innerWheres);
-    if (!inner) return null;
-    let sql = `SELECT ${quoteIdent("value")} AS ${quoteIdent("value")} FROM (${inner})`;
-    const orderSql = compileValueSortExprs(selectExpr.orderBy, quoteIdent("value"), target, options.resolveEnumMembers, options.resolveFieldEnumMembers);
-    if (orderSql) {
-      sql += ` ORDER BY ${orderSql}`;
-    } else if (selectExpr.orderBy && selectExpr.orderBy.length > 0) {
-      // The order paths refer to the iteration source itself (the common
-      // `SELECT X ORDER BY X` shape used by `array_agg(... ORDER BY ...)`
-      // over multi scalar pointers). compileValueSortPath returns null for
-      // those because it doesn't know the path equals the row's value;
-      // fall back to ordering by `value` for any path whose serialized
-      // identity matches the iteration source.
-      const sourceKey = pathIdKey(result);
-      const orderParts = selectExpr.orderBy
-        .map((sort) => pathIdKey(sort.path) === sourceKey
-          ? `${quoteIdent("value")} ${sort.direction.toUpperCase()}`
-          : "")
-        .filter((part) => part.length > 0);
-      if (orderParts.length > 0) {
-        sql += ` ORDER BY ${orderParts.join(", ")}`;
-      }
-    }
-    const limit = extractNumericLiteral(selectExpr.limit);
-    if (limit !== undefined) {
-      sql += " LIMIT ?";
-      params.push(limit);
-    }
-    const offset = extractNumericLiteral(selectExpr.offset);
-    if (offset !== undefined) {
-      // SQLite requires a LIMIT before OFFSET; `LIMIT -1` means unbounded.
-      if (limit === undefined) sql += " LIMIT -1";
-      sql += " OFFSET ?";
-      params.push(offset);
-    }
-    return sql;
+    return compileSelectExprScalarSource(sourceSet, params, target, options, outerWheres);
   }
   // Set-valued IF/ELSE (`<array<User>>{} IF false ELSE [User]`): pick the
   // arm row set by the condition. The condition is projected through a CTE
   // so its placeholders aren't duplicated; a NULL (empty) condition excludes
   // both arms, matching EdgeQL's empty-condition semantics.
   if (sourceSet.expr.kind === "if_else_expr") {
-    const ifElse = sourceSet.expr as IfElseExpr;
-    const ifElseCheckpoint = params.length;
-    // Only handle source-free conditions (`IF false`, `IF <param>`) here —
-    // a condition over row paths needs the correlated lowerings below, and
-    // compiling it against a phantom alias would emit dangling references.
-    const condSources = new Map<string, TypeRef>();
-    collectScalarPointerSources(ifElse.condition, condSources);
-    if (condSources.size > 0) {
-      params.length = ifElseCheckpoint;
-    }
-    const condSql = condSources.size === 0
-      ? compileValueSetSQL(ifElse.condition, "g0", params, target, options)
-      : null;
-    const ifRows = condSql ? compileScalarSelectSQL(ifElse.ifExpr, params, target, options, outerWheres) : null;
-    const elseRows = ifRows ? compileScalarSelectSQL(ifElse.elseExpr, params, target, options, outerWheres) : null;
-    if (condSql && ifRows && elseRows) {
-      // Conditions arrive as either native SQL booleans (0/1) or JSON-text
-      // booleans ('true'/'false') — normalize once so WHERE doesn't cast
-      // the text 'true' to 0.
-      return `WITH cond_raw AS (SELECT ${condSql} AS ${quoteIdent("r")}),`
-        + ` cond_q AS (SELECT (CASE WHEN ${quoteIdent("r")} IN (1, 'true') THEN 1 WHEN ${quoteIdent("r")} IN (0, 'false') THEN 0 ELSE NULL END) AS ${quoteIdent("c")} FROM cond_raw)`
-        + ` SELECT ${quoteIdent("value")} FROM (${ifRows}) WHERE (SELECT ${quoteIdent("c")} FROM cond_q)`
-        + ` UNION ALL SELECT ${quoteIdent("value")} FROM (${elseRows}) WHERE NOT (SELECT ${quoteIdent("c")} FROM cond_q)`;
-    }
-    params.length = ifElseCheckpoint;
+    const r = compileIfElseScalarSource(sourceSet, params, target, options, outerWheres);
+    if (r !== null) return r;
   }
 
   // EdgeQL `X.__type__.name` resolves to the source row's type label —
