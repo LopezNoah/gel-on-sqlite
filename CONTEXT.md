@@ -84,6 +84,12 @@ _Avoid_: schema layout, storage model.
 A type name in `module::name` form. The rule that produces one is the single home in `src/schema/schema.ts`: `qualifiedTypeName(decl)` builds it from a declaration-shaped value (`TypeDef`, `ObjectTypeDeclaration`, …); `normalizeTypeName(name, moduleName = "default")` qualifies a bare name, leaving an already-qualified name untouched. Canonical argument order is `(name, moduleName)`. The rule used to be re-derived across `pathid.ts` / `database.ts` / `sdl_adapter.ts` / `migrations.ts` under three different argument orders. Two same-named functions are deliberately **not** copies and are left in place: the union-aware variant in `uiSchema.ts` (splits `A | B`) and the `TypeRef`-aware variant in `client/codec.ts`. The inference oracle (`semantic.ts`) keeps its own closure copy per `docs/adr/0001`.
 _Avoid_: full name, fq name.
 
+## SQL lowering
+
+**Pointer-step join**:
+`src/sql/pointer_join.ts::pointerStepJoinSql(step)` — the single home for the JOIN fragment that lowers one pointer-chain step (`User.posts.author`). Four shapes: junction-table vs inline-`<name>_id`-FK, each × inbound (backlink) / outbound. Takes the parts that vary with context (direction, previous/next alias, the already-compiled `targetSource`, and either the junction `{linkAlias, linkTable}` or the `{inlineColumn}`) and emits SQL byte-identical to the inline form it replaced. Nine lowering functions in `gel_ir_compiler.ts` re-derived this wiring, differing only in alias names; they now route through it. The first-step FROM seeds, single-link correlated-subquery membership checks, and `anchorWhere` constructions are a different idiom (WHERE-correlation, not per-step JOIN append) and stay with their callers (see `docs/adr/0011`). Depends only on `quoteIdent`, so it is a pure, unit-tested string builder — no `SqlLoweringContext` deps needed.
+_Avoid_: join helper, path join.
+
 ## Execution
 
 **Runtime evaluator**:
