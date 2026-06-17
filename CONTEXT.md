@@ -76,6 +76,10 @@ SchemaSnapshot                (schema.ts — the authoritative immutable form)
 `src/schema/load.ts` — the one canonical SDL → SchemaSnapshot entry (`parseDeclarativeSchema` then `schemaSnapshotFromDeclarative`). The chain was hand-rolled across 20+ call sites; new callers use `loadSchema` (see `docs/adr/0005`). Note: schema *parsing* is separate from query parsing — `schema_tokenizer.ts`/`sdl_adapter.ts` is a distinct front end from `edgeql/tokenizer.ts`/`parser.ts` (SDL declaration syntax vs the EdgeQL expression language); they intentionally do not share a tokenizer.
 _Avoid_: buildSchema, schema loader (for the runtime introspection path).
 
+**Qualified type name**:
+A type name in `module::name` form. The rule that produces one is the single home in `src/schema/schema.ts`: `qualifiedTypeName(decl)` builds it from a declaration-shaped value (`TypeDef`, `ObjectTypeDeclaration`, …); `normalizeTypeName(name, moduleName = "default")` qualifies a bare name, leaving an already-qualified name untouched. Canonical argument order is `(name, moduleName)`. The rule used to be re-derived across `pathid.ts` / `database.ts` / `sdl_adapter.ts` / `migrations.ts` under three different argument orders. Two same-named functions are deliberately **not** copies and are left in place: the union-aware variant in `uiSchema.ts` (splits `A | B`) and the `TypeRef`-aware variant in `client/codec.ts`. The inference oracle (`semantic.ts`) keeps its own closure copy per `docs/adr/0001`.
+_Avoid_: full name, fq name.
+
 ## Execution
 
 **Runtime evaluator**:

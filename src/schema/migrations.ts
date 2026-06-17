@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import type { MutationRewriteExpr, ScalarType, ScalarValue, TriggerDef, TriggerInsertAction, TriggerValueExpr } from "../types.js";
 import type { DeclarativeSchema, LinkMember, ObjectTypeDeclaration, PropertyMember, TypeMember } from "./declarative.js";
 import { scalarToSqlType } from "./scalar.js";
-import { usesLinkTable } from "./schema.js";
+import { normalizeTypeName, qualifiedTypeName, usesLinkTable } from "./schema.js";
 
 export interface MigrationStep {
   description: string;
@@ -475,7 +475,7 @@ const compileTriggerActionSQL = (
   event: TriggerDef["event"],
   allTypes: Map<string, ObjectTypeDeclaration>,
 ): string => {
-  const targetTypeName = normalizeTypeName(typeDecl.module, action.targetType);
+  const targetTypeName = normalizeTypeName(action.targetType, typeDecl.module);
   const targetType = allTypes.get(targetTypeName);
   if (!targetType) {
     throw new Error(`Unknown trigger target type '${targetTypeName}' in ${qualifiedTypeName(typeDecl)}.${action.kind}`);
@@ -594,8 +594,6 @@ const indexTypes = (schema: DeclarativeSchema): Map<string, ObjectTypeDeclaratio
   return map;
 };
 
-const qualifiedTypeName = (typeDecl: ObjectTypeDeclaration): string => `${typeDecl.module}::${typeDecl.name}`;
-
 const tableName = (typeDecl: ObjectTypeDeclaration): string =>
   `${typeDecl.module.toLowerCase()}__${typeDecl.name.toLowerCase()}`;
 
@@ -604,8 +602,6 @@ const multiPropertyTable = (typeDecl: ObjectTypeDeclaration, member: PropertyMem
 
 const linkTable = (typeDecl: ObjectTypeDeclaration, member: LinkMember): string =>
   `${tableName(typeDecl)}__${member.name.toLowerCase()}`;
-
-const normalizeTypeName = (moduleName: string, name: string): string => (name.includes("::") ? name : `${moduleName}::${name}`);
 
 const triggerName = (table: string, suffix: string): string => `${table.replaceAll(/[^A-Za-z0-9_]/g, "_")}__${suffix}`;
 

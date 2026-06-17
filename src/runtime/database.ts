@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import { AppError } from "../errors.js";
 
 import type { SchemaSnapshot } from "../schema/schema.js";
-import { qualifiedTypeName } from "../schema/schema.js";
+import { normalizeTypeName, qualifiedTypeName } from "../schema/schema.js";
 import { populateSchemaIntrospection } from "../schema/schema_introspection.js";
 import type { AsyncRuntimeInstance, RuntimeDatabaseAdapter, RuntimeInstance } from "./adapter.js";
 import { toAsyncAdapter } from "./adapter.js";
@@ -1559,14 +1559,6 @@ const literalToSQL = (value: ScalarValue): string => {
   }
 
   return `'${value.replaceAll("'", "''")}'`;
-};
-
-const normalizeTypeName = (name: string, moduleName: string): string => {
-  if (name.includes("::")) {
-    return name;
-  }
-
-  return `${moduleName}::${name}`;
 };
 
 const tableName = (typeDef: TypeDef): string => `${(typeDef.module ?? "default").toLowerCase()}__${typeDef.name.toLowerCase()}`;

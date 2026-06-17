@@ -296,10 +296,20 @@ const deepFreeze = <T>(value: T): T => {
   return Object.freeze(value);
 };
 
-export const qualifiedTypeName = (typeDef: TypeDef): string => {
+// A fully-qualified type name is `module::name`. `qualifiedTypeName` builds one
+// from a declaration-shaped value (`TypeDef`, `ObjectTypeDeclaration`, …);
+// `normalizeTypeName` qualifies a bare name string, leaving an already-qualified
+// name untouched. Both are the single home for the rule — callers used to
+// re-derive it under three different argument orders. Canonical order is
+// (name, moduleName). The union-aware variant in uiSchema.ts and the
+// TypeRef-aware variant in client/codec.ts are distinct functions, not copies.
+export const qualifiedTypeName = (typeDef: { module?: string; name: string }): string => {
   const module = typeDef.module ?? "default";
   return `${module}::${typeDef.name}`;
 };
+
+export const normalizeTypeName = (name: string, moduleName = "default"): string =>
+  name.includes("::") ? name : `${moduleName}::${name}`;
 
 // The one home for the link-storage rule: a link is stored in a separate
 // junction table (vs. an inline `<name>_id` column) iff it is `multi` or

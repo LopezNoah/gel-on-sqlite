@@ -12,6 +12,7 @@ import type {
 } from "../types.js";
 import { normalizeAnnotationName } from "./annos.js";
 import { parseComputedSetLiteralExpr } from "./computed_expr.js";
+import { normalizeTypeName } from "./schema.js";
 import type {
   AliasDeclaration,
   AbstractAnnotationDeclaration,
@@ -407,13 +408,6 @@ const resolveDeclarationName = (
     moduleName: contextModuleName,
     localName: name.parts[0] ?? "",
   };
-};
-
-const normalizeTypeName = (moduleName: string, name: string): string => {
-  if (name.includes("::")) {
-    return name;
-  }
-  return `${moduleName}::${name}`;
 };
 
 const normalizeConstraintName = (moduleName: string, name: string): string => {
@@ -1051,7 +1045,7 @@ const parseAliasDeclaration = (
     values
     || !sourceTypeCandidate
       ? undefined
-      : normalizeTypeName(resolvedName.moduleName, sourceTypeCandidate);
+      : normalizeTypeName(sourceTypeCandidate, resolvedName.moduleName);
 
   return {
     module: resolvedName.moduleName,
@@ -1522,7 +1516,7 @@ const normalizeLinkTargetType = (moduleName: string, targetType: string): string
     .split("|")
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0)
-    .map((entry) => normalizeTypeName(moduleName, entry))
+    .map((entry) => normalizeTypeName(entry, moduleName))
     .join(" | ");
 
 const parseIndexExpression = (node: IndexDeclarationNode): string => {
@@ -1648,7 +1642,7 @@ const extractSplatStrategyFromLinkProperties = (
 
 const resolveFieldTargetTypeName = (moduleName: string, declaredType: string, enumTypeName?: string): string | undefined => {
   if (enumTypeName) {
-    return normalizeTypeName(moduleName, enumTypeName);
+    return normalizeTypeName(enumTypeName, moduleName);
   }
 
   const lowered = declaredType.toLowerCase();
@@ -1678,7 +1672,7 @@ const resolveFieldTargetTypeName = (moduleName: string, declaredType: string, en
     return undefined;
   }
 
-  return normalizeTypeName(moduleName, declaredType);
+  return normalizeTypeName(declaredType, moduleName);
 };
 
 const splitTopLevelComma = (text: string): string[] => {
@@ -2025,7 +2019,7 @@ const convertDeclarationToMember = (
       !declaration.explicitKeyword
       && !scalarResolution
       && (
-        objectTypeNames.has(normalizeTypeName(moduleName, declaredType))
+        objectTypeNames.has(normalizeTypeName(declaredType, moduleName))
         || declaredType.includes("::")
         || declaredType.length > 0
       );
@@ -2129,7 +2123,7 @@ const convertTypeDeclaration = (
     module: typeModuleName,
     name: typeName,
     abstract: node.abstract,
-    extends: node.extends.map((base) => normalizeTypeName(typeModuleName, qualifiedNameToString(base))),
+    extends: node.extends.map((base) => normalizeTypeName(qualifiedNameToString(base), typeModuleName)),
     annotations,
     indexes,
     members,
@@ -2365,7 +2359,7 @@ const buildPointerInheritance = (documents: ParsedModuleDocument[]): PointerInhe
         }
       }
       const extendsList = declaration.extends.map((base) =>
-        normalizeTypeName(typeModuleName, qualifiedNameToString(base)),
+        normalizeTypeName(qualifiedNameToString(base), typeModuleName),
       );
       resolver.register(fullName, {
         extends: extendsList,

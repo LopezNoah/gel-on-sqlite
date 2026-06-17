@@ -1,4 +1,5 @@
 import type { SchemaSnapshot } from "../schema/schema.js";
+import { normalizeTypeName, qualifiedTypeName } from "../schema/schema.js";
 import type {
   ComputedDef,
   ComputedLinkPropertyDef,
@@ -51,11 +52,6 @@ const SCALAR_DISPLAY_NAMES: Record<string, string> = {
   uuid: "std::uuid",
 };
 
-const normalizeTypeName = (name: string): string =>
-  name.includes("::") ? name : `default::${name}`;
-
-const qualifiedTypeName = (typeDef: TypeDef): string =>
-  `${typeDef.module ?? "default"}::${typeDef.name}`;
 
 const scalarTypeRef = (scalar: ScalarType | string): TypeRef => {
   const displayName = SCALAR_DISPLAY_NAMES[scalar] ?? (scalar.includes("::") ? scalar : `std::${scalar}`);
