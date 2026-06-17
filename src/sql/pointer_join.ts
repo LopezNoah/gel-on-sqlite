@@ -67,3 +67,18 @@ export const pointerStepJoinSql = (step: PointerStepJoin): string => {
     ? ` JOIN ${targetSource} ON ${nextAlias}.${quoteIdent(inlineColumn)} = ${prevId}`
     : ` JOIN ${targetSource} ON ${nextAlias}.${quoteIdent("id")} = ${previousAlias}.${quoteIdent(inlineColumn)}`;
 };
+
+// The one home for the pointer-chain SQL alias scheme — the naming sibling of
+// `pointerStepJoinSql`. A pointer path lowers to a FROM seeded at the root
+// alias, then one JOIN per step; step `i` (0-based) joins through link alias
+// `pj{i}` onto target alias `p{i+1}`. The three pointer-path lowerings in
+// `gel_ir_compiler.ts` (the scalar path, its correlated variant, and the
+// reversed-links link-property path) each re-spelled this scheme inline, so a
+// change to it meant editing three places that had to agree. They now share
+// these helpers. The well-known single-scope anchor aliases (`g0`/`j0`/`t0`)
+// and the single-use indexed families (cp/oe/sg/…) are deliberately left inline
+// — they are not this scheme, and an opaque counter would change every alias
+// string and break the anchors referenced by literal (see docs/adr/0022).
+export const POINTER_ROOT_ALIAS = "p0";
+export const pointerStepTargetAlias = (stepIndex: number): string => `p${stepIndex + 1}`;
+export const pointerStepLinkAlias = (stepIndex: number): string => `pj${stepIndex}`;
