@@ -17,6 +17,7 @@ import type { ShapeElement as GelIRShapeElement, Set as GelIRSet, Statement as G
 import type { InsertIR, InsertLinkDefaultIR, InsertLinkPropertyIR, IRStatement, OverlayIR, SelectIR, UpdateIR, UpdateLinkAssignmentIR } from "../ir/model.js";
 import type { AccessPolicyCondition, AccessPolicyDef, ComputedLinkPropertyExpr, ConstraintDef, FieldDef, FieldDefaultExpr, FunctionDef, FunctionExprDef, FunctionVolatility, LinkPropertyDef, ScalarType, ScalarValue, TypeDef } from "../types.js";
 import { cloneTypeDef, fieldSequenceName, normalizeLinkTargetNames, qualifiedTypeName, usesLinkTable } from "../schema/schema.js";
+import { resolveLinkStorageOwner } from "../schema/physical_layout.js";
 import { parseDeclarativeSchema } from "../schema/sdl_adapter.js";
 import { schemaSnapshotFromDeclarative } from "../schema/uiSchema.js";
 import { tableNameForType } from "../codegen/sql.js";
@@ -9374,68 +9375,6 @@ const findFieldDef = (
   }
 
   return undefined;
-};
-
-const linkDefsEquivalent = (a: NonNullable<TypeDef["links"]>[number], b: NonNullable<TypeDef["links"]>[number]): boolean => {
-  if (a.name !== b.name) {
-    return false;
-  }
-  if ((a.targetType ?? "") !== (b.targetType ?? "")) {
-    return false;
-  }
-  if (Boolean(a.multi) !== Boolean(b.multi)) {
-    return false;
-  }
-
-  const aProps = a.properties ?? [];
-  const bProps = b.properties ?? [];
-  if (aProps.length !== bProps.length) {
-    return false;
-  }
-  for (let i = 0; i < aProps.length; i += 1) {
-    const ap = aProps[i];
-    const bp = bProps[i];
-    if (!bp || ap.name !== bp.name || ap.type !== bp.type) {
-      return false;
-    }
-  }
-
-  return true;
-};
-
-const resolveLinkStorageOwner = (
-  schema: SchemaSnapshot,
-  typeDef: TypeDef,
-  link: NonNullable<TypeDef["links"]>[number],
-): TypeDef => {
-  if (link.overloaded) {
-    return typeDef;
-  }
-
-  let owner = typeDef;
-  let current = typeDef;
-
-  while ((current.extends ?? []).length > 0) {
-    const nextBaseName = current.extends?.[0];
-    if (!nextBaseName) {
-      break;
-    }
-
-    const baseType = schema.getType(nextBaseName);
-    if (!baseType) {
-      break;
-    }
-
-    const baseLink = (baseType.links ?? []).find((candidate) => candidate.name === link.name);
-    if (!baseLink || baseLink.overloaded || !linkDefsEquivalent(link, baseLink)) {
-      break;
-    }
-
-    owner = baseType;
-    current = baseType;
-  }
-
-  return owner;
 };
 
 const coerceScalarForOutput = (type: ScalarType, value: unknown): unknown => {
