@@ -42,6 +42,10 @@ _Avoid_: uniqueness, distinctness.
 How an expression behaves across evaluations: `immutable | stable | volatile | modifying`.
 _Avoid_: purity, side-effect class.
 
+**Live IR inference** (`src/compiler/inference.ts`):
+The home for computing the inference facts on the Live IR, so the [[inference oracle]] (`semantic.ts`) can eventually be deleted (the ADR 0001 follow-up). Currently implements **volatility** only — `inferStatementVolatility(statement, schema, module)`, ported from the oracle and invoked by `compileASTToGelIR`; the Live IR now matches the oracle on all 17 volatility cases (`tests/edgeql_ir_volatility_live.test.ts`, the counterpart to the oracle-pinning `edgeql_ir_volatility_inference.test.ts`). It is **additive** — nothing on the execution path reads `Statement.volatility`, and the call is `try/catch`-guarded so a pathological AST can never break a compile (see `docs/adr/0015`). Cardinality / multiplicity / scope-tree / type parity (286 of the 307 oracle assertions) are not yet ported, so the oracle stays.
+_Avoid_: inference pass, the analyzer.
+
 **Scope tree**:
 The path-scope structure (`ScopeTreeNode`) describing which paths are correlated vs independently iterated within a statement.
 _Avoid_: scope graph, binding tree.
