@@ -1112,7 +1112,7 @@ export const compileDmlToIR = (
       if (e.kind === "literal" && typeof e.value === "boolean") {
         filterExpr = e.value
           ? undefined
-          : { kind: "predicate", target: { kind: "field", field: "id" }, op: "=", value: " __never__" };
+          : { kind: "predicate", target: { kind: "field", field: "id" }, op: "=", value: "__never__" };
       } else if (e.kind === "compare" && e.op === "=") {
         const targetName = statement.typeName;
         const pickField = (s: FreeObjectExpr): string | undefined => {
