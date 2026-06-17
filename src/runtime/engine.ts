@@ -22,7 +22,7 @@ import { materializeGelSQLRows, normalizeGelSQLValue } from "./row_codec.js";
 import { coIteratedBinding } from "./co_iteration.js";
 import { parseDeclarativeSchema } from "../schema/sdl_adapter.js";
 import { schemaSnapshotFromDeclarative } from "../schema/uiSchema.js";
-import { tableNameForType } from "../codegen/sql.js";
+import { linkTableName, tableNameForType } from "../codegen/sql.js";
 import { populateSchemaIntrospection } from "../schema/schema_introspection.js";
 import { materializeSchema, type SQLiteDatabase } from "../runtime/database.js";
 import {
@@ -1927,9 +1927,9 @@ const tryRuntimeSelectExprEvaluationAst = (
         if (!sourceType) return undefined;
         const targetTypeNames = normalizeLinkTargetNames(linkDef.link.targetType, sourceType.module ?? "default");
         const targetTypes = targetTypeNames.flatMap((name) => schema.listConcreteTypesAssignableTo(name));
-        if (linkDef.link.multi || (linkDef.link.properties?.length ?? 0) > 0) {
+        if (usesLinkTable(linkDef.link)) {
           const owner = resolveLinkStorageOwner(schema, sourceType, linkDef.link);
-          const linkTable = `${tableNameForType(qualifiedTypeName(owner))}__${linkDef.link.name.toLowerCase()}`;
+          const linkTable = linkTableName(qualifiedTypeName(owner), linkDef.link);
           const linkRows = db.prepare(`SELECT ${quoteIdent("target")} FROM ${quoteIdent(linkTable)} WHERE ${quoteIdent("source")} = ?`).all(r.id as string) as Array<{ target?: unknown }>;
           for (const linkRow of linkRows) {
             if (typeof linkRow.target !== "string") continue;
@@ -2457,12 +2457,11 @@ const tryRuntimeSelectExprEvaluationAst = (
           if (sourceTypeName && !fieldName.startsWith("@") && typeof row.id === "string") {
             const linkDef = findRuntimeLinkDef(schema, sourceTypeName, fieldName);
             if (linkDef) {
-              const usesTable = Boolean(linkDef.link.multi) || (linkDef.link.properties?.length ?? 0) > 0;
+              const usesTable = usesLinkTable(linkDef.link);
               const sourceType = schema.getType(sourceTypeName);
               if (usesTable && sourceType) {
                 const owner = resolveLinkStorageOwner(schema, sourceType, linkDef.link);
-                const ownerTable = tableNameForType(qualifiedTypeName(owner));
-                const linkTable = `${ownerTable}__${linkDef.link.name.toLowerCase()}`;
+                const linkTable = linkTableName(qualifiedTypeName(owner), linkDef.link);
                 const targetTypeNames = normalizeLinkTargetNames(linkDef.link.targetType, sourceType.module ?? "default");
                 const candidates = targetTypeNames.flatMap((targetTypeName) => {
                   const concrete = schema.listConcreteTypesAssignableTo(targetTypeName);
@@ -8910,11 +8909,10 @@ const resolveBacklinkRowsForSubject = (
     if (filterSource && !schema.listConcreteTypesAssignableTo(filterSource).some((t) => qualifiedTypeName(t) === candidateName)) continue;
     const linkDef = findRuntimeLinkDef(schema, candidateName, link);
     if (!linkDef) continue;
-    const usesTable = Boolean(linkDef.link.multi) || (linkDef.link.properties?.length ?? 0) > 0;
+    const usesTable = usesLinkTable(linkDef.link);
     if (usesTable) {
       const owner = resolveLinkStorageOwner(schema, candidate, linkDef.link);
-      const ownerTable = tableNameForType(qualifiedTypeName(owner));
-      const linkTable = `${ownerTable}__${linkDef.link.name.toLowerCase()}`;
+      const linkTable = linkTableName(qualifiedTypeName(owner), linkDef.link);
       for (const concrete of schema.listConcreteTypesAssignableTo(candidateName)) {
         const concreteName = qualifiedTypeName(concrete);
         const concreteTable = tableNameForType(concreteName);
@@ -8962,7 +8960,7 @@ const collectBacklinkSourceRows = (
     const sourceTable = tableNameForType(qualifiedTypeName(sourceType));
     if (usesLinkTable(link)) {
       const owner = resolveLinkStorageOwner(schema, sourceType, link);
-      const linkTable = `${tableNameForType(qualifiedTypeName(owner))}__${link.name.toLowerCase()}`;
+      const linkTable = linkTableName(qualifiedTypeName(owner), link);
       const linkRows = db
         .prepare(`SELECT s.* FROM ${quoteIdent(sourceTable)} s JOIN ${quoteIdent(linkTable)} l ON l.${quoteIdent("source")} = s.${quoteIdent("id")} WHERE l.${quoteIdent("target")} = ?`)
         .all(targetId) as Record<string, unknown>[];
@@ -9138,9 +9136,9 @@ const evaluateSelectExprShapeEntry = (
       return loaded ? { ...loaded, __source_type: targetTypeName } : null;
     };
 
-    if (linkDef.multi || (linkDef.properties?.length ?? 0) > 0) {
+    if (usesLinkTable(linkDef)) {
       const owner = resolveLinkStorageOwner(schema, schema.getType(sourceType) ?? { module: sourceType.split("::").slice(0, -1).join("::"), name: sourceType.split("::").at(-1) ?? sourceType, fields: [] }, linkDef);
-      const linkTable = `${tableNameForType(qualifiedTypeName(owner))}__${linkDef.name.toLowerCase()}`;
+      const linkTable = linkTableName(qualifiedTypeName(owner), linkDef);
       const linkRows = db.prepare(`SELECT ${quoteIdent("target")} FROM ${quoteIdent(linkTable)} WHERE ${quoteIdent("source")} = ?`).all(row.id) as Array<{ target?: unknown }>;
       return linkRows.map((linkRow) => loadTargetById(linkRow.target)).filter((target): target is Record<string, unknown> => target !== null);
     }
@@ -11446,7 +11444,7 @@ const runWriteWithAccessPolicies = (
 
       if (ast.kind === "insert") {
         for (const link of subjectType.links ?? []) {
-          if (link.multi || (link.properties?.length ?? 0) > 0) {
+          if (usesLinkTable(link)) {
             continue;
           }
           if (!Object.prototype.hasOwnProperty.call(ast.values, link.name)) {
