@@ -1,7 +1,7 @@
-import { getCompilerService, type CompilerCacheMeta } from "../compiler/service.js";
+import { getCompilerService, type CompileContext, type CompilerCacheMeta } from "../compiler/service.js";
 import { validateParsedStatement } from "../compiler/ast_to_ir.js";
 import { PENDING_INSERT_SEQUENCE_VALUE, PENDING_INSERT_SQL_EXPR_VALUE, rewriteDunderDefaults } from "../compiler/dml_lowering.js";
-import { AppError, asAppError, isQueryFailure, tryResult } from "../errors.js";
+import { AppError, asAppError, isQueryFailure, tryProbe, tryResult } from "../errors.js";
 import { decorateErrorWithUnsupportedTag } from "../diagnostics/unsupported.js";
 import { parseEdgeQL, parseEdgeQLScript, type ParseEdgeQLOptions } from "../edgeql/parser.js";
 import { offsetToLineCol, tokenize, type Token } from "../edgeql/tokenizer.js";
@@ -230,6 +230,26 @@ const globalValuesFor = (schema: SchemaSnapshot): Map<string, ScalarValue> => {
 // single-or-empty, so we return the lone scalar row, or `undefined` when the
 // expression yields the empty set (caller treats that as "no value"). Object /
 // non-scalar results aren't valid global values; they return undefined too.
+
+// The shared home for the "can this statement run as one SQL statement? if so
+// use it, else fall back to the runtime evaluator" probe. Compiles `stmtAst`
+// and, when it lowers to a single SQL statement, runs it and returns the rows;
+// otherwise `undefined`. Query problems (unsupported lowering, etc.) fall back
+// to `undefined`; engine defects (TypeError, …) propagate via `tryProbe`
+// instead of being swallowed by a bare `catch`.
+const tryRunSingleSqlRows = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  stmtAst: Statement,
+  context: SecurityContext,
+  compileContext?: CompileContext,
+): unknown[] | undefined =>
+  tryProbe(() => {
+    const compiled = getCompilerService().compile(schema, stmtAst, compileContext);
+    if (!lowersToSingleSql(compiled.sql)) return undefined;
+    return runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
+  });
+
 const evaluateGlobalExpr = (
   db: SQLiteDatabase,
   schema: SchemaSnapshot,
@@ -241,16 +261,10 @@ const evaluateGlobalExpr = (
     expr,
     pos: { line: 1, column: 1 },
   } as unknown as SelectExprStatement;
-  try {
-    const compiled = getCompilerService().compile(schema, stmtAst as unknown as Statement, { globals: context.globals });
-    if (!lowersToSingleSql(compiled.sql)) return undefined;
-    const rows = runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
-    if (rows.length === 0) return undefined;
-    const first = rows[0];
-    return first === null || isScalarValue(first) ? (first as ScalarValue) : undefined;
-  } catch {
-    return undefined;
-  }
+  const rows = tryRunSingleSqlRows(db, schema, stmtAst as unknown as Statement, context, { globals: context.globals });
+  if (!rows || rows.length === 0) return undefined;
+  const first = rows[0];
+  return first === null || isScalarValue(first) ? (first as ScalarValue) : undefined;
 };
 
 // Applies `CREATE GLOBAL <name> [:= <expr>]`. Registers the global on the
@@ -6990,15 +7004,10 @@ const evaluateForScalarIteratorViaSql = (
     withModule: forAst.withModule,
     pos: forAst.pos,
   } as unknown as Statement;
-  try {
-    const compiled = getCompilerService().compile(schema, stmtAst, { globals: context.globals, params: context.params });
-    if (!lowersToSingleSql(compiled.sql)) return undefined;
-    const rows = runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
-    const mapped = rows.map((row) => (row !== null && typeof row === "object" ? JSON.stringify(row) : row));
-    return mapped.every((row) => row === null || isScalarValue(row)) ? (mapped as (ScalarValue | null)[]) : undefined;
-  } catch {
-    return undefined;
-  }
+  const rows = tryRunSingleSqlRows(db, schema, stmtAst, context, { globals: context.globals, params: context.params });
+  if (!rows) return undefined;
+  const mapped = rows.map((row) => (row !== null && typeof row === "object" ? JSON.stringify(row) : row));
+  return mapped.every((row) => row === null || isScalarValue(row)) ? (mapped as (ScalarValue | null)[]) : undefined;
 };
 
 // Expand a FOR body (an INSERT leaf or a nested FOR) into concrete INSERTs,
