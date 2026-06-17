@@ -30,6 +30,7 @@ import {
   validateUserDDLStatement,
 } from "./ddl.js";
 import { installSqlTrace, runWithSqlSink } from "./sql_trace_sink.js";
+import { applyLimitOffset, dedupeRowsById, distinctValues } from "./result_clauses.js";
 
 
 export interface QueryResult {
@@ -158,21 +159,6 @@ const normalizeRuntimeFloat = (value: number): number => (
   Number.isFinite(value) ? Number(value.toPrecision(15)) : value
 );
 
-// Fieldless `count(.link)` aggregates over the link target rows themselves.
-// Mirror the SQL lowering (`COUNT(DISTINCT target)` in countForwardLink) by
-// deduping id-bearing rows before handing them to the aggregate.
-const dedupeRowsById = (rows: unknown[]): unknown[] => {
-  const seen = new Set<string>();
-  return rows.filter((item) => {
-    const id = item && typeof item === "object" && !Array.isArray(item)
-      ? (item as { id?: unknown }).id
-      : undefined;
-    if (typeof id !== "string") return true;
-    if (seen.has(id)) return false;
-    seen.add(id);
-    return true;
-  });
-};
 
 const runtimeExprAliases = new WeakMap<SchemaSnapshot, Map<string, string>>();
 
@@ -2554,15 +2540,7 @@ const tryRuntimeSelectExprEvaluationAst = (
           if (out.length > 1
             && out.every((item) => item && typeof item === "object" && !Array.isArray(item)
               && typeof (item as { id?: unknown }).id === "string")) {
-            const seen = new Set<string>();
-            const deduped: unknown[] = [];
-            for (const item of out) {
-              const id = (item as { id: string }).id;
-              if (seen.has(id)) continue;
-              seen.add(id);
-              deduped.push(item);
-            }
-            return deduped;
+            return dedupeRowsById(out);
           }
           return out;
         }
@@ -3076,9 +3054,7 @@ const tryRuntimeSelectExprEvaluationAst = (
           const direction = clausesOrderBy.direction === "desc" ? -1 : 1;
           rows.sort((a, b) => String(a[clausesOrderBy.field] ?? "").localeCompare(String(b[clausesOrderBy.field] ?? "")) * direction);
         }
-        if (expr.clauses.limit !== undefined) {
-          rows = rows.slice(0, expr.clauses.limit);
-        }
+        rows = applyLimitOffset(rows, expr.clauses.limit);
         if (expr.shape && expr.shape.some((el) => el.kind === "computed" || (el.kind === "field" && el.origin !== "default"))) {
           return rows.map((row) => materializeShapeOnRow(row, sourceType, expr.shape, env));
         }
@@ -3203,22 +3179,13 @@ const tryRuntimeSelectExprEvaluationAst = (
             return String(left ?? "").localeCompare(String(right ?? "")) * direction;
           });
         }
-        if (expr.limit !== undefined || expr.offset !== undefined) {
-          const offset = expr.offset ?? 0;
-          rows = expr.limit === undefined ? rows.slice(offset) : rows.slice(offset, offset + expr.limit);
-        }
+        rows = applyLimitOffset(rows, expr.limit, expr.offset);
         return rows;
       }
       case "distinct": {
         const value = evalExpr(expr.expr, env);
         if (!Array.isArray(value)) return value;
-        const seen = new Set<string>();
-        return value.filter((item) => {
-          const key = JSON.stringify(item);
-          if (seen.has(key)) return false;
-          seen.add(key);
-          return true;
-        });
+        return distinctValues(value);
       }
       case "type_name": {
         const current = env.get("__current__");
@@ -4271,12 +4238,7 @@ const applyChainSubqueryClauses = (
     if (orderBy?.direction === "desc") rows.reverse();
     ids = rows.map((r) => String(r.id));
   }
-  const offset = node.offset ?? 0;
-  if (node.limit !== undefined) {
-    ids = ids.slice(offset, offset + node.limit);
-  } else if (offset > 0) {
-    ids = ids.slice(offset);
-  }
+  ids = applyLimitOffset(ids, node.limit, node.offset);
   return { typeName: base.typeName, ids };
 };
 
