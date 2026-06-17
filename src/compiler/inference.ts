@@ -383,11 +383,17 @@ const dedupeByName = <T extends { name: string }>(items: readonly T[]): T[] => {
   return out;
 };
 
-export const inferStatementCardinality = (
+export type MultLevel = "empty" | "unique" | "duplicate" | "unknown";
+
+// Shared per-statement inference engine: builds the schema walkers + the
+// cardinality expression engine once, and exposes statement-level cardinality
+// and multiplicity derivations that reuse them. Both `inferStatementCardinality`
+// and `inferStatementMultiplicity` are thin wrappers over this (see ADR 0017).
+const makeInferenceEngine = (
   statement: Statement,
   schema: SchemaSnapshot,
   activeModule = "default",
-): CardLevel => {
+) => {
   const bindingTypes = new Map<string, TypeDef>();
   const bindingCards = new Map<string, CardLevel>();
   const bindingTypeExprs = new Map<string, TypeExpr>();
@@ -981,51 +987,515 @@ export const inferStatementCardinality = (
     }
   };
 
-  if (statement.kind === "insert") {
-    const ins = statement as { typeName: string; conflict?: { else?: { typeName?: string } } };
-    const conflict = ins.conflict;
-    if (!conflict) return "one";
-    if (!conflict.else) return "at_most_one"; // UNLESS CONFLICT may insert nothing
-    // ELSE yields the conflict branch. When it targets the insert's own subject
-    // type it is the single conflicting row → the statement stays single; an
-    // unrelated else set makes the result many.
-    const elseType = conflict.else.typeName;
-    if (elseType && normalizeTypeName(elseType, activeModule) === normalizeTypeName(ins.typeName, activeModule)) return "one";
-    return "many";
-  }
-  if (statement.kind === "update" || statement.kind === "delete") {
-    populateBindings((statement as { with?: Array<{ name: string; value: WithBindingValue }> }).with);
-    const s = statement as { typeName: string; filter?: FilterExpr };
-    const typeDef = bindingTypes.get(s.typeName) ?? resolveObjectTypeOrAliasSource(s.typeName);
-    if (typeDef && filterRestrictsAtMostOne(s.filter, typeDef)) return "at_most_one";
-    return "many";
-  }
-
-  if (statement.kind === "for") {
-    populateBindings((statement as { with?: Array<{ name: string; value: WithBindingValue }> }).with);
-    const s = statement as { iteratorExpr: FreeObjectExpr; body: Statement };
-    const iterCard = inferAstCardinality(s.iteratorExpr);
-    const bodyCard = inferStatementCardinality(s.body, schema, activeModule);
-    return cartesianCard(iterCard, bodyCard);
-  }
-
-  if (statement.kind === "select_expr") {
-    populateBindings((statement as { with?: Array<{ name: string; value: WithBindingValue }> }).with);
-    const raw = inferAstCardinality(statement.expr);
-    return raw === "empty" ? "at_most_one" : raw;
-  }
-
-  if (statement.kind === "select") {
-    populateBindings((statement as { with?: Array<{ name: string; value: WithBindingValue }> }).with);
-    const limit = (statement as { limit?: number }).limit;
-    let card: CardLevel = limit === 0 ? "empty" : limit === 1 ? "at_most_one" : "many";
-    const typeDef = resolveObjectTypeOrAliasSource((statement as { typeName: string }).typeName);
-    if (card === "many" && typeDef && filterRestrictsAtMostOne((statement as { filter?: FilterExpr }).filter, typeDef)) {
-      card = "at_most_one";
+  const statementCardinality = (): CardLevel => {
+    if (statement.kind === "insert") {
+      const ins = statement as { typeName: string; conflict?: { else?: { typeName?: string } } };
+      const conflict = ins.conflict;
+      if (!conflict) return "one";
+      if (!conflict.else) return "at_most_one"; // UNLESS CONFLICT may insert nothing
+      const elseType = conflict.else.typeName;
+      if (elseType && normalizeTypeName(elseType, activeModule) === normalizeTypeName(ins.typeName, activeModule)) return "one";
+      return "many";
     }
-    return card;
+    if (statement.kind === "update" || statement.kind === "delete") {
+      populateBindings((statement as { with?: Array<{ name: string; value: WithBindingValue }> }).with);
+      const s = statement as { typeName: string; filter?: FilterExpr };
+      const typeDef = bindingTypes.get(s.typeName) ?? resolveObjectTypeOrAliasSource(s.typeName);
+      if (typeDef && filterRestrictsAtMostOne(s.filter, typeDef)) return "at_most_one";
+      return "many";
+    }
+    if (statement.kind === "for") {
+      populateBindings((statement as { with?: Array<{ name: string; value: WithBindingValue }> }).with);
+      const s = statement as { iteratorExpr: FreeObjectExpr; body: Statement };
+      const iterCard = inferAstCardinality(s.iteratorExpr);
+      const bodyCard = inferStatementCardinality(s.body, schema, activeModule);
+      return cartesianCard(iterCard, bodyCard);
+    }
+    if (statement.kind === "select_expr") {
+      populateBindings((statement as { with?: Array<{ name: string; value: WithBindingValue }> }).with);
+      const raw = inferAstCardinality(statement.expr);
+      return raw === "empty" ? "at_most_one" : raw;
+    }
+    if (statement.kind === "select") {
+      populateBindings((statement as { with?: Array<{ name: string; value: WithBindingValue }> }).with);
+      const limit = (statement as { limit?: number }).limit;
+      let card: CardLevel = limit === 0 ? "empty" : limit === 1 ? "at_most_one" : "many";
+      const typeDef = resolveObjectTypeOrAliasSource((statement as { typeName: string }).typeName);
+      if (card === "many" && typeDef && filterRestrictsAtMostOne((statement as { filter?: FilterExpr }).filter, typeDef)) {
+        card = "at_most_one";
+      }
+      return card;
+    }
+    if (statement.kind === "select_free") return "one";
+    return "many";
+  };
+
+  // ---- multiplicity engine (mirrors the oracle's inferAstMultiplicity) ----
+  const bindingMults = new Map<string, MultLevel>();
+  const shapeContextStack: ShapeElement[][] = [];
+  const withBindingValues = new Map<string, WithBindingValue>(
+    (statement as { with?: Array<{ name: string; value: WithBindingValue }> }).with?.map((b) => [b.name, b.value] as const) ?? [],
+  );
+
+  // Look up `field` in the shape a binding/projection projects, returning the
+  // multiplicity of the matching computed element's body (mirrors the oracle's
+  // findInShape). Lets `binding.computed` resolve through the binding's own
+  // shape rather than the underlying schema type.
+  const computedBodyToExpr = (ce: unknown): FreeObjectExpr | undefined => {
+    if (!ce || typeof ce !== "object") return undefined;
+    const node = ce as { kind?: string; expr?: unknown };
+    if (node.kind === "select_expr" && node.expr) return node.expr as FreeObjectExpr;
+    if (node.kind === "field_ref") return undefined;
+    return ce as FreeObjectExpr;
+  };
+  const findShapeFieldMult = (shape: ShapeElement[], field: string): MultLevel | undefined => {
+    for (const el of shape) {
+      if ("name" in el && el.name === field && el.kind === "computed") {
+        const inner = computedBodyToExpr((el as { expr: unknown }).expr);
+        if (!inner) return undefined;
+        shapeContextStack.push(shape);
+        try { return inferAstMultiplicity(inner); } finally { shapeContextStack.pop(); }
+      }
+    }
+    return undefined;
+  };
+  const findInExprShape = (e: FreeObjectExpr, field: string): MultLevel | undefined => {
+    if (e.kind === "shape_projection") {
+      const own = findShapeFieldMult(e.shape, field);
+      if (own !== undefined) return own;
+      return findInExprShape(e.expr, field);
+    }
+    if (e.kind === "select_expr_subquery" || e.kind === "distinct" || e.kind === "cast") return findInExprShape(e.expr, field);
+    if (e.kind === "binding_ref") {
+      const v = withBindingValues.get(e.name);
+      if (v?.kind === "subquery") return findShapeFieldMult(v.query.shape, field);
+      if (v?.kind === "subquery_expr") return findInExprShape(v.expr, field);
+    }
+    return undefined;
+  };
+
+  const objectTypesOverlap = (a: TypeDef, b: TypeDef): boolean => {
+    const aName = qualifiedTypeName(a);
+    const bName = qualifiedTypeName(b);
+    if (aName === bName) return true;
+    const aConc = new Set(schema.listConcreteTypesAssignableTo(aName).map(qualifiedTypeName));
+    return schema.listConcreteTypesAssignableTo(bName).map(qualifiedTypeName).some((n) => aConc.has(n));
+  };
+
+  const fieldMultiplicityOnType = (typeDef: TypeDef, fieldName: string): MultLevel => {
+    if (fieldName === "id") return "unique";
+    if (collectLinks(typeDef).some((l) => l.name === fieldName)) return "unique"; // object link → UNIQUE
+    const computed = (typeDef.computeds ?? []).find((c) => c.name === fieldName);
+    if (computed) return computed.kind === "link" ? "unique" : "duplicate";
+    const field = collectFields(typeDef).find((f) => f.name === fieldName);
+    if (!field) return "unknown";
+    return isExclusiveFieldOf(fieldName, typeDef) ? "unique" : "duplicate";
+  };
+
+  const callArgAsExpr = (a: unknown): FreeObjectExpr | undefined => {
+    const k = (a as { kind?: string }).kind;
+    if (k === "named_arg") return callArgAsExpr((a as { arg: unknown }).arg);
+    if (k === "expr") return (a as { expr: FreeObjectExpr }).expr;
+    if (k === "binding_ref") return { kind: "binding_ref", name: (a as { name: string }).name } as FreeObjectExpr;
+    if (k === "literal") return { kind: "literal", value: (a as { value: unknown }).value } as FreeObjectExpr;
+    if (k === "parameter") return { kind: "parameter", name: (a as { name: string }).name } as FreeObjectExpr;
+    if (k === "set_literal") return { kind: "set_literal", values: (a as { values: unknown[] }).values } as FreeObjectExpr;
+    if (k === "array_literal") return { kind: "array_literal_expr", values: [] } as FreeObjectExpr;
+    if (k === "function_call") return { kind: "function_call", call: (a as { call: FunctionCallExpr }).call } as FreeObjectExpr;
+    return undefined;
+  };
+
+  const inferUnionMultiplicity = (values: FreeObjectExpr[]): MultLevel => {
+    if (values.length === 0) return "empty";
+    const mults = values.map(inferAstMultiplicity);
+    const nonEmpty = mults.filter((m) => m !== "empty");
+    if (nonEmpty.length === 0) return "empty";
+    if (nonEmpty.some((m) => m === "duplicate")) return "duplicate";
+    if (nonEmpty.length === 1) return nonEmpty[0];
+    if (values.every((v) => v.kind === "mutation_expr" && (v as { statement: { kind: string } }).statement.kind === "insert")) return "unique";
+    const types = values.map((v) => resolveExprObjectType(v));
+    let anyType = false;
+    let overlap = false;
+    for (let i = 0; i < types.length && !overlap; i++) {
+      const ti = types[i];
+      if (!ti) continue;
+      anyType = true;
+      for (let j = i + 1; j < types.length; j++) {
+        const tj = types[j];
+        if (tj && objectTypesOverlap(ti, tj)) { overlap = true; break; }
+      }
+    }
+    if (anyType && !overlap) return "unique";
+    return "duplicate";
+  };
+
+  function inferAstMultiplicity(expr: FreeObjectExpr | undefined): MultLevel {
+    if (!expr) return "unknown";
+    switch (expr.kind) {
+      case "literal":
+      case "parameter":
+      case "substitution":
+      case "global_ref":
+      case "current_item":
+      case "enum_path":
+      case "introspect_typeof":
+        return "unique";
+      case "select": {
+        return resolveObjectTypeOrAliasSource(expr.typeName) ? "unique" : "duplicate";
+      }
+      case "binding_ref": {
+        const bound = bindingMults.get(expr.name);
+        if (bound !== undefined) return bound;
+        return resolveObjectTypeOrAliasSource(expr.name) ? "unique" : "unknown";
+      }
+      case "shape_projection":
+      case "cast":
+        return inferAstMultiplicity(expr.expr);
+      case "distinct": {
+        const inner = inferAstMultiplicity(expr.expr);
+        return inner === "empty" ? "empty" : "unique";
+      }
+      case "set_literal": {
+        if (expr.values.length === 0) return "empty";
+        const seen = new Set<string>();
+        for (const v of expr.values) {
+          const key = JSON.stringify(v);
+          if (seen.has(key)) return "duplicate";
+          seen.add(key);
+        }
+        return "unique";
+      }
+      case "set_expr":
+        return inferUnionMultiplicity(expr.values);
+      case "set_op": {
+        const a = inferAstMultiplicity(expr.left);
+        const b = inferAstMultiplicity(expr.right);
+        if (a === "empty" || b === "empty") return "empty";
+        if (expr.op === "intersect") return (a === "unique" || b === "unique") ? "unique" : "duplicate";
+        return a;
+      }
+      case "tuple": {
+        const mults = expr.values.map(inferAstMultiplicity);
+        if (mults.some((m) => m === "empty")) return "empty";
+        const cards = expr.values.map(inferAstCardinality);
+        const numMany = cards.filter((c) => !isAtMostOne(c)).length;
+        if (numMany === 0) return mults.every((m) => m === "unique") ? "unique" : "duplicate";
+        if (numMany > 1) return "duplicate";
+        for (let i = 0; i < cards.length; i++) if (!isAtMostOne(cards[i])) return mults[i];
+        return "duplicate";
+      }
+      case "free_object_constructor":
+        return "unique";
+      case "array_literal_expr": {
+        const mults = expr.values.map(inferAstMultiplicity);
+        if (mults.some((m) => m === "empty")) return "empty";
+        const cards = expr.values.map(inferAstCardinality);
+        const numMany = cards.filter((c) => !isAtMostOne(c)).length;
+        return (numMany <= 1 && mults.every((m) => m === "unique")) ? "unique" : "duplicate";
+      }
+      case "field_access": {
+        if (expr.expr.kind === "introspect_typeof") return "unique";
+        // Shape-element body resolution via the surrounding shape context.
+        if (expr.expr.kind === "current_item" && shapeContextStack.length > 0) {
+          const ctx = shapeContextStack[shapeContextStack.length - 1];
+          for (const el of ctx) {
+            if ("name" in el && el.name === expr.field && el.kind === "computed") {
+              const body = (el as { expr?: { kind?: string; expr?: FreeObjectExpr } }).expr;
+              const inner = body?.kind === "select_expr" ? body.expr : (body as FreeObjectExpr | undefined);
+              if (inner) {
+                shapeContextStack.push(ctx);
+                try { return inferAstMultiplicity(inner); } finally { shapeContextStack.pop(); }
+              }
+            }
+          }
+        }
+        const shapeMult = findInExprShape(expr.expr, expr.field);
+        if (shapeMult !== undefined) return shapeMult;
+        const srcType = resolveExprObjectType(expr.expr);
+        if (!srcType) return "duplicate";
+        return fieldMultiplicityOnType(srcType, expr.field);
+      }
+      case "is_type":
+      case "exists":
+        return "duplicate";
+      case "math": {
+        const lm = inferAstMultiplicity(expr.left);
+        const rm = inferAstMultiplicity(expr.right);
+        if (lm === "empty" || rm === "empty") return "empty";
+        if (expr.op === "+") {
+          if (lm === "duplicate" || rm === "duplicate") return "duplicate";
+          const numMany = (isAtMostOne(inferAstCardinality(expr.left)) ? 0 : 1) + (isAtMostOne(inferAstCardinality(expr.right)) ? 0 : 1);
+          return numMany > 1 ? "duplicate" : "unique";
+        }
+        return "duplicate";
+      }
+      case "compare":
+      case "in_expr":
+      case "logical":
+      case "and":
+      case "or":
+        return "duplicate";
+      case "not":
+      case "unary":
+        return inferAstMultiplicity(expr.expr);
+      case "if_else": {
+        if (!isAtMostOne(inferAstCardinality(expr.condition))) return "duplicate";
+        const t = inferAstMultiplicity(expr.thenExpr);
+        const e = inferAstMultiplicity(expr.elseExpr);
+        if (t === "empty") return e;
+        if (e === "empty") return t;
+        return (t === "unique" && e === "unique") ? "unique" : "duplicate";
+      }
+      case "coalesce": {
+        const a = inferAstMultiplicity(expr.left);
+        const b = inferAstMultiplicity(expr.right);
+        if (a === "empty") return b;
+        if (b === "empty") return a;
+        return (a === "unique" && b === "unique") ? "unique" : "duplicate";
+      }
+      case "concat": {
+        const partMults = expr.parts.map(inferAstMultiplicity);
+        if (partMults.some((m) => m === "empty")) return "empty";
+        if (partMults.some((m) => m === "duplicate")) return "duplicate";
+        const numMany = expr.parts.map(inferAstCardinality).filter((c) => !isAtMostOne(c)).length;
+        if (numMany > 1) return "duplicate";
+        return partMults.every((m) => m === "unique") ? "unique" : "duplicate";
+      }
+      case "function_call": {
+        const callName = expr.call.name;
+        const stripped = stripModulePrefix(callName);
+        const argExprs = expr.call.args.map(callArgAsExpr);
+        const argMults = argExprs.map((a) => a ? inferAstMultiplicity(a) : "duplicate");
+        const argCards = argExprs.map((a) => a ? inferAstCardinality(a) : "many");
+        if (isAggregating(callName) || isOptionalAggregate(callName)) return "unique";
+        if (stripped === "assert_distinct" || stripped === "enumerate") return "unique";
+        if (stripped === "assert_exists" || stripped === "assert_single") return argMults[0] ?? "unknown";
+        const fn = schema.findFunction("default", stripped, expr.call.args.length) ?? schema.findFunction("std", stripped, expr.call.args.length);
+        if (fn) {
+          const eMults = fn.params.map((p, i) => p.setOf ? "unique" : (argMults[i] ?? "unknown"));
+          const eCards = fn.params.map((p, i) => p.setOf ? "one" as CardLevel : (argCards[i] ?? "many"));
+          if (eMults.some((m) => m === "empty")) return "empty";
+          if (eMults.some((m) => m === "duplicate" || m === "unknown")) return "duplicate";
+          return eCards.filter((c) => !isAtMostOne(c)).length > 1 ? "duplicate" : "unique";
+        }
+        return "duplicate";
+      }
+      case "index_access": {
+        if (expr.expr.kind === "tuple") {
+          const els = expr.expr.values;
+          const idx = expr.index;
+          if (idx < 0 || idx >= els.length) return "unknown";
+          const elCards = els.map(inferAstCardinality);
+          const numMany = elCards.filter((c) => !isAtMostOne(c)).length;
+          if (numMany > 1) return "duplicate";
+          if (numMany === 1 && isAtMostOne(elCards[idx])) return "duplicate";
+          return inferAstMultiplicity(els[idx]);
+        }
+        if (isAtMostOne(inferAstCardinality(expr.expr))) return inferAstMultiplicity(expr.expr);
+        return "duplicate";
+      }
+      case "slice_access":
+        return "duplicate";
+      case "select_expr_subquery":
+        if (expr.limit === 0) return "empty";
+        return inferAstMultiplicity(expr.expr);
+      case "for_expr": {
+        const iterMult = inferAstMultiplicity(expr.iterator);
+        const bodyMult = inferAstMultiplicity(expr.body);
+        if (iterMult === "empty" || bodyMult === "empty") return "empty";
+        if (iterMult === "duplicate") return "duplicate";
+        if (expr.body.kind === "free_object_constructor") return "unique";
+        return bodyMult === "unique" ? "unique" : "duplicate";
+      }
+      case "path":
+        return inferAstMultiplicity({
+          kind: "field_access",
+          expr: { kind: "binding_ref", name: (expr as { head: string }).head } as FreeObjectExpr,
+          field: (expr as { tail: string }).tail,
+        } as FreeObjectExpr);
+      case "backlink_path":
+      case "mutation_expr":
+      case "group_expr":
+        return "unique";
+      default:
+        return "unknown";
+    }
   }
 
-  if (statement.kind === "select_free") return "one";
-  return "many";
+  const inferTopLevelMultiplicity = (expr: FreeObjectExpr | undefined, card: CardLevel): MultLevel => {
+    const m = inferAstMultiplicity(expr);
+    if ((m === "duplicate" || m === "unknown") && isAtMostOne(card)) return "unique";
+    return m;
+  };
+
+  const populateBindingMults = (withClause: Array<{ name: string; value: WithBindingValue }> | undefined): void => {
+    for (const binding of withClause ?? []) {
+      const value = binding.value;
+      if (value.kind === "subquery_expr") bindingMults.set(binding.name, inferAstMultiplicity(value.expr));
+      else if (value.kind === "subquery") bindingMults.set(binding.name, "unique");
+      else if (value.kind === "set_literal") bindingMults.set(binding.name, value.values.length === 0 ? "empty" : (new Set(value.values.map((v) => JSON.stringify(v))).size === value.values.length ? "unique" : "duplicate"));
+      else if (value.kind === "literal" || value.kind === "parameter" || value.kind === "array_literal") bindingMults.set(binding.name, "unique");
+      else if (value.kind === "binding_ref") { const m = bindingMults.get(value.name); if (m !== undefined) bindingMults.set(binding.name, m); }
+    }
+  };
+
+  const statementMultiplicity = (): MultLevel => {
+    if (statement.kind === "insert" || statement.kind === "update" || statement.kind === "delete") return "unique";
+    if (statement.kind === "select" || statement.kind === "select_free") return "unique";
+    const withClause = (statement as { with?: Array<{ name: string; value: WithBindingValue }> }).with;
+    populateBindings(withClause);
+    populateBindingMults(withClause);
+    if (statement.kind === "select_expr") {
+      return inferTopLevelMultiplicity(statement.expr, inferAstCardinality(statement.expr));
+    }
+    if (statement.kind === "for") {
+      // Mirrors the oracle's `_infer_for_multiplicity` (DISTINCT_UNION
+      // detection): a UNIQUE body that is provably disjoint across iterations
+      // (references the iter var, filters by it, or has fresh identity) keeps
+      // the union UNIQUE; otherwise the iterator's duplicates leak through.
+      const variable = (statement as { variable: string }).variable;
+      const iteratorExpr = (statement as { iteratorExpr: FreeObjectExpr }).iteratorExpr;
+      const body = (statement as { body: Statement }).body;
+
+      const iterCard = inferAstCardinality(iteratorExpr);
+      let bodyCard: CardLevel = "many";
+      if (body.kind === "select_expr") bodyCard = inferAstCardinality((body as { expr: FreeObjectExpr }).expr);
+      else if (body.kind === "select_free") bodyCard = "one";
+      else if (body.kind === "insert") bodyCard = "one";
+      const combinedRaw = cartesianCard(iterCard, bodyCard);
+
+      bindingMults.set(variable, "unique");
+      bindingCards.set(variable, "one");
+      const forIterMult = inferAstMultiplicity(iteratorExpr);
+      const forBodyExpr: FreeObjectExpr | undefined =
+        body.kind === "select_expr" ? (body as { expr: FreeObjectExpr }).expr :
+        body.kind === "select" ? { kind: "select", typeName: (body as { typeName: string }).typeName, shape: (body as { shape: ShapeElement[] }).shape, clauses: {} } as FreeObjectExpr :
+        undefined;
+
+      const isIterDerivedRef = (e: FreeObjectExpr): boolean => {
+        if (e.kind === "binding_ref" && e.name === variable) return true;
+        if (e.kind === "index_access" || e.kind === "field_access") return isIterDerivedRef(e.expr);
+        return false;
+      };
+      const isDirectIterFilter = (filter: FilterExpr | undefined): boolean => {
+        if (!filter) return false;
+        if (filter.kind === "predicate" && filter.op === "=" && filter.target.kind === "field") {
+          const v = (filter as { value?: unknown }).value;
+          if (typeof v === "object" && v !== null && (v as { kind?: string }).kind === "binding_ref" && (v as { name?: string }).name === variable) return true;
+        }
+        if (filter.kind === "and") return isDirectIterFilter(filter.left) || isDirectIterFilter(filter.right);
+        if (filter.kind === "free_expr") {
+          const e = filter.expr;
+          if (e.kind === "compare" && e.op === "=") {
+            const sides = [e.left, e.right];
+            const fieldSide = sides.find((s) => s.kind === "field_access" && (s.expr.kind === "current_item" || s.expr.kind === "binding_ref"));
+            const varSide = sides.find(isIterDerivedRef);
+            if (fieldSide && varSide) return true;
+          }
+        }
+        return false;
+      };
+      const bodyFilter: FilterExpr | undefined =
+        body.kind === "select" ? (body as { filter?: FilterExpr }).filter :
+        body.kind === "select_expr" && ((body as { expr: { filter?: unknown } }).expr).filter ? (((body as { expr: { filter: FreeObjectExpr } }).expr).filter as unknown as FilterExpr) :
+        undefined;
+      const unwrapBodyExpr = (e: FreeObjectExpr | undefined): FreeObjectExpr | undefined => {
+        if (!e) return undefined;
+        if (e.kind === "shape_projection" || e.kind === "cast" || e.kind === "distinct") return unwrapBodyExpr(e.expr);
+        if (e.kind === "select_expr_subquery" && !e.filter && !e.orderBy && e.limit === undefined && e.offset === undefined) return unwrapBodyExpr(e.expr);
+        return e;
+      };
+      const withList = (statement as { with?: Array<{ name: string; value: WithBindingValue }> }).with ?? [];
+      const resolveBindingToExpr = (name: string, depth = 0): FreeObjectExpr | undefined => {
+        if (depth > 8) return undefined;
+        for (const b of withList) {
+          if (b.name === name) {
+            if (b.value.kind === "subquery_expr") return b.value.expr;
+            if (b.value.kind === "binding_ref") return resolveBindingToExpr(b.value.name, depth + 1);
+          }
+        }
+        return undefined;
+      };
+      const seededInner: string[] = [];
+      const seedInnerBindings = (e: FreeObjectExpr | undefined): void => {
+        if (!e) return;
+        if (e.kind === "select_expr_subquery") {
+          const withs = (e.clauses as { _withBindings?: Array<{ name: string; value: { kind: string; expr?: FreeObjectExpr } }> } | undefined)?._withBindings;
+          for (const b of withs ?? []) {
+            if (b.value.kind === "subquery_expr" && b.value.expr) { bindingMults.set(b.name, inferAstMultiplicity(b.value.expr)); seededInner.push(b.name); }
+          }
+          seedInnerBindings(e.expr);
+        }
+      };
+      seedInnerBindings(forBodyExpr);
+      const innerBindingMap = new Map<string, FreeObjectExpr>();
+      const collectInner = (e: FreeObjectExpr | undefined): void => {
+        if (!e) return;
+        if (e.kind === "select_expr_subquery") {
+          const withs = (e.clauses as { _withBindings?: Array<{ name: string; value: { kind: string; expr?: FreeObjectExpr } }> } | undefined)?._withBindings;
+          for (const b of withs ?? []) if (b.value.kind === "subquery_expr" && b.value.expr) innerBindingMap.set(b.name, b.value.expr);
+          collectInner(e.expr);
+        }
+      };
+      collectInner(forBodyExpr);
+      const resolvesToIterVar = (name: string): boolean => {
+        const seen = new Set<string>();
+        let cur: string | undefined = name;
+        while (cur !== undefined && !seen.has(cur)) {
+          if (cur === variable) return true;
+          seen.add(cur);
+          const next = innerBindingMap.get(cur);
+          cur = next && next.kind === "binding_ref" ? next.name : undefined;
+        }
+        return false;
+      };
+      const findNestedIterFilter = (e: FreeObjectExpr | undefined, depth = 0): boolean => {
+        if (!e || depth > 6) return false;
+        const fc = (e as { filter?: unknown }).filter;
+        if (fc && isDirectIterFilter(fc as unknown as FilterExpr)) return true;
+        if (e.kind === "select" && e.clauses?.filter && isDirectIterFilter(e.clauses.filter)) return true;
+        if (e.kind === "select_expr_subquery" || e.kind === "shape_projection" || e.kind === "distinct" || e.kind === "cast") return findNestedIterFilter(e.expr, depth + 1);
+        if (e.kind === "set_expr") return e.values.some((v) => findNestedIterFilter(v, depth + 1));
+        return false;
+      };
+
+      const forBodyMult = forBodyExpr ? inferAstMultiplicity(forBodyExpr) : "unique";
+      const bodyInner = unwrapBodyExpr(forBodyExpr);
+      const bodyResolvedFreeObj = bodyInner?.kind === "binding_ref"
+        ? unwrapBodyExpr(resolveBindingToExpr(bodyInner.name))?.kind === "free_object_constructor"
+        : false;
+
+      let forCombinedMult: MultLevel = "duplicate";
+      if (forIterMult === "empty" || forBodyMult === "empty") forCombinedMult = "empty";
+      else if (body.kind === "insert") forCombinedMult = "unique";
+      else if (forIterMult !== "duplicate" && forBodyMult === "unique") {
+        const bodyRefsIter =
+          (bodyInner?.kind === "binding_ref" && resolvesToIterVar(bodyInner.name))
+          || (bodyInner !== undefined && isIterDerivedRef(bodyInner));
+        const bodyIsFreeObj = bodyInner?.kind === "free_object_constructor";
+        const bodyIsInsert = bodyInner?.kind === "mutation_expr" && (bodyInner as { statement: { kind: string } }).statement.kind === "insert";
+        if (bodyRefsIter || bodyIsFreeObj || bodyIsInsert || isDirectIterFilter(bodyFilter) || findNestedIterFilter(forBodyExpr)) {
+          forCombinedMult = "unique";
+        }
+      }
+      if (bodyInner?.kind === "free_object_constructor" || bodyResolvedFreeObj) forCombinedMult = "unique";
+      if (forCombinedMult === "duplicate" && isAtMostOne(combinedRaw)) forCombinedMult = "unique";
+      return forCombinedMult;
+    }
+    return "unknown";
+  };
+
+  return { statementCardinality, statementMultiplicity };
 };
+
+export const inferStatementCardinality = (
+  statement: Statement,
+  schema: SchemaSnapshot,
+  activeModule = "default",
+): CardLevel => makeInferenceEngine(statement, schema, activeModule).statementCardinality();
+
+export const inferStatementMultiplicity = (
+  statement: Statement,
+  schema: SchemaSnapshot,
+  activeModule = "default",
+): MultLevel => makeInferenceEngine(statement, schema, activeModule).statementMultiplicity();
