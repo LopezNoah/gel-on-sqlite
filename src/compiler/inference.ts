@@ -1499,3 +1499,43 @@ export const inferStatementMultiplicity = (
   schema: SchemaSnapshot,
   activeModule = "default",
 ): MultLevel => makeInferenceEngine(statement, schema, activeModule).statementMultiplicity();
+
+// Statement-level type name (`stype`) for the Live IR. Returns the derived
+// union name `__derived__::(modA:A | modB:B)` when the top-level expression
+// composes multiple distinct object types (UNION / set literal / IF-ELSE / ??),
+// matching the oracle; otherwise `undefined` so the caller falls back to the
+// base set's typeref (which the builder already computes for the single-type
+// case). Additive — `stype` is read 0× by execution.
+export const inferStatementType = (
+  statement: Statement,
+  schema: SchemaSnapshot,
+  activeModule = "default",
+): string | undefined => {
+  const branchObjectTypeName = (expr: FreeObjectExpr | undefined): string | undefined => {
+    if (!expr) return undefined;
+    let name: string | undefined;
+    if (expr.kind === "binding_ref") name = expr.name;
+    else if (expr.kind === "select") name = expr.typeName;
+    else if (expr.kind === "shape_projection") return branchObjectTypeName(expr.expr);
+    if (!name) return undefined;
+    const typeDef = schema.getType(normalizeTypeName(name, activeModule));
+    return typeDef ? qualifiedTypeName(typeDef) : undefined;
+  };
+
+  const expr = (statement as { expr?: FreeObjectExpr }).expr;
+  if (!expr) return undefined;
+  let branches: FreeObjectExpr[] | undefined;
+  if (expr.kind === "set_expr") branches = expr.values;
+  else if (expr.kind === "if_else") branches = [expr.thenExpr, expr.elseExpr];
+  else if (expr.kind === "coalesce") branches = [expr.left, expr.right];
+  if (!branches) return undefined;
+  const names: string[] = [];
+  for (const b of branches) {
+    const n = branchObjectTypeName(b);
+    if (!n) return undefined;
+    names.push(n);
+  }
+  const distinct = [...new Set(names)];
+  if (distinct.length < 2) return undefined;
+  return `__derived__::(${distinct.map((qn) => qn.replace("::", ":")).join(" | ")})`;
+};

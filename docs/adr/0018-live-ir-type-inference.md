@@ -1,0 +1,15 @@
+# Live-IR type inference (statement-level `stype`, incl. derived unions)
+
+Continuing candidate 6 (Live-IR inference parity → retire the `semantic.ts` oracle, ADR 0001). After volatility (0015), cardinality (0016), and multiplicity (0017), this ports **type** — the statement-level `stype`.
+
+**The gap (measured).** A probe over the oracle's type cases showed the Live IR never set `stype` (always `undefined`), and `expr.typeref.id` (the base set type) returned the **first operand** for the composite cases — e.g. `SELECT Card UNION User` gave `default::Card` instead of the derived union. The oracle exposes `__derived__::(mod:T1 | mod:T2)` for these (semantic.ts ~3169-3193).
+
+**Decision (done):** Add `inferStatementType(statement, schema, activeModule)` to `src/compiler/inference.ts`, ported from the oracle's `synthesizeDerivedUnionTypeRef` + `branchObjectTypeName`: when the top-level expression composes **multiple distinct object types** — `set_expr` (covers both `A UNION B` and `{A, B}`), `if_else`, or `coalesce` — it returns `__derived__::(modA:A | modB:B)`; otherwise `undefined`. `compileASTToGelIR` sets `Statement.stype = inferStatementType(...) ?? result.expr.typeref.id` inside the guarded `try/catch` — so the single-type case (`SELECT Card { name }` → `default::Card`) falls back to the base typeref the builder already computes correctly, and only the composite cases are synthesized. `tests/edgeql_ir_type_live.test.ts` pins the 5 statement-level cases (1 base type + 4 derived-union forms).
+
+**Why this is safe (additive + guarded).** `stype` is read **0×** by the SQL lowering and runtime — purely additive, cannot change query results; the call is guarded. The additivity slice (`select`/`insert`/`advtypes`/`expressions`) is at the pre-existing partial-conformance baseline (zero new failures). 0 type errors. The other three live dimensions and all four oracle inference tests stay green.
+
+**Decision (scoped out, with reason):** the oracle test's **shape-element typeref** case (`SELECT Card { name }` → the `name` shape field has type `std::str`) is **not** part of this dimension — it asserts a per-element typeref the SQL builder constructs, the same class as the scoped-out shape-element cardinality cases (ADR 0016), not the statement-level `stype` this inference owns.
+
+**Consequences.** Four of five inference dimensions (volatility, cardinality, multiplicity, type) now reach statement-level parity on the Live IR. Only **scope-tree** remains — and it is the non-additive outlier (error-detection: the 6 cases assert the compile *throws* correlated-reference violations). `checkScopeTreeViolations` already exists as a standalone module called by the oracle; wiring it into the Live IR path, gated on no over-rejection of production queries, is the final step before `semantic.ts` can be deleted.
+
+**Why record it:** a future reader will see `inferStatementType` only synthesize derived unions and return `undefined` otherwise — that is deliberate: the base-type case is already correct on `expr.typeref.id`, so the inference only fills the gap (composite object types) rather than re-deriving what the builder has.

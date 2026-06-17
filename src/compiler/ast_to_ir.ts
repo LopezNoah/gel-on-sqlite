@@ -1,6 +1,6 @@
 import { AppError, tryResult } from "../errors.js";
 import { parseEdgeQL } from "../edgeql/parser.js";
-import { inferStatementCardinality, inferStatementMultiplicity, inferStatementVolatility } from "./inference.js";
+import { inferStatementCardinality, inferStatementMultiplicity, inferStatementType, inferStatementVolatility } from "./inference.js";
 import type {
   Statement as EdgeQLStatement,
   ComputedExpr,
@@ -9777,6 +9777,14 @@ export const compileASTToGelIR = (statement: EdgeQLStatement, options: IRCompile
       (result as { multiplicity: string }).multiplicity = inferStatementMultiplicity(statement, ctx.schema, ctx.module);
     } catch {
       // leave default multiplicity
+    }
+    try {
+      const derived = inferStatementType(statement, ctx.schema, ctx.module);
+      const baseType = (result as { expr?: { typeref?: { id?: string } } }).expr?.typeref?.id;
+      const stype = derived ?? baseType;
+      if (stype !== undefined) (result as { stype?: string }).stype = stype;
+    } catch {
+      // leave stype unset
     }
   }
 
