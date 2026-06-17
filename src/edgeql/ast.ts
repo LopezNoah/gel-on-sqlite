@@ -1,4 +1,5 @@
 import type { ScalarType, ScalarValue } from "../types.js";
+import type { CreateTypeBodyEntry } from "./ddl_body.js";
 
 export interface SourcePos {
   line: number;
@@ -965,6 +966,11 @@ export interface DDLStatement {
   // validators can reject forbidden settings like `fallback` or
   // `force_return_cast` without re-parsing the source.
   setCommands?: string[];
+  // The structured `CREATE TYPE { … }` body (members / inline & type-level
+  // exclusive constraints / ALTER-pointer constraints). Populated by the parser
+  // for `CREATE TYPE` so the runtime reads the parsed body off the AST instead
+  // of re-parsing the source. See docs/adr/0029.
+  createTypeBody?: CreateTypeBodyEntry[];
   pos: SourcePos;
 }
 
