@@ -12,7 +12,7 @@ import { parseEdgeQL } from "../edgeql/parser.js";
 import { tryResult } from "../errors.js";
 import type { ComputedLinkPropertyExpr, DeclarativeSchema, FunctionDeclaration, LinkMember, LinkProperty, PropertyMember, TypeMember } from "./declarative.js";
 import { AnnotationRegistry, AnnotationResolver, AnnotationSet } from "./annos.js";
-import { SchemaSnapshot } from "./schema.js";
+import { SchemaSnapshot, qualifiedTypeName } from "./schema.js";
 import { scalarTypeDeclarationToTypeDef } from "./scalar.js";
 import { schemaIntrospectionTypeDefs } from "./schema_introspection.js";
 
@@ -895,9 +895,6 @@ export const renderDeclarativeSchemaFromSnapshot = (schema: SchemaSnapshot): str
   return renderDeclarativeSchema(declarativeSchemaFromTypeDefs(schema.listTypes(), schema.listFunctions()));
 };
 
-const qualifiedTypeName = (typeDecl: DeclarativeSchema["types"][number]): string => {
-  return `${typeDecl.module}::${typeDecl.name}`;
-};
 
 const cloneMember = (member: TypeMember): TypeMember => {
   if (member.kind === "property") {
