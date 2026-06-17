@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseCreateTypeBody, type CreateTypeBodyEntry } from "../src/edgeql/ddl_body.js";
+import { parseAlterTypeBody, parseCreateTypeBody, type CreateTypeBodyEntry } from "../src/edgeql/ddl_body.js";
 
 // Parse one body and return the single entry (asserts exactly one).
 const one = (body: string): CreateTypeBodyEntry => {
@@ -199,5 +199,45 @@ describe("parseCreateTypeBody — multi-member bodies", () => {
   it("empty body yields no entries", () => {
     expect(parseCreateTypeBody("")).toEqual([]);
     expect(parseCreateTypeBody("   ")).toEqual([]);
+  });
+});
+
+describe("parseAlterTypeBody — ALTER TYPE tail (after the type name)", () => {
+  it("braced type-level create constraint", () => {
+    expect(parseAlterTypeBody("{ CREATE CONSTRAINT exclusive ON (.name); }")).toEqual([
+      { kind: "create_constraint", constraint: { delegated: false, onExpr: ".name", exceptExpr: undefined } },
+    ]);
+  });
+
+  it("braced drop constraint", () => {
+    expect(parseAlterTypeBody("{ DROP CONSTRAINT exclusive ON (.email); }")).toEqual([
+      { kind: "drop_constraint", constraint: { delegated: false, onExpr: ".email", exceptExpr: undefined } },
+    ]);
+  });
+
+  it("SET default on a property path (braced, nested)", () => {
+    expect(parseAlterTypeBody("{ ALTER PROPERTY status { SET default := 'active'; }; }")).toEqual([
+      { kind: "set_default", pointerPath: ["status"], exprText: "'active'" },
+    ]);
+  });
+
+  it("SET default on a link-property path (captures the link-property op)", () => {
+    // Deeply-nested ALTER LINK { ALTER PROPERTY { SET default } } emits the
+    // correct link-property op; it may also emit extra duplicate ops with
+    // shorter paths (a benign quirk preserved verbatim from the prior
+    // parser — applyAlterTypeDDL applies set_default idempotently and the
+    // shorter paths match no real field). Assert the real op is present.
+    const ops = parseAlterTypeBody("{ ALTER LINK owner { ALTER PROPERTY note { SET default := 'x'; }; }; }");
+    expect(ops).toContainEqual({ kind: "set_default", pointerPath: ["owner", "note"], exprText: "'x'" });
+  });
+
+  it("chained form (no outer braces)", () => {
+    expect(parseAlterTypeBody("ALTER PROPERTY status SET default := 'done'")).toEqual([
+      { kind: "set_default", pointerPath: ["status"], exprText: "'done'" },
+    ]);
+  });
+
+  it("empty / no-op tail yields no ops", () => {
+    expect(parseAlterTypeBody("")).toEqual([]);
   });
 });

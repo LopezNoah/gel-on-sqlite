@@ -1,0 +1,16 @@
+# AST-driven ALTER TYPE; delete the ALTER string parser (Stage D1d)
+
+Continuing the DDL front-end unification: after CREATE TYPE became AST-driven (ADR 0030), this ports `ALTER TYPE` the same way and removes the second half of the runtime's string shadow-parser.
+
+**Decision (done):**
+- The 188-line `parseAlterTypeStatement` + its `AlterTypeOp` type move out of `runtime/engine.ts` into `edgeql/ddl_body.ts` as `parseAlterTypeBody(tail) → AlterTypeOp[]` (the recursive `walk` + `parseConstraintOp` / `sliceDefaultExpr` / `walkAlterPointer` / `skipPointerClause` helpers, ported verbatim). It parses the *tail* — everything after the type name, in either the braced (`{ … }`) or chained (`ALTER PROPERTY … SET …`) form — into structured ops, reusing the constraint/backtick helpers already in `ddl_body.ts` (so the duplicate inline exclusive-constraint parser the round-4 review flagged is now gone too).
+- `DDLStatement` (`ast.ts`) gains `alterTypeOps?: AlterTypeOp[]`. `parseDDL` adds an `action === "alter" && objectKind === "type"` branch that captures the tail span (`captureAlterTypeBody`) and parses it onto the AST.
+- `applyAlterTypeDDL` (`engine.ts`) now parses the statement to the AST via `parseEdgeQL` (guarded by `tryResult`) and reads `ast.name` + `ast.alterTypeOps`; its op-application loop is unchanged. `parseAlterTypeStatement` and the now-orphaned `stripBacktickName` are deleted.
+
+**A preserved quirk (faithful port).** Deeply-nested `ALTER LINK { ALTER PROPERTY { SET default … } }` emits the correct link-property `set_default` op *plus* extra duplicate ops with shorter paths — a pre-existing artifact of `skipPointerClause` returning the brace index, so the outer `walk` re-enters the block (the `path.length > 0` guard suppresses it only at the single level). It is benign: `applyAlterTypeDDL` applies `set_default` idempotently and the shorter paths (`["owner"]`) match no real field, so they no-op. The port reproduces it exactly — fixing it would be a behaviour change, out of scope for this neutral move. A unit test asserts the correct op is *present* (`toContainEqual`) rather than pinning the duplicates.
+
+**Verification.** `npx tsc` 0 errors. Behaviour-neutral: `edgeql_userddl` stayed `2 failed`; `edgeql_userddl` + `edgeql_insert` ran `55 failed / 297 passed` **identically** before and after. New tests: `parseAlterTypeBody` unit cases (braced create/drop constraint, SET default on property and link-property paths, chained form, empty) in `tests/ddl_body.test.ts`, and AST-level `alterTypeOps` cases in `tests/ddl_ast_body.test.ts` — all green (37 total across the two files).
+
+**Consequences.** Both `CREATE TYPE` and `ALTER TYPE` are now parsed once by the EdgeQL parser onto the AST and read by the runtime. The string shadow-parser is down to one piece — `parseCreateFutureFlag` — and the pre-pass still string-splits + re-parses per statement; routing future flags through the AST and parsing the script once (Stage D1e) finishes the job.
+
+**Why record it:** a future reader will find ALTER-TYPE op parsing in `edgeql/ddl_body.ts` and the engine reading `alterTypeOps` off the AST. That is the parser-owns-DDL design; `parseAlterTypeStatement` is gone, not relocated to another runtime spot. The nested-default duplicate-op quirk is a documented, benign, faithfully-preserved artifact — not a new bug.

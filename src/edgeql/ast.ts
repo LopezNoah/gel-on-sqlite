@@ -1,5 +1,5 @@
 import type { ScalarType, ScalarValue } from "../types.js";
-import type { CreateTypeBodyEntry } from "./ddl_body.js";
+import type { AlterTypeOp, CreateTypeBodyEntry } from "./ddl_body.js";
 
 export interface SourcePos {
   line: number;
@@ -971,6 +971,10 @@ export interface DDLStatement {
   // for `CREATE TYPE` so the runtime reads the parsed body off the AST instead
   // of re-parsing the source. See docs/adr/0029.
   createTypeBody?: CreateTypeBodyEntry[];
+  // The structured ops of an `ALTER TYPE … { … }` body (SET default, CREATE /
+  // DROP exclusive constraint), populated by the parser for `ALTER TYPE` so the
+  // runtime reads them off the AST. See docs/adr/0031.
+  alterTypeOps?: AlterTypeOp[];
   pos: SourcePos;
 }
 

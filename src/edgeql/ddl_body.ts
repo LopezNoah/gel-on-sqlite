@@ -458,3 +458,167 @@ export const parseCreateTypeBody = (bodyText: string): CreateTypeBodyEntry[] => 
   }
   return entries;
 };
+
+/** One operation parsed from an `ALTER TYPE …` tail (everything after the type
+ * name). `pointerPath` is the link/property chain the op applies to. */
+export type AlterTypeOp =
+  | { kind: "set_default"; pointerPath: string[]; exprText: string }
+  | { kind: "drop_constraint"; constraint: ExclusiveConstraintSpec }
+  | { kind: "create_constraint"; constraint: ExclusiveConstraintSpec };
+
+/**
+ * Parse the tail of an `ALTER TYPE <name> …` statement (the text after the type
+ * name — either a `{ … }` block or chained `ALTER LINK/PROPERTY … SET … `
+ * clauses) into structured ops. Handles `SET default := <expr>` on a pointer
+ * path and `(CREATE|DROP) [DELEGATED] CONSTRAINT exclusive [ON …] [EXCEPT …]`
+ * (the only constraint the runtime enforces). Pure and total.
+ */
+export const parseAlterTypeBody = (tail: string): AlterTypeOp[] => {
+  const src = tail;
+  const tokenized = tryResult(() => tokenize(src));
+  if (!tokenized.ok) return [];
+  const tokens: readonly Token[] = tokenized.value;
+  const ops: AlterTypeOp[] = [];
+
+  const sliceParen = (startIdx: number): { text: string; next: number } | undefined => {
+    if (tokens[startIdx]?.kind !== "lparen") return undefined;
+    let depth = 0;
+    for (let j = startIdx; j < tokens.length; j += 1) {
+      const t = tokens[j];
+      if (t.kind === "lparen") depth += 1;
+      else if (t.kind === "rparen") {
+        depth -= 1;
+        if (depth === 0) return { text: src.slice(tokens[startIdx].offset + 1, t.offset).trim(), next: j + 1 };
+      }
+    }
+    return undefined;
+  };
+
+  const parseConstraintOp = (idx: number): { op: AlterTypeOp; next: number } | undefined => {
+    const verb = tokens[idx];
+    const isDrop = verb?.kind === "kw_drop";
+    const isCreate = verb?.kind === "kw_create";
+    if (!isDrop && !isCreate) return undefined;
+    let j = idx + 1;
+    let delegated = false;
+    if (tokens[j]?.kind === "identifier" && tokens[j].lower === "delegated") { delegated = true; j += 1; }
+    if (tokens[j]?.kind !== "kw_constraint") return undefined;
+    j += 1;
+    const cnameTok = tokens[j];
+    if (!cnameTok) return undefined;
+    let cname = stripBacktickName(cnameTok.lexeme);
+    j += 1;
+    if (tokens[j]?.kind === "coloncolon" && tokens[j + 1]) { cname = stripBacktickName(tokens[j + 1].lexeme); j += 2; }
+    if (cname.includes("::")) cname = cname.slice(cname.lastIndexOf("::") + 2);
+    if (cname !== "exclusive") return undefined;
+    let onExpr: string | undefined;
+    let exceptExpr: string | undefined;
+    while (tokens[j]) {
+      if (tokens[j].kind === "kw_on") {
+        const sliced = sliceParen(j + 1);
+        if (!sliced) break;
+        onExpr = sliced.text; j = sliced.next; continue;
+      }
+      if (tokens[j].kind === "kw_except") {
+        const sliced = sliceParen(j + 1);
+        if (!sliced) break;
+        exceptExpr = sliced.text; j = sliced.next; continue;
+      }
+      break;
+    }
+    const constraint: ExclusiveConstraintSpec = { delegated, onExpr, exceptExpr };
+    return { op: { kind: isDrop ? "drop_constraint" : "create_constraint", constraint }, next: j };
+  };
+
+  const sliceDefaultExpr = (assignIdx: number): { text: string; next: number } => {
+    const startTok = tokens[assignIdx + 1];
+    let depth = 0;
+    let j = assignIdx + 1;
+    for (; j < tokens.length; j += 1) {
+      const t = tokens[j];
+      if (t.kind === "eof") break;
+      if (t.kind === "lparen" || t.kind === "lbrace" || t.kind === "lbracket") depth += 1;
+      else if (t.kind === "rparen" || t.kind === "rbracket") depth -= 1;
+      else if (t.kind === "rbrace") {
+        if (depth === 0) break;
+        depth -= 1;
+      } else if (t.kind === "semi" && depth === 0) break;
+    }
+    const endTok = tokens[j];
+    const endOffset = endTok && endTok.kind !== "eof" ? endTok.offset : src.length;
+    return { text: startTok ? src.slice(startTok.offset, endOffset).trim() : "", next: j };
+  };
+
+  const skipPointerClause = (start: number, end: number): number => {
+    let j = start + 3; // past ALTER <kind> <name>
+    while (j < end && tokens[j]?.kind !== "lbrace" && tokens[j]?.kind !== "kw_alter"
+      && tokens[j]?.kind !== "kw_set" && tokens[j]?.kind !== "semi"
+      && tokens[j]?.kind !== "kw_drop" && tokens[j]?.kind !== "kw_create") {
+      j += 1;
+    }
+    return j;
+  };
+
+  const walkAlterPointer = (start: number, end: number, path: string[], braceDepth: number): void => {
+    const nameT = tokens[start + 2];
+    const name = stripBacktickName(nameT.lexeme);
+    const nextPath = [...path, name];
+    const j = start + 3;
+    if (tokens[j]?.kind === "lbrace") {
+      let depth = 1; let k = j + 1;
+      while (k < end && depth > 0) {
+        if (tokens[k].kind === "lbrace") depth += 1;
+        else if (tokens[k].kind === "rbrace") depth -= 1;
+        if (depth === 0) break;
+        k += 1;
+      }
+      walk(j + 1, k, nextPath, braceDepth + 1);
+    } else {
+      walk(j, end, nextPath, braceDepth);
+    }
+  };
+
+  function walk(start: number, end: number, path: string[], braceDepth: number): void {
+    let j = start;
+    while (j < end) {
+      const t = tokens[j];
+      if (!t || t.kind === "eof") break;
+      if (t.kind === "lbrace") {
+        let depth = 1; let k = j + 1;
+        while (k < end && depth > 0) {
+          if (tokens[k].kind === "lbrace") depth += 1;
+          else if (tokens[k].kind === "rbrace") depth -= 1;
+          if (depth === 0) break;
+          k += 1;
+        }
+        walk(j + 1, k, path, braceDepth + 1);
+        j = k + 1;
+        continue;
+      }
+      if (t.kind === "rbrace" || t.kind === "semi") { j += 1; continue; }
+      if (t.kind === "kw_alter") {
+        const kindTok = tokens[j + 1];
+        const nameT = tokens[j + 2];
+        if ((kindTok?.kind === "kw_link" || kindTok?.kind === "kw_property") && nameT) {
+          walkAlterPointer(j, end, path, braceDepth);
+          j = skipPointerClause(j, end);
+          continue;
+        }
+        j += 1;
+        continue;
+      }
+      if (t.kind === "kw_set" && tokens[j + 1]?.lower === "default" && tokens[j + 2]?.kind === "assign") {
+        const sliced = sliceDefaultExpr(j + 2);
+        if (path.length > 0) ops.push({ kind: "set_default", pointerPath: [...path], exprText: sliced.text });
+        j = sliced.next;
+        continue;
+      }
+      const con = parseConstraintOp(j);
+      if (con) { ops.push(con.op); j = con.next; continue; }
+      j += 1;
+    }
+  }
+
+  walk(0, tokens.length, [], 0);
+  return ops;
+};
