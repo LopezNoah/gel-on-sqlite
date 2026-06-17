@@ -3680,10 +3680,10 @@ const traverseLinkIds = (
   const td = schema.getType(typeName);
   const placeholders = ids.map(() => "?").join(", ");
   const realLink = (td?.links ?? []).find((link) => link.name === linkName);
-  if (realLink) {
+  if (realLink && td) {
     const targetType = qualifyChainType(realLink.targetType, typeName.split("::")[0] ?? "default");
-    if (realLink.multi) {
-      const lt = `${tableNameForType(typeName)}__${linkName.toLowerCase()}`;
+    if (usesLinkTable(realLink)) {
+      const lt = linkTableName(qualifiedTypeName(resolveLinkStorageOwner(schema, td, realLink)), realLink);
       const rows = ids.length
         ? db.prepare(`SELECT DISTINCT ${quoteIdent("target")} AS t FROM ${quoteIdent(lt)} WHERE ${quoteIdent("source")} IN (${placeholders})`).all(...ids) as { t?: unknown }[]
         : [];
@@ -3703,8 +3703,8 @@ const traverseLinkIds = (
     const srcType = qualifyChainType(computed.expr.sourceType ?? typeName, typeName.split("::")[0] ?? "default");
     const srcTd = schema.getType(srcType);
     const backReal = (srcTd?.links ?? []).find((link) => link.name === backLink);
-    if (backReal?.multi) {
-      const lt = `${tableNameForType(srcType)}__${backLink.toLowerCase()}`;
+    if (backReal && srcTd && usesLinkTable(backReal)) {
+      const lt = linkTableName(qualifiedTypeName(resolveLinkStorageOwner(schema, srcTd, backReal)), backReal);
       const rows = ids.length
         ? db.prepare(`SELECT DISTINCT ${quoteIdent("source")} AS s FROM ${quoteIdent(lt)} WHERE ${quoteIdent("target")} IN (${placeholders})`).all(...ids) as { s?: unknown }[]
         : [];
@@ -10881,7 +10881,7 @@ const runWriteWithAccessPolicies = (
         const sourceIds = new Set<string>();
 
         if (usesLinkTable(link)) {
-          const linkTable = `${sourceTable}__${link.name.toLowerCase()}`;
+          const linkTable = linkTableName(qualifiedTypeName(resolveLinkStorageOwner(schema, sourceType, link)), link);
           const placeholders = targetIds.map(() => "?").join(", ");
           const rows = db
             .prepare(`SELECT ${quoteIdent("source")} AS ${quoteIdent("source")} FROM ${quoteIdent(linkTable)} WHERE ${quoteIdent("target")} IN (${placeholders})`)
