@@ -33,6 +33,7 @@ import {
   validateUserDDLStatement,
 } from "./ddl.js";
 import { installSqlTrace, runWithSqlSink } from "./sql_trace_sink.js";
+import { parseCreateTypeBody, type ExclusiveConstraintSpec } from "./ddl_body.js";
 import { applyLimitOffset, dedupeRowsById, distinctValues } from "./result_clauses.js";
 
 
@@ -803,256 +804,12 @@ const applyParsedFunctionDDL = (schema: SchemaSnapshot, ast: DDLStatement, defau
 // `parseCreateTypeHeader` and `stripTrailingBraceBlock` now live in
 // `src/runtime/ddl.ts`; this module imports them above.
 
-// Tokenize a `CREATE … property/link …` body entry and return its structured
-// header — kind, modifiers, member name, target type (for `->`/`:`) or raw
-// computed expression (for `:=`). Returns `undefined` for anything that
-// doesn't begin with a `create` keyword, leaving non-member entries (indexes,
-// constraints, etc.) for the caller's other branches to handle.
-type MemberHeader =
-  | {
-      kind: "property" | "link";
-      modifiers: { required: boolean; optional: boolean; multi: boolean; single: boolean };
-      name: string;
-      targetType: string;
-    }
-  | {
-      kind: "computed_link";
-      modifiers: { required: boolean; optional: boolean; multi: boolean; single: boolean };
-      name: string;
-      exprText: string;
-    };
-
-const MEMBER_MODIFIER_KINDS = new globalThis.Set([
-  "kw_required",
-  "kw_optional",
-  "kw_multi",
-  "kw_single",
-]);
+// `parseMemberHeader` / `parseExclusiveConstraintEntry` / the `CREATE TYPE`
+// body token-walker that used to live here were retired in favour of the
+// structured `parseCreateTypeBody` (src/runtime/ddl_body.ts); see docs/adr/0027.
 
 const stripBacktickName = (lexeme: string): string =>
   lexeme.startsWith("`") && lexeme.endsWith("`") ? lexeme.slice(1, -1) : lexeme;
-
-const sliceTokenRange = (tokens: readonly Token[], startIdx: number, source: string): string => {
-  if (startIdx >= tokens.length) return "";
-  const startTok = tokens[startIdx];
-  let endOffset = source.length;
-  for (let j = tokens.length - 1; j >= startIdx; j -= 1) {
-    const t = tokens[j];
-    if (t.kind === "eof") continue;
-    endOffset = t.offset + t.lexeme.length;
-    break;
-  }
-  return source.slice(startTok.offset, endOffset).trim();
-};
-
-const parseMemberHeader = (entry: string): MemberHeader | undefined => {
-  // Probe: an untokenizable entry is simply not a member header.
-  // tryResult rethrows non-syntax errors so tokenizer bugs surface.
-  const tokenized = tryResult(() => tokenize(entry));
-  if (!tokenized.ok) return undefined;
-  const tokens: readonly Token[] = tokenized.value;
-  let i = 0;
-  if (tokens[i]?.kind !== "kw_create") return undefined;
-  i += 1;
-  const modifiers = { required: false, optional: false, multi: false, single: false };
-  while (tokens[i] && MEMBER_MODIFIER_KINDS.has(tokens[i].kind)) {
-    const k = tokens[i].kind;
-    if (k === "kw_required") modifiers.required = true;
-    else if (k === "kw_optional") modifiers.optional = true;
-    else if (k === "kw_multi") modifiers.multi = true;
-    else if (k === "kw_single") modifiers.single = true;
-    i += 1;
-  }
-  const memberKindTok = tokens[i];
-  if (!memberKindTok) return undefined;
-  let memberKind: "property" | "link";
-  if (memberKindTok.kind === "kw_property") {
-    memberKind = "property";
-  } else if (memberKindTok.kind === "kw_link") {
-    memberKind = "link";
-  } else {
-    return undefined;
-  }
-  i += 1;
-  const nameTok = tokens[i];
-  if (!nameTok || (nameTok.kind !== "identifier" && nameTok.kind !== "backtick_name")) return undefined;
-  const memberName = nameTok.kind === "backtick_name" ? stripBacktickName(nameTok.lexeme) : nameTok.lexeme;
-  i += 1;
-  const sepTok = tokens[i];
-  if (!sepTok) return undefined;
-  // `->` for properties; both `->` and `:` are accepted for stored links;
-  // `:=` introduces a computed link alias.
-  if (sepTok.kind === "assign") {
-    if (memberKind !== "link") return undefined;
-    const exprText = sliceTokenRange(tokens, i + 1, entry);
-    if (exprText.length === 0) return undefined;
-    return { kind: "computed_link", modifiers, name: memberName, exprText };
-  }
-  if (sepTok.kind === "arrow" || sepTok.kind === "colon") {
-    const targetType = sliceTokenRange(tokens, i + 1, entry);
-    if (targetType.length === 0) return undefined;
-    return { kind: memberKind, modifiers, name: memberName, targetType };
-  }
-  return undefined;
-};
-
-// Parse an `ALTER PROPERTY <name>` / `ALTER LINK <name>` body-entry header.
-// Returns the pointer kind + name, or `undefined` for any other entry.
-const parseAlterPointerHeader = (entry: string): { kind: "property" | "link"; name: string } | undefined => {
-  const tokenized = tryResult(() => tokenize(entry));
-  if (!tokenized.ok) return undefined;
-  const tokens: readonly Token[] = tokenized.value;
-  let i = 0;
-  if (tokens[i]?.kind !== "kw_alter") return undefined;
-  i += 1;
-  const kindTok = tokens[i];
-  let kind: "property" | "link";
-  if (kindTok?.kind === "kw_property") kind = "property";
-  else if (kindTok?.kind === "kw_link") kind = "link";
-  else return undefined;
-  i += 1;
-  const nameTok = tokens[i];
-  if (!nameTok || (nameTok.kind !== "identifier" && nameTok.kind !== "backtick_name")) return undefined;
-  const name = nameTok.kind === "backtick_name" ? stripBacktickName(nameTok.lexeme) : nameTok.lexeme;
-  return { kind, name };
-};
-
-// Parse a `CREATE [DELEGATED] CONSTRAINT exclusive [ON (<expr>)] [EXCEPT (<expr>)]`
-// body entry. Returns the structured exclusive-constraint descriptor, or
-// `undefined` for anything that isn't an exclusive constraint declaration
-// (other constraint kinds — max_len_value, regexp, … — aren't enforced by the
-// runtime, so we don't record them).
-type DynamicExclusiveConstraint = {
-  delegated: boolean;
-  onExpr?: string;
-  exceptExpr?: string;
-};
-
-const parseExclusiveConstraintEntry = (entry: string): DynamicExclusiveConstraint | undefined => {
-  const tokenized = tryResult(() => tokenize(entry));
-  if (!tokenized.ok) return undefined;
-  const tokens: readonly Token[] = tokenized.value;
-  let i = 0;
-  if (tokens[i]?.kind !== "kw_create") return undefined;
-  i += 1;
-  let delegated = false;
-  // `delegated` arrives as an unreserved identifier.
-  if (tokens[i] && tokens[i].kind === "identifier" && tokens[i].lower === "delegated") {
-    delegated = true;
-    i += 1;
-  }
-  if (tokens[i]?.kind !== "kw_constraint") return undefined;
-  i += 1;
-  // The constraint name (`exclusive` or `std::exclusive`). `exclusive` is an
-  // unreserved identifier; allow the `std::` qualifier too.
-  const nameTok = tokens[i];
-  if (!nameTok || (nameTok.kind !== "identifier" && nameTok.kind !== "backtick_name")) return undefined;
-  let constraintName = nameTok.kind === "backtick_name" ? stripBacktickName(nameTok.lexeme) : nameTok.lexeme;
-  i += 1;
-  // Optional `std::` module qualifier. The tokenizer may emit `std`, `::`,
-  // `exclusive` as separate tokens, or fold them into one qualified identifier.
-  if (tokens[i]?.kind === "coloncolon") {
-    const qualTok = tokens[i + 1];
-    if (qualTok && (qualTok.kind === "identifier" || qualTok.kind === "backtick_name")) {
-      constraintName = qualTok.kind === "backtick_name" ? stripBacktickName(qualTok.lexeme) : qualTok.lexeme;
-      i += 2;
-    }
-  }
-  if (constraintName.includes("::")) {
-    constraintName = constraintName.slice(constraintName.lastIndexOf("::") + 2);
-  }
-  if (constraintName !== "exclusive") return undefined;
-
-  let onExpr: string | undefined;
-  let exceptExpr: string | undefined;
-  // Optional `ON (<expr>)` and `EXCEPT (<expr>)` clauses. Slice the parenthesised
-  // expression text by walking balanced parens via token offsets.
-  const sliceParen = (startIdx: number): { text: string; next: number } | undefined => {
-    if (tokens[startIdx]?.kind !== "lparen") return undefined;
-    let depth = 0;
-    for (let j = startIdx; j < tokens.length; j += 1) {
-      const t = tokens[j];
-      if (t.kind === "lparen") depth += 1;
-      else if (t.kind === "rparen") {
-        depth -= 1;
-        if (depth === 0) {
-          const text = entry.slice(tokens[startIdx].offset + 1, t.offset).trim();
-          return { text, next: j + 1 };
-        }
-      }
-    }
-    return undefined;
-  };
-  while (tokens[i]) {
-    if (tokens[i].kind === "kw_on") {
-      const sliced = sliceParen(i + 1);
-      if (!sliced) break;
-      onExpr = sliced.text;
-      i = sliced.next;
-      continue;
-    }
-    if (tokens[i].kind === "kw_except") {
-      const sliced = sliceParen(i + 1);
-      if (!sliced) break;
-      exceptExpr = sliced.text;
-      i = sliced.next;
-      continue;
-    }
-    break;
-  }
-  return { delegated, onExpr, exceptExpr };
-};
-
-// Collect exclusive constraints declared inside a property/link `{ … }` block
-// (e.g. `CREATE CONSTRAINT exclusive;`). Returns the ConstraintDef[] shape that
-// materializeExclusivity consumes, or `undefined` when none are present.
-const collectDynamicExclusiveConstraints = (innerBody: string): ConstraintDef[] | undefined => {
-  const out: ConstraintDef[] = [];
-  for (const bodyEntry of splitTopLevelScriptStatements(innerBody)) {
-    const excl = parseExclusiveConstraintEntry(stripTrailingBraceBlock(bodyEntry));
-    if (!excl) continue;
-    out.push({
-      name: "std::exclusive",
-      annotations: [],
-      delegated: excl.delegated || undefined,
-      onExpr: excl.onExpr,
-      exceptExpr: excl.exceptExpr,
-    });
-  }
-  return out.length > 0 ? out : undefined;
-};
-
-// Extract the `[SET] default := <expr>` text from a property/link `{ … }`
-// inner body (e.g. `set default := .f` → ".f"). Returns undefined when there's
-// no default declaration. Token-offset based so string/expression bodies slice
-// cleanly.
-const extractInlineDefaultText = (innerBody: string): string | undefined => {
-  for (const rawEntry of splitTopLevelScriptStatements(innerBody)) {
-    const entry = rawEntry.trim();
-    const tokenized = tryResult(() => tokenize(entry));
-    if (!tokenized.ok) continue;
-    const tokens: readonly Token[] = tokenized.value;
-    let i = 0;
-    if (tokens[i]?.kind === "kw_set") i += 1;
-    if (tokens[i]?.lower !== "default") continue;
-    i += 1;
-    if (tokens[i]?.kind !== "assign") continue;
-    i += 1;
-    if (i >= tokens.length || tokens[i].kind === "eof") return undefined;
-    const startOffset = tokens[i].offset;
-    let endOffset = entry.length;
-    for (let j = tokens.length - 1; j >= i; j -= 1) {
-      if (tokens[j].kind === "eof" || tokens[j].kind === "semi") continue;
-      endOffset = tokens[j].offset + tokens[j].lexeme.length;
-      break;
-    }
-    // For a trailing string token the lexeme excludes its quotes; extend to the
-    // entry end so the closing quote isn't clipped.
-    const text = entry.slice(startOffset).trim().replace(/;\s*$/, "");
-    return text.length > 0 ? text : entry.slice(startOffset, endOffset).trim();
-  }
-  return undefined;
-};
 
 // Extract single-field references from a type-level constraint `on` expression
 // (e.g. `(.name)` → ["name"]). Tuple constraints over multiple fields are not
@@ -1071,8 +828,8 @@ const exclusiveConstraintFieldRefs = (onExpr: string | undefined): string[] => {
 // property).
 type AlterTypeOp =
   | { kind: "set_default"; pointerPath: string[]; exprText: string }
-  | { kind: "drop_constraint"; constraint: DynamicExclusiveConstraint }
-  | { kind: "create_constraint"; constraint: DynamicExclusiveConstraint };
+  | { kind: "drop_constraint"; constraint: ExclusiveConstraintSpec }
+  | { kind: "create_constraint"; constraint: ExclusiveConstraintSpec };
 
 // Token-based parser for `ALTER TYPE <name> …`. Handles both the chained form
 // (`ALTER TYPE T ALTER LINK l ALTER PROPERTY p SET default := …`) and the
@@ -1153,7 +910,7 @@ const parseAlterTypeStatement = (
       }
       break;
     }
-    const constraint: DynamicExclusiveConstraint = { delegated, onExpr, exceptExpr };
+    const constraint: ExclusiveConstraintSpec = { delegated, onExpr, exceptExpr };
     return { op: { kind: isDrop ? "drop_constraint" : "create_constraint", constraint }, next: j };
   };
 
@@ -1388,6 +1145,20 @@ const validateBareSdlDefaults = (script: string): void => {
   }
 };
 
+// Map the structured exclusive-constraint specs from `parseCreateTypeBody` to
+// the `ConstraintDef[]` the runtime's exclusivity machinery consumes (or
+// undefined when none), mirroring the old `collectExclusiveConstraintSpecs`.
+const exclusiveConstraintDefs = (specs: readonly ExclusiveConstraintSpec[]): ConstraintDef[] | undefined => {
+  if (specs.length === 0) return undefined;
+  return specs.map((s) => ({
+    name: "std::exclusive",
+    annotations: [],
+    delegated: s.delegated || undefined,
+    onExpr: s.onExpr,
+    exceptExpr: s.exceptExpr,
+  }));
+};
+
 const registerDynamicTypeDDL = (schema: SchemaSnapshot, statement: string, defaultModule = "default"): boolean => {
   const header = parseCreateTypeHeader(statement.trim());
   if (!header) return false;
@@ -1427,73 +1198,20 @@ const registerDynamicTypeDDL = (schema: SchemaSnapshot, statement: string, defau
     }
   }
 
-  for (const rawEntry of splitTopLevelScriptStatements(bodyText)) {
-    // Capture (and then strip) any inline `{ … }` block on the entry. For
-    // `CREATE LINK x: X { CREATE PROPERTY a: int64 }` the inner block lists
-    // link properties — without parsing them we'd register the link with no
-    // properties, the storage wouldn't get a link table, and `@a := 2`
-    // assignments would have nowhere to write.
-    const innerBody = extractTrailingBraceBlock(rawEntry);
-    const entry = stripTrailingBraceBlock(rawEntry);
-    const member = parseMemberHeader(entry);
-    if (!member) {
-      // `ALTER PROPERTY <name> { CREATE [DELEGATED] CONSTRAINT exclusive … }` /
-      // `ALTER LINK <name> { … }` — add an exclusive constraint to a pointer
-      // (typically inherited from a base type) without redeclaring it. Used by
-      // `CREATE TYPE Bar EXTENDING Foo { ALTER PROPERTY name { CREATE
-      // CONSTRAINT exclusive } }`.
-      const altered = parseAlterPointerHeader(entry);
-      if (altered && innerBody) {
-        const constraints = collectDynamicExclusiveConstraints(innerBody);
-        if (constraints) {
-          if (altered.kind === "property") {
-            const existing = fields.find((f) => f.name === altered.name);
-            if (existing) {
-              existing.constraints = [...(existing.constraints ?? []), ...constraints];
-            } else {
-              // Inherited field not yet materialised on this type's field list —
-              // record a bare field carrying just the constraint so the
-              // exclusivity collector can pick it up.
-              fields.push({ name: altered.name, type: "str", constraints });
-            }
-          } else {
-            const existingLink = links.find((l) => l.name === altered.name);
-            if (existingLink) {
-              existingLink.constraints = [...(existingLink.constraints ?? []), ...constraints];
-            }
-            const fkField = fields.find((f) => f.name === `${altered.name}_id`);
-            if (fkField) {
-              fkField.constraints = [...(fkField.constraints ?? []), ...constraints];
-            }
-          }
-        }
-        continue;
-      }
-      // Type-level `CREATE [DELEGATED] CONSTRAINT exclusive [on (.field)] [except (...)]`.
-      const typeExcl = parseExclusiveConstraintEntry(entry);
-      if (typeExcl) {
-        const refs = exclusiveConstraintFieldRefs(typeExcl.onExpr);
-        if (refs.length > 0) {
-          typeConstraints.push({
-            name: "std::exclusive",
-            exprText: typeExcl.onExpr ?? "",
-            fieldRefs: refs,
-            delegated: typeExcl.delegated || undefined,
-            exceptExpr: typeExcl.exceptExpr,
-          });
-        }
-      }
-      continue;
-    }
+  // The `CREATE TYPE` body is parsed into structured members by
+  // `parseCreateTypeBody` (src/runtime/ddl_body.ts); this loop converts those
+  // members to the runtime's TypeDef shape (scalar resolution, FK synthesis,
+  // exclusivity). See docs/adr/0027.
+  for (const member of parseCreateTypeBody(bodyText)) {
     if (member.kind === "property") {
       const scalar = dynamicScalarFromType(member.targetType);
-      const constraints = innerBody ? collectDynamicExclusiveConstraints(innerBody) : undefined;
-      const defaultText = innerBody ? extractInlineDefaultText(innerBody) : undefined;
+      const constraints = exclusiveConstraintDefs(member.constraints);
+      const defaultText = member.defaultText;
       fields.push({
         name: member.name,
         type: scalar.type,
-        required: member.modifiers.required,
-        multi: member.modifiers.multi,
+        required: member.required,
+        multi: member.multi,
         collection: scalar.collection,
         constraints,
         hasDefault: defaultText !== undefined || undefined,
@@ -1503,55 +1221,77 @@ const registerDynamicTypeDDL = (schema: SchemaSnapshot, statement: string, defau
       continue;
     }
     if (member.kind === "link") {
-      const multi = member.modifiers.multi;
-      const linkProperties: LinkPropertyDef[] = [];
-      if (innerBody) {
-        for (const linkBodyEntry of splitTopLevelScriptStatements(innerBody)) {
-          const propHeader = parseMemberHeader(stripTrailingBraceBlock(linkBodyEntry));
-          if (!propHeader || propHeader.kind !== "property") continue;
-          const propScalar = dynamicScalarFromType(propHeader.targetType);
-          linkProperties.push({
-            name: propHeader.name,
-            type: propScalar.type,
-            required: propHeader.modifiers.required,
-            collection: propScalar.collection,
-          });
-        }
-      }
-      const linkConstraints = innerBody ? collectDynamicExclusiveConstraints(innerBody) : undefined;
+      // Inline link-property declarations (`CREATE LINK x { CREATE PROPERTY a: int64 }`)
+      // become the link's properties; a link with properties OR `multi` is
+      // stored in a `<owner>__<link>` junction table rather than an inline FK.
+      const linkProperties: LinkPropertyDef[] = member.properties.map((p) => {
+        const propScalar = dynamicScalarFromType(p.targetType);
+        return { name: p.name, type: propScalar.type, required: p.required, collection: propScalar.collection };
+      });
+      const linkConstraints = exclusiveConstraintDefs(member.constraints);
       links.push({
         name: member.name,
         targetType: normalizeDynamicTypeName(member.targetType, module),
-        multi,
+        multi: member.multi,
         properties: linkProperties.length > 0 ? linkProperties : undefined,
         constraints: linkConstraints,
       });
-      // Without an inline FK column when the link uses a link table (i.e.
-      // when it has properties OR is multi). The runtime creates a
-      // `<owner>__<link>` table for these.
-      if (!multi && linkProperties.length === 0) {
+      if (!member.multi && linkProperties.length === 0) {
         // Carry an exclusive constraint declared on the link down to the
         // synthetic FK column so the same-table UNIQUE index / shared
         // exclusivity machinery enforces it (links are unique on their target).
-        fields.push({
-          name: `${member.name}_id`,
-          type: "uuid",
-          isLinkColumn: true,
-          constraints: linkConstraints,
-        });
+        fields.push({ name: `${member.name}_id`, type: "uuid", isLinkColumn: true, constraints: linkConstraints });
       }
       continue;
     }
-    // `CREATE LINK foo := <expr>` is a computed link alias. The expression
-    // body isn't materialised as a column — record the declaration so backlink
-    // resolution can flag attempts to follow `<foo` without an `[IS T]` filter
-    // (the canonical EdgeQL error message names the computed-link's type).
-    if (member.kind !== "computed_link") continue;
-    computeds.push({
-      kind: "link",
-      name: member.name,
-      expr: { kind: "select_type", typeName: rawName, exprText: member.exprText },
-    });
+    if (member.kind === "computed_link") {
+      // A computed link alias (`CREATE LINK foo := <expr>`) isn't materialised
+      // as a column — record the declaration so backlink resolution can flag
+      // `.<foo` without an `[IS T]` filter (the EdgeQL error names the type).
+      computeds.push({ kind: "link", name: member.name, expr: { kind: "select_type", typeName: rawName, exprText: member.exprText } });
+      continue;
+    }
+    if (member.kind === "alter_pointer") {
+      // `ALTER PROPERTY|LINK <name> { CREATE CONSTRAINT exclusive … }` adds an
+      // exclusive constraint to a (usually inherited) pointer without
+      // redeclaring it (e.g. `CREATE TYPE Bar EXTENDING Foo { ALTER PROPERTY
+      // name { CREATE CONSTRAINT exclusive } }`).
+      const constraints = exclusiveConstraintDefs(member.constraints);
+      if (constraints) {
+        if (member.pointerKind === "property") {
+          const existing = fields.find((f) => f.name === member.name);
+          if (existing) {
+            existing.constraints = [...(existing.constraints ?? []), ...constraints];
+          } else {
+            // Inherited field not yet materialised on this type's field list —
+            // record a bare field carrying just the constraint so the
+            // exclusivity collector can pick it up.
+            fields.push({ name: member.name, type: "str", constraints });
+          }
+        } else {
+          const existingLink = links.find((l) => l.name === member.name);
+          if (existingLink) {
+            existingLink.constraints = [...(existingLink.constraints ?? []), ...constraints];
+          }
+          const fkField = fields.find((f) => f.name === `${member.name}_id`);
+          if (fkField) {
+            fkField.constraints = [...(fkField.constraints ?? []), ...constraints];
+          }
+        }
+      }
+      continue;
+    }
+    // Type-level `CREATE CONSTRAINT exclusive [ON (.field)] [EXCEPT (...)]`.
+    const refs = exclusiveConstraintFieldRefs(member.onExpr);
+    if (refs.length > 0) {
+      typeConstraints.push({
+        name: "std::exclusive",
+        exprText: member.onExpr ?? "",
+        fieldRefs: refs,
+        delegated: member.delegated || undefined,
+        exceptExpr: member.exceptExpr,
+      });
+    }
   }
 
   schema.addType({
