@@ -6190,6 +6190,16 @@ const buildCorrelatedScalarPointerPath = (
   if (!path) return null;
   if (path.links.length === 0) return null;
 
+  // Per-level column needs (id, connecting FKs, the leaf column). Target rows
+  // are read via compilePolymorphicSource so a polymorphic target (e.g. a link
+  // to `Card`, whose rows may live in `cards__card` OR a subtype table like
+  // `cards__specialcard`) unions every concrete branch instead of scanning the
+  // single declared table and dropping subtype rows. For a non-polymorphic
+  // target this is identical to the bare table.
+  const aliasColumns = pointerPathAliasColumns(path);
+  const polySource = (typeref: TypeRef, alias: string, level: number): string =>
+    compilePolymorphicSource(typeref, false, alias, aliasColumns[level] ?? ["id"], options);
+
   const firstLink = path.links[0];
   const firstTargetType = firstLink.direction === "inbound" ? firstLink.ptrref.outSource : firstLink.ptrref.outTarget;
   const firstAlias = "cp1";
@@ -6211,13 +6221,13 @@ const buildCorrelatedScalarPointerPath = (
     && firstIsSingleLink
     && rootIsPolymorphic;
   if (useProjectedFK) {
-    fromSql = `${quoteIdent(resolveTypeTableName(firstTargetType, options))} ${firstAlias}`;
+    fromSql = polySource(firstTargetType, firstAlias, 1);
     const firstInlineColumn = `${firstLink.ptrref.shortName}_id`;
     anchorWhere = `${firstAlias}.${quoteIdent("id")} = ${sourceAlias}.${quoteIdent(firstInlineColumn)}`;
   } else if (shouldUseLinkTable(firstLink)) {
     const linkTable = linkTableNameForPointer(firstLink, options);
     const linkAlias = "cpj1";
-    fromSql = `${quoteIdent(linkTable)} ${linkAlias} JOIN ${quoteIdent(resolveTypeTableName(firstTargetType, options))} ${firstAlias}`;
+    fromSql = `${quoteIdent(linkTable)} ${linkAlias} JOIN ${polySource(firstTargetType, firstAlias, 1)}`;
     if (firstLink.direction === "inbound") {
       fromSql += ` ON ${firstAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("source")}`;
       anchorWhere = `${linkAlias}.${quoteIdent("target")} = ${sourceAlias}.${quoteIdent("id")}`;
@@ -6226,7 +6236,7 @@ const buildCorrelatedScalarPointerPath = (
       anchorWhere = `${linkAlias}.${quoteIdent("source")} = ${sourceAlias}.${quoteIdent("id")}`;
     }
   } else {
-    fromSql = `${quoteIdent(resolveTypeTableName(firstTargetType, options))} ${firstAlias}`;
+    fromSql = polySource(firstTargetType, firstAlias, 1);
     const firstInlineColumn = `${firstLink.ptrref.shortName}_id`;
     anchorWhere = firstLink.direction === "inbound"
       ? `${firstAlias}.${quoteIdent(firstInlineColumn)} = ${sourceAlias}.${quoteIdent("id")}`
@@ -6238,8 +6248,7 @@ const buildCorrelatedScalarPointerPath = (
     const link = path.links[i];
     const nextAlias = `cp${i + 1}`;
     const targetType = link.direction === "inbound" ? link.ptrref.outSource : link.ptrref.outTarget;
-    const targetTable = resolveTypeTableName(targetType, options);
-    const targetSource = `${quoteIdent(targetTable)} ${nextAlias}`;
+    const targetSource = polySource(targetType, nextAlias, i + 1);
     fromSql += pointerStepJoinForLink(link, prevAlias, nextAlias, targetSource, `cpj${i + 1}`, options);
     prevAlias = nextAlias;
   }
@@ -10685,6 +10694,23 @@ const compilePredicateSetSQL = (
         return `(${existsKW} (SELECT 1 FROM (${lhsCorrelated}) WHERE "value" ${inKW} (${placeholders})))`;
       }
     }
+    // Correlated multi LHS that is a scalar POINTER PATH (`User.friends.id IN
+    // <set>`) against a row-set RHS — e.g. the membership a typed backlink off
+    // group elements (`X.elements.<friends[is User]`) decorrelates to. EdgeQL
+    // `X IN Y` over a multi LHS is element-wise (keep the row when ANY LHS
+    // element is in Y), so EXISTS-test the LHS path's rows against the RHS set.
+    {
+      const lhsPath = tryCompileCorrelatedScalarPointerPathScalarSelect(args[0].expr, sourceAlias, options);
+      if (lhsPath) {
+        const rhsCp = params.length;
+        const rhsSet = compileScalarSelectSQL(args[1].expr, params, target, options);
+        if (rhsSet) {
+          const existsKW = call.operator === "in" ? "EXISTS" : "NOT EXISTS";
+          return `(${existsKW} (SELECT 1 FROM (${lhsPath}) WHERE ${quoteIdent("value")} IN (${rhsSet})))`;
+        }
+        params.length = rhsCp;
+      }
+    }
     const left = compileValueSetSQL(args[0].expr, sourceAlias, params, target, options, linkPropertyAlias);
     if (!left) {
       params.length = checkpoint;
@@ -11738,6 +11764,26 @@ const compileValueSetSQL = (
 
   if (expr.kind === "exists_expr") {
     const existsExpr = expr as ExistsExpr;
+    // `exists <link>` where the link is stored in a junction table (a multi
+    // link, or a single link carrying link properties) has no inline
+    // `<name>_id` column to test for NULL — probe the junction table directly.
+    // Without this the value read returns the (absent, hence NULL) FK column
+    // and `exists` is always false. Anchored at the row alias / source path.
+    {
+      const linkUnwrapped = unwrapSelectExprSet(existsExpr.expr).result;
+      if (linkUnwrapped.expr.kind === "pointer") {
+        const ptr = linkUnwrapped.expr as Pointer;
+        // The link is read off the current row (a leading-dot `.link` in a
+        // FILTER, anchored at the outer alias), or a path-bound source with a
+        // registered alias.
+        const anchor = pickSourcePathAlias(ptr.source, options) ?? sourceAlias;
+        if (!ptr.ptrref.isLinkProperty && !ptr.ptrref.outTarget.isScalar
+            && ptr.direction === "outbound" && shouldUseLinkTable(ptr)) {
+          const lt = linkTableNameForPointer(ptr, options);
+          return `(CASE WHEN EXISTS (SELECT 1 FROM ${quoteIdent(lt)} WHERE ${quoteIdent("source")} = ${anchor}.${quoteIdent("id")}) THEN json('true') ELSE json('false') END)`;
+        }
+      }
+    }
     const inner = compileValueSetSQL(existsExpr.expr, sourceAlias, params, target, options, linkPropertyAlias);
     if (!inner) {
       // The inner set may be a self-contained row set (no type roots, so no
