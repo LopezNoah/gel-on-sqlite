@@ -5040,14 +5040,32 @@ type ScalarPointerPath = {
   root: Set;
   leaf: Pointer;
   links: Pointer[];
+  // The narrowed scan type for each link in `links` (same order): the wrapping
+  // set's typeref, which a `[IS T]` intersection replaces with the narrowed
+  // type. `effectiveStepType` reads this so the narrowing falls out of the
+  // id-equijoin against the link's targets.
+  linkTargets: TypeRef[];
+};
+
+// The type to scan for a link step's target (outbound) or source (inbound)
+// rows. Normally the pointer's declared target/source, but a `[IS T]`
+// intersection puts the narrowed type on the wrapping set; scanning that
+// instead filters the step's rows to the narrowed extent purely via the
+// existing id JOIN — `stw0[IS R]` scans R's tables, so only the union-link
+// targets that are R-typed survive.
+const effectiveStepType = (link: Pointer, setTyperef: TypeRef | undefined): TypeRef => {
+  const declared = link.direction === "inbound" ? link.ptrref.outSource : link.ptrref.outTarget;
+  return setTyperef && setTyperef.id !== declared.id ? setTyperef : declared;
 };
 
 const extractScalarPointerPath = (set: Set): ScalarPointerPath | null => {
   const chain: Pointer[] = [];
+  const chainSetTyperefs: TypeRef[] = [];
   let cursor: Set = set;
   while (cursor.expr.kind === "pointer") {
     const pointer = cursor.expr as Pointer;
     chain.push(pointer);
+    chainSetTyperefs.push(cursor.typeref);
     cursor = pointer.source;
   }
 
@@ -5068,8 +5086,9 @@ const extractScalarPointerPath = (set: Set): ScalarPointerPath | null => {
   if (links.some((link) => link.ptrref.outTarget.isScalar || link.ptrref.isLinkProperty)) {
     return null;
   }
+  const linkTargets = chainSetTyperefs.slice(1).reverse();
 
-  return { root: cursor, leaf, links };
+  return { root: cursor, leaf, links, linkTargets };
 };
 
 const pointerPathAliasColumns = (path: ScalarPointerPath): string[][] => {
@@ -5109,6 +5128,68 @@ const linkTableNameForPointer = (pointer: Pointer, options?: GelIRCompileOptions
   return `${tableNameForType(storage)}__${linkName.toLowerCase()}`;
 };
 
+// The DISTINCT physical junction tables this link read must touch. Usually one
+// (the link's single storage owner), but a link inherited independently by a
+// multiple-inheritance subtype lives in that subtype's own table, separate from
+// the base owners (e.g. `V : S, T` owns `default__v__l_a`, distinct from
+// `default__s__l_a` / `default__t__l_a`). When the source set may hold several
+// such concrete types, the read must union every owner's table. De-duped, so
+// the ordinary single-inheritance case (subtypes share the base's table) still
+// yields exactly one — keeping the SQL byte-identical there.
+const linkStorageTablesForPointer = (link: Pointer, options?: GelIRCompileOptions): string[] => {
+  const linkName = link.ptrref.shortName;
+  // Outbound: keyed by the concrete types the source set may hold. Inbound
+  // (a `.<link` backlink): keyed by the concrete types that DECLARE the link
+  // (its `outSource` extent), since the junction lives with the referencing
+  // type, not the row we start from.
+  const keyTyperef = link.direction === "inbound" ? link.ptrref.outSource : link.source.typeref;
+  // Expand to concrete types branch by branch via the shared closure rule: a
+  // union (`S | T`) arrives as bare branch refs with no `children`, so the
+  // typeref's own closure would miss each branch's subtypes (the V in S|T).
+  const concrete = new globalThis.Set<string>();
+  for (const branch of expandUnionTypeRefBranches(keyTyperef)) {
+    for (const name of branchConcreteTypeNames(branch, options)) concrete.add(name);
+  }
+  const tables = new globalThis.Set<string>();
+  for (const typeName of concrete) {
+    // When a storage resolver is wired, an `undefined` answer means this
+    // concrete type does NOT declare the link — skip it rather than naming a
+    // table that was never created. This matters for backlinks: the ptrref's
+    // `outSource` is widened to a common base (`l_a` resolves to `R`), whose
+    // extent includes siblings like `A` that never carry the link.
+    let storage: string | undefined;
+    if (options?.resolveLinkStorageType) {
+      storage = options.resolveLinkStorageType(typeName, linkName);
+      if (storage === undefined) continue;
+    } else {
+      storage = typeName;
+    }
+    tables.add(`${tableNameForType(storage)}__${linkName.toLowerCase()}`);
+  }
+  if (tables.size === 0) {
+    tables.add(linkTableNameForPointer(link, options));
+  }
+  return [...tables];
+};
+
+// The FROM reference for a link's junction in a JOIN/FROM position: a single
+// quoted table name in the common case, or a parenthesised UNION-ALL over the
+// distinct per-owner storage tables when the link is split across several (a
+// multiple-inheritance diamond). `rowid` is projected through the union so the
+// default insertion-order link ordering (`ORDER BY <alias>.rowid`) still
+// resolves; `*` carries `source`/`target` and any link-property columns, which
+// align positionally because every owner materialises the same link shape.
+const linkTableSourceForPointer = (link: Pointer, options?: GelIRCompileOptions): string => {
+  const tables = linkStorageTablesForPointer(link, options);
+  if (tables.length <= 1) {
+    return quoteIdent(tables[0] ?? linkTableNameForPointer(link, options));
+  }
+  const union = tables
+    .map((table) => `SELECT ${quoteIdent("rowid")}, * FROM ${quoteIdent(table)}`)
+    .join(" UNION ALL ");
+  return `(${union})`;
+};
+
 // One home for the per-link choice between the two pointer-step join shapes: a
 // link-table step joins through its junction alias, an inline step through the
 // `<name>_id` FK column. The four join shapes themselves live in
@@ -5135,7 +5216,7 @@ const pointerStepJoinForLink = (
         nextAlias,
         targetSource,
         linkAlias,
-        linkTable: linkTableNameForPointer(link, options),
+        linkTableExpr: linkTableSourceForPointer(link, options),
       })
     : pointerStepJoinSql({
         usesLinkTable: false,
@@ -5168,7 +5249,7 @@ const tryCompileScalarPointerPathSelectSQL = (
 
   path.links.forEach((link, index) => {
     const nextAlias = pointerStepTargetAlias(index);
-    const targetType = link.direction === "inbound" ? link.ptrref.outSource : link.ptrref.outTarget;
+    const targetType = effectiveStepType(link, path.linkTargets[index]);
     const targetSource = compilePolymorphicSource(targetType, false, nextAlias, aliasColumns[index + 1], options);
     fromSql += pointerStepJoinForLink(link, previousAlias, nextAlias, targetSource, pointerStepLinkAlias(index), options);
     previousAlias = nextAlias;
@@ -6201,7 +6282,7 @@ const buildCorrelatedScalarPointerPath = (
     compilePolymorphicSource(typeref, false, alias, aliasColumns[level] ?? ["id"], options);
 
   const firstLink = path.links[0];
-  const firstTargetType = firstLink.direction === "inbound" ? firstLink.ptrref.outSource : firstLink.ptrref.outTarget;
+  const firstTargetType = effectiveStepType(firstLink, path.linkTargets[0]);
   const firstAlias = "cp1";
   let fromSql: string;
   let anchorWhere: string;
@@ -6247,7 +6328,7 @@ const buildCorrelatedScalarPointerPath = (
   for (let i = 1; i < path.links.length; i += 1) {
     const link = path.links[i];
     const nextAlias = `cp${i + 1}`;
-    const targetType = link.direction === "inbound" ? link.ptrref.outSource : link.ptrref.outTarget;
+    const targetType = effectiveStepType(link, path.linkTargets[i]);
     const targetSource = polySource(targetType, nextAlias, i + 1);
     fromSql += pointerStepJoinForLink(link, prevAlias, nextAlias, targetSource, `cpj${i + 1}`, options);
     prevAlias = nextAlias;
@@ -8728,19 +8809,42 @@ const expandUnionTypeRefBranches = (typeRef: TypeRef): TypeRef[] => {
   // `unknown:default::File` which would table-name to `unknown:default__file`.
   const stripUnknown = (s: string): string => s.startsWith("unknown:") ? s.slice("unknown:".length) : s;
   const idWithoutMarker = stripUnknown(typeRef.id);
-  return idWithoutMarker.split("|").map((branchId) => {
-    const trimmed = stripUnknown(branchId.trim());
-    return {
-      kind: "type_ref" as const,
-      id: trimmed,
-      nameHint: trimmed,
-      module: trimmed.split("::")[0] ?? "default",
-      isView: false,
-      isScalar: false,
-      isAbstract: false,
-      inSchema: true,
-    };
-  });
+  return idWithoutMarker.split("|").map((branchId) => typeRefFromQualifiedName(stripUnknown(branchId.trim())));
+};
+
+// A minimal concrete TypeRef synthesised from a qualified name — used where a
+// concrete type is recovered as a string (a union-branch id split, or the
+// schema's concrete-subtype closure) and must re-enter the TypeRef-shaped
+// lowering. Downstream reads only the name (table + columns key off it), so the
+// synthetic children/flags suffice.
+const typeRefFromQualifiedName = (name: string): TypeRef => ({
+  kind: "type_ref",
+  id: name,
+  nameHint: name,
+  module: name.split("::")[0] ?? "default",
+  isView: false,
+  isScalar: false,
+  isAbstract: false,
+  inSchema: true,
+});
+
+// The concrete (non-abstract) qualified type names one already-expanded typeref
+// branch admits — the single home for "expand a polymorphic branch to its
+// concrete extent". Prefers the schema's concrete-subtype closure
+// (`resolveConcreteSubtypes`): it alone recovers a union branch's own subtypes,
+// since a union branch arrives as a bare id string with no `children`. Falls
+// back to the IR children-closure when no resolver is wired. Per-branch: the
+// caller expands unions (`expandUnionTypeRefBranches`) and de-dupes. Both
+// polymorphic readers — `compilePolymorphicSource` (union path) and
+// `linkStorageTablesForPointer` — route through this so they cannot drift.
+const branchConcreteTypeNames = (branch: TypeRef, options: GelIRCompileOptions | undefined): string[] => {
+  const viaSchema = options?.resolveConcreteSubtypes?.(qualifyTypeName(branch));
+  if (viaSchema && viaSchema.length > 0) {
+    return viaSchema;
+  }
+  return flattenTypeClosure(branch)
+    .filter((candidate) => !candidate.isAbstract)
+    .map((candidate) => qualifyTypeName(candidate));
 };
 
 // Request for an extra column derived from joining a link's storage table.
@@ -8764,11 +8868,31 @@ const compilePolymorphicSource = (
   linkProjections: LinkProjection[] = [],
 ): string => {
   const branches = expandUnionTypeRefBranches(typeRef);
+  const isUnion = branches.length > 1;
   const candidates = skipSubtypes
     ? branches
-    : branches.flatMap((branch) => flattenTypeClosure(branch));
+    // A union target (`stw0 -> S | T | W`) arrives as bare branch refs with no
+    // `children`, so the per-branch type-closure would scan only S/T/W and miss
+    // V (a subtype of both S and T). `branchConcreteTypeNames` recovers each
+    // branch's concrete subtypes from the schema (the same rule
+    // `linkStorageTablesForPointer` uses). Non-union sources keep the
+    // children-based closure so their SQL stays byte-identical.
+    : branches.flatMap((branch) =>
+        isUnion
+          ? branchConcreteTypeNames(branch, options).map(typeRefFromQualifiedName)
+          : flattenTypeClosure(branch));
   const concrete = candidates.filter((candidate) => !candidate.isAbstract);
-  const sources = concrete.length > 0 ? concrete : [typeRef];
+  // De-dupe by qualified name: a union whose branches share a subtype (V is
+  // under both S and T) would otherwise scan V's table once per branch and
+  // double its rows. First-occurrence order, so non-union output is unchanged.
+  const seenNames = new globalThis.Set<string>();
+  const deduped = concrete.filter((candidate) => {
+    const name = qualifyTypeName(candidate);
+    if (seenNames.has(name)) return false;
+    seenNames.add(name);
+    return true;
+  });
+  const sources = deduped.length > 0 ? deduped : [typeRef];
 
   const selects = sources.map((source) => {
     const sourceTypeName = qualifyTypeName(source);
@@ -9884,11 +10008,13 @@ const tryCompileObjectIdentityExistsSQL = (
 // where the comparison reduces to "leaf row's id equals the outer row's id".
 const extractObjectPointerPath = (set: Set): ScalarPointerPath | null => {
   const chain: Pointer[] = [];
+  const chainSetTyperefs: TypeRef[] = [];
   let cursor: Set = set;
   while (cursor.expr.kind === "pointer") {
     const pointer = cursor.expr as Pointer;
     if (pointer.ptrref.isLinkProperty) return null;
     chain.push(pointer);
+    chainSetTyperefs.push(cursor.typeref);
     cursor = pointer.source;
   }
 
@@ -9907,8 +10033,9 @@ const extractObjectPointerPath = (set: Set): ScalarPointerPath | null => {
   if (links.some((link) => link.ptrref.outTarget.isScalar || link.ptrref.isLinkProperty)) {
     return null;
   }
+  const linkTargets = chainSetTyperefs.slice(1).reverse();
 
-  return { root: cursor, leaf, links };
+  return { root: cursor, leaf, links, linkTargets };
 };
 
 const tryCompileMultiStepPointerExistsSQL = (
@@ -12434,12 +12561,12 @@ const compileOutboundLinkArrayExpr = (
     ? compileChainSourceIdSetSQL(pointer.source, sourceAlias, options)
     : null;
   if (shouldUseLinkTable(pointer)) {
-    const linkTable = linkTableNameForPointer(pointer, options);
+    const linkTableRef = linkTableSourceForPointer(pointer, options);
     const sourceMatch = chainedSourceIds !== null
       ? `${joinAlias}.${quoteIdent("source")} IN (${chainedSourceIds})`
       : `${joinAlias}.${quoteIdent("source")} = ${sourceAlias}.${quoteIdent("id")}`;
     const inner = appendDefaultLinkOrder(
-      compileLinkedInnerSelect(rowExpr, `FROM ${targetSource} JOIN ${quoteIdent(linkTable)} ${joinAlias} ON ${joinAlias}.${quoteIdent("target")} = ${targetAlias}.${quoteIdent("id")} WHERE ${sourceMatch}`, modifiers, targetAlias, params, target, options, joinAlias, pointer),
+      compileLinkedInnerSelect(rowExpr, `FROM ${targetSource} JOIN ${linkTableRef} ${joinAlias} ON ${joinAlias}.${quoteIdent("target")} = ${targetAlias}.${quoteIdent("id")} WHERE ${sourceMatch}`, modifiers, targetAlias, params, target, options, joinAlias, pointer),
       modifiers, joinAlias,
     );
     return `COALESCE((SELECT json_group_array(json(${quoteIdent("item")})) FROM (${inner})), '[]')`;
@@ -12477,12 +12604,12 @@ const compileBacklinkArrayExpr = (
     ? compileChainSourceIdSetSQL(pointer.source, sourceAlias, options)
     : null;
   if (shouldUseLinkTable(pointer)) {
-    const linkTable = linkTableNameForPointer(pointer, options);
+    const linkTableRef = linkTableSourceForPointer(pointer, options);
     const targetMatch = chainedSourceIds !== null
       ? `${joinAlias}.${quoteIdent("target")} IN (${chainedSourceIds})`
       : `${joinAlias}.${quoteIdent("target")} = ${sourceAlias}.${quoteIdent("id")}`;
     const inner = appendDefaultLinkOrder(
-      compileLinkedInnerSelect(rowExpr, `FROM ${backlinkSource} JOIN ${quoteIdent(linkTable)} ${joinAlias} ON ${joinAlias}.${quoteIdent("source")} = ${backlinkAlias}.${quoteIdent("id")} WHERE ${targetMatch}`, modifiers, backlinkAlias, params, target, options, joinAlias, pointer),
+      compileLinkedInnerSelect(rowExpr, `FROM ${backlinkSource} JOIN ${linkTableRef} ${joinAlias} ON ${joinAlias}.${quoteIdent("source")} = ${backlinkAlias}.${quoteIdent("id")} WHERE ${targetMatch}`, modifiers, backlinkAlias, params, target, options, joinAlias, pointer),
       modifiers, joinAlias,
     );
     return `COALESCE((SELECT json_group_array(json(${quoteIdent("item")})) FROM (${inner})), '[]')`;

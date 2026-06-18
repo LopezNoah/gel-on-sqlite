@@ -38,6 +38,12 @@ export interface PointerStepJoin {
   // Junction-table case: the junction alias and table name.
   linkAlias?: string;
   linkTable?: string;
+  // A pre-formed FROM reference for the junction (already quoted, or a
+  // parenthesised UNION-ALL subquery). When set it is used verbatim in place
+  // of `quoteIdent(linkTable)` — the escape hatch for a link whose physical
+  // storage is split across several tables (a multiple-inheritance diamond),
+  // where one table name cannot name the junction.
+  linkTableExpr?: string;
   // Inline-FK case: the `<name>_id` column on whichever side holds it.
   inlineColumn?: string;
 }
@@ -52,10 +58,11 @@ export const pointerStepJoinSql = (step: PointerStepJoin): string => {
 
   if (step.usesLinkTable) {
     const { linkAlias, linkTable } = step;
+    const linkTableRef = step.linkTableExpr ?? quoteIdent(linkTable!);
     const onPrev = inbound ? "target" : "source";
     const onTarget = inbound ? "source" : "target";
     return (
-      ` JOIN ${quoteIdent(linkTable!)} ${linkAlias}`
+      ` JOIN ${linkTableRef} ${linkAlias}`
       + ` ON ${linkAlias}.${quoteIdent(onPrev)} = ${prevId}`
       + ` JOIN ${targetSource}`
       + ` ON ${nextAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent(onTarget)}`
