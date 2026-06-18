@@ -1895,17 +1895,33 @@ const compileSetConstructor = (values: Set[], label: string): Set => {
     return values[0];
   }
   const first = values[0];
+  // A union of distinct concrete object types (`{CBaBb, CBbBc}`) spans more
+  // than one type, so its element type is the `A | B` union — not the first
+  // branch's type. Reflect that in the typeref so `.__type__.name` reads the
+  // dynamic `__source_type` discriminator (the `includes("|")` path) instead of
+  // baking in the first branch's static name, and so polymorphic pointer
+  // resolution probes every branch. Scalars and same-typed branches keep
+  // `first.typeref`.
+  const objectIds = values
+    .map((value) => value.typeref)
+    .filter((ref) => ref && !ref.isScalar && !ref.id.startsWith("unknown:"))
+    .map((ref) => ref.id);
+  const distinctObjectIds = [...new globalThis.Set(objectIds)];
+  const allObjects = objectIds.length === values.length;
+  const typeref = allObjects && distinctObjectIds.length > 1
+    ? ({ ...first.typeref, id: distinctObjectIds.join(" | "), isAbstract: false } as TypeRef)
+    : first.typeref;
   return {
     kind: "set",
     expr: {
       kind: "operator_call",
       operator: "union",
       args: Object.fromEntries(values.map((value, index) => [String(index), mkCallArg(value)])),
-      returning: first.typeref,
+      returning: typeref,
       volatility: "immutable",
     } as OperatorCall,
     pathId: defaultPathId(label),
-    typeref: first.typeref,
+    typeref,
     shape: [],
     isBinding: false,
     isMaterializedRef: false,
