@@ -500,7 +500,7 @@ export const runSelectExprEvaluation = (
           if (typeof sourceType !== "string") return false;
           const matchName = (name: string): boolean => {
             const qualified = qualifyRuntimeTypeName(name);
-            return sourceType === qualified || schema.listConcreteTypesAssignableTo(qualified).some((candidate) => qualifiedTypeName(candidate) === sourceType);
+            return sourceType === qualified || schema.concreteTypeNamesUnder(qualified).includes(sourceType);
           };
           if (typeExpr.kind === "type_name") return matchName(typeExpr.name);
           if (typeExpr.kind === "type_union") return matchesType(row, typeExpr.left) || matchesType(row, typeExpr.right);
@@ -1304,7 +1304,7 @@ export const runSelectExprEvaluation = (
             if (!item || typeof item !== "object" || Array.isArray(item)) return false;
             const sourceType = (item as Record<string, unknown>).__source_type;
             return typeof sourceType === "string"
-              && (sourceType === qualified || schema.listConcreteTypesAssignableTo(qualified).some((candidate) => qualifiedTypeName(candidate) === sourceType));
+              && (sourceType === qualified || schema.concreteTypeNamesUnder(qualified).includes(sourceType));
           });
         }
         return Array.isArray(value) ? value.map(checkOne) : checkOne(value);
@@ -1380,7 +1380,7 @@ export const runSelectExprEvaluation = (
           return null;
         }
         const sourceTypeQualified = qualifyRuntimeTypeName(expr.sourceType);
-        const concretes = schema.listConcreteTypesAssignableTo(sourceTypeQualified).map((typeDef) => qualifiedTypeName(typeDef));
+        const concretes = schema.concreteTypeNamesUnder(sourceTypeQualified);
         const matches = rowSourceType === sourceTypeQualified || concretes.includes(rowSourceType);
         if (!matches) {
           return null;

@@ -222,6 +222,15 @@ export class SchemaSnapshot {
     });
   }
 
+  // The qualified names (`module::name`) of every concrete type assignable to
+  // `name` — the one home for the projection ~30 call sites used to re-spell
+  // inline as `listConcreteTypesAssignableTo(name).map(qualifiedTypeName)`.
+  // Membership ("is concrete type X covered by `name`?") is
+  // `concreteTypeNamesUnder(name).includes(X)`.
+  concreteTypeNamesUnder(name: string): string[] {
+    return this.listConcreteTypesAssignableTo(name).map(qualifiedTypeName);
+  }
+
   // Public wrapper for the recursive private check: is `child` (qualified
   // name or TypeDef) a subtype of `ancestor`? Returns true when they're the
   // same name, when `child` directly extends `ancestor`, or transitively.

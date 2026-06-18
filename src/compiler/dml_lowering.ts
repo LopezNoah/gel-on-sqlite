@@ -1482,10 +1482,10 @@ const expectedTargetTablesForLink = (
   const targetTypeNames = normalizeLinkTargetNames(link.targetType, ownerModule);
   const tables = new Set<string>();
   for (const targetTypeName of targetTypeNames) {
-    const assignable = schema.listConcreteTypesAssignableTo(targetTypeName);
+    const assignable = schema.concreteTypeNamesUnder(targetTypeName);
     if (assignable.length > 0) {
-      for (const candidate of assignable) {
-        tables.add(tableNameForType(qualifiedTypeName(candidate)));
+      for (const candidateName of assignable) {
+        tables.add(tableNameForType(candidateName));
       }
     } else {
       tables.add(tableNameForType(targetTypeName));

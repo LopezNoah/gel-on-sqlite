@@ -4631,7 +4631,7 @@ const concreteTypeNamesForTypeExprAtRuntime = (
           .filter((typeDef) => !typeDef.abstract)
           .map((typeDef) => qualifiedTypeName(typeDef));
       }
-      return schema.listConcreteTypesAssignableTo(qualified).map((typeDef) => qualifiedTypeName(typeDef));
+      return schema.concreteTypeNamesUnder(qualified);
     }
     const left = new Set(visit(node.left));
     const right = new Set(visit(node.right));
@@ -4663,7 +4663,7 @@ const expandPolymorphicMutation = (
     // statement misses rows that physically live in subtype tables (and skips
     // their exclusivity triggers). When the subject is itself the only concrete
     // type, leave it untouched (no expansion needed).
-    const concretes = schema.listConcreteTypesAssignableTo(qualified).map((typeDef) => qualifiedTypeName(typeDef));
+    const concretes = schema.concreteTypeNamesUnder(qualified);
     if (concretes.length === 0) {
       return undefined;
     }
@@ -6955,7 +6955,7 @@ const resolveBacklinkRowsForSubject = (
   };
   for (const candidate of schema.listTypes()) {
     const candidateName = qualifiedTypeName(candidate);
-    if (filterSource && !schema.listConcreteTypesAssignableTo(filterSource).some((t) => qualifiedTypeName(t) === candidateName)) continue;
+    if (filterSource && !schema.concreteTypeNamesUnder(filterSource).includes(candidateName)) continue;
     const linkDef = findRuntimeLinkDef(schema, candidateName, link);
     if (!linkDef) continue;
     const usesTable = usesLinkTable(linkDef.link);
@@ -7227,9 +7227,7 @@ const evaluateSelectExprShapeEntry = (
     if (t.kind === "type_name") {
       const qualified = t.name.includes("::") ? t.name : `default::${t.name}`;
       if (qualified === "default::Object" || qualified === "std::Object") return true;
-      return schema
-        .listConcreteTypesAssignableTo(qualified)
-        .some((candidate) => qualifiedTypeName(candidate) === typeName);
+      return schema.concreteTypeNamesUnder(qualified).includes(typeName);
     }
     if (t.kind === "type_union") {
       return concreteMatches(typeName, t.left) || concreteMatches(typeName, t.right);
@@ -9346,7 +9344,7 @@ const runWriteWithAccessPolicies = (
         if (target === targetQualifiedName) {
           return true;
         }
-        return schema.listConcreteTypesAssignableTo(target).some((candidate) => qualifiedTypeName(candidate) === targetQualifiedName);
+        return schema.concreteTypeNamesUnder(target).includes(targetQualifiedName);
       });
     };
 
@@ -11730,8 +11728,7 @@ function checkEmptyCastTargetType(
     const declaredObj = ctx.schema.getType(declared);
     const compatible =
       castObj && declaredObj &&
-      ctx.schema.listConcreteTypesAssignableTo(declared)
-        .some((c) => qualifiedTypeName(c) === qualifiedTypeName(castObj));
+      ctx.schema.concreteTypeNamesUnder(declared).includes(qualifiedTypeName(castObj));
     if (!compatible) {
       preValidationFail(
         `invalid target for link '${field}' of object type ` +
