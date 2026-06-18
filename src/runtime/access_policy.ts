@@ -98,6 +98,28 @@ export const appliesToOperation = (
   return policy.operations.includes(operation);
 };
 
+// Evaluate a single policy against the row. A policy carrying a `USING (...)`
+// predicate (`usingExprText`) is evaluated through the SQL pipeline via the
+// injected `evalUsingExpr` (the engine scopes it to the subject and lowers it
+// to SQL); without that injection it has no statically-known truth value, so a
+// predicate-bearing policy is treated as not-satisfied. Predicate-free policies
+// fall back to the structured `condition`.
+const evalPolicyAgainstRow = (
+  policy: AccessPolicyDef,
+  row: Record<string, unknown>,
+  context: SecurityContext,
+  evalUsingExpr?: PolicyExprEvaluator,
+): boolean => {
+  if (policy.usingExprText !== undefined) {
+    return evalUsingExpr ? evalUsingExpr(policy, row) : false;
+  }
+  return evaluateCondition(policy.condition, row, context);
+};
+
+// Resolves a policy's `USING (...)` predicate for a concrete subject row by
+// lowering it to SQL (injected by the engine, which owns the DB/schema).
+export type PolicyExprEvaluator = (policy: AccessPolicyDef, row: Record<string, unknown>) => boolean;
+
 // The core decision: a row passes iff some `allow` policy's condition holds and
 // no `deny` policy's condition holds. No relevant policy → deny (false). With
 // `failOnDeny`, a matched deny throws its message instead of returning false.
@@ -106,7 +128,7 @@ export const evaluatePoliciesForOperation = (
   operation: "select" | "insert" | "update_read" | "update_write" | "delete",
   row: Record<string, unknown>,
   context: SecurityContext,
-  options: { failOnDeny: boolean },
+  options: { failOnDeny: boolean; evalUsingExpr?: PolicyExprEvaluator },
 ): boolean => {
   const policies = typeDef.accessPolicies ?? [];
   if (policies.length === 0 || context.isSuperuser) {
@@ -120,13 +142,13 @@ export const evaluatePoliciesForOperation = (
 
   const allows = relevant.filter((policy) => policy.effect === "allow");
   const denies = relevant.filter((policy) => policy.effect === "deny");
-  const allowed = allows.some((policy) => evaluateCondition(policy.condition, row, context));
+  const allowed = allows.some((policy) => evalPolicyAgainstRow(policy, row, context, options.evalUsingExpr));
   if (!allowed) {
     return false;
   }
 
   for (const deny of denies) {
-    if (evaluateCondition(deny.condition, row, context)) {
+    if (evalPolicyAgainstRow(deny, row, context, options.evalUsingExpr)) {
       if (options.failOnDeny) {
         throw new Error(deny.errmessage ?? `Denied by policy '${deny.name}'`);
       }
@@ -139,15 +161,16 @@ export const evaluatePoliciesForOperation = (
 
 export const enforceInsertPolicies = (
   typeDef: TypeDef,
-  values: Record<string, ScalarValue>,
+  values: Record<string, unknown>,
   context: SecurityContext,
   line: number,
   column: number,
+  evalUsingExpr?: PolicyExprEvaluator,
 ): void => {
   const row: Record<string, unknown> = { ...values };
-  const ok = evaluatePoliciesForOperation(typeDef, "insert", row, context, { failOnDeny: true });
+  const ok = evaluatePoliciesForOperation(typeDef, "insert", row, context, { failOnDeny: true, evalUsingExpr });
   if (!ok) {
-    throw new AppError("E_RUNTIME", `Access policy violation on insert of ${qualifiedTypeName(typeDef)}`, line, column);
+    throw new AppError("E_RUNTIME", `access policy violation on insert of ${qualifiedTypeName(typeDef)}`, line, column);
   }
 };
 
@@ -157,11 +180,12 @@ export const enforceUpdateReadPolicies = (
   context: SecurityContext,
   line: number,
   column: number,
+  evalUsingExpr?: PolicyExprEvaluator,
 ): void => {
   for (const row of rows) {
-    const ok = evaluatePoliciesForOperation(typeDef, "update_read", row, context, { failOnDeny: true });
+    const ok = evaluatePoliciesForOperation(typeDef, "update_read", row, context, { failOnDeny: true, evalUsingExpr });
     if (!ok) {
-      throw new AppError("E_RUNTIME", `Access policy violation on update read of ${qualifiedTypeName(typeDef)}`, line, column);
+      throw new AppError("E_RUNTIME", `access policy violation on update read of ${qualifiedTypeName(typeDef)}`, line, column);
     }
   }
 };
@@ -172,11 +196,12 @@ export const enforceUpdateWritePolicies = (
   context: SecurityContext,
   line: number,
   column: number,
+  evalUsingExpr?: PolicyExprEvaluator,
 ): void => {
   for (const row of rows) {
-    const ok = evaluatePoliciesForOperation(typeDef, "update_write", row, context, { failOnDeny: true });
+    const ok = evaluatePoliciesForOperation(typeDef, "update_write", row, context, { failOnDeny: true, evalUsingExpr });
     if (!ok) {
-      throw new AppError("E_RUNTIME", `Access policy violation on update write of ${qualifiedTypeName(typeDef)}`, line, column);
+      throw new AppError("E_RUNTIME", `access policy violation on update write of ${qualifiedTypeName(typeDef)}`, line, column);
     }
   }
 };
@@ -187,11 +212,12 @@ export const enforceDeletePolicies = (
   context: SecurityContext,
   line: number,
   column: number,
+  evalUsingExpr?: PolicyExprEvaluator,
 ): void => {
   for (const row of rows) {
-    const ok = evaluatePoliciesForOperation(typeDef, "delete", row, context, { failOnDeny: true });
+    const ok = evaluatePoliciesForOperation(typeDef, "delete", row, context, { failOnDeny: true, evalUsingExpr });
     if (!ok) {
-      throw new AppError("E_RUNTIME", `Access policy violation on delete of ${qualifiedTypeName(typeDef)}`, line, column);
+      throw new AppError("E_RUNTIME", `access policy violation on delete of ${qualifiedTypeName(typeDef)}`, line, column);
     }
   }
 };

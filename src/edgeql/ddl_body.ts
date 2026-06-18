@@ -464,7 +464,18 @@ export const parseCreateTypeBody = (bodyText: string): CreateTypeBodyEntry[] => 
 export type AlterTypeOp =
   | { kind: "set_default"; pointerPath: string[]; exprText: string }
   | { kind: "drop_constraint"; constraint: ExclusiveConstraintSpec }
-  | { kind: "create_constraint"; constraint: ExclusiveConstraintSpec };
+  | { kind: "create_constraint"; constraint: ExclusiveConstraintSpec }
+  | {
+      kind: "create_access_policy";
+      name: string;
+      effect: "allow" | "deny";
+      // Raw operation phrases as written: "select" | "insert" | "delete" |
+      // "update" | "update read" | "update write" | "all". The runtime
+      // normalizes these to AccessPolicyOperation[].
+      operations: string[];
+      // The `USING (...)` predicate source text (undefined ⇒ no predicate).
+      usingExprText?: string;
+    };
 
 /**
  * Parse the tail of an `ALTER TYPE <name> …` statement (the text after the type
@@ -528,6 +539,70 @@ export const parseAlterTypeBody = (tail: string): AlterTypeOp[] => {
     }
     const constraint: ExclusiveConstraintSpec = { delegated, onExpr, exceptExpr };
     return { op: { kind: isDrop ? "drop_constraint" : "create_constraint", constraint }, next: j };
+  };
+
+  // `CREATE ACCESS POLICY <name> (ALLOW|DENY) <ops> [USING (<expr>)] [{ … }]`.
+  // Parsed off the token stream (the USING predicate is sliced by balanced
+  // parens, not pattern-matched) so the predicate text flows into the normal
+  // EdgeQL pipeline for lowering. Returns undefined when this isn't an access
+  // policy (so `parseConstraintOp` gets its turn on the same `CREATE`).
+  const parseAccessPolicyOp = (idx: number): { op: AlterTypeOp; next: number } | undefined => {
+    if (tokens[idx]?.kind !== "kw_create") return undefined;
+    let j = idx + 1;
+    if (tokens[j]?.lower !== "access") return undefined;
+    j += 1;
+    if (tokens[j]?.kind !== "kw_policy") return undefined;
+    j += 1;
+    const nameTok = tokens[j];
+    if (!nameTok || nameTok.kind === "semi" || nameTok.kind === "eof"
+      || nameTok.kind === "lbrace" || nameTok.kind === "rbrace") return undefined;
+    const name = stripBacktickName(nameTok.lexeme);
+    j += 1;
+    const effectLower = tokens[j]?.lower;
+    if (effectLower !== "allow" && effectLower !== "deny") return undefined;
+    const effect = effectLower as "allow" | "deny";
+    j += 1;
+    const operations: string[] = [];
+    let parseOk = true;
+    while (tokens[j]) {
+      const t = tokens[j];
+      if (t.kind === "kw_using" || t.kind === "semi" || t.kind === "rbrace"
+        || t.kind === "eof" || t.kind === "lbrace") break;
+      if (t.kind === "comma") { j += 1; continue; }
+      if (t.kind === "kw_select") { operations.push("select"); j += 1; continue; }
+      if (t.kind === "kw_insert") { operations.push("insert"); j += 1; continue; }
+      if (t.kind === "kw_delete") { operations.push("delete"); j += 1; continue; }
+      if (t.lower === "all") { operations.push("all"); j += 1; continue; }
+      if (t.kind === "kw_update") {
+        j += 1;
+        if (tokens[j]?.lower === "read") { operations.push("update read"); j += 1; }
+        else if (tokens[j]?.lower === "write") { operations.push("update write"); j += 1; }
+        else operations.push("update");
+        continue;
+      }
+      parseOk = false;
+      break;
+    }
+    if (!parseOk) return undefined;
+    let usingExprText: string | undefined;
+    if (tokens[j]?.kind === "kw_using") {
+      const sliced = sliceParen(j + 1);
+      if (!sliced) return undefined;
+      usingExprText = sliced.text;
+      j = sliced.next;
+    }
+    // Skip an optional trailing `{ … }` body (annotations, set errmessage, …)
+    // so the outer walk doesn't reparse its contents.
+    if (tokens[j]?.kind === "lbrace") {
+      let depth = 1;
+      j += 1;
+      while (tokens[j] && depth > 0) {
+        if (tokens[j].kind === "lbrace") depth += 1;
+        else if (tokens[j].kind === "rbrace") depth -= 1;
+        j += 1;
+      }
+    }
+    return { op: { kind: "create_access_policy", name, effect, operations, usingExprText }, next: j };
   };
 
   const sliceDefaultExpr = (assignIdx: number): { text: string; next: number } => {
@@ -613,6 +688,8 @@ export const parseAlterTypeBody = (tail: string): AlterTypeOp[] => {
         j = sliced.next;
         continue;
       }
+      const ap = parseAccessPolicyOp(j);
+      if (ap) { ops.push(ap.op); j = ap.next; continue; }
       const con = parseConstraintOp(j);
       if (con) { ops.push(con.op); j = con.next; continue; }
       j += 1;

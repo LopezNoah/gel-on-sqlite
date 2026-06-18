@@ -5890,6 +5890,19 @@ describe("TestEdgeQLGroup", () => {
     }).toThrow(new RegExp("access policy violation on update"));
   });
 
+  // NOTE: this passes, but only because the policy is never registered: access
+  // policies are parsed/lowered for `ALTER TYPE ... { create access policy }`
+  // (ddl_body parseAccessPolicyOp → runtime applyAlterTypeDDL → SQL-lowered
+  // USING predicate), but NOT for inline policies in a `CREATE TYPE` body
+  // (parseCreateTypeBody has no access-policy handling), so type T ends up with
+  // no policies and the insert is unconditionally allowed. Even if it were
+  // registered, this USING expression would not lower today: it groups a SCALAR
+  // multi-property (`group x := .vals ... by v`) and then sums a shape-projected
+  // path (`...{ x := count(.elements) }).x`); compileEmbeddedGroupSQL only
+  // supports link-table sources and only `count(group)` is lowered as a value.
+  // Registering CREATE TYPE policies without first lowering this shape would
+  // regress this test (the allow-policy would evaluate false and deny the
+  // insert). See policies_01 for the working ALTER TYPE + group-over-link path.
   it("test_edgeql_group_policies_02", () => {
     h.script(
       `

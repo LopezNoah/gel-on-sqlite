@@ -9084,8 +9084,9 @@ const buildGroupStmtParts = (
     }
   }
   const hiddenByFields: string[] = [];
-  if (sourceAst.kind === "shape_projection" || sourceAst.kind === "select") {
-    const shape = [...(sourceAst.shape ?? [])];
+  if (sourceAst.kind === "shape_projection" || sourceAst.kind === "select" || sourceAst.kind === "binding_ref") {
+    const originalShape = sourceAst.kind === "binding_ref" ? [] : (sourceAst.shape ?? []);
+    const shape = [...originalShape];
     const present = new globalThis.Set<string>(
       shape
         .filter((s): s is Extract<EdgeQLShapeElement, { name: string }> => "name" in s && typeof s.name === "string")
@@ -9117,6 +9118,8 @@ const buildGroupStmtParts = (
           ? sourceAst.typeName
           : sourceAst.kind === "shape_projection" && sourceAst.expr.kind === "binding_ref"
             ? sourceAst.expr.name
+            : sourceAst.kind === "binding_ref"
+              ? (sourceAst as { name?: string }).name
             : undefined;
         if (subjectBindingName && containsBindingRef(usingExpr)) {
           const rewritten = rewriteSubjectBindingPathsToCurrentItem(usingExpr, subjectBindingName);
@@ -9161,8 +9164,10 @@ const buildGroupStmtParts = (
       hiddenByFields.push(name);
       present.add(name);
     }
-    if (shape.length !== (sourceAst.shape ?? []).length) {
-      sourceAst = { ...sourceAst, shape };
+    if (shape.length !== originalShape.length) {
+      sourceAst = sourceAst.kind === "binding_ref"
+        ? { kind: "shape_projection", expr: sourceAst, shape }
+        : { ...sourceAst, shape };
     }
   }
 

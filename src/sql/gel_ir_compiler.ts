@@ -11218,6 +11218,16 @@ const compileValueSetSQL = (
   }
 
   const expr = unwrapped.result.expr;
+  // A `(group <src> by <key>)` in *value* position lowers to the same
+  // correlated JSON-array-of-groups subquery a top-level group shape element
+  // uses. This is what lets group-in-expression (e.g. an access-policy
+  // `using (count((group .deck by .element)) = 2)`) lower to SQL rather than
+  // being dropped. `count` over it is the number of groups; a path/shape over
+  // it reads the group objects (handled by the pointer/shape paths via this
+  // array value).
+  if (expr.kind === "embedded_group") {
+    return compileEmbeddedGroupSQL(expr as EmbeddedGroupExpr, sourceAlias, params, options, target, 0);
+  }
   if (expr.kind === "pointer") {
     const pointer = expr as Pointer;
     const col = columnForPointer(pointer);
@@ -11484,6 +11494,22 @@ const compileValueSetSQL = (
     }
     const castTarget = sqlCastTarget(castExpr.toType);
     return castTarget ? `CAST(${inner} AS ${castTarget})` : inner;
+  }
+
+  // `count((group <src> by <key>))` — the number of groups is the length of
+  // the embedded group's JSON array. Intercept before the generic function
+  // lowering, which has no embedded_group shape and would drop it.
+  if (expr.kind === "function_call") {
+    const call = expr as FunctionCall;
+    const shortName = (call.functionName.split("::").pop() ?? call.functionName).toLowerCase();
+    const callArgs = orderedCallArgs(call.args);
+    if (shortName === "count" && callArgs.length === 1) {
+      const argGroup = unwrapSelectExprSet(callArgs[0].expr).result.expr;
+      if (argGroup.kind === "embedded_group") {
+        const arr = compileEmbeddedGroupSQL(argGroup as EmbeddedGroupExpr, sourceAlias, params, options, target, 0);
+        return `json_array_length(${arr})`;
+      }
+    }
   }
 
   if (expr.kind === "function_call") {

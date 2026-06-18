@@ -734,8 +734,11 @@ export const renderDeclarativeSchema = (schema: DeclarativeSchema): string => {
 
       for (const policy of typeDecl.accessPolicies) {
         const operationList = renderPolicyOperations(policy.operations);
+        // Prefer the original `USING (...)` source text (round-trips arbitrary
+        // predicates verbatim); fall back to the structured condition.
+        const usingClause = policy.usingExprText ?? renderPolicyCondition(policy.condition, moduleName);
         lines.push(
-          `    access policy ${policy.name} ${policy.effect} ${operationList} using (${renderPolicyCondition(policy.condition, moduleName)});`,
+          `    access policy ${policy.name} ${policy.effect} ${operationList} using (${usingClause});`,
         );
       }
 
