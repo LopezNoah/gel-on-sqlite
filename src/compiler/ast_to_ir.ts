@@ -1108,7 +1108,7 @@ const resolveBacklinkPointerRef = (
   // by an abstract (or otherwise polymorphic) supertype. When the filter is a
   // concrete type, this collapses to `{filter id}`.
   const allowedSourceIds = sourceHint
-    ? new globalThis.Set<string>([sourceHint, ...(hintTypeDef && ctx.schema ? ctx.schema.listConcreteTypesAssignableTo(sourceHint).map((td) => qualifyTypeNameOf(td)) : [])])
+    ? new globalThis.Set<string>([sourceHint, ...(hintTypeDef && ctx.schema ? ctx.schema.concreteTypeNamesUnder(sourceHint) : [])])
     : undefined;
   // Targets accepted by this backlink. Includes the requested type and any
   // ancestor whose link target is a union (`Issue.references: File | URL | …`)
@@ -1125,7 +1125,7 @@ const resolveBacklinkPointerRef = (
         if (resolved.id === target.id) return true;
         // Union branch may itself be a supertype of the requested target;
         // accept that too so `<references[IS Issue]` on a File still matches.
-        const branchAssignable = ctx.schema?.listConcreteTypesAssignableTo(part).map(qualifyTypeNameOf) ?? [];
+        const branchAssignable = ctx.schema?.concreteTypeNamesUnder(part) ?? [];
         return branchAssignable.includes(target.id);
       });
   };
@@ -6464,9 +6464,7 @@ const evalTypeExprConcreteNames = (
   if (!ctx.schema) return undefined;
   if (typeExpr.kind === "type_name") {
     const qualified = qualifyTypeName(typeExpr.name, ctx.module);
-    return new globalThis.Set(
-      ctx.schema.listConcreteTypesAssignableTo(qualified).map(qualifyTypeNameOf),
-    );
+    return new globalThis.Set(ctx.schema.concreteTypeNamesUnder(qualified));
   }
   const left = evalTypeExprConcreteNames(ctx, typeExpr.left);
   const right = evalTypeExprConcreteNames(ctx, typeExpr.right);
@@ -7862,6 +7860,10 @@ const compileShape = (
         shapeOrigin: resolveShapeOrigin(el),
         required: el.required ?? false,
         cardinality: el.cardinality ?? ptrref.inCardinality,
+        // A named backlink computable (`w_of := .<w[IS X] {…}`) carries its
+        // alias on the AST element; without this the projection would fall
+        // back to the link's own short name (`w`).
+        name: el.name,
       });
       continue;
     }

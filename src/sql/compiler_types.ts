@@ -41,6 +41,13 @@ export interface GelIRCompileOptions {
   // table for backlinks/forward links; if absent it falls back to the
   // sourceType-named table.
   resolveLinkStorageType?: (sourceTypeName: string, linkName: string) => string | undefined;
+  // The qualified names of every CONCRETE type assignable to `typeName`
+  // (itself if concrete, plus all concrete subtypes). A union typeref reaches
+  // the SQL layer as a bare `A | B` id string whose branch refs carry no
+  // `children`, so its own type-closure misses subtypes; this schema-backed
+  // resolver recovers them — needed to find every physical link-storage table
+  // a polymorphic read must union over.
+  resolveConcreteSubtypes?: (typeName: string) => string[];
   maxShapeDepth?: number;
   target?: RuntimeTarget;
   parameterValues?: Record<string, ScalarValue>;

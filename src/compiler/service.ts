@@ -218,6 +218,7 @@ const compileSqlFromGelIR = (
     globalValues: context.globals,
     resolveTypeColumns: makeTypeStorageColumnsResolver(schema),
     resolveLinkStorageType: makeLinkStorageOwnerResolver(schema),
+    resolveConcreteSubtypes: (typeName: string) => schema.concreteTypeNamesUnder(typeName),
     resolveEnumMembers: (typeName: string) => {
       const scalar = schema.listScalarTypes().find((s) => `${s.module}::${s.name}` === typeName);
       return scalar?.enumValues && scalar.enumValues.length > 0 ? scalar.enumValues : undefined;

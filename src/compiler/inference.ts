@@ -531,7 +531,7 @@ const makeInferenceEngine = (
 
   const isAssignableTo = (candidate: string, target: string): boolean => {
     if (candidate === target) return true;
-    return schema.listConcreteTypesAssignableTo(target).some((c) => qualifiedTypeName(c) === candidate);
+    return schema.concreteTypeNamesUnder(target).includes(candidate);
   };
 
   // ---- filter-restricts-at-most-one (exclusive-constraint detection) ----
@@ -1078,8 +1078,8 @@ const makeInferenceEngine = (
     const aName = qualifiedTypeName(a);
     const bName = qualifiedTypeName(b);
     if (aName === bName) return true;
-    const aConc = new Set(schema.listConcreteTypesAssignableTo(aName).map(qualifiedTypeName));
-    return schema.listConcreteTypesAssignableTo(bName).map(qualifiedTypeName).some((n) => aConc.has(n));
+    const aConc = new Set(schema.concreteTypeNamesUnder(aName));
+    return schema.concreteTypeNamesUnder(bName).some((n) => aConc.has(n));
   };
 
   const fieldMultiplicityOnType = (typeDef: TypeDef, fieldName: string): MultLevel => {
