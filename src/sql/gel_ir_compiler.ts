@@ -765,12 +765,29 @@ const compileDeleteStmtToSQL = (statement: DeleteStmt, options: GelIRCompileOpti
   const params: ScalarValue[] = [];
   const table = resolveTypeTableName(statement.subject, options);
   const qualifiedType = qualifyTypeName(statement.subject);
-  const targetExpr = unwrapSelectExprSet(statement.expr);
-  const sourceSet = unwrapSelectResultSet(targetExpr.result) ?? targetExpr.result;
-  const whereSet = statement.where ?? targetExpr.selectExpr?.where;
-  const orderBy = statement.orderBy ?? targetExpr.selectExpr?.orderBy;
-  const limitSet = statement.limit ?? targetExpr.selectExpr?.limit;
-  const offsetSet = statement.offset ?? targetExpr.selectExpr?.offset;
+  // `DELETE (SELECT T FILTER f)` nests the target's SELECT inside a subquery
+  // `select_expr` wrapper, so the filter / ORDER BY / pagination live on an
+  // *inner* select level — `unwrapSelectExprSet` only peels one. Walk every
+  // nested select_expr level so the clauses on the real SELECT are recovered
+  // (the wrappers are clause-free); without this the target filter is dropped
+  // and the DELETE removes every row.
+  let sourceSet: Set = statement.expr;
+  let targetWhere: Set | undefined;
+  let targetOrderBy: SortExpr[] | undefined;
+  let targetLimit: Set | undefined;
+  let targetOffset: Set | undefined;
+  while (sourceSet.expr.kind === "select_expr") {
+    const se = sourceSet.expr as SelectExpr;
+    targetWhere ??= se.where;
+    if (targetOrderBy === undefined && se.orderBy && se.orderBy.length > 0) targetOrderBy = se.orderBy;
+    targetLimit ??= se.limit;
+    targetOffset ??= se.offset;
+    sourceSet = se.result;
+  }
+  const whereSet = statement.where ?? targetWhere;
+  const orderBy = statement.orderBy ?? targetOrderBy;
+  const limitSet = statement.limit ?? targetLimit;
+  const offsetSet = statement.offset ?? targetOffset;
   const compiledSource = compileSelectSource(sourceSet, whereSet, orderBy, options, params, target);
 
   if (!compiledSource) {
@@ -10712,6 +10729,73 @@ const compilePredicateSetSQL = (
         return `(${left} ${call.operator === "?=" ? "IS" : "IS NOT"} ${right})`;
       }
       params.length = checkpoint;
+    }
+  }
+
+  // `<x> LIKE/ILIKE <set>` where one operand ranges over a FOREIGN root — a
+  // different extent than the SELECT subject (`DeleteTest2.name LIKE
+  // DeleteTest.name[:2] ++ '%'`, where `DeleteTest` is independent of the
+  // filtered `DeleteTest2`). The match is element-wise over that set and the
+  // FILTER keeps the row when ANY element matches. The plain value path below
+  // would collapse the foreign root onto the outer alias (so every row matches
+  // its own name), so unpack the set side into a correlated EXISTS, preserving
+  // the operator's operand order (LIKE is not symmetric). The current subject
+  // is registered in `outerScopes`, so its own references stay correlated to
+  // the outer alias and are NOT mistaken for a foreign set. `=`/`!=`/ordering
+  // operators have their own set lowering below; this covers the string-match
+  // operators `normalizeOperator` doesn't recognise.
+  if (call.operator === "like" || call.operator === "ilike"
+      || call.operator === "not_like" || call.operator === "not_ilike") {
+    const likeArgs = orderedCallArgs(call.args);
+    if (likeArgs.length >= 2) {
+      const negated = call.operator === "not_like" || call.operator === "not_ilike";
+      const insensitive = call.operator === "ilike" || call.operator === "not_ilike";
+      const renderLike = (lhs: string, rhs: string): string => insensitive
+        ? `LOWER(${lhs}) ${negated ? "NOT LIKE" : "LIKE"} LOWER(${rhs})`
+        : `${lhs} ${negated ? "NOT LIKE" : "LIKE"} ${rhs}`;
+      for (const swap of [false, true] as const) {
+        const setArgIdx = swap ? 0 : 1;
+        const otherIdx = swap ? 1 : 0;
+        const setArg = likeArgs[setArgIdx].expr;
+        if (isSingletonOuterScopeRef(setArg, options)) continue;
+        if (isSingleObjectLinkRef(setArg)) continue;
+        // Only set-treat an operand that reaches a foreign root: a scalar
+        // pointer source not bound to the current/enclosing scope. A pure
+        // literal/correlated operand (no sources, or all-outer) keeps the plain
+        // value comparison.
+        const argSources = new Map<string, TypeRef>();
+        collectScalarPointerSources(setArg, argSources);
+        if (argSources.size === 0) continue;
+        let hasForeignRoot = false;
+        for (const [key, typeref] of argSources.entries()) {
+          const ns = key.includes("|") ? key.slice(key.indexOf("|") + 1) : "";
+          const namespace = ns.length > 0 ? ns.split(",") : [];
+          if (!findMatchingOuterScope({ typerefId: typeref.id, namespace }, options)) {
+            hasForeignRoot = true;
+            break;
+          }
+        }
+        if (!hasForeignRoot) continue;
+        // The other operand must itself reach an object root — a literal /
+        // param pattern (`.name LIKE '%x%'`) is a plain correlated comparison,
+        // NOT a cross-extent match, and `findMatchingOuterScope` can't always
+        // recognise the current subject (e.g. `.name`, a WITH-rebound subject)
+        // as non-foreign. Requiring the other side to carry a source keeps those
+        // on the value path and reserves the EXISTS lowering for genuine
+        // cross-extent matches (`<subject>.x LIKE <other-extent>.y`).
+        const otherSources = new Map<string, TypeRef>();
+        collectScalarPointerSources(likeArgs[otherIdx].expr, otherSources);
+        if (otherSources.size === 0) continue;
+        const swapCheckpoint = params.length;
+        const setSelect = compileScalarSelectSQL(setArg, params, target, options);
+        if (!setSelect) { params.length = swapCheckpoint; continue; }
+        const otherSql = compileValueSetSQL(likeArgs[otherIdx].expr, sourceAlias, params, target, options, linkPropertyAlias);
+        if (!otherSql) { params.length = swapCheckpoint; continue; }
+        // The set side projects as "value"; preserve the original LHS/RHS order.
+        const lhsSql = setArgIdx === 0 ? `"value"` : otherSql;
+        const rhsSql = setArgIdx === 0 ? otherSql : `"value"`;
+        return `(EXISTS (SELECT 1 FROM (${setSelect}) WHERE ${renderLike(lhsSql, rhsSql)}))`;
+      }
     }
   }
 
