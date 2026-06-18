@@ -339,6 +339,11 @@ export interface AccessPolicyDef {
   name: string;
   effect: "allow" | "deny";
   operations: AccessPolicyOperation[];
+  // The `USING (...)` predicate, kept as source text so it can be parsed and
+  // lowered through the normal EdgeQL pipeline (tokenizer → AST → IR → SQL)
+  // when enforced, scoped to the subject object. Absent ⇒ no predicate (the
+  // policy always applies), modelled by `condition`.
+  usingExprText?: string;
   condition: AccessPolicyCondition;
   errmessage?: string;
 }

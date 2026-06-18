@@ -15,7 +15,7 @@ import { executeStdlibFunction, resolveStdlibFunction, type RuntimeFunctionArg }
 import { assertTargetSqlCompatibility, type RuntimeTarget } from "./target.js";
 import type { ShapeElement as GelIRShapeElement, Set as GelIRSet, Statement as GelIRStatement, TypeRef as GelIRTypeRef } from "../ir/gel_ir.js";
 import type { InsertIR, InsertLinkDefaultIR, InsertLinkPropertyIR, IRStatement, OverlayIR, UpdateIR, UpdateLinkAssignmentIR } from "../ir/model.js";
-import type { AccessPolicyCondition, ComputedLinkPropertyExpr, ConstraintDef, FieldDef, FieldDefaultExpr, FunctionDef, FunctionExprDef, FunctionVolatility, LinkPropertyDef, ScalarType, ScalarValue, TypeDef } from "../types.js";
+import type { AccessPolicyCondition, AccessPolicyDef, ComputedLinkPropertyExpr, ConstraintDef, FieldDef, FieldDefaultExpr, FunctionDef, FunctionExprDef, FunctionVolatility, LinkPropertyDef, ScalarType, ScalarValue, TypeDef } from "../types.js";
 import { cloneTypeDef, fieldSequenceName, normalizeLinkTargetNames, qualifiedTypeName, usesLinkTable } from "../schema/schema.js";
 import { resolveLinkStorageOwner } from "../schema/physical_layout.js";
 import { materializeGelSQLRows, normalizeGelSQLValue } from "./row_codec.js";
@@ -29,6 +29,7 @@ import {
   enforceUpdateWritePolicies,
   evaluatePoliciesForOperation,
   hasPermission,
+  type PolicyExprEvaluator,
 } from "./access_policy.js";
 import {
   bindingSelectShape,
@@ -113,7 +114,7 @@ export interface SecurityContext {
 
 const DEFAULT_SECURITY_CONTEXT: SecurityContext = {
   roleName: "default",
-  isSuperuser: true,
+  isSuperuser: false,
   permissions: ["sys::perm::data_modification"],
   globals: {},
   runtimeTarget: "sqlite",
@@ -845,6 +846,22 @@ const literalDefaultFromText = (exprText: string): FieldDefaultExpr | undefined 
   return undefined;
 };
 
+// Normalize the raw operation phrases the DDL body parser collected for a
+// `CREATE ACCESS POLICY` into the `AccessPolicyOperation[]` the runtime
+// enforces. `update` (bare) covers both read and write; an empty list defaults
+// to `all` (matching EdgeQL's "FOR ALL" implied default).
+const normalizeAccessPolicyOperations = (raw: readonly string[]): AccessPolicyDef["operations"] => {
+  if (raw.length === 0 || raw.includes("all")) return ["all"];
+  const out: AccessPolicyDef["operations"] = [];
+  for (const part of raw) {
+    if (part === "select" || part === "insert" || part === "delete") out.push(part);
+    else if (part === "update read") out.push("update_read");
+    else if (part === "update write") out.push("update_write");
+    else if (part === "update") out.push("update_read", "update_write");
+  }
+  return out.length > 0 ? out : ["all"];
+};
+
 // Apply the operations parsed from a top-level `ALTER TYPE …` statement to the
 // schema in place. Returns true when the statement was a (recognised) ALTER
 // TYPE, so the caller re-materialises and clears the compiler cache.
@@ -853,7 +870,9 @@ const applyAlterTypeDDL = (schema: SchemaSnapshot, ast: DDLStatement, defaultMod
   if (ast.action !== "alter" || ast.objectKind !== "type") return false;
   const ops = ast.alterTypeOps ?? [];
   if (ops.length === 0) return false;
-  const { module, name } = dynamicQualifiedNameParts(ast.name, defaultModule);
+  // Honor a `with module <m>` prefix on the statement (e.g.
+  // `with module cards alter type User { … }`) when qualifying the target.
+  const { module, name } = dynamicQualifiedNameParts(ast.name, ast.withModule ?? defaultModule);
   const stored = schema.getType(`${module}::${name}`);
   if (!stored) return false;
   // Schema reads return frozen, shared definitions; this routine mutates the
@@ -906,6 +925,23 @@ const applyAlterTypeDDL = (schema: SchemaSnapshot, ast: DDLStatement, defaultMod
         return !(c.name === "std::exclusive" && sameOn && sameExcept);
       });
       if ((typeDef.typeConstraints?.length ?? 0) !== before) mutated = true;
+    } else if (op.kind === "create_access_policy") {
+      // The USING predicate flows through verbatim as `usingExprText`; it is
+      // parsed and lowered to SQL at enforcement time (scoped to the subject),
+      // not pattern-matched here.
+      const policy: AccessPolicyDef = {
+        name: op.name,
+        effect: op.effect,
+        operations: normalizeAccessPolicyOperations(op.operations),
+        usingExprText: op.usingExprText,
+        condition: { kind: "always", value: true },
+      };
+      const nextPolicies = [...(typeDef.accessPolicies ?? [])];
+      const existing = nextPolicies.findIndex((candidate) => candidate.name === policy.name);
+      if (existing >= 0) nextPolicies.splice(existing, 1, policy);
+      else nextPolicies.push(policy);
+      typeDef.accessPolicies = nextPolicies;
+      mutated = true;
     }
   }
 
@@ -9212,6 +9248,57 @@ const enforceBuiltinPermissions = (
   }
 };
 
+// Evaluate an access policy's `USING (...)` predicate for one subject object by
+// running it through the full pipeline (parse → AST → IR → SQL): we project the
+// predicate as a computed shape element on the subject's type, filtered to the
+// subject's id, and read back the boolean. Inside the shape the implicit source
+// is the subject, so leading-dot paths (`.deck`, `.vals`) and the group/count
+// machinery lower as a correlated subquery — exactly the top-level group shape
+// path, no regex and no special-cased condition kinds.
+//
+// Policy predicates are themselves evaluated WITHOUT applying access policies
+// (an elevated context), mirroring Gel — otherwise a SELECT policy on the same
+// type would recurse.
+const evaluatePolicyUsingExpr = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  context: SecurityContext,
+  typeDef: TypeDef,
+  subjectId: string,
+  usingExprText: string,
+): boolean => {
+  const qname = qualifiedTypeName(typeDef);
+  const moduleName = typeDef.module ?? (qname.includes("::") ? qname.slice(0, qname.lastIndexOf("::")) : "default");
+  const shortName = qname.includes("::") ? qname.slice(qname.lastIndexOf("::") + 2) : qname;
+  // subjectId is a DB-generated UUID (hex + dashes), safe to inline as an
+  // EdgeQL uuid literal.
+  const query = `with module ${moduleName}\n`
+    + `select ${shortName} { __ap_check := (${usingExprText}) } filter .id = <uuid>'${subjectId}'`;
+  const elevated: SecurityContext = { ...context, isSuperuser: true };
+  const probe = tryResult(
+    () => executeQueryWithTraceImpl(db, schema, query, elevated),
+    { captureAll: true },
+  );
+  if (!probe.ok || probe.value.result.kind !== "select" || !Array.isArray(probe.value.result.rows)) {
+    return false;
+  }
+  const row = probe.value.result.rows[0] as Record<string, unknown> | undefined;
+  return row?.__ap_check === true;
+};
+
+// Build the `evalUsingExpr` injection access_policy.ts uses to resolve a
+// predicate-bearing policy against a concrete subject row (keyed by id).
+const policyExprEvaluator = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  context: SecurityContext,
+  subjectType: TypeDef,
+): PolicyExprEvaluator => (policy, row) => {
+  const id = row.id;
+  if (typeof id !== "string" || policy.usingExprText === undefined) return false;
+  return evaluatePolicyUsingExpr(db, schema, context, subjectType, id, policy.usingExprText);
+};
+
 const runWriteWithAccessPolicies = (
   db: SQLiteDatabase,
   schema: SchemaSnapshot,
@@ -9400,7 +9487,11 @@ const runWriteWithAccessPolicies = (
       // the UNLESS CONFLICT resolved-value probe further below.
       const sqlExprByColumn = new Map((sqlArtifact.insertColumns ?? []).map((entry) => [entry.column, entry]));
 
-      enforceInsertPolicies(subjectType, insertValues, context, ast.pos.line, ast.pos.column);
+      // Access-policy enforcement runs AFTER the row + its links are written
+      // (see below), so a `USING (...)` predicate over the inserted object's
+      // links (e.g. `count((group .deck by .element)) = 2`) can read the just
+      // -written state; a violation throws and the enclosing savepoint rolls
+      // the insert back. Predicate-free policies are also checked there.
 
       // Validate an explicit `UNLESS CONFLICT ON .prop` target: the property
       // must exist on the inserted type and carry exactly one exclusive
@@ -9676,6 +9767,18 @@ const runWriteWithAccessPolicies = (
         }
       }
 
+      if (typeof insertedId === "string") {
+        const insertedRow = readRowById(db, ir.table, insertedId) ?? { id: insertedId };
+        enforceInsertPolicies(
+          subjectType,
+          insertedRow,
+          context,
+          ast.pos.line,
+          ast.pos.column,
+          policyExprEvaluator(db, schema, context, subjectType),
+        );
+      }
+
       db.prepare(dmlUsesSavepoint ? "RELEASE gel_dml" : "COMMIT").run();
       // Expose the same type-metadata columns a SELECT/DELETE returning row
       // carries (`__tid__`, `__tname__`, `__source_type`) so a bare INSERT's
@@ -9692,7 +9795,7 @@ const runWriteWithAccessPolicies = (
       const preRows = ast.kind === "update"
         ? readTargetRowsForAssignableTypes(db, schema, subjectType, ir.filter)
         : readTargetRowsForFilter(db, ir.table, ir.filter);
-      enforceUpdateReadPolicies(subjectType, preRows, context, ast.pos.line, ast.pos.column);
+      enforceUpdateReadPolicies(subjectType, preRows, context, ast.pos.line, ast.pos.column, policyExprEvaluator(db, schema, context, subjectType));
       // When an UPDATE assigns only links (or `SET {}`), the column-level base
       // statement degrades to a no-op self-assignment (`SET "id" = g0_w."id"`).
       // Skip running it — the real work happens in applyUpdateLinkAssignments,
@@ -9731,14 +9834,14 @@ const runWriteWithAccessPolicies = (
         );
       }
       const updatedRows = preRows.length > 0 ? readRowsByIds(db, ir.table, preRows.map((row) => String(row.id))) : [];
-      enforceUpdateWritePolicies(subjectType, updatedRows, context, ast.pos.line, ast.pos.column);
+      enforceUpdateWritePolicies(subjectType, updatedRows, context, ast.pos.line, ast.pos.column, policyExprEvaluator(db, schema, context, subjectType));
       db.prepare(dmlUsesSavepoint ? "RELEASE gel_dml" : "COMMIT").run();
       return { changes: writeResult.changes };
     }
 
     if (ir.kind === "delete") {
       const preRows = readTargetRowsForFilter(db, ir.table, ir.filter);
-      enforceDeletePolicies(subjectType, preRows, context, ast.pos.line, ast.pos.column);
+      enforceDeletePolicies(subjectType, preRows, context, ast.pos.line, ast.pos.column, policyExprEvaluator(db, schema, context, subjectType));
       applyOnTargetDeletePolicies(subjectType, preRows.map((row) => String(row.id)), ast.pos);
       if (/\bRETURNING\b/i.test(sqlArtifact.sql)) {
         const rows = db.prepare(sqlArtifact.sql).all(...sqlArtifact.params) as Record<string, unknown>[];
@@ -9873,6 +9976,10 @@ const executeNestedInsert = (
       .filter((id): id is string => typeof id === "string");
   }
 
+  // Predicate-free policies (structured `condition`) are checked pre-write
+  // here; this nested-binding path has no savepoint to roll back a post-write
+  // rejection, and `USING (...)` predicates over the written object are
+  // enforced by the main write path (runWriteWithAccessPolicies).
   enforceInsertPolicies(typeDef, compiled.ir.values, context, 1, 1);
   db.prepare(compiled.sql.sql).run(...compiled.sql.params);
   const inserted = db
@@ -10793,7 +10900,10 @@ const evaluateSelectPolicies = (
     rowForEval = fullRow;
   }
 
-  return evaluatePoliciesForOperation(sourceTypeDef, "select", rowForEval, context, { failOnDeny: false });
+  return evaluatePoliciesForOperation(sourceTypeDef, "select", rowForEval, context, {
+    failOnDeny: false,
+    evalUsingExpr: policyExprEvaluator(db, schema, context, sourceTypeDef),
+  });
 };
 
 const readTargetRowsForFilter = (

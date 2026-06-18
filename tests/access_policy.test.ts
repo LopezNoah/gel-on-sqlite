@@ -100,7 +100,7 @@ describe("evaluatePoliciesForOperation", () => {
 describe("enforceInsertPolicies", () => {
   it("throws when the insert is not allowed", () => {
     const t = typeWith([policy({ effect: "allow", operations: ["insert"], condition: { kind: "always", value: false } })]);
-    expect(() => enforceInsertPolicies(t, {}, ctx(), 1, 1)).toThrow(/Access policy violation on insert/);
+    expect(() => enforceInsertPolicies(t, {}, ctx(), 1, 1)).toThrow(/access policy violation on insert/);
   });
   it("passes a permitted insert", () => {
     const t = typeWith([policy({ effect: "allow", operations: ["insert"], condition: { kind: "always", value: true } })]);
