@@ -31,6 +31,7 @@ import { resolveStdlibFunction, type RuntimeFunctionArg } from "../stdlib/functi
 import type { ScalarValue } from "../types.js";
 import { coIteratedBinding } from "./co_iteration.js";
 import { applyLimitOffset, dedupeRowsById, distinctValues } from "./result_clauses.js";
+import { evalTypeNarrowing, type TypeNarrowingDeps } from "./type_narrowing.js";
 import type { QueryResult, SecurityContext, SelectExprEvaluatorDeps } from "./engine.js";
 
 export const runSelectExprEvaluation = (
@@ -257,7 +258,7 @@ export const runSelectExprEvaluation = (
       case "subquery":
         return evalExpr({ kind: "select", typeName: expr.typeName, shape: expr.shape, clauses: expr.clauses }, env);
       case "type_intersection":
-        return evalExpr({ kind: "is_type", expr: expr.expr, typeName: expr.sourceType, typeExpr: expr.sourceTypeExpr }, env);
+        return evalTypeNarrowing(expr, env, typeNarrowingDeps);
       case "field_suffix_math":
         return null;
       case "global_ref":
@@ -1246,69 +1247,8 @@ export const runSelectExprEvaluation = (
         }
         return value;
       }
-      case "is_type": {
-        const value = evalExpr(expr.expr, env);
-        const typeDef = schema.getType(qualifyRuntimeTypeName(expr.typeName));
-        const enumValues = typeDef?.fields.flatMap((field) => field.enumValues ?? []) ?? [];
-        const checkOne = (item: unknown) => enumValues.length > 0 && typeof item === "string" && enumValues.includes(item);
-        if (enumValues.length === 0) {
-          const qualified = qualifyRuntimeTypeName(expr.typeName);
-          const items = Array.isArray(value) ? value : [value];
-          // Scalar IS type check: applies when item is a primitive value.
-          const scalarTypeCheck = (item: unknown): boolean | undefined => {
-            if (item === null || item === undefined) return undefined;
-            if (typeof item === "object") return undefined;
-            const last = expr.typeName.split("::").at(-1) ?? expr.typeName;
-            const isInt = typeof item === "number" && Number.isInteger(item);
-            const isFloat = typeof item === "number" && !Number.isInteger(item);
-            const isStr = typeof item === "string";
-            const isBool = typeof item === "boolean";
-            switch (last) {
-              case "anyscalar": return true;
-              case "anytype": return true;
-              case "anyreal": return typeof item === "number";
-              case "anyint": return isInt;
-              case "anyfloat": return isFloat;
-              case "int64":
-                return isInt;
-              case "int16":
-              case "int32":
-                // Without static type info, can't distinguish int16/32 from int64.
-                // EdgeQL `IS int16/int32` checks the static type, which defaults
-                // to int64 for literals and field values.
-                return false;
-              case "float64":
-                return isFloat;
-              case "float32":
-                return false;
-              case "decimal":
-              case "bigint":
-                return false;
-              case "str":
-                return isStr;
-              case "bool":
-                return isBool;
-              case "Object":
-              case "BaseObject":
-                return false;
-              default:
-                return undefined;
-            }
-          };
-          // If all items are primitives, this is a scalar IS check — return boolean(s).
-          if (items.length > 0 && items.every((item) => item !== null && item !== undefined && typeof item !== "object")) {
-            const results = items.map((item) => scalarTypeCheck(item) ?? false);
-            return Array.isArray(value) ? results : results[0];
-          }
-          return items.filter((item) => {
-            if (!item || typeof item !== "object" || Array.isArray(item)) return false;
-            const sourceType = (item as Record<string, unknown>).__source_type;
-            return typeof sourceType === "string"
-              && (sourceType === qualified || schema.concreteTypeNamesUnder(qualified).includes(sourceType));
-          });
-        }
-        return Array.isArray(value) ? value.map(checkOne) : checkOne(value);
-      }
+      case "is_type":
+        return evalTypeNarrowing(expr, env, typeNarrowingDeps);
       case "select_expr_subquery": {
         const value = evalExpr(expr.expr, env);
         if (value === undefined) {
@@ -1359,34 +1299,10 @@ export const runSelectExprEvaluation = (
         if (!Array.isArray(value)) return value;
         return distinctValues(value);
       }
-      case "type_name": {
-        const current = env.get("__current__");
-        if (current && typeof current === "object" && !Array.isArray(current)) {
-          const sourceType = (current as Record<string, unknown>).__source_type;
-          if (typeof sourceType === "string") {
-            return sourceType;
-          }
-        }
-        return null;
-      }
-      case "polymorphic_field_ref": {
-        const current = env.get("__current__");
-        if (!current || typeof current !== "object" || Array.isArray(current)) {
-          return null;
-        }
-        const row = current as Record<string, unknown>;
-        const rowSourceType = typeof row.__source_type === "string" ? row.__source_type : undefined;
-        if (!rowSourceType) {
-          return null;
-        }
-        const sourceTypeQualified = qualifyRuntimeTypeName(expr.sourceType);
-        const concretes = schema.concreteTypeNamesUnder(sourceTypeQualified);
-        const matches = rowSourceType === sourceTypeQualified || concretes.includes(rowSourceType);
-        if (!matches) {
-          return null;
-        }
-        return row[expr.field] ?? null;
-      }
+      case "type_name":
+        return evalTypeNarrowing(expr, env, typeNarrowingDeps);
+      case "polymorphic_field_ref":
+        return evalTypeNarrowing(expr, env, typeNarrowingDeps);
       case "shape_projection": {
         const exprAsPath = (e: FreeObjectExpr | undefined): string | undefined => {
           if (!e || typeof e !== "object") return undefined;
@@ -1556,6 +1472,10 @@ export const runSelectExprEvaluation = (
         return undefined;
     }
   };
+
+  // The runtime type-narrowing cases (`[IS T]` / `IS` / discriminator read /
+  // polymorphic field) delegate to one home; see runtime/type_narrowing.ts.
+  const typeNarrowingDeps: TypeNarrowingDeps = { evalExpr, schema, qualifyRuntimeTypeName };
 
   const enumOrderForRows = (rows: unknown[]): Map<string, number> | undefined => {
     if (!rows.every((item) => typeof item === "string")) {
