@@ -25,6 +25,7 @@ import type {
   PathStep as EdgeQLPathStep,
   GroupByElement,
   GroupByAtom,
+  TypeExpr,
 } from "../edgeql/ast.js";
 import type {
   Cardinality,
@@ -1623,7 +1624,8 @@ const compilePathSteps = (steps: EdgeQLPathStep[], ctx: IRCompileContext): Set =
       return literalToSet(null);
     }
     let out = current;
-    for (const step of steps) {
+    for (let i = 0; i < steps.length; i += 1) {
+      const step = steps[i];
       if (step.kind === "ptr") {
         const groupStepSet = tryExtendGroupRowFieldPath(out, step.name, step.direction);
         if (groupStepSet) {
@@ -1641,7 +1643,13 @@ const compilePathSteps = (steps: EdgeQLPathStep[], ctx: IRCompileContext): Set =
         continue;
       }
       if (step.kind === "type_intersection") {
-        out = { ...out, typeref: resolveTypeRef(ctx, step.typeName) };
+        const baseTypeId = out.typeref.id;
+        const intersected = resolveTypeRef(ctx, step.typeName);
+        const next = steps[i + 1];
+        if (next && next.kind === "ptr") {
+          validateTypeIntersectionPointer(ctx, baseTypeId, intersected.id, next.name);
+        }
+        out = { ...out, typeref: intersected };
         continue;
       }
       if (step.kind === "splat") continue;
@@ -1664,7 +1672,9 @@ const compilePathSteps = (steps: EdgeQLPathStep[], ctx: IRCompileContext): Set =
     }
   }
   let out = resolveBinding(ctx, first.name) ?? setFromTypeRoot(resolveTypeRef(ctx, first.name));
-  for (const step of steps.slice(1)) {
+  const rest = steps.slice(1);
+  for (let i = 0; i < rest.length; i += 1) {
+    const step = rest[i];
     if (step.kind === "ptr") {
       // `.foo` on a primitive value — e.g. a WITH-bound enum member
       // (`WITH x := color_enum_t.RED SELECT x.GREEN`) — is invalid.
@@ -1733,9 +1743,15 @@ const compilePathSteps = (steps: EdgeQLPathStep[], ctx: IRCompileContext): Set =
       continue;
     }
     if (step.kind === "type_intersection") {
+      const baseTypeId = out.typeref.id;
+      const intersected = resolveTypeRef(ctx, step.typeName);
+      const next = rest[i + 1];
+      if (next && next.kind === "ptr") {
+        validateTypeIntersectionPointer(ctx, baseTypeId, intersected.id, next.name);
+      }
       out = {
         ...out,
-        typeref: resolveTypeRef(ctx, step.typeName),
+        typeref: intersected,
       };
       continue;
     }
@@ -3419,9 +3435,28 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
 
     case "polymorphic_field_ref": {
       const subject = resolveBinding(ctx, "__current__") ?? resolveBinding(ctx, "__subject__");
+      // `[is Bb & Bc].bb` / `[is (CBaBc | Bb) & Bc].bc` — a compound `[is …]`
+      // type expression (no single `sourceType`). Evaluate the `&`/`|` tree to
+      // the concrete types it admits and narrow to their `|`-union, so pointer
+      // resolution probes every branch and the SQL layer gates the column by
+      // `__source_type` (a row contributes only when its concrete type is in
+      // the intersection). An empty intersection narrows to the empty set.
+      let narrowedTyperef: TypeRef;
+      if (!expr.sourceType && expr.sourceTypeExpr) {
+        const concrete = evalTypeExprConcreteNames(ctx, expr.sourceTypeExpr);
+        if (concrete && concrete.size === 0) {
+          return literalToSet(null);
+        }
+        const baseTyperef = subject?.typeref ?? resolveTypeRef(ctx, "std::BaseObject");
+        narrowedTyperef = concrete
+          ? { ...baseTyperef, id: [...concrete].join(" | "), isScalar: false, isAbstract: false }
+          : baseTyperef;
+      } else {
+        narrowedTyperef = resolveTypeRef(ctx, expr.sourceType);
+      }
       const narrowedSubject = subject
-        ? { ...subject, typeref: resolveTypeRef(ctx, expr.sourceType) }
-        : setFromTypeRoot(resolveTypeRef(ctx, expr.sourceType));
+        ? { ...subject, typeref: narrowedTyperef }
+        : setFromTypeRoot(narrowedTyperef);
       const ptrref = resolvePointerRef(ctx, narrowedSubject.typeref, expr.field);
       return ptrref ? extendPathSet(narrowedSubject, ptrref) : literalToSet(null);
     }
@@ -6416,6 +6451,127 @@ const findInheritedFieldOwner = (
     if (inherited) return inherited;
   }
   return undefined;
+};
+
+// Evaluate a `[is …]` type expression (`Bb & Bc`, `(CBaBc | Bb) & Bc`) into the
+// set of qualified CONCRETE type names it admits: a `type_name` contributes its
+// own concrete subtypes, `&` intersects the operand sets, `|` unions them.
+// Returns undefined when the schema is unavailable.
+const evalTypeExprConcreteNames = (
+  ctx: IRCompileContext,
+  typeExpr: TypeExpr,
+): globalThis.Set<string> | undefined => {
+  if (!ctx.schema) return undefined;
+  if (typeExpr.kind === "type_name") {
+    const qualified = qualifyTypeName(typeExpr.name, ctx.module);
+    return new globalThis.Set(
+      ctx.schema.listConcreteTypesAssignableTo(qualified).map(qualifyTypeNameOf),
+    );
+  }
+  const left = evalTypeExprConcreteNames(ctx, typeExpr.left);
+  const right = evalTypeExprConcreteNames(ctx, typeExpr.right);
+  if (!left || !right) return undefined;
+  if (typeExpr.kind === "type_union") {
+    return new globalThis.Set([...left, ...right]);
+  }
+  return new globalThis.Set([...left].filter((id) => right.has(id)));
+};
+
+// The fullest TypeDef available, including `computeds` — `getSchemaTypeByQualifiedName`
+// prefers the generated schema model, which omits computed pointers, so the
+// intersection-pointer checks (which must see computeds) read the snapshot.
+const fullTypeDef = (ctx: IRCompileContext, typeId: string): TypeDef | undefined =>
+  ctx.schema?.getType(typeId) ?? getSchemaTypeByQualifiedName(ctx, typeId);
+
+// The most-ancestral type that declares `ptrName`. Inherited members are folded
+// down, so every type in the chain "has" the pointer; the origin is the topmost
+// ancestor still carrying it. Two types share the SAME version of a computed
+// pointer iff they share this origin.
+const pointerDeclOrigin = (ctx: IRCompileContext, typeId: string, ptrName: string): string => {
+  const hasPtr = (def: TypeDef): boolean =>
+    (def.fields ?? []).some((f) => f.name === ptrName && !f.isLinkColumn)
+    || (def.links ?? []).some((l) => l.name === ptrName)
+    || (def.computeds ?? []).some((c) => c.name === ptrName);
+  let origin = typeId;
+  const visit = (id: string, seen: globalThis.Set<string>): void => {
+    if (seen.has(id)) return;
+    seen.add(id);
+    const def = fullTypeDef(ctx, id);
+    if (!def || !hasPtr(def)) return;
+    origin = id;
+    for (const base of def.extends ?? []) {
+      visit(qualifyTypeName(base, def.module ?? "default"), seen);
+    }
+  };
+  visit(typeId, new globalThis.Set());
+  return origin;
+};
+
+type IntersectionPointerInfo = { kind: "property" | "link"; computed: boolean; multi: boolean; origin: string };
+
+const intersectionPointerInfo = (
+  ctx: IRCompileContext,
+  typeId: string,
+  ptrName: string,
+): IntersectionPointerInfo | undefined => {
+  const def = fullTypeDef(ctx, typeId);
+  if (!def) return undefined;
+  const field = (def.fields ?? []).find((f) => f.name === ptrName && !f.isLinkColumn);
+  if (field) {
+    return { kind: "property", computed: false, multi: !!field.multi, origin: pointerDeclOrigin(ctx, typeId, ptrName) };
+  }
+  const link = (def.links ?? []).find((l) => l.name === ptrName);
+  if (link) {
+    return { kind: "link", computed: false, multi: !!link.multi, origin: pointerDeclOrigin(ctx, typeId, ptrName) };
+  }
+  const computed = (def.computeds ?? []).find((c) => c.name === ptrName);
+  if (computed) {
+    return {
+      kind: computed.kind === "link" ? "link" : "property",
+      computed: true,
+      multi: !!computed.multi,
+      origin: pointerDeclOrigin(ctx, typeId, ptrName),
+    };
+  }
+  return undefined;
+};
+
+// `A[is B].p` introduces `p` from BOTH A and B into the A&B intersection type.
+// Mixing two versions of a computed pointer from different declarations — or two
+// non-computed versions with different cardinalities — is illegal; surface the
+// upstream error. Same-origin computeds (both inherited from one base) are a
+// single version and pass; a pointer present on only one side has no conflict.
+const validateTypeIntersectionPointer = (
+  ctx: IRCompileContext,
+  baseTypeId: string,
+  intersectTypeId: string,
+  ptrName: string,
+): void => {
+  if (baseTypeId === intersectTypeId) return;
+  if (baseTypeId.startsWith("unknown:") || intersectTypeId.startsWith("unknown:")) return;
+  const a = intersectionPointerInfo(ctx, baseTypeId, ptrName);
+  const b = intersectionPointerInfo(ctx, intersectTypeId, ptrName);
+  if (!a || !b) return;
+  const label = `${a.kind} '${ptrName}'`;
+  if (a.computed || b.computed) {
+    if (a.origin !== b.origin) {
+      throw new AppError(
+        "E_SEMANTIC",
+        `it is illegal to create a type intersection that causes a computed ${label} to mix with other versions of the same ${label}`,
+        1,
+        1,
+      );
+    }
+    return;
+  }
+  if (a.multi !== b.multi) {
+    throw new AppError(
+      "E_SEMANTIC",
+      `it is illegal to create a type intersection that causes a ${label} to mix with other versions of ${label} which have a different cardinality`,
+      1,
+      1,
+    );
+  }
 };
 
 const isSubtypeOf = (ctx: IRCompileContext, childId: string, parentId: string): boolean => {
