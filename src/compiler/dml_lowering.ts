@@ -13,6 +13,7 @@ import type {
   UpdateLinkAssignmentIR,
 } from "../ir/model.js";
 import { fieldSequenceName, normalizeLinkTargetNames, qualifiedTypeName, type SchemaSnapshot } from "../schema/schema.js";
+import { resolveLinkStorageOwner } from "../schema/physical_layout.js";
 import { tableNameForType } from "../codegen/sql.js";
 import type { ScalarType, ScalarValue, TypeDef } from "../types.js";
 import { checkScopeTreeViolations } from "./scope_tree_check.js";
@@ -1432,47 +1433,10 @@ export const rewriteDunderDefaults = <T>(schema: SchemaSnapshot, node: T): T => 
 /* Link mutation plans                */
 /* ---------------------------------- */
 
-const linkDefsEquivalent = (
-  a: NonNullable<TypeDef["links"]>[number],
-  b: NonNullable<TypeDef["links"]>[number],
-): boolean => {
-  if (a.name !== b.name) return false;
-  if ((a.targetType ?? "") !== (b.targetType ?? "")) return false;
-  if (Boolean(a.multi) !== Boolean(b.multi)) return false;
-  const aProps = a.properties ?? [];
-  const bProps = b.properties ?? [];
-  if (aProps.length !== bProps.length) return false;
-  for (let i = 0; i < aProps.length; i += 1) {
-    const ap = aProps[i];
-    const bp = bProps[i];
-    if (!bp || ap.name !== bp.name || ap.type !== bp.type) return false;
-  }
-  return true;
-};
-
-// Inherited link tables live on the most-base type where the link is defined
-// (e.g. `Owned.owner` stays in `default__owned__owner`, not in each subtype's
-// own table). Mirrored by the runtime and the gelIR SQL compiler.
-const resolveLinkStorageOwner = (
-  schema: SchemaSnapshot,
-  typeDef: TypeDef,
-  link: NonNullable<TypeDef["links"]>[number],
-): TypeDef => {
-  if (link.overloaded) return typeDef;
-  let owner = typeDef;
-  let current = typeDef;
-  while ((current.extends ?? []).length > 0) {
-    const baseName = current.extends?.[0];
-    if (!baseName) break;
-    const baseType = schema.getType(baseName);
-    if (!baseType) break;
-    const baseLink = (baseType.links ?? []).find((candidate) => candidate.name === link.name);
-    if (!baseLink || baseLink.overloaded || !linkDefsEquivalent(link, baseLink)) break;
-    owner = baseType;
-    current = baseType;
-  }
-  return owner;
-};
+// `resolveLinkStorageOwner` (the inherited-link-owner walk, with its
+// `linkDefsEquivalent` guard) is the one home in `schema/physical_layout.ts` —
+// shared with the runtime and the gelIR SQL compiler so the rule can't drift
+// (docs/adr/0010, 0033). Imported above rather than re-copied here.
 
 const expectedTargetTablesForLink = (
   schema: SchemaSnapshot,
