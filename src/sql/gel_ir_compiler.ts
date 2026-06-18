@@ -8795,6 +8795,18 @@ const compilePolymorphicSource = (
   return `(${selects.join(" UNION ALL ")}) ${alias}`;
 };
 
+// The qualified concrete type names a (possibly union-id) typeref admits —
+// expanding `A | B` into branches and each branch into its subtype closure.
+// Used to gate an intersection-narrowed pointer (`[is T].p`) so a subject row
+// contributes only when its `__source_type` is one of these.
+const concreteSourceTypeNames = (typeRef: TypeRef): string[] =>
+  [...new Set(
+    expandUnionTypeRefBranches(typeRef)
+      .flatMap((branch) => flattenTypeClosure(branch))
+      .filter((candidate) => !candidate.isAbstract)
+      .map((candidate) => qualifyTypeName(candidate)),
+  )];
+
 const flattenTypeClosure = (root: TypeRef): TypeRef[] => {
   const out: TypeRef[] = [];
   const seen = new Set<string>();
@@ -9154,24 +9166,62 @@ const compileShapeProjection = (
     // carries link properties routes through its link table.
     const targetAlias = `sfl${depth}`;
     const targetSql = compilePolymorphicSource(linkPtr.ptrref.outTarget, false, targetAlias, ["id", leafCol], options);
+    // `[is BaseOriginB].dest.name` — the link's source was intersection-narrowed
+    // to a SIBLING type reachable only through a common subtype (`narrowed` !=
+    // the underlying type_root). A subject row contributes only when its
+    // concrete type is one of the narrowed type's concrete subtypes; otherwise
+    // the `[is T]` view is empty and the leaf is NULL. Guard the correlation by
+    // the subject's `__source_type` so non-matching rows yield no link row.
+    const narrowedType = linkPtr.source.typeref;
+    const rootType = linkPtr.source.expr.kind === "type_root"
+      ? (linkPtr.source.expr as TypeRoot).typeref
+      : undefined;
+    const narrowGuard = ((): string | null => {
+      if (!narrowedType || !rootType || narrowedType.id === rootType.id) return null;
+      const concrete = concreteSourceTypeNames(narrowedType).map((name) => quoteLiteral(name));
+      if (concrete.length === 0) return null;
+      return `${sourceAlias}.${quoteIdent("__source_type")} IN (${concrete.join(", ")})`;
+    })();
     let fromSql: string;
     if (shouldUseLinkTable(linkPtr)) {
       const linkTable = linkTableNameForPointer(linkPtr, options);
       const linkAlias = `sflj${depth}`;
       fromSql = `${targetSql} JOIN ${quoteIdent(linkTable)} ${linkAlias}`
         + ` ON ${linkAlias}.${quoteIdent("target")} = ${targetAlias}.${quoteIdent("id")}`
-        + ` AND ${linkAlias}.${quoteIdent("source")} = ${sourceAlias}.${quoteIdent("id")}`;
+        + ` AND ${linkAlias}.${quoteIdent("source")} = ${sourceAlias}.${quoteIdent("id")}`
+        + (narrowGuard ? ` AND ${narrowGuard}` : "");
     } else {
       // Inline single link: correlate the target scan on the subject's FK.
       const inlineColumn = `${linkPtr.ptrref.shortName}_id`;
-      fromSql = `${targetSql} WHERE ${targetAlias}.${quoteIdent("id")} = ${sourceAlias}.${quoteIdent(inlineColumn)}`;
+      fromSql = `${targetSql} WHERE ${targetAlias}.${quoteIdent("id")} = ${sourceAlias}.${quoteIdent(inlineColumn)}`
+        + (narrowGuard ? ` AND ${narrowGuard}` : "");
     }
     const value = shapeScalarColumnValue(`${targetAlias}.${quoteIdent(leafCol)}`, leaf.ptrref.outTarget);
     return `(SELECT ${value} FROM ${fromSql} LIMIT 1) AS ${quoteIdent(alias)}`;
   }
   const projectedColumn = (elementIsManyViaChain || elementRootsAtForeignType) ? null : compileProjectedSourceColumnRef(shapeExpr.result);
   if (projectedColumn) {
-    const rawValue = `${sourceAlias}.${quoteIdent(projectedColumn)}`;
+    // `[is Bb & Bc].bb` — the property's source was intersection-narrowed to a
+    // type (or `|`-union of types) distinct from the underlying type_root. The
+    // column may exist on rows OUTSIDE the narrowed set (`CBaBb` has `bb` but is
+    // not `Bb & Bc`), so reading it bare would leak those rows' values. Gate the
+    // column by the subject's `__source_type` so only rows of the narrowed
+    // concrete types contribute; the rest read NULL (the empty `[is T]` view).
+    const rawColumnRef = `${sourceAlias}.${quoteIdent(projectedColumn)}`;
+    const narrowGuard = ((): string | null => {
+      const e = shapeExpr.result.expr;
+      if (e.kind !== "pointer") return null;
+      const src = (e as Pointer).source;
+      if (src.expr.kind !== "type_root") return null;
+      const rootId = (src.expr as TypeRoot).typeref.id;
+      if (!src.typeref || src.typeref.id === rootId) return null;
+      const concrete = concreteSourceTypeNames(src.typeref).map((name) => quoteLiteral(name));
+      if (concrete.length === 0) return null;
+      return `${sourceAlias}.${quoteIdent("__source_type")} IN (${concrete.join(", ")})`;
+    })();
+    const rawValue = narrowGuard
+      ? `(CASE WHEN ${narrowGuard} THEN ${rawColumnRef} END)`
+      : rawColumnRef;
     const isMultiScalar = shapeExpr.result.expr.kind === "pointer"
       && ((shapeExpr.result.expr as Pointer).ptrref.outCardinality === "many"
           || (shapeExpr.result.expr as Pointer).ptrref.outCardinality === "at_least_one");

@@ -3682,7 +3682,11 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
       }
       const [first, ...rest] = expr.steps;
       if (!first || first.kind !== "object_ref") {
-        return literalToSet(null);
+        // A partial path (`[is BaseOriginB].dest.name`, `.dest.name`) starts
+        // from the surrounding subject rather than a named object. Delegate to
+        // the shared path walker, which seeds from `__current__`/`__subject__`
+        // and applies a leading `[is T]` intersection.
+        return compilePathSteps(expr.steps, ctx);
       }
       if (!resolveBinding(ctx, first.name)) {
         const enumType = lookupEnumScalar(ctx, first.name);
