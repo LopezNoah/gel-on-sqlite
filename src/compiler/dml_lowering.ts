@@ -84,6 +84,140 @@ type FieldEqPredicate = Extract<FilterExpr, { kind: "predicate" }> & {
   target: { kind: "field"; field: string };
 };
 
+// Validate a DELETE statement's target. Rejects free objects, standard-library
+// types, and non-object literals, plus DML embedded in FILTER / ORDER BY. This
+// is exported so the engine can run it *before* its polymorphic-target
+// expansion: that expansion fans a `DELETE <base>` / `DELETE {A, B}` out to its
+// concrete subtypes (and drops branches that resolve to no runtime type), which
+// would otherwise discard an invalid target — a free-object binding, or
+// `schema::Object` inside a set — before lowering ever validates it.
+// `compileDmlToIR` calls this too, so the single-statement path stays identical.
+export const validateDeleteStatement = (
+  schema: SchemaSnapshot,
+  statement: Extract<Statement, { kind: "delete" }>,
+): void => {
+  const fail = (message: string): never => {
+    throw new AppError("E_SEMANTIC", message, statement.pos.line, statement.pos.column);
+  };
+  const moduleNames = new Set(schema.listTypes().map((typeDef) => typeDef.module ?? "default"));
+  const resolveModuleName = (name: string): string => {
+    if (moduleNames.has(name)) return name;
+    const stdFallback = `std::${name}`;
+    if (moduleNames.has(stdFallback)) return stdFallback;
+    return name;
+  };
+  const activeModule = statement.withModule ? resolveModuleName(statement.withModule) : "default";
+  const moduleAliases = new Map(
+    (statement.withModuleAliases ?? []).map((entry) => [entry.alias, resolveModuleName(entry.module)] as const),
+  );
+  const normalizeTypeName = (name: string, fallbackModule: string = activeModule): string => {
+    if (!name.includes("::")) return `${fallbackModule}::${name}`;
+    const [head, ...rest] = name.split("::");
+    const aliasedModule = moduleAliases.get(head);
+    if (!aliasedModule) return name;
+    return rest.length === 0 ? aliasedModule : `${aliasedModule}::${rest.join("::")}`;
+  };
+
+  const exprContainsMutation = (expr: FreeObjectExpr | undefined): MutationValueKind | undefined => {
+    if (!expr) return undefined;
+    if (expr.kind === "mutation_expr") return expr.statement.kind;
+    if (expr.kind === "set_expr" || expr.kind === "tuple" || expr.kind === "array_literal_expr") {
+      for (const value of expr.values) {
+        const nested = exprContainsMutation(value);
+        if (nested) return nested;
+      }
+      return undefined;
+    }
+    if (expr.kind === "free_object_constructor") {
+      for (const entry of expr.entries) {
+        const nested = exprContainsMutation(entry.expr);
+        if (nested) return nested;
+      }
+      return undefined;
+    }
+    if (expr.kind === "shape_projection" || expr.kind === "distinct" || expr.kind === "cast" || expr.kind === "exists" || expr.kind === "field_access" || expr.kind === "index_access" || expr.kind === "slice_access" || expr.kind === "is_type" || expr.kind === "unary" || expr.kind === "select_expr_subquery") {
+      return exprContainsMutation((expr as { expr: FreeObjectExpr }).expr);
+    }
+    if (expr.kind === "compare" || expr.kind === "math" || expr.kind === "logical" || expr.kind === "coalesce" || expr.kind === "and" || expr.kind === "or") {
+      return exprContainsMutation(expr.left) ?? exprContainsMutation(expr.right);
+    }
+    if (expr.kind === "if_else") {
+      return exprContainsMutation(expr.condition) ?? exprContainsMutation(expr.thenExpr) ?? exprContainsMutation(expr.elseExpr);
+    }
+    if (expr.kind === "concat") {
+      for (const part of expr.parts) {
+        const nested = exprContainsMutation(part);
+        if (nested) return nested;
+      }
+    }
+    if (expr.kind === "function_call") {
+      for (const arg of expr.call.args) {
+        if (arg.kind === "expr") {
+          const nested = exprContainsMutation(arg.expr);
+          if (nested) return nested;
+        }
+      }
+    }
+    return undefined;
+  };
+
+  const filterContainsMutation = (filter: FilterExpr | undefined): MutationValueKind | undefined => {
+    if (!filter) return undefined;
+    if (filter.kind === "free_expr") return exprContainsMutation(filter.expr);
+    if (filter.kind === "and" || filter.kind === "or") return filterContainsMutation(filter.left) ?? filterContainsMutation(filter.right);
+    if (filter.kind === "not") return filterContainsMutation(filter.expr);
+    return undefined;
+  };
+
+  const mutationInFilter = filterContainsMutation(statement.filter);
+  if (mutationInFilter) {
+    fail(`${mutationInFilter.toUpperCase()} statements cannot be used in a FILTER clause`);
+  }
+  const mutationInOrder = exprContainsMutation(statement.orderBy?.expr);
+  if (mutationInOrder) {
+    fail(`${mutationInOrder.toUpperCase()} statements cannot be used in an ORDER BY clause`);
+  }
+
+  const bindingValue = (name: string): WithBindingValue | undefined => statement.with?.find((binding) => binding.name === name)?.value;
+  const bindingExpr = (value: WithBindingValue | undefined): FreeObjectExpr | undefined => {
+    if (!value) return undefined;
+    if (value.kind === "subquery_expr") return value.expr;
+    if (value.kind === "subquery") return { kind: "select", typeName: value.query.typeName, shape: value.query.shape, clauses: value.query.clauses };
+    return undefined;
+  };
+  const isFreeObjectDeleteTarget = (expr: FreeObjectExpr | undefined): boolean => {
+    if (!expr) return false;
+    if (expr.kind === "free_object_constructor") return true;
+    if (expr.kind === "binding_ref") return isFreeObjectDeleteTarget(bindingExpr(bindingValue(expr.name)));
+    if (expr.kind === "select_expr_subquery") return isFreeObjectDeleteTarget(expr.expr);
+    return false;
+  };
+  const containsStdlibDeleteTarget = (expr: FreeObjectExpr | undefined): boolean => {
+    if (!expr) return false;
+    if (expr.kind === "select") {
+      const normalized = normalizeTypeName(expr.typeName, activeModule);
+      return normalized.startsWith("schema::") || (normalized.startsWith("std::") && normalized !== "std::FreeObject");
+    }
+    if (expr.kind === "set_expr") return expr.values.some(containsStdlibDeleteTarget);
+    if (expr.kind === "select_expr_subquery") return containsStdlibDeleteTarget(expr.expr);
+    if (expr.kind === "shape_projection" || expr.kind === "distinct" || expr.kind === "cast" || expr.kind === "is_type" || expr.kind === "field_access") {
+      return containsStdlibDeleteTarget((expr as { expr: FreeObjectExpr }).expr);
+    }
+    if (expr.kind === "binding_ref") return containsStdlibDeleteTarget(bindingExpr(bindingValue(expr.name)));
+    return false;
+  };
+  const normalizedDeleteType = normalizeTypeName(statement.typeName, activeModule);
+  if (normalizedDeleteType === "std::FreeObject" || isFreeObjectDeleteTarget(statement.target)) {
+    fail("free objects cannot be deleted");
+  }
+  if (normalizedDeleteType.startsWith("schema::") || (normalizedDeleteType.startsWith("std::") && normalizedDeleteType !== "std::Object") || containsStdlibDeleteTarget(statement.target)) {
+    fail("cannot delete standard library type");
+  }
+  if (statement.target && (statement.target.kind === "literal" || statement.target.kind === "set_literal" || statement.target.kind === "array_literal_expr" || statement.target.kind === "tuple")) {
+    fail("cannot delete non-ObjectType object");
+  }
+};
+
 export const compileDmlToIR = (
   schema: SchemaSnapshot,
   statement: DmlStatement,
@@ -639,105 +773,8 @@ export const compileDmlToIR = (
     return undefined;
   };
 
-  const exprContainsMutation = (expr: FreeObjectExpr | undefined): MutationValueKind | undefined => {
-    if (!expr) return undefined;
-    if (expr.kind === "mutation_expr") return expr.statement.kind;
-    if (expr.kind === "set_expr" || expr.kind === "tuple" || expr.kind === "array_literal_expr") {
-      for (const value of expr.values) {
-        const nested = exprContainsMutation(value);
-        if (nested) return nested;
-      }
-      return undefined;
-    }
-    if (expr.kind === "free_object_constructor") {
-      for (const entry of expr.entries) {
-        const nested = exprContainsMutation(entry.expr);
-        if (nested) return nested;
-      }
-      return undefined;
-    }
-    if (expr.kind === "shape_projection" || expr.kind === "distinct" || expr.kind === "cast" || expr.kind === "exists" || expr.kind === "field_access" || expr.kind === "index_access" || expr.kind === "slice_access" || expr.kind === "is_type" || expr.kind === "unary" || expr.kind === "select_expr_subquery") {
-      return exprContainsMutation((expr as { expr: FreeObjectExpr }).expr);
-    }
-    if (expr.kind === "compare" || expr.kind === "math" || expr.kind === "logical" || expr.kind === "coalesce" || expr.kind === "and" || expr.kind === "or") {
-      return exprContainsMutation(expr.left) ?? exprContainsMutation(expr.right);
-    }
-    if (expr.kind === "if_else") {
-      return exprContainsMutation(expr.condition) ?? exprContainsMutation(expr.thenExpr) ?? exprContainsMutation(expr.elseExpr);
-    }
-    if (expr.kind === "concat") {
-      for (const part of expr.parts) {
-        const nested = exprContainsMutation(part);
-        if (nested) return nested;
-      }
-    }
-    if (expr.kind === "function_call") {
-      for (const arg of expr.call.args) {
-        if (arg.kind === "expr") {
-          const nested = exprContainsMutation(arg.expr);
-          if (nested) return nested;
-        }
-      }
-    }
-    return undefined;
-  };
-
-  const filterContainsMutation = (filter: FilterExpr | undefined): MutationValueKind | undefined => {
-    if (!filter) return undefined;
-    if (filter.kind === "free_expr") return exprContainsMutation(filter.expr);
-    if (filter.kind === "and" || filter.kind === "or") return filterContainsMutation(filter.left) ?? filterContainsMutation(filter.right);
-    if (filter.kind === "not") return filterContainsMutation(filter.expr);
-    return undefined;
-  };
-
   if (statement.kind === "delete") {
-    const mutationInFilter = filterContainsMutation(statement.filter);
-    if (mutationInFilter) {
-      fail(`${mutationInFilter.toUpperCase()} statements cannot be used in a FILTER clause`);
-    }
-    const mutationInOrder = exprContainsMutation(statement.orderBy?.expr);
-    if (mutationInOrder) {
-      fail(`${mutationInOrder.toUpperCase()} statements cannot be used in an ORDER BY clause`);
-    }
-
-    const bindingValue = (name: string): WithBindingValue | undefined => statement.with?.find((binding) => binding.name === name)?.value;
-    const bindingExpr = (value: WithBindingValue | undefined): FreeObjectExpr | undefined => {
-      if (!value) return undefined;
-      if (value.kind === "subquery_expr") return value.expr;
-      if (value.kind === "subquery") return { kind: "select", typeName: value.query.typeName, shape: value.query.shape, clauses: value.query.clauses };
-      return undefined;
-    };
-    const isFreeObjectDeleteTarget = (expr: FreeObjectExpr | undefined): boolean => {
-      if (!expr) return false;
-      if (expr.kind === "free_object_constructor") return true;
-      if (expr.kind === "binding_ref") return isFreeObjectDeleteTarget(bindingExpr(bindingValue(expr.name)));
-      if (expr.kind === "select_expr_subquery") return isFreeObjectDeleteTarget(expr.expr);
-      return false;
-    };
-    const containsStdlibDeleteTarget = (expr: FreeObjectExpr | undefined): boolean => {
-      if (!expr) return false;
-      if (expr.kind === "select") {
-        const normalized = normalizeTypeName(expr.typeName, activeModule);
-        return normalized.startsWith("schema::") || (normalized.startsWith("std::") && normalized !== "std::FreeObject");
-      }
-      if (expr.kind === "set_expr") return expr.values.some(containsStdlibDeleteTarget);
-      if (expr.kind === "select_expr_subquery") return containsStdlibDeleteTarget(expr.expr);
-      if (expr.kind === "shape_projection" || expr.kind === "distinct" || expr.kind === "cast" || expr.kind === "is_type" || expr.kind === "field_access") {
-        return containsStdlibDeleteTarget((expr as { expr: FreeObjectExpr }).expr);
-      }
-      if (expr.kind === "binding_ref") return containsStdlibDeleteTarget(bindingExpr(bindingValue(expr.name)));
-      return false;
-    };
-    const normalizedDeleteType = normalizeTypeName(statement.typeName, activeModule);
-    if (normalizedDeleteType === "std::FreeObject" || isFreeObjectDeleteTarget(statement.target)) {
-      fail("free objects cannot be deleted");
-    }
-    if (normalizedDeleteType.startsWith("schema::") || (normalizedDeleteType.startsWith("std::") && normalizedDeleteType !== "std::Object") || containsStdlibDeleteTarget(statement.target)) {
-      fail("cannot delete standard library type");
-    }
-    if (statement.target && (statement.target.kind === "literal" || statement.target.kind === "set_literal" || statement.target.kind === "array_literal_expr" || statement.target.kind === "tuple")) {
-      fail("cannot delete non-ObjectType object");
-    }
+    validateDeleteStatement(schema, statement);
   }
 
   const resolvedRootType = {

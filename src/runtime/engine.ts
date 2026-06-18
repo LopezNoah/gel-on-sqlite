@@ -1,6 +1,6 @@
 import { getCompilerService, type CompileContext, type CompilerCacheMeta } from "../compiler/service.js";
 import { validateParsedStatement } from "../compiler/ast_to_ir.js";
-import { PENDING_INSERT_SEQUENCE_VALUE, PENDING_INSERT_SQL_EXPR_VALUE, rewriteDunderDefaults } from "../compiler/dml_lowering.js";
+import { PENDING_INSERT_SEQUENCE_VALUE, PENDING_INSERT_SQL_EXPR_VALUE, rewriteDunderDefaults, validateDeleteStatement } from "../compiler/dml_lowering.js";
 import { AppError, asAppError, isQueryFailure, tryProbe, tryResult } from "../errors.js";
 import { decorateErrorWithUnsupportedTag } from "../diagnostics/unsupported.js";
 import { parseEdgeQL, parseEdgeQLScript, type ParseEdgeQLOptions } from "../edgeql/parser.js";
@@ -1627,6 +1627,16 @@ const normalizeQueryVariables = (variables: QueryVariables): Record<string, Scal
   return params;
 };
 
+// Two DML entry points that DIVERGE — keep mutation semantics in sync across
+// both. `executeQuery` (client `query()` / test `h.query`) runs a single
+// statement through `executeQueryWithTraceImpl`; `executeScript` (client
+// `script()` / test `h.script`) runs the multi-statement loop in
+// `executeQueryUnitWithTrace`. The two paths handle DELETE/UPDATE targets,
+// SELECT-over-mutation, and WITH-DML chains with separate (and historically
+// drifting) code, so a delete/update behaviour can be correct on one path and
+// wrong on the other. When touching DML execution, exercise BOTH — note that
+// `assertQueryResult` in the conformance tests uses the QUERY path while a bare
+// `h.script(...)` uses the SCRIPT path.
 export const executeQuery = (
   db: SQLiteDatabase,
   schema: SchemaSnapshot,
@@ -2314,13 +2324,29 @@ const concreteTypeNameForId = (
   baseTypeName: string,
   id: string,
 ): string => {
-  const concretes = schema.listConcreteTypesAssignableTo(baseTypeName);
-  for (const typeDef of concretes) {
+  const rowExists = (typeDef: TypeDef): boolean => {
     const table = tableNameForType(qualifiedTypeName(typeDef));
     const row = tryResult(() =>
       db.prepare(`SELECT 1 FROM ${quoteIdent(table)} WHERE ${quoteIdent("id")} = ? LIMIT 1`).all(id)[0],
     );
-    if (row.ok && row.value !== undefined) {
+    return row.ok && row.value !== undefined;
+  };
+  const checked = new Set<string>();
+  const concretes = schema.listConcreteTypesAssignableTo(baseTypeName);
+  for (const typeDef of concretes) {
+    checked.add(qualifiedTypeName(typeDef));
+    if (rowExists(typeDef)) {
+      return qualifiedTypeName(typeDef);
+    }
+  }
+  // The id may belong to a sibling not assignable to `baseTypeName` — a
+  // heterogeneous union (`(SELECT A) UNION (SELECT B)`) resolves to one
+  // branch's type yet carries ids of both. Fall back to scanning every other
+  // concrete type so each row is re-targeted at the table that actually holds
+  // it (ids are globally unique, so the first match is authoritative).
+  for (const typeDef of schema.listTypes()) {
+    if (typeDef.abstract || checked.has(qualifiedTypeName(typeDef))) continue;
+    if (rowExists(typeDef)) {
       return qualifiedTypeName(typeDef);
     }
   }
@@ -2401,7 +2427,12 @@ const executeDmlChainStatement = (
 
   if (stmt.kind === "delete") {
     for (const id of target.ids) {
-      const perId = { kind: "delete", typeName: target.typeName, filter: { kind: "predicate", target: { kind: "field", field: "id" }, op: "=", value: id }, pos: { line: 1, column: 1 } } as unknown as DeleteStatement;
+      // A heterogeneous union (`(SELECT A …) UNION (SELECT B …)`) resolves to a
+      // single ObjectSet typed at the common ancestor (possibly abstract), so
+      // re-target each row at the concrete type that physically stores it —
+      // deleting from the (abstract/base) ancestor table would miss the row.
+      const concreteType = concreteTypeNameForId(db, schema, target.typeName, id);
+      const perId = { kind: "delete", typeName: concreteType, filter: { kind: "predicate", target: { kind: "field", field: "id" }, op: "=", value: id }, pos: { line: 1, column: 1 } } as unknown as DeleteStatement;
       const runDelete = (): void => {
         const c = compilerService.compile(schema, perId, { globals: context.globals, params: context.params, target: runtimeTarget });
         const st = typeDefForTable(schema, (c.ir as { table?: string }).table ?? "");
@@ -2568,11 +2599,19 @@ const isWithDmlChain = (ast: Statement): ast is UpdateStatement | DeleteStatemen
   if (ast.kind !== "update" && ast.kind !== "delete" && ast.kind !== "insert") return false;
   const withBindings = (ast as { with?: WithBinding[] }).with ?? [];
   if (withBindings.length === 0) return false;
-  // Only engage when a binding is a DML subquery or the subject names a
-  // binding — plain scalar/SELECT WITH bindings keep their existing path.
+  // Only engage when a binding is a DML subquery, the subject names a binding,
+  // or the UPDATE/DELETE target is a binding ref (`WITH X := (… UNION …) DELETE
+  // X`) — plain scalar/SELECT WITH bindings keep their existing path. The
+  // target-binding case routes a heterogeneous-union delete through the chain
+  // executor, which resolves the binding to ids and deletes each by its
+  // concrete type; the polymorphic-type expansion can't (the binding name is
+  // not a type).
   const hasDmlBinding = withBindings.some((b) => bindingValueContainsMutation(b.value));
   const subjectIsBinding = withBindings.some((b) => b.name === (ast as { typeName?: string }).typeName);
-  return hasDmlBinding || subjectIsBinding;
+  const target = (ast as { target?: { kind?: string; name?: string } }).target;
+  const targetIsBinding = target?.kind === "binding_ref"
+    && withBindings.some((b) => b.name === target.name);
+  return hasDmlBinding || subjectIsBinding || targetIsBinding;
 };
 
 const executeWithDmlChain = (
@@ -3721,13 +3760,31 @@ interface SelectOverMutation {
   orderBy?: OrderExprChain;
 }
 
+// The implicit shape an object-valued expression gets when no shape is written
+// (`SELECT (DELETE T)` returns each object's id, like a bare `SELECT T`).
+const ID_ONLY_SHAPE: ShapeElement[] = [
+  { kind: "field", name: "id", operation: "assign", origin: "explicit" } as unknown as ShapeElement,
+];
+
 const detectSelectOverMutation = (ast: Statement): SelectOverMutation | null => {
   if (ast.kind !== "select_expr") return null;
   const expr = ast.expr;
-  if (!expr || expr.kind !== "shape_projection") return null;
-  const inner = expr.expr;
-  if (!inner || inner.kind !== "mutation_expr") return null;
-  return { mutation: inner.statement, shape: expr.shape, orderBy: ast.orderBy };
+  if (!expr) return null;
+  // `SELECT (DML) { shape }` — the parser nests it as
+  // `select_expr → shape_projection → mutation_expr`.
+  if (expr.kind === "shape_projection") {
+    const inner = expr.expr;
+    if (!inner || inner.kind !== "mutation_expr") return null;
+    return { mutation: inner.statement, shape: expr.shape, orderBy: ast.orderBy };
+  }
+  // Bare `SELECT (DML)` — no explicit shape, so the affected objects project
+  // through the implicit id-only shape. Without this the statement compiles to
+  // a NULL-placeholder SELECT (the SQL stage can't mutate-and-return) and yields
+  // a spurious `[null]` row instead of the affected objects.
+  if (expr.kind === "mutation_expr") {
+    return { mutation: expr.statement, shape: ID_ONLY_SHAPE, orderBy: ast.orderBy };
+  }
+  return null;
 };
 
 const executeSelectOverMutation = (
@@ -3774,16 +3831,74 @@ const executeSelectOverMutation = (
     return { rows, sql: compiled.sql };
   };
 
+  const emptyArtifact: SQLArtifact = { sql: "", params: [], loweringMode: "single_statement" };
+  // Assigned by the write step below; read by `projectAffected` (for its empty
+  // fallback artifact) and the returned trace. Hoisted so the closure and the
+  // DELETE pre-capture can reference it before the write runs.
+  let lastCompiled: ReturnType<typeof compilerService.compile> | undefined;
+  // Project a set of affected-row ids through the requested shape, reordering
+  // to the capture order when there's no explicit ORDER BY (the `id IN (…)`
+  // re-projection has no pinned row order otherwise). The requested shape may
+  // omit `id`, so project it alongside for the sort; result comparison ignores
+  // the extra key. Used after the write for INSERT/UPDATE (rows survive) and
+  // *before* the write for DELETE (rows are about to be removed).
+  const projectAffected = (ids: string[]): { rows: unknown[]; sql: SQLArtifact } => {
+    if (ids.length === 0) return { rows: [], sql: lastCompiled?.sql ?? emptyArtifact };
+    const reorder = !orderBy && ids.length > 1;
+    const shapeHasId = shape.some((el) => (el as { name?: string }).name === "id");
+    const projectShape = reorder && !shapeHasId ? [...shape, idShapeElement] : shape;
+    const idFilter: FilterExpr = {
+      kind: "in_predicate",
+      target: { kind: "field", field: "id" },
+      op: "in",
+      values: { kind: "set_literal", values: ids },
+    } as unknown as FilterExpr;
+    const out = runShapedSelect(idFilter, projectShape, orderBy);
+    if (reorder && out.rows.length > 1) {
+      const rank = new Map(ids.map((id, i) => [id, i] as const));
+      out.rows = [...out.rows].sort((a, b) => {
+        const ra = rank.get((a as Record<string, unknown>)?.id as string) ?? Number.MAX_SAFE_INTEGER;
+        const rb = rank.get((b as Record<string, unknown>)?.id as string) ?? Number.MAX_SAFE_INTEGER;
+        return ra - rb;
+      });
+    }
+    return out;
+  };
+
+  // `DELETE (SELECT T FILTER f)` / `UPDATE (SELECT T FILTER f) SET …` carries
+  // the row predicate on the target subquery, not the statement's own `filter`.
+  // Peel the target's select wrappers to recover that filter so the capture
+  // below selects only the rows the mutation actually touches (otherwise it
+  // captures — and the per-id loop deletes — every row of the type).
+  const targetSubqueryFilter = (target: FreeObjectExpr | undefined): FilterExpr | undefined => {
+    let cur = target;
+    while (cur) {
+      if (cur.kind === "select_expr_subquery" || cur.kind === "distinct") {
+        cur = (cur as { expr: FreeObjectExpr }).expr;
+        continue;
+      }
+      if (cur.kind === "select") return cur.clauses?.filter as FilterExpr | undefined;
+      break;
+    }
+    return undefined;
+  };
+
   // 1. Capture the ids the mutation will touch. For UPDATE/DELETE the rows are
   //    identified by the statement's own filter (ids are stable across the
   //    write); INSERT is captured after the write instead.
   let affectedIds: string[] = [];
   if (mutation.kind === "update" || mutation.kind === "delete") {
-    const idRows = runShapedSelect(mutation.filter, [idShapeElement]);
+    const captureFilter = mutation.filter ?? targetSubqueryFilter(mutation.target);
+    const idRows = runShapedSelect(captureFilter, [idShapeElement]);
     affectedIds = idRows.rows
       .map((row) => (row && typeof row === "object" ? (row as { id?: unknown }).id : undefined))
       .filter((id): id is string => typeof id === "string");
   }
+
+  // DELETE physically removes the rows, so capture their shaped projection
+  // *now*, before the write — afterward there's nothing to read. `SELECT
+  // (DELETE T) { shape }` returns the deleted objects' data as it was.
+  const deletedProjection = mutation.kind === "delete" ? projectAffected(affectedIds) : undefined;
 
   // 2. Run the mutation. For UPDATE/DELETE we re-issue it once per captured id
   //    with a `.id = <uuid>` filter: this pins the write to exactly the rows
@@ -3797,7 +3912,6 @@ const executeSelectOverMutation = (
   if (!subjectType) {
     throw new AppError("E_SEMANTIC", `Unknown type '${typeName}'`, ast.pos.line, ast.pos.column);
   }
-  let lastCompiled: ReturnType<typeof compilerService.compile> | undefined;
   if (mutation.kind === "insert") {
     if (isWithDmlChain(mutation)) {
       // DML bindings (or a binding-named subject) — run through the chain
@@ -3833,38 +3947,12 @@ const executeSelectOverMutation = (
     }
   }
 
-  // 3. Re-project the affected rows through the requested shape. DELETE leaves
-  //    no surviving rows, so the projection is empty.
-  const idFilter: FilterExpr = {
-    kind: "in_predicate",
-    target: { kind: "field", field: "id" },
-    op: "in",
-    values: { kind: "set_literal", values: affectedIds },
-  } as unknown as FilterExpr;
-  const emptyArtifact: SQLArtifact = { sql: "", params: [], loweringMode: "single_statement" };
-  // Without an explicit ORDER BY the `id IN (…)` re-projection has no pinned
-  // row order, so multiple affected rows can surface in an unstable order. The
-  // capture step read `affectedIds` in the subject's natural (rowid /
-  // insertion) order — reorder the projected rows to follow it so the result
-  // is deterministic (matching the order a non-rewritten UPDATE … returns).
-  // The requested shape may not include `id`, so project it alongside (under a
-  // reserved key) for the sort, then strip it back off.
-  const needsReorder = !orderBy && affectedIds.length > 1 && mutation.kind !== "delete";
-  // Project `id` alongside the requested shape so the rows can be reordered to
-  // the capture order; result comparison ignores the extra key.
-  const shapeHasId = shape.some((el) => (el as { name?: string }).name === "id");
-  const projectShape = needsReorder && !shapeHasId ? [...shape, idShapeElement] : shape;
-  const projected = (affectedIds.length > 0 && mutation.kind !== "delete")
-    ? runShapedSelect(idFilter, projectShape, orderBy)
-    : { rows: [], sql: lastCompiled?.sql ?? emptyArtifact };
-  if (needsReorder && projected.rows.length > 1) {
-    const rank = new Map(affectedIds.map((id, i) => [id, i] as const));
-    projected.rows = [...projected.rows].sort((a, b) => {
-      const ra = rank.get((a as Record<string, unknown>)?.id as string) ?? Number.MAX_SAFE_INTEGER;
-      const rb = rank.get((b as Record<string, unknown>)?.id as string) ?? Number.MAX_SAFE_INTEGER;
-      return ra - rb;
-    });
-  }
+  // 3. Re-project the affected rows through the requested shape. DELETE was
+  //    captured before the write (`deletedProjection`); INSERT/UPDATE rows
+  //    survive and are read back here by id.
+  const projected = mutation.kind === "delete"
+    ? (deletedProjection ?? { rows: [], sql: emptyArtifact })
+    : projectAffected(affectedIds);
 
   return {
     ast,
@@ -5199,7 +5287,18 @@ export const executeQueryUnitWithTrace = (
         const peeled = peelInnerMutation(rawAst);
         if (peeled) ast = peeled;
       }
-      if (ast.kind === "delete" || ast.kind === "update") {
+      if (ast.kind === "delete") {
+        // Validate the target before expansion: `expandPolymorphicMutation`
+        // fans the delete out to concrete subtypes (and drops branches with no
+        // runtime type), which would otherwise discard an invalid target — a
+        // free-object binding, or `schema::Object` inside a set — so the error
+        // never fires on the script path.
+        validateDeleteStatement(schema, ast);
+      }
+      if ((ast.kind === "delete" || ast.kind === "update") && !isWithDmlChain(ast)) {
+        // A target-binding chain (`WITH X := (… UNION …) DELETE X`) is handled
+        // by the WITH-DML chain executor below; expanding it here would drop it
+        // (the binding name resolves to no concrete type).
         const expansion = expandPolymorphicMutation(schema, ast);
         if (expansion) {
           expanded.push(...expansion);
