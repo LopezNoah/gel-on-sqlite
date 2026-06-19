@@ -12,6 +12,7 @@ ui/
 /qast.ts
 /qir.ts
 /qsql.ts
+/qadv.ts
 /cdbg.ts
 /csql.ts
 /sdbg.ts

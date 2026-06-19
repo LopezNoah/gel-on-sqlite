@@ -8398,6 +8398,16 @@ const setValueIsJson = (set: Set): boolean => {
   if (result.expr.kind === "function_call") {
     const fn = ((result.expr as FunctionCall).functionName ?? "").split("::").pop();
     if (fn === "array_agg") return true;
+    // Cardinality/identity guards (`assert_single`, `assert_exists`,
+    // `assert_distinct`, `distinct`) pass their argument's set through
+    // unchanged, so the value is JSON-structured exactly when the argument's
+    // is — e.g. `{ x := assert_single(objectSet) }` must still wrap in
+    // json(...) or the nested object renders as a quoted string.
+    if (fn === "assert_single" || fn === "assert_exists"
+      || fn === "assert_distinct" || fn === "distinct") {
+      const inner = orderedCallArgs((result.expr as FunctionCall).args)[0]?.expr;
+      if (inner) return setValueIsJson(inner);
+    }
   }
   // A coalesce's value is JSON when either side's is — the coalesce set's
   // typeref is often a bare `std::coalesce` placeholder with no collection

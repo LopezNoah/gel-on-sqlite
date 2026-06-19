@@ -44,6 +44,7 @@ export interface ConnectOptions {
 
 interface SecurityContextLike {
   strictUserDDL?: boolean;
+  isolation?: "serializable" | "repeatable_read";
 }
 
 // The query-running surface shared by Client and Transaction.
