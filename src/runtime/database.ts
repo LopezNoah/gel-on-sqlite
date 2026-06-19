@@ -542,6 +542,84 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
         || (r.inc_upper ? cmpVals(x, r.upper) <= 0 : cmpVals(x, r.upper) < 0);
       return aboveLower && belowUpper;
     };
+    // Range set algebra (`+` union, `*` intersection, `-` difference). Both
+    // single ranges and multiranges are handled uniformly as range lists
+    // (`asRangeList`). The result serializes as a single range when both
+    // operands were single ranges (erroring if the result isn't one contiguous
+    // range, as EdgeQL does), or as a multirange `{ranges:[…]}` — byte-identical
+    // to `_gel_multirange` — when either operand was a multirange.
+    const serializeRange = (r: RangeObj): string =>
+      r.empty
+        ? JSON.stringify({ empty: true })
+        : JSON.stringify({ lower: r.lower, upper: r.upper, inc_lower: r.inc_lower, inc_upper: r.inc_upper });
+    const mkRange = (
+      lower: number | string | null, incLower: boolean,
+      upper: number | string | null, incUpper: boolean,
+    ): RangeObj => {
+      const il = lower === null ? false : incLower;
+      const iu = upper === null ? false : incUpper;
+      if (lower !== null && upper !== null) {
+        const c = cmpVals(lower, upper);
+        if (c > 0 || (c === 0 && !(il && iu))) return { lower: null, upper: null, inc_lower: false, inc_upper: false, empty: true };
+      }
+      return { lower: lower as number | null, upper: upper as number | null, inc_lower: il, inc_upper: iu };
+    };
+    const rawIsMultirange = (raw: unknown): boolean => {
+      if (raw === null || raw === undefined) return false;
+      const o = typeof raw === "string" ? JSON.parse(raw) : raw;
+      return Boolean(o) && Array.isArray((o as { ranges?: unknown[] }).ranges);
+    };
+    // Re-run the multirange canonicalizer over a raw list so a computed result
+    // matches the shape `_gel_multirange` (and thus range/multirange `=`) emits.
+    const canonicalize = (list: RangeObj[]): RangeObj[] =>
+      asRangeList(JSON.stringify({ ranges: list })) ?? [];
+    const overlaps = (a: RangeObj, b: RangeObj): boolean =>
+      cmpPos(lowerPos(a), upperPos(b)) <= 0 && cmpPos(lowerPos(b), upperPos(a)) <= 0;
+    const intersectOne = (a: RangeObj, b: RangeObj): RangeObj => {
+      const lo = cmpPos(lowerPos(a), lowerPos(b)) >= 0 ? a : b; // the greater lower
+      const up = cmpPos(upperPos(a), upperPos(b)) <= 0 ? a : b; // the lesser upper
+      return mkRange(lo.lower, lo.inc_lower, up.upper, up.inc_upper);
+    };
+    // `a` minus `b` — 0, 1, or 2 ranges (2 when `b` carves out `a`'s middle).
+    const subtractOne = (a: RangeObj, b: RangeObj): RangeObj[] => {
+      if (!overlaps(a, b)) return [a];
+      const out: RangeObj[] = [];
+      if (cmpPos(lowerPos(a), lowerPos(b)) < 0) out.push(mkRange(a.lower, a.inc_lower, b.lower, !b.inc_lower));
+      if (cmpPos(upperPos(a), upperPos(b)) > 0) out.push(mkRange(b.upper, !b.inc_upper, a.upper, a.inc_upper));
+      return out.filter((r) => !r.empty);
+    };
+    const serializeResult = (list: RangeObj[], anyMulti: boolean, op: string): string => {
+      if (anyMulti) {
+        return JSON.stringify({
+          ranges: list.map((r) => ({ lower: r.lower, upper: r.upper, inc_lower: r.inc_lower, inc_upper: r.inc_upper })),
+        });
+      }
+      if (list.length === 0) return JSON.stringify({ empty: true });
+      if (list.length === 1) return serializeRange(list[0]);
+      throw new AppError("E_VALIDATION", `result of range ${op} would not be contiguous`);
+    };
+    const rangeSetOp = (
+      aRaw: string | null, bRaw: string | null, op: "union" | "intersection" | "difference",
+    ): string | null => {
+      const a = asRangeList(aRaw); const b = asRangeList(bRaw);
+      if (!a || !b) return null;
+      let result: RangeObj[];
+      if (op === "union") {
+        result = canonicalize([...a, ...b]);
+      } else if (op === "intersection") {
+        const parts: RangeObj[] = [];
+        for (const x of a) for (const y of b) if (overlaps(x, y)) parts.push(intersectOne(x, y));
+        result = canonicalize(parts);
+      } else {
+        let acc = a;
+        for (const y of b) acc = acc.flatMap((x) => subtractOne(x, y));
+        result = canonicalize(acc);
+      }
+      return serializeResult(result, rawIsMultirange(aRaw) || rawIsMultirange(bRaw), op);
+    };
+    db.function("_gel_range_union", (aRaw: string | null, bRaw: string | null) => rangeSetOp(aRaw, bRaw, "union"));
+    db.function("_gel_range_intersection", (aRaw: string | null, bRaw: string | null) => rangeSetOp(aRaw, bRaw, "intersection"));
+    db.function("_gel_range_difference", (aRaw: string | null, bRaw: string | null) => rangeSetOp(aRaw, bRaw, "difference"));
     db.function("_gel_range_contains", (rRaw: string | null, v: unknown) => {
       const rs = asRangeList(rRaw);
       if (!rs || v === null || v === undefined) return null;
