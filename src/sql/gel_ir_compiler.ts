@@ -9010,6 +9010,146 @@ const isTrulyPolymorphicTypeRef = (typeRef: TypeRef): boolean => {
   return false;
 };
 
+// One shape element whose value is a non-scalar pointer (a link projected as a
+// JSON array of shaped rows): `watchers: { name }`, `owner: { name }`. Lifted
+// verbatim out of compileShapeProjection so the link-array case has a named
+// home and a test surface (ADR 0049). Single-cardinality links unwrap to the
+// first element.
+const compileShapeLinkArray = (
+  shape: ShapeElement,
+  shapeExpr: { result: Set; selectExpr?: SelectExpr },
+  sourceAlias: string,
+  params: ScalarValue[],
+  options: GelIRCompileOptions,
+  target: RuntimeTarget,
+  depth: number,
+): string => {
+  // The caller guards `shapeExpr.result.expr.kind === "pointer"`; the cast
+  // restores the narrowing the inline `if` previously provided.
+  const linkExpr = compilePointerArrayExpr(
+    shapeExpr.result.expr as Pointer,
+    sourceAlias,
+    shapeExpr.result.shape,
+    params,
+    options,
+    target,
+    depth + 1,
+    shapeExpr.selectExpr,
+    narrowedLinkTarget(shapeExpr.result),
+  );
+  const alias = shapeAliasForElement(shape, shape.expr, depth);
+  // Single-cardinality links surface as `owner: {…}`, not `owner: [{…}]`.
+  // The inner builder always emits a json_group_array because it doesn't
+  // know how many rows it'll get; unwrap the first element here when the
+  // shape declares the link is single (matches what
+  // `compilePublicShapeObjectExpr` does for nested shapes).
+  const linkPointer = shapeExpr.result.expr as Pointer;
+  const isSingleLink = shape.cardinality === "one"
+    || shape.cardinality === "at_most_one"
+    || (shape.cardinality === undefined
+        && linkPointer.ptrref.outCardinality !== "many"
+        && linkPointer.ptrref.outCardinality !== "at_least_one"
+        && linkPointer.direction !== "inbound");
+  if (isSingleLink) {
+    return `json(COALESCE(json_extract(${linkExpr}, '$[0]'), 'null')) AS ${quoteIdent(alias)}`;
+  }
+  return `${linkExpr} AS ${quoteIdent(alias)}`;
+};
+
+// One shape element that projects a scalar leaf through an intermediate
+// *single* object link not joined into the outer row (`a := .bar.a`). Returns
+// the correlated-subquery projection when the pattern matches, or null to fall
+// through to the projected-column / multi-scalar lowering below. Lifted
+// verbatim out of compileShapeProjection (ADR 0049).
+const compileShapeLeafThroughForeignLink = (
+  shape: ShapeElement,
+  shapeExpr: { result: Set; selectExpr?: SelectExpr },
+  sourceAlias: string,
+  params: ScalarValue[],
+  options: GelIRCompileOptions,
+  target: RuntimeTarget,
+  depth: number,
+): string | null => {
+  // Computed shape field that projects a scalar leaf through an intermediate
+  // *single* object LINK (`a := .bar.a`, `c := .owner.name` written as a
+  // computed rather than a shape-on-path). The leaf's source is a link pointer
+  // whose target type is NOT joined into the outer `g0` row (unlike a
+  // shape-on-path `Issue.owner { name }`, where `owner` IS the shape subject
+  // and is already joined). compileProjectedSourceColumnRef would wrongly read
+  // the leaf column off the outer source (yielding `NULL AS …`), so lower it as
+  // a correlated subquery over the link's target rows.
+  const leafThroughForeignLink = ((): { leaf: Pointer; linkPtr: Pointer } | null => {
+    if (shapeExpr.result.expr.kind !== "pointer") return null;
+    const leaf = shapeExpr.result.expr as Pointer;
+    if (!leaf.ptrref.outTarget.isScalar || leaf.ptrref.isLinkProperty) return null;
+    // Peel any select_expr wrapper around the link (`(select .bar order by …).a`):
+    // for a SINGLE link the inner ORDER BY / LIMIT / FILTER are no-ops over an
+    // at-most-one set, so reading the leaf off the single target is correct.
+    // The cardinality guard below rejects multi links, where those clauses
+    // would matter (they keep their existing multi-scalar lowering).
+    let src: Set = leaf.source;
+    while (src.expr.kind === "select_expr") src = (src.expr as SelectExpr).result;
+    if (src.expr.kind !== "pointer") return null;
+    const linkPtr = src.expr as Pointer;
+    // Must be a single forward object link rooted directly at the shape subject
+    // (`.bar.a`); deeper / inbound / multi chains keep their existing lowering
+    // so this stays a narrow, provably-correct single-row correlation.
+    if (linkPtr.direction === "inbound" || linkPtr.ptrref.outTarget.isScalar) return null;
+    if (linkPtr.ptrref.outCardinality === "many" || linkPtr.ptrref.outCardinality === "at_least_one") return null;
+    if (linkPtr.source.expr.kind !== "type_root") return null;
+    // Shape-on-path (`Issue.owner { name }`): the link IS the shape subject and
+    // already joined into `g0` — keep the direct-column read. Detect that by
+    // comparing path identity with the shape source.
+    if (shape.source && pathIdKey(src) === pathIdKey(shape.source)) return null;
+    return { leaf, linkPtr };
+  })();
+  if (leafThroughForeignLink) {
+    const { leaf, linkPtr } = leafThroughForeignLink;
+    const alias = shapeAliasForElement(shape, shapeExpr.result, depth);
+    const leafCol = columnForPointer(leaf);
+    // The link is single, so the leaf scalar is at_most_one — pick one row.
+    // Project the link's target rows correlated to the outer subject row, then
+    // read the scalar leaf column off them. For an inline single link the FK
+    // lives on the subject (`<subject>.bar_id = <Bar>.id`); a single link that
+    // carries link properties routes through its link table.
+    const targetAlias = `sfl${depth}`;
+    const targetSql = compilePolymorphicSource(linkPtr.ptrref.outTarget, false, targetAlias, ["id", leafCol], options);
+    // `[is BaseOriginB].dest.name` — the link's source was intersection-narrowed
+    // to a SIBLING type reachable only through a common subtype (`narrowed` !=
+    // the underlying type_root). A subject row contributes only when its
+    // concrete type is one of the narrowed type's concrete subtypes; otherwise
+    // the `[is T]` view is empty and the leaf is NULL. Guard the correlation by
+    // the subject's `__source_type` so non-matching rows yield no link row.
+    const narrowedType = linkPtr.source.typeref;
+    const rootType = linkPtr.source.expr.kind === "type_root"
+      ? (linkPtr.source.expr as TypeRoot).typeref
+      : undefined;
+    const narrowGuard = ((): string | null => {
+      if (!narrowedType || !rootType || narrowedType.id === rootType.id) return null;
+      const concrete = concreteSourceTypeNames(narrowedType).map((name) => quoteLiteral(name));
+      if (concrete.length === 0) return null;
+      return `${sourceAlias}.${quoteIdent("__source_type")} IN (${concrete.join(", ")})`;
+    })();
+    let fromSql: string;
+    if (shouldUseLinkTable(linkPtr)) {
+      const linkTable = linkTableNameForPointer(linkPtr, options);
+      const linkAlias = `sflj${depth}`;
+      fromSql = `${targetSql} JOIN ${quoteIdent(linkTable)} ${linkAlias}`
+        + ` ON ${linkAlias}.${quoteIdent("target")} = ${targetAlias}.${quoteIdent("id")}`
+        + ` AND ${linkAlias}.${quoteIdent("source")} = ${sourceAlias}.${quoteIdent("id")}`
+        + (narrowGuard ? ` AND ${narrowGuard}` : "");
+    } else {
+      // Inline single link: correlate the target scan on the subject's FK.
+      const inlineColumn = `${linkPtr.ptrref.shortName}_id`;
+      fromSql = `${targetSql} WHERE ${targetAlias}.${quoteIdent("id")} = ${sourceAlias}.${quoteIdent(inlineColumn)}`
+        + (narrowGuard ? ` AND ${narrowGuard}` : "");
+    }
+    const value = shapeScalarColumnValue(`${targetAlias}.${quoteIdent(leafCol)}`, leaf.ptrref.outTarget);
+    return `(SELECT ${value} FROM ${fromSql} LIMIT 1) AS ${quoteIdent(alias)}`;
+  }
+  return null;
+};
+
 const compileShapeProjection = (
   shape: ShapeElement,
   sourceAlias: string,
@@ -9054,34 +9194,7 @@ const compileShapeProjection = (
     return `${compileEmbeddedGroupSQL(shapeExpr.result.expr, sourceAlias, params, options, target, depth)} AS ${quoteIdent(alias)}`;
   }
   if (shapeExpr.result.expr.kind === "pointer" && !shapeExpr.result.typeref.isScalar) {
-    const linkExpr = compilePointerArrayExpr(
-      shapeExpr.result.expr,
-      sourceAlias,
-      shapeExpr.result.shape,
-      params,
-      options,
-      target,
-      depth + 1,
-      shapeExpr.selectExpr,
-      narrowedLinkTarget(shapeExpr.result),
-    );
-    const alias = shapeAliasForElement(shape, shape.expr, depth);
-    // Single-cardinality links surface as `owner: {…}`, not `owner: [{…}]`.
-    // The inner builder always emits a json_group_array because it doesn't
-    // know how many rows it'll get; unwrap the first element here when the
-    // shape declares the link is single (matches what
-    // `compilePublicShapeObjectExpr` does for nested shapes).
-    const linkPointer = shapeExpr.result.expr as Pointer;
-    const isSingleLink = shape.cardinality === "one"
-      || shape.cardinality === "at_most_one"
-      || (shape.cardinality === undefined
-          && linkPointer.ptrref.outCardinality !== "many"
-          && linkPointer.ptrref.outCardinality !== "at_least_one"
-          && linkPointer.direction !== "inbound");
-    if (isSingleLink) {
-      return `json(COALESCE(json_extract(${linkExpr}, '$[0]'), 'null')) AS ${quoteIdent(alias)}`;
-    }
-    return `${linkExpr} AS ${quoteIdent(alias)}`;
+    return compileShapeLinkArray(shape, shapeExpr, sourceAlias, params, options, target, depth);
   }
 
   // Object-set coalesce computed (`coalesce := .primary ?? .secondary`,
@@ -9293,82 +9406,10 @@ const compileShapeProjection = (
     }
   }
   // Computed shape field that projects a scalar leaf through an intermediate
-  // *single* object LINK (`a := .bar.a`, `c := .owner.name` written as a
-  // computed rather than a shape-on-path). The leaf's source is a link pointer
-  // whose target type is NOT joined into the outer `g0` row (unlike a
-  // shape-on-path `Issue.owner { name }`, where `owner` IS the shape subject
-  // and is already joined). compileProjectedSourceColumnRef would wrongly read
-  // the leaf column off the outer source (yielding `NULL AS …`), so lower it as
-  // a correlated subquery over the link's target rows.
-  const leafThroughForeignLink = ((): { leaf: Pointer; linkPtr: Pointer } | null => {
-    if (shapeExpr.result.expr.kind !== "pointer") return null;
-    const leaf = shapeExpr.result.expr as Pointer;
-    if (!leaf.ptrref.outTarget.isScalar || leaf.ptrref.isLinkProperty) return null;
-    // Peel any select_expr wrapper around the link (`(select .bar order by …).a`):
-    // for a SINGLE link the inner ORDER BY / LIMIT / FILTER are no-ops over an
-    // at-most-one set, so reading the leaf off the single target is correct.
-    // The cardinality guard below rejects multi links, where those clauses
-    // would matter (they keep their existing multi-scalar lowering).
-    let src: Set = leaf.source;
-    while (src.expr.kind === "select_expr") src = (src.expr as SelectExpr).result;
-    if (src.expr.kind !== "pointer") return null;
-    const linkPtr = src.expr as Pointer;
-    // Must be a single forward object link rooted directly at the shape subject
-    // (`.bar.a`); deeper / inbound / multi chains keep their existing lowering
-    // so this stays a narrow, provably-correct single-row correlation.
-    if (linkPtr.direction === "inbound" || linkPtr.ptrref.outTarget.isScalar) return null;
-    if (linkPtr.ptrref.outCardinality === "many" || linkPtr.ptrref.outCardinality === "at_least_one") return null;
-    if (linkPtr.source.expr.kind !== "type_root") return null;
-    // Shape-on-path (`Issue.owner { name }`): the link IS the shape subject and
-    // already joined into `g0` — keep the direct-column read. Detect that by
-    // comparing path identity with the shape source.
-    if (shape.source && pathIdKey(src) === pathIdKey(shape.source)) return null;
-    return { leaf, linkPtr };
-  })();
-  if (leafThroughForeignLink) {
-    const { leaf, linkPtr } = leafThroughForeignLink;
-    const alias = shapeAliasForElement(shape, shapeExpr.result, depth);
-    const leafCol = columnForPointer(leaf);
-    // The link is single, so the leaf scalar is at_most_one — pick one row.
-    // Project the link's target rows correlated to the outer subject row, then
-    // read the scalar leaf column off them. For an inline single link the FK
-    // lives on the subject (`<subject>.bar_id = <Bar>.id`); a single link that
-    // carries link properties routes through its link table.
-    const targetAlias = `sfl${depth}`;
-    const targetSql = compilePolymorphicSource(linkPtr.ptrref.outTarget, false, targetAlias, ["id", leafCol], options);
-    // `[is BaseOriginB].dest.name` — the link's source was intersection-narrowed
-    // to a SIBLING type reachable only through a common subtype (`narrowed` !=
-    // the underlying type_root). A subject row contributes only when its
-    // concrete type is one of the narrowed type's concrete subtypes; otherwise
-    // the `[is T]` view is empty and the leaf is NULL. Guard the correlation by
-    // the subject's `__source_type` so non-matching rows yield no link row.
-    const narrowedType = linkPtr.source.typeref;
-    const rootType = linkPtr.source.expr.kind === "type_root"
-      ? (linkPtr.source.expr as TypeRoot).typeref
-      : undefined;
-    const narrowGuard = ((): string | null => {
-      if (!narrowedType || !rootType || narrowedType.id === rootType.id) return null;
-      const concrete = concreteSourceTypeNames(narrowedType).map((name) => quoteLiteral(name));
-      if (concrete.length === 0) return null;
-      return `${sourceAlias}.${quoteIdent("__source_type")} IN (${concrete.join(", ")})`;
-    })();
-    let fromSql: string;
-    if (shouldUseLinkTable(linkPtr)) {
-      const linkTable = linkTableNameForPointer(linkPtr, options);
-      const linkAlias = `sflj${depth}`;
-      fromSql = `${targetSql} JOIN ${quoteIdent(linkTable)} ${linkAlias}`
-        + ` ON ${linkAlias}.${quoteIdent("target")} = ${targetAlias}.${quoteIdent("id")}`
-        + ` AND ${linkAlias}.${quoteIdent("source")} = ${sourceAlias}.${quoteIdent("id")}`
-        + (narrowGuard ? ` AND ${narrowGuard}` : "");
-    } else {
-      // Inline single link: correlate the target scan on the subject's FK.
-      const inlineColumn = `${linkPtr.ptrref.shortName}_id`;
-      fromSql = `${targetSql} WHERE ${targetAlias}.${quoteIdent("id")} = ${sourceAlias}.${quoteIdent(inlineColumn)}`
-        + (narrowGuard ? ` AND ${narrowGuard}` : "");
-    }
-    const value = shapeScalarColumnValue(`${targetAlias}.${quoteIdent(leafCol)}`, leaf.ptrref.outTarget);
-    return `(SELECT ${value} FROM ${fromSql} LIMIT 1) AS ${quoteIdent(alias)}`;
-  }
+  // single object link not joined into the outer row (`a := .bar.a`) — lowered
+  // as a correlated subquery over the link's target rows (see the helper).
+  const leafThroughForeignSql = compileShapeLeafThroughForeignLink(shape, shapeExpr, sourceAlias, params, options, target, depth);
+  if (leafThroughForeignSql !== null) return leafThroughForeignSql;
   const projectedColumn = (elementIsManyViaChain || elementRootsAtForeignType) ? null : compileProjectedSourceColumnRef(shapeExpr.result);
   if (projectedColumn) {
     // `[is Bb & Bc].bb` — the property's source was intersection-narrowed to a
