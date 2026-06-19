@@ -587,8 +587,13 @@ export const compileFunctionCallSQL = (
     Object.keys(call.args)
       .sort((left, right) => left.localeCompare(right, undefined, { numeric: true }))
       .forEach((key, i) => { sqlByKey[key] = args[i] as string; });
-    const isIntTypeHint = (hint: string): boolean =>
-      hint.endsWith("::int16") || hint.endsWith("::int32") || hint.endsWith("::int64");
+    // Discrete range types canonicalize to inclusive-lower / exclusive-upper
+    // (like Postgres `int4range`/`daterange`): the integer families and
+    // `cal::local_date` (dates step by whole days). `datetime`/`local_datetime`
+    // are continuous and keep their bounds verbatim.
+    const isDiscreteTypeHint = (hint: string): boolean =>
+      hint.endsWith("::int16") || hint.endsWith("::int32") || hint.endsWith("::int64")
+      || hint.endsWith("::local_date");
     const exprIsIntLiteral = (s: Set): boolean => {
       let cur = s;
       while (cur.expr.kind === "select_expr") cur = (cur.expr as SelectExpr).result;
@@ -598,7 +603,7 @@ export const compileFunctionCallSQL = (
       const arg = call.args[key];
       if (!arg) return false;
       const hint = scalarArgTypeHint(arg.expr);
-      return (hint !== undefined && isIntTypeHint(hint)) || exprIsIntLiteral(arg.expr);
+      return (hint !== undefined && isDiscreteTypeHint(hint)) || exprIsIntLiteral(arg.expr);
     });
     const lower = sqlByKey["0"] ?? "NULL";
     const upper = sqlByKey["1"] ?? "NULL";
