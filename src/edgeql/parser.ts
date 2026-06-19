@@ -6734,6 +6734,22 @@ class Parser {
     ) {
       return { kind: "set", values: [], castType };
     }
+    // A scalar `<str>` cast must not be silently dropped: `<str>420` stores
+    // "420", not the number 420 (which then fails the str field check). Fold a
+    // raw scalar literal immediately; for a deferred operand (a binding ref)
+    // keep an explicit cast node so DML lowering applies the coercion.
+    const castTarget = castType.includes("::")
+      ? castType.slice(castType.lastIndexOf("::") + 2)
+      : castType;
+    if (castTarget === "str") {
+      if (typeof inner === "number" || typeof inner === "boolean" || typeof inner === "bigint") {
+        return String(inner);
+      }
+      if (inner !== null && typeof inner === "object"
+        && (inner as { kind?: string }).kind === "binding_ref") {
+        return { kind: "expr", expr: { kind: "cast", castType, expr: inner as FreeObjectExpr } };
+      }
+    }
     return inner;
   }
 
@@ -6772,8 +6788,10 @@ class Parser {
       if (this.peek().kind === "lparen") {
         const parsed = this.attempt(() => {
           this.consume();
+          let detached = false;
           if (this.peek().kind === "kw_detached") {
             this.consume();
+            detached = true;
           }
           const typeName = this.parseQualifiedName("Expected type name in parenthesized select expression");
           this.expect("rparen", "Expected ')' after select expression root");
@@ -6783,6 +6801,10 @@ class Parser {
             typeName,
             shape: [{ kind: "field" as const, name: "id", operation: "assign" as const, origin: "default" as const }],
             clauses,
+            // `(SELECT (DETACHED W) FILTER …)` — keep the DETACHED marker so the
+            // self-reference guard and IR scoping see it (it was being consumed
+            // and dropped, making the insert look self-referential).
+            detached: detached || undefined,
           };
         });
         if (parsed) {

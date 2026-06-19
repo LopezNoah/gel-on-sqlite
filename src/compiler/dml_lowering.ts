@@ -511,7 +511,22 @@ export const compileDmlToIR = (
         return resolveBindingScalarOrDefer(expr.name);
       }
       if (expr.kind === "cast") {
-        return resolveFreeObjectScalar(expr.expr);
+        const inner = resolveFreeObjectScalar(expr.expr);
+        if (inner === PENDING_INSERT_SQL_EXPR_VALUE) {
+          return PENDING_INSERT_SQL_EXPR_VALUE;
+        }
+        // Apply the cast's target type to the folded literal. Stripping the
+        // cast entirely keeps the inner JS value, so `<str>420` would store the
+        // number 420 and fail the str field check — EdgeQL `<str>` of a number
+        // or bool yields its textual form. Only the string target needs eager
+        // coercion here; other targets keep the same JS representation or defer
+        // to SQL lowering (PENDING) when the inner can't be folded.
+        const target = expr.castType.split("::").pop()?.trim().toLowerCase();
+        if (target === "str"
+          && (typeof inner === "number" || typeof inner === "boolean" || typeof inner === "bigint")) {
+          return String(inner);
+        }
+        return inner;
       }
       if (expr.kind === "concat") {
         const parts = expr.parts.map((part) => resolveFreeObjectScalar(part));

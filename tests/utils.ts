@@ -46,6 +46,11 @@ export interface HarnessOptions {
   // `INTERNAL_TESTMODE = False` on `TestEdgeQLUserDDL`. The read-only
   // stdlib-module guard is always enforced regardless of this flag.
   strictUserDDL?: boolean;
+  // Transaction isolation level. Mirrors upstream's `TRANSACTION_ISOLATION`
+  // test-class attribute (e.g. `TestRepeatableReadInsert`): under
+  // "repeatable_read" the engine rejects INSERT/UPDATE that would rely on a
+  // cross-table exclusive-constraint check. Defaults to serializable.
+  isolation?: "serializable" | "repeatable_read";
 }
 
 function inferredModuleNameFromSchema(schemaName: string): string {
@@ -180,6 +185,15 @@ export class QueryHarness {
     this.client.setSecurityContext(value ? { strictUserDDL: true } : undefined);
   }
 
+  // Apply create-time security options (currently the transaction isolation
+  // level) to the underlying client. Called from `create` for both the snapshot
+  // fast path and the slow path.
+  private applyHarnessOptions(options: HarnessOptions): void {
+    if (options.isolation) {
+      this.client.setSecurityContext({ isolation: options.isolation });
+    }
+  }
+
   /**
    * Factory method to create a fresh test database with schema/data.
    *
@@ -197,7 +211,10 @@ export class QueryHarness {
   static async create(options: HarnessOptions): Promise<QueryHarness> {
     if (!options.dbFile) {
       const fast = QueryHarness.tryCreateFromSnapshot(options);
-      if (fast) return fast;
+      if (fast) {
+        fast.applyHarnessOptions(options);
+        return fast;
+      }
     }
 
     const dbFile = options.dbFile ?? ":memory:";
@@ -257,6 +274,7 @@ export class QueryHarness {
       }
     }
 
+    harness.applyHarnessOptions(options);
     return harness;
   }
 

@@ -102,6 +102,13 @@ export interface SecurityContext {
   // ignores any matching id found in this set, letting the insert proceed and
   // trip the constraint. Reset at each top-level statement boundary.
   statementInsertedIds?: Set<string>;
+  // Transaction isolation level for the executing session. Cross-table
+  // exclusive constraints (inherited across a type hierarchy, or involving a
+  // link) are enforced by triggers that read sibling tables — safe under
+  // SERIALIZABLE but racy under REPEATABLE READ. When this is "repeatable_read"
+  // an INSERT/UPDATE touching such a constraint is rejected up front, mirroring
+  // upstream's `check_for_isolation_conflicts`. Defaults to serializable.
+  isolation?: "serializable" | "repeatable_read";
 }
 
 const DEFAULT_SECURITY_CONTEXT: SecurityContext = {
@@ -8989,6 +8996,140 @@ const exclusiveChecksFor = (
   return checks.filter((c) => JSON.stringify([...c.fields].sort()) === want);
 };
 
+// One exclusive constraint visible on a type, with its origin (the type in the
+// hierarchy that actually declares it). `property` is set for a single-property
+// constraint; `exprText` is set for a type-level (composite/expression) one.
+interface IsolationConstraint {
+  property?: string;
+  exprText?: string;
+  fields: string[];
+  originType: TypeDef;
+  delegated: boolean;
+}
+
+// Enumerate a type's exclusive constraints (its own and inherited), pairing
+// each with the ancestor that originally declares it. Inherited single-property
+// constraints don't reappear on the child's own `fields`, so this walks the
+// whole ancestor chain — matching how `exclusiveChecksFor` finds the owner.
+const gatherIsolationConstraints = (schema: SchemaSnapshot, typ: TypeDef): IsolationConstraint[] => {
+  const chain = [typ, ...typeAncestorsOf(schema, typ)];
+  const out: IsolationConstraint[] = [];
+
+  // Single-property constraints: the origin is the most-base type that declares
+  // an exclusive on the property. The chain runs typ-first then ancestors
+  // (base types later in the DFS order), so the last writer wins.
+  const propOwner = new Map<string, { owner: TypeDef; delegated: boolean }>();
+  for (const t of chain) {
+    for (const field of t.fields ?? []) {
+      if (field.name === "id") continue;
+      const constraints = (field as { constraints?: Array<{ name: string; delegated?: boolean }> }).constraints ?? [];
+      const excl = constraints.find(constraintIsExclusiveLike);
+      if (excl) propOwner.set(field.name, { owner: t, delegated: excl.delegated ?? false });
+    }
+  }
+  for (const [property, { owner, delegated }] of propOwner) {
+    out.push({ property, fields: [property], originType: owner, delegated });
+  }
+
+  // Type-level constraints are stored only on the declaring type (children don't
+  // copy them), so the origin is whichever chain type carries the entry.
+  const seenExpr = new Set<string>();
+  for (const t of chain) {
+    for (const tc of t.typeConstraints ?? []) {
+      if (!constraintIsExclusiveLike(tc)) continue;
+      const exprText = tc.exprText ?? "";
+      if (seenExpr.has(exprText)) continue;
+      seenExpr.add(exprText);
+      out.push({
+        exprText,
+        fields: tc.fieldRefs ?? [],
+        originType: t,
+        delegated: (tc as { delegated?: boolean }).delegated ?? false,
+      });
+    }
+  }
+  return out;
+};
+
+// Reject an INSERT/UPDATE that, under REPEATABLE READ, would rely on a
+// cross-table exclusive-constraint check the engine can't make safe (the
+// constraint is inherited across the type hierarchy or shared with descendant
+// types). A direct port of `check_for_isolation_conflicts` in
+// edb/edgeql/compiler/conflicts.py. No-op under SERIALIZABLE (the default), so
+// it never affects suites that don't opt into repeatable-read isolation.
+const checkIsolationConflicts = (
+  schema: SchemaSnapshot,
+  ast: Statement,
+  subjectType: TypeDef,
+  context: SecurityContext,
+): void => {
+  if (context.isolation !== "repeatable_read") return;
+  if (ast.kind !== "insert" && ast.kind !== "update") return;
+
+  const isInsert = ast.kind === "insert";
+  const op = isInsert ? "INSERT" : "UPDATE";
+  // For UPDATE only constraints whose pointers are actually modified matter
+  // (an INSERT must consider every constraint, since exclusivity also depends
+  // on the absence of a value).
+  const modified = isInsert
+    ? undefined
+    : new Set(Object.keys((ast as { values?: Record<string, unknown> }).values ?? {}));
+
+  // INSERT touches one type; UPDATE touches the target plus every concrete
+  // subtype whose rows it spans.
+  const updateTypeName = isInsert ? undefined : qualifiedTypeName(subjectType);
+  const affected = isInsert
+    ? [subjectType]
+    : schema.listConcreteTypesAssignableTo(qualifiedTypeName(subjectType));
+
+  const dangers: string[] = [];
+  for (const typ of affected) {
+    const typeName = qualifiedTypeName(typ);
+    for (const constr of gatherIsolationConstraints(schema, typ)) {
+      if (modified && constr.fields.length > 0 && !constr.fields.some((f) => modified.has(f))) {
+        continue;
+      }
+      const originName = qualifiedTypeName(constr.originType);
+      const allConcrete = schema.concreteTypeNamesUnder(originName);
+      // Originates here with no descendants → a single physical table → safe.
+      if (originName === typeName && allConcrete.length <= 1) continue;
+      // Delegated constraints owned here aren't enforced on this type.
+      if (originName === typeName && constr.delegated) continue;
+      // UPDATE: when the base type being updated is itself covered, the danger
+      // is reported for the ancestor — skip the noisier per-child duplicate.
+      if (!isInsert && updateTypeName && updateTypeName !== typeName
+        && allConcrete.includes(updateTypeName)) continue;
+
+      const typeVN = `object type '${typeName}'`;
+      const subjectVN = constr.property !== undefined
+        ? `property '${constr.property}' of ${typeVN}`
+        : typeVN;
+      let vn = `${op} to ${typeVN} affects an exclusive constraint on ${subjectVN}`;
+      if (constr.exprText !== undefined && constr.exprText !== "") {
+        vn += ` with expression '${constr.exprText}'`;
+      }
+      if (originName !== typeName) {
+        dangers.push(`${vn} that is defined in ancestor object type '${originName}'`);
+      } else {
+        const descendants = allConcrete
+          .filter((name) => name !== typeName)
+          .sort()
+          .map((name) => `'${name}'`);
+        dangers.push(`${vn} that is shared with descendant types: ${descendants.join(", ")}`);
+      }
+    }
+  }
+
+  if (dangers.length === 0) return;
+  const body = dangers.map((d) => " - " + d).join("\n");
+  throw new AppError(
+    "E_UNSUPPORTED",
+    `Can not execute query with transaction isolation level RepeatableRead because: \n${body}`,
+    ast.pos.line,
+    ast.pos.column,
+  );
+};
+
 // Given an exclusive check and the resolved storage-column values the INSERT is
 // about to write, find an existing row that already holds those values. Returns
 // its id, or undefined when there is no clash. Multi-property checks scan the
@@ -9213,6 +9354,7 @@ const normalizeSecurityContext = (context: SecurityContext): SecurityContext => 
     params: context.params ? { ...context.params } : undefined,
     runtimeTarget: context.runtimeTarget ?? DEFAULT_SECURITY_CONTEXT.runtimeTarget,
     strictUserDDL: context.strictUserDDL ?? DEFAULT_SECURITY_CONTEXT.strictUserDDL,
+    isolation: context.isolation ?? DEFAULT_SECURITY_CONTEXT.isolation,
   };
 };
 
@@ -9311,6 +9453,9 @@ const runWriteWithAccessPolicies = (
   if (!ir) {
     throw new AppError("E_RUNTIME", "invariant: write path requires a DML IR");
   }
+  // Reject cross-table exclusive constraints under REPEATABLE READ before any
+  // write work (no-op under the default SERIALIZABLE isolation).
+  checkIsolationConflicts(schema, ast, subjectType, context);
   validateLinkAssignments(db, schema, ir, ast);
 
   if (ast.kind === "update") {
