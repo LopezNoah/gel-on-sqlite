@@ -567,7 +567,27 @@ export const compileGelIRToSQL = (
       })();
       const orderColumn = pointerIsDirect ? compileSetColumnRef(order.path) : null;
       if (orderColumn) {
-        return `${sourceAlias}.${quoteIdent(orderColumn)} ${order.direction.toUpperCase()}${sortNullsClause(order)}`;
+        // A computed shape field (`tn := .__type__.name`) over a polymorphic
+        // union is materialized only as an output alias of this outer SELECT,
+        // never as a physical column of the source subquery — so
+        // `${sourceAlias}."tn"` references a column that does not exist. Such
+        // fields are still valid as bare ORDER BY references, which SQLite
+        // resolves against the projection list. Stored pointers keep the
+        // source-qualified form to preserve the emitted SQL for direct columns.
+        const shapeField = (sourceSet?.shape ?? []).find(
+          (el) => (el.targetPtr?.shortName ?? el.name) === orderColumn,
+        );
+        const isStoredColumn = (() => {
+          if (!shapeField) return true;
+          const value = unwrapSelectExprSet(shapeField.expr).result;
+          return value.expr.kind === "pointer"
+            && !(value.expr as Pointer).ptrref.isLinkProperty
+            && columnForPointer(value.expr as Pointer) === orderColumn;
+        })();
+        const ref = isStoredColumn
+          ? `${sourceAlias}.${quoteIdent(orderColumn)}`
+          : quoteIdent(orderColumn);
+        return `${ref} ${order.direction.toUpperCase()}${sortNullsClause(order)}`;
       }
       // `SELECT Issue.owner {…} ORDER BY Issue.owner.name` — the sort path
       // extends the statement's own pointer-chain source, so its leaf column
