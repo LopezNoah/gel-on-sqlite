@@ -18,6 +18,13 @@ import type { ScalarValue } from "../types.js";
 import type { GelIRCompileOptions } from "./compiler_types.js";
 import { lowerStdlibFunctionSql } from "./stdlib_lowering.js";
 
+// Functions returning `optional T` where a SQL NULL means "no value" — at a
+// top-level scalar select that's the EMPTY SET (zero rows), not a NULL row.
+// `range_get_upper`/`range_get_lower` return {} for an unbounded bound.
+export const EMPTY_ON_NULL_FUNCTIONS = new Set<string>([
+  "range_get_upper", "range_get_lower",
+]);
+
 export const SET_CONSUMING_FUNCTIONS = new Set<string>([
   "count", "sum", "min", "max", "avg", "all", "any", "array_agg", "enumerate",
   "mean", "stddev", "stddev_pop", "var", "var_pop",

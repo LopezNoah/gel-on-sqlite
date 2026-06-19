@@ -12,6 +12,7 @@ import {
 } from "./group_lowering.js";
 import {
   compileFunctionCallSQL,
+  EMPTY_ON_NULL_FUNCTIONS,
   scalarArgTypeHint,
   setLooksLikeRange,
   SET_CONSUMING_FUNCTIONS,
@@ -4791,6 +4792,18 @@ const compileScalarSelectSQLInner = (
       // Couldn't lower the filter — fall back to the pre-existing behaviour
       // (drop it) rather than failing the whole value compile.
       params.length = preWhereCheckpoint;
+    }
+    // An optional-returning bound accessor (`range_get_upper`/`_lower`) yields
+    // the empty set, not a NULL row, when its result is absent (unbounded
+    // bound) — drop the row at runtime.
+    const emptyOnNull = (() => {
+      let cur: Set = sourceSet;
+      while (cur.expr.kind === "select_expr") cur = (cur.expr as SelectExpr).result;
+      if (cur.expr.kind !== "function_call") return false;
+      return EMPTY_ON_NULL_FUNCTIONS.has((cur.expr as FunctionCall).functionName.split("::").pop() ?? "");
+    })();
+    if (emptyOnNull) {
+      return `SELECT ${quoteIdent("value")} FROM (SELECT ${valueSql} AS ${quoteIdent("value")}) WHERE ${quoteIdent("value")} IS NOT NULL`;
     }
     return `SELECT ${valueSql} AS ${quoteIdent("value")}`;
   }
