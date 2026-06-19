@@ -13,6 +13,7 @@ import {
 import {
   compileFunctionCallSQL,
   scalarArgTypeHint,
+  setLooksLikeRange,
   SET_CONSUMING_FUNCTIONS,
   type SqlLoweringContext,
 } from "./function_lowering.js";
@@ -12342,6 +12343,16 @@ const compileOperatorValueSQL = (
     if (looksLikeArrayConcat) {
       const unions = compiled.map((piece) => `SELECT value FROM json_each(${piece})`).join(" UNION ALL ");
       return `(SELECT json_group_array(value) FROM (${unions}))`;
+    }
+    // `+`/`*`/`-` over range operands are set algebra (union / intersection /
+    // difference), not scalar arithmetic — emit the range UDFs, which return
+    // the same JSON shape `range()` produces so range equality still matches.
+    if (compiled.length === 2 && (call.operator === "+" || call.operator === "*" || call.operator === "-")
+      && args.every((arg) => setLooksLikeRange(arg.expr))) {
+      const rangeFn = call.operator === "+" ? "_gel_range_union"
+        : call.operator === "*" ? "_gel_range_intersection"
+        : "_gel_range_difference";
+      return `${rangeFn}(${compiled[0]}, ${compiled[1]})`;
     }
     return `(${compiled.join(` ${infixOperator} `)})`;
   }

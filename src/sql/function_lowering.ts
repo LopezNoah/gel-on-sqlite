@@ -163,12 +163,22 @@ export const scalarArgTypeHint = (set: Set): string | undefined => {
 // True when a set's value is a range (a `range(...)` constructor or a
 // range-typed expression) — used to pick range semantics for the overloaded
 // `contains` and friends.
-const setLooksLikeRange = (set: Set): boolean => {
+export const setLooksLikeRange = (set: Set): boolean => {
   let cur = set;
   while (cur.expr.kind === "select_expr") cur = (cur.expr as SelectExpr).result;
   if (cur.expr.kind === "function_call") {
     const fn = ((cur.expr as FunctionCall).functionName.split("::").pop()) ?? "";
     if (fn === "range" || fn === "multirange") return true;
+  }
+  // Range set algebra (`+`/`*`/`-` over range operands) again yields a range,
+  // so a chained op (`r1 - r2 - r3`) — whose left operand is itself such an
+  // operator_call — is still a range.
+  if (cur.expr.kind === "operator_call") {
+    const op = cur.expr as OperatorCall;
+    if (op.operator === "+" || op.operator === "*" || op.operator === "-") {
+      const operands = Object.values(op.args);
+      if (operands.length === 2 && operands.every((a) => setLooksLikeRange(a.expr))) return true;
+    }
   }
   const hint = cur.typeref?.nameHint ?? "";
   return hint.startsWith("range<") || hint.startsWith("std::range");
