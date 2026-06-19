@@ -444,8 +444,8 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
       return o;
     };
     db.function("_gel_range", { varargs: true }, (...a: unknown[]) => {
-      let lower = a[0] === undefined ? null : a[0] as number | null;
-      let upper = a[1] === undefined ? null : a[1] as number | null;
+      let lower = a[0] === undefined ? null : a[0] as number | string | null;
+      let upper = a[1] === undefined ? null : a[1] as number | string | null;
       // Boolean args may arrive as JSON-encoded text ('true'/'false') from
       // the value layer — coerce by content, not JS truthiness.
       const boolArg = (v: unknown, dflt: boolean): boolean =>
@@ -460,9 +460,18 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
       // (which only shifts finite bounds).
       if (lower === null) incLower = false;
       if (upper === null) incUpper = false;
+      // Step a discrete bound to its canonical neighbour: integers by one,
+      // `cal::local_date` strings ('YYYY-MM-DD') by one calendar day.
+      const stepBound = (v: number | string): number | string => {
+        if (typeof v === "number") return v + 1;
+        const [y, mo, d] = String(v).split("-").map(Number);
+        const next = new Date(Date.UTC(y, mo - 1, d + 1));
+        const pad = (n: number): string => String(n).padStart(2, "0");
+        return `${next.getUTCFullYear()}-${pad(next.getUTCMonth() + 1)}-${pad(next.getUTCDate())}`;
+      };
       if (discrete) {
-        if (lower !== null && !incLower) { lower = Number(lower) + 1; incLower = true; }
-        if (upper !== null && incUpper) { upper = Number(upper) + 1; incUpper = false; }
+        if (lower !== null && !incLower) { lower = stepBound(lower); incLower = true; }
+        if (upper !== null && incUpper) { upper = stepBound(upper); incUpper = false; }
       }
       const cmpBound = (x: unknown, y: unknown): number => {
         if (typeof x === "number" && typeof y === "number") return x < y ? -1 : x > y ? 1 : 0;
