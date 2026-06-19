@@ -574,21 +574,37 @@ export const compileFunctionCallSQL = (
     }
   }
 
-  // `range(lower, upper [, inc_lower, inc_upper])` — integer-typed bounds
-  // produce a discrete range (canonicalized to [lower, upper) like Postgres).
+  // `range(lower, upper, named only inc_lower, inc_upper)` — integer-typed
+  // bounds produce a discrete range (canonicalized to [lower, upper) like
+  // Postgres). `inc_lower`/`inc_upper` are NAMED-ONLY parameters, so map each
+  // argument to its `_gel_range` slot by its `call.args` key rather than by
+  // sorted position — otherwise `inc_upper := true` on its own lands in the
+  // `inc_lower` slot and the upper bound is wrongly read as exclusive.
   if (shortName === "range" && args.length >= 1 && args.length <= 4) {
-    const callArgList = orderedCallArgs(call.args);
-    const hints = callArgList.map((arg) => scalarArgTypeHint(arg.expr));
+    // `args` is parallel to the key-sorted `orderedCallArgs`, so recover the
+    // key→SQL mapping by zipping the same sort back together.
+    const sqlByKey: Record<string, string> = {};
+    Object.keys(call.args)
+      .sort((left, right) => left.localeCompare(right, undefined, { numeric: true }))
+      .forEach((key, i) => { sqlByKey[key] = args[i] as string; });
+    const isIntTypeHint = (hint: string): boolean =>
+      hint.endsWith("::int16") || hint.endsWith("::int32") || hint.endsWith("::int64");
     const exprIsIntLiteral = (s: Set): boolean => {
       let cur = s;
       while (cur.expr.kind === "select_expr") cur = (cur.expr as SelectExpr).result;
       return cur.expr.kind === "integer_constant";
     };
-    const discrete = callArgList.slice(0, 2).some((arg, i) =>
-      (hints[i] !== undefined && /::(int16|int32|int64)$/.test(hints[i] as string))
-      || exprIsIntLiteral(arg.expr));
-    const a = [args[0] ?? "NULL", args[1] ?? "NULL", args[2] ?? "NULL", args[3] ?? "NULL"];
-    return `_gel_range(${a[0]}, ${a[1]}, ${a[2]}, ${a[3]}, ${discrete ? 1 : 0})`;
+    const discrete = (["0", "1"] as const).some((key) => {
+      const arg = call.args[key];
+      if (!arg) return false;
+      const hint = scalarArgTypeHint(arg.expr);
+      return (hint !== undefined && isIntTypeHint(hint)) || exprIsIntLiteral(arg.expr);
+    });
+    const lower = sqlByKey["0"] ?? "NULL";
+    const upper = sqlByKey["1"] ?? "NULL";
+    const incLower = sqlByKey["inc_lower"] ?? "NULL";
+    const incUpper = sqlByKey["inc_upper"] ?? "NULL";
+    return `_gel_range(${lower}, ${upper}, ${incLower}, ${incUpper}, ${discrete ? 1 : 0})`;
   }
 
   const lowered = lowerStdlibFunctionSql(
