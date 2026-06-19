@@ -2616,16 +2616,45 @@ const areCompareCompatible = (a: string, b: string): boolean => {
     return true;
   }
   if (ca === cb && SAME_CATEGORIES.has(ca)) return true;
-  // Two arrays / two tuples: defer to a structural comparison of the inner
-  // generics so `array<int64>` vs `array<float64>` is rejected but two
-  // `array<int64>` (even when the literals were assembled differently) is
-  // accepted. The simplest form: same outer kind AND same printed name OR
-  // anytype on either side wins (we use `anytype` for empty/unknown).
+  // Two arrays / two tuples whose printed names match exactly. Element-wise
+  // compatibility for differing-but-comparable element types (`array<int64>`
+  // vs `array<decimal>`) is handled structurally over the parser's collection
+  // AST nodes in `areCompareCompatibleExpr`, not by parsing these names.
   if (ca === cb && (ca === "array" || ca === "tuple")) {
     if (a.includes("anytype") || b.includes("anytype")) return true;
     return a === b;
   }
   return false;
+};
+
+// Comparison-compatibility over the parser's AST, so collection literals are
+// compared element-by-element through their structure rather than by parsing
+// printed type names. `[1] = [<decimal>1]` recurses to `1` vs `<decimal>1`
+// (int/decimal — comparable), while `[1] = ['a']` recurses to int vs str
+// (rejected). Non-collection operands fall back to name-based compatibility.
+const areCompareCompatibleExpr = (
+  left: FreeObjectExpr,
+  right: FreeObjectExpr,
+  ctx: IRCompileContext,
+): boolean => {
+  if (left.kind === "array_literal_expr" && right.kind === "array_literal_expr") {
+    const lv = (left as { values: FreeObjectExpr[] }).values;
+    const rv = (right as { values: FreeObjectExpr[] }).values;
+    // An empty array is `array<anytype>` and compares against any array.
+    if (lv.length === 0 || rv.length === 0) return true;
+    return areCompareCompatibleExpr(lv[0], rv[0], ctx);
+  }
+  if (left.kind === "tuple" && right.kind === "tuple") {
+    const lv = (left as { values: FreeObjectExpr[] }).values;
+    const rv = (right as { values: FreeObjectExpr[] }).values;
+    if (lv.length !== rv.length) return false;
+    return lv.every((el, i) => areCompareCompatibleExpr(el, rv[i], ctx));
+  }
+  const leftType = inferAstExprTypeName(left, ctx);
+  const rightType = inferAstExprTypeName(right, ctx);
+  // Un-inferable operands must not block the comparison.
+  if (!leftType || !rightType) return true;
+  return areCompareCompatible(leftType, rightType);
 };
 
 // Arithmetic-compatible: numeric pairs per the compare rules, plus
@@ -4934,7 +4963,7 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
       // 'Z'" rather than silently returning false from SQLite.
       const leftType = inferAstExprTypeName(expr.left, ctx);
       const rightType = inferAstExprTypeName(expr.right, ctx);
-      if (leftType && rightType && !areCompareCompatible(leftType, rightType)) {
+      if (leftType && rightType && !areCompareCompatibleExpr(expr.left, expr.right, ctx)) {
         failSemantic(
           `operator '${expr.op}' cannot be applied to operands of type '${leftType}' and '${rightType}'`,
         );
