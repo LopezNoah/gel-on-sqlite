@@ -454,6 +454,12 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
       let incLower = boolArg(a[2], true);
       let incUpper = boolArg(a[3], false);
       const discrete = Boolean(a[4]);
+      // An unbounded bound (`range(<T>{})`, a missing lower/upper) has no
+      // endpoint to include, so it is never inclusive — Postgres treats
+      // infinities as exclusive. Normalize before discrete canonicalization
+      // (which only shifts finite bounds).
+      if (lower === null) incLower = false;
+      if (upper === null) incUpper = false;
       if (discrete) {
         if (lower !== null && !incLower) { lower = Number(lower) + 1; incLower = true; }
         if (upper !== null && incUpper) { upper = Number(upper) + 1; incUpper = false; }
@@ -599,25 +605,30 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
       const rs = asRangeList(raw);
       return rs ? JSON.stringify(rs) : null;
     });
+    // These bound queries work on multiranges too: `asRangeList` normalizes a
+    // single range or a `{ranges: […]}` multirange into a sorted, merged,
+    // non-empty list, so the overall lower bound is the first range's and the
+    // overall upper bound is the last range's. An empty list means an empty
+    // range/multirange (no bound to report, never inclusive).
     db.function("_gel_range_is_empty", (raw: string | null) => {
-      const r = parseRange(raw);
-      return r ? (rangeIsEmpty(r) ? 1 : 0) : null;
+      const rs = asRangeList(raw);
+      return rs ? (rs.length === 0 ? 1 : 0) : null;
     });
     db.function("_gel_range_is_inclusive_lower", (raw: string | null) => {
-      const r = parseRange(raw);
-      return r ? (rangeIsEmpty(r) ? 0 : (r.inc_lower ? 1 : 0)) : null;
+      const rs = asRangeList(raw);
+      return rs ? (rs.length === 0 ? 0 : (rs[0].inc_lower ? 1 : 0)) : null;
     });
     db.function("_gel_range_is_inclusive_upper", (raw: string | null) => {
-      const r = parseRange(raw);
-      return r ? (rangeIsEmpty(r) ? 0 : (r.inc_upper ? 1 : 0)) : null;
+      const rs = asRangeList(raw);
+      return rs ? (rs.length === 0 ? 0 : (rs[rs.length - 1].inc_upper ? 1 : 0)) : null;
     });
     db.function("_gel_range_get_lower", (raw: string | null) => {
-      const r = parseRange(raw);
-      return r && !rangeIsEmpty(r) ? r.lower : null;
+      const rs = asRangeList(raw);
+      return rs && rs.length > 0 ? rs[0].lower : null;
     });
     db.function("_gel_range_get_upper", (raw: string | null) => {
-      const r = parseRange(raw);
-      return r && !rangeIsEmpty(r) ? r.upper : null;
+      const rs = asRangeList(raw);
+      return rs && rs.length > 0 ? rs[rs.length - 1].upper : null;
     });
     // `range_unpack(range [, step])` — explode into a JSON array of values
     // (the SQL layer json_each's the result into rows).
