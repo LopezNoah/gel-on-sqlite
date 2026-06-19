@@ -9816,6 +9816,13 @@ const compileWhereClause = (
   target: RuntimeTarget,
   options: GelIRCompileOptions,
 ): string | null => {
+  // `FILTER {}` (or `FILTER <T>{}`) is an empty set: EdgeQL keeps a row only
+  // when the filter yields `true`, so an empty filter retains nothing. Compile
+  // it to a never-true predicate rather than letting the empty expression drop
+  // the clause (which would wrongly return every row).
+  if (isEmptySetBranch(set)) {
+    return "0";
+  }
   const checkpoint = params.length;
   const compiled = compilePredicateSetSQL(set, sourceAlias, params, target, options);
   if (!compiled) {
