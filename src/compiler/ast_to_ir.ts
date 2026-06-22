@@ -1267,6 +1267,55 @@ const tryLowerComputedPropertyOnTypePath = (
   return undefined;
 };
 
+// `T.<computed-link>` where the link is a filtered alias (`good_awards :=
+// SELECT .awards FILTER .name != '3rd'`, stored as a structured `link_ref`).
+// Synthesize the equivalent SELECT and lower it through the normal pipeline,
+// binding the current row as the subject — same approach as the computed
+// property/aggregate paths. Returns undefined for non-link / non-link_ref
+// computeds (backlink aliases resolve as real pointers via resolvePointerRef).
+const tryLowerComputedLinkRefOnTypePath = (
+  ctx: IRCompileContext,
+  source: Set,
+  fieldName: string,
+): Set | undefined => {
+  if (!ctx.schema) return undefined;
+  const typeDef = ctx.schema.getType(source.typeref.id);
+  if (!typeDef) return undefined;
+  const computed = typeDef.computeds?.find(
+    (candidate) => candidate.kind === "link" && candidate.name === fieldName,
+  );
+  if (!computed || computed.kind !== "link" || computed.expr.kind !== "link_ref") {
+    return undefined;
+  }
+  const linkRef = computed.expr;
+  const renderLiteral = (value: ScalarValue): string => {
+    if (typeof value === "string") return `'${value.split("'").join("''")}'`;
+    if (typeof value === "boolean") return value ? "true" : "false";
+    return String(value);
+  };
+  const opSql: Record<string, string> = { "=": "=", "!=": "!=", like: "LIKE", ilike: "ILIKE" };
+  const filterClause = linkRef.filter
+    ? ` FILTER .${linkRef.filter.field} ${opSql[linkRef.filter.op] ?? linkRef.filter.op} ${renderLiteral(linkRef.filter.value)}`
+    : "";
+  const text = `SELECT .${linkRef.link}${filterClause}`;
+  const key = `${typeDef.module}::${typeDef.name}.${fieldName}`;
+  if (ctx.computedExprResolutionStack?.has(key)) return undefined;
+  const parseAttempt = tryResult(() => parseEdgeQL(text));
+  if (!parseAttempt.ok || parseAttempt.value.kind !== "select_expr") return undefined;
+  if (!ctx.computedExprResolutionStack) {
+    ctx.computedExprResolutionStack = new globalThis.Set<string>();
+  }
+  ctx.computedExprResolutionStack.add(key);
+  try {
+    const innerCtx = childScope(ctx);
+    bindValue(innerCtx, "__current__", source);
+    bindValue(innerCtx, "__subject__", source);
+    return compileFreeObjectExpr(parseAttempt.value.expr, innerCtx);
+  } finally {
+    ctx.computedExprResolutionStack.delete(key);
+  }
+};
+
 // Field names a FOR body reads off the group's elements — `g.elements.name`
 // (path or field_access form), fields read through a WITH alias bound to
 // `g.elements` (`WITH U := g.elements SELECT U {name, x := .cost}`), and
@@ -4019,7 +4068,8 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
       // substitution before the unknown-type fallback. Lets `Type.computedP`
       // lower as the computed body's expression rather than a phantom
       // `std::anytype` pointer reference.
-      const computedSet = tryLowerComputedPropertyOnTypePath(ctx, source, expr.field);
+      const computedSet = tryLowerComputedPropertyOnTypePath(ctx, source, expr.field)
+        ?? tryLowerComputedLinkRefOnTypePath(ctx, source, expr.field);
       if (computedSet) {
         // `(SELECT T FILTER …).computedP` — the substituted body alone
         // loses the source's filtered iteration; wrap in a FOR over the
