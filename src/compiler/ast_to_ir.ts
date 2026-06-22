@@ -4964,9 +4964,20 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
       const leftType = inferAstExprTypeName(expr.left, ctx);
       const rightType = inferAstExprTypeName(expr.right, ctx);
       if (leftType && rightType && !areCompareCompatibleExpr(expr.left, expr.right, ctx)) {
-        failSemantic(
-          `operator '${expr.op}' cannot be applied to operands of type '${leftType}' and '${rightType}'`,
-        );
+        // Object-identity equality (`=`/`!=`/`?=`/`?!=`) is valid for any two
+        // object types — they compare by id. The name-based compatibility check
+        // can't see module qualification or inheritance, so it wrongly rejects
+        // `Issue ?= default::Issue` (same type) and `Text != Issue` (related).
+        // Allow these explicitly via the schema; ordering ops stay rejected.
+        const isEqualityOp = expr.op === "=" || expr.op === "!=" || expr.op === "?=" || expr.op === "?!=";
+        const bothObjects = ctx.schema !== undefined
+          && ctx.schema.getType(qualifyTypeName(leftType, ctx.module)) !== undefined
+          && ctx.schema.getType(qualifyTypeName(rightType, ctx.module)) !== undefined;
+        if (!(isEqualityOp && bothObjects)) {
+          failSemantic(
+            `operator '${expr.op}' cannot be applied to operands of type '${leftType}' and '${rightType}'`,
+          );
+        }
       }
       const left = compileFreeObjectExpr(expr.left, ctx);
       const right = compileFreeObjectExpr(expr.right, ctx);
