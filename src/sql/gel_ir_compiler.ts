@@ -5984,6 +5984,35 @@ const tryCompileLinkPropertyPathSelectSQL = (
   return `SELECT ${valueSql} AS ${quoteIdent("value")} FROM ${fromSql} WHERE ${leafSql} IS NOT NULL`;
 };
 
+// Correlated form of a single-link link-property path (`X.<deck[IS User]@count`,
+// `X.deck@count`): the link property is multi-cardinality per the subject row,
+// so emit a row set `SELECT <prop> AS value FROM <link table> WHERE <target|
+// source> = sourceAlias.id`. Unlike the standalone select above it does not
+// re-scan the root type — it correlates to the enclosing subject (`g0`). Used in
+// predicate (`@count = 1`) and shape-projection contexts where the value path
+// would otherwise collapse `@count` onto a nonexistent `sourceAlias.@count`.
+const tryCompileCorrelatedLinkPropertyPathSQL = (
+  set: Set,
+  sourceAlias: string,
+  options: GelIRCompileOptions,
+): string | null => {
+  const path = extractLinkPropertyPath(set);
+  if (!path || path.links.length !== 1) return null;
+  const link = path.links[0];
+  if (!shouldUseLinkTable(link)) return null;
+  const linkTable = linkTableNameForPointer(link, options);
+  const lj = "lpj0";
+  // For an inbound backlink the subject is the link's TARGET; for an outbound
+  // link it is the SOURCE.
+  const correlationColumn = link.direction === "inbound" ? "target" : "source";
+  const leafShortName = path.leafProperty.ptrref.shortName;
+  const propertyColumn = leafShortName.startsWith("@") ? leafShortName.slice(1) : leafShortName;
+  const leafSql = `${lj}.${quoteIdent(propertyColumn)}`;
+  const valueSql = scalarResultValueSQL(leafSql, path.leafProperty.ptrref.outTarget);
+  return `SELECT ${valueSql} AS ${quoteIdent("value")} FROM ${quoteIdent(linkTable)} ${lj}`
+    + ` WHERE ${lj}.${quoteIdent(correlationColumn)} = ${sourceAlias}.${quoteIdent("id")} AND ${leafSql} IS NOT NULL`;
+};
+
 // Collect every Pointer node in a Set tree, oldest-first. Used to find shared
 // chain prefixes when an outer expression (`a@p + a.x`) needs the same link
 // iteration for both operands.
@@ -9266,6 +9295,26 @@ const compileShapeProjection = (
     const alias = shapeAliasForElement(shape, shape.expr, depth);
     return `${compileEmbeddedGroupSQL(shapeExpr.result.expr, sourceAlias, params, options, target, depth)} AS ${quoteIdent(alias)}`;
   }
+  // Computed link-property projection (`count := X.<deck[IS User]@count`): the
+  // value path would collapse `@count` onto a nonexistent `sourceAlias.@count`.
+  // Lower it as a correlated link-table scan and aggregate the per-link values.
+  {
+    const corrLinkProp = tryCompileCorrelatedLinkPropertyPathSQL(shapeExpr.result, sourceAlias, options);
+    if (corrLinkProp) {
+      const alias = shapeAliasForElement(shape, shapeExpr.result, depth);
+      // `SELECT _ := … @count ORDER BY _` self-orders by the property value.
+      const selfOrder = shapeExpr.selectExpr?.orderBy?.[0];
+      const orderClause = selfOrder ? ` ORDER BY ${quoteIdent("value")} ${selfOrder.direction.toUpperCase()}` : "";
+      const isMany = shape.cardinality === "many" || shape.cardinality === "at_least_one";
+      if (isMany) {
+        // ORDER BY lives INSIDE the row subquery so json_group_array aggregates
+        // the values in order (an outer ORDER BY on the single aggregate row is
+        // a no-op).
+        return `COALESCE((SELECT json_group_array(${quoteIdent("value")}) FROM (${corrLinkProp}${orderClause})), '[]') AS ${quoteIdent(alias)}`;
+      }
+      return `(SELECT ${quoteIdent("value")} FROM (${corrLinkProp}${orderClause}) LIMIT 1) AS ${quoteIdent(alias)}`;
+    }
+  }
   if (shapeExpr.result.expr.kind === "pointer" && !shapeExpr.result.typeref.isScalar) {
     return compileShapeLinkArray(shape, shapeExpr, sourceAlias, params, options, target, depth);
   }
@@ -11150,7 +11199,8 @@ const compilePredicateSetSQL = (
   for (const swap of [false, true] as const) {
     const multiArgIdx = swap ? 1 : 0;
     const otherIdx = swap ? 0 : 1;
-    const multiCorrelated = tryCompileCorrelatedMultiScalarRHS(args[multiArgIdx].expr, sourceAlias, options);
+    const multiCorrelated = tryCompileCorrelatedMultiScalarRHS(args[multiArgIdx].expr, sourceAlias, options)
+      ?? tryCompileCorrelatedLinkPropertyPathSQL(args[multiArgIdx].expr, sourceAlias, options);
     if (!multiCorrelated) continue;
     // Only emit the EXISTS lowering for equality / inequality / ordering
     // operators where set semantics is well-defined. AND/OR/IN have their
