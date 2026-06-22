@@ -1204,7 +1204,12 @@ const splitComputedConcatParts = (text: string): string[] => {
   return parts;
 };
 
-const parseComputedValuePart = (text: string): ComputedValuePart => {
+// Parse one `++`-separated part of a computed property body to the structured
+// `ComputedValuePart` shape, or `undefined` when it cannot be represented
+// faithfully (e.g. `<str>.cost`, whose cast the structured form would silently
+// drop). The caller redirects an unrepresentable concat to the raw-text
+// `edgeql_expr` fallback so the full EdgeQL pipeline lowers it correctly.
+const parseComputedValuePart = (text: string): ComputedValuePart | undefined => {
   const trimmed = stripOuterParens(text);
   const scalar = parseScalarLiteral(trimmed) ?? parseCastScalarLiteral(trimmed);
   if (scalar !== undefined) {
@@ -1214,11 +1219,9 @@ const parseComputedValuePart = (text: string): ComputedValuePart => {
   if (fieldMatch && trimmed.startsWith(".")) {
     return { kind: "field_ref", field: fieldMatch[1] };
   }
-  const castFieldMatch = /^<[A-Za-z_][A-Za-z0-9_:]*>\.([A-Za-z_][A-Za-z0-9_]*)$/.exec(trimmed);
-  if (castFieldMatch) {
-    return { kind: "field_ref", field: castFieldMatch[1] };
-  }
-  return unsupported(`Unsupported computed declaration expression part '${text}'`);
+  // A cast on the field (`<str>.cost`) cannot be carried by `field_ref`; signal
+  // the caller to fall back to the full parser rather than dropping the cast.
+  return undefined;
 };
 
 // Token-driven detection of the `count(.<linkname>)` shape used as a
@@ -1272,10 +1275,13 @@ const parseComputedPropertyExpr = (text: string): Extract<ComputedDef, { kind: "
 
   const concatParts = splitComputedConcatParts(trimmed);
   if (concatParts.length > 1) {
-    return {
-      kind: "concat",
-      parts: concatParts.map(parseComputedValuePart),
-    };
+    const parts = concatParts.map(parseComputedValuePart);
+    // Only keep the structured `concat` form when every part is faithfully
+    // representable. If any part needs the full parser (a cast, a function
+    // call, …), fall through to the raw-text `edgeql_expr` fallback below.
+    if (parts.every((part): part is ComputedValuePart => part !== undefined)) {
+      return { kind: "concat", parts };
+    }
   }
 
   const scalar = parseScalarLiteral(trimmed) ?? parseCastScalarLiteral(trimmed);
