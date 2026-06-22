@@ -434,13 +434,20 @@ function checkFunctionCallSignatures(ctx: AstPreValidationCtx, call: FunctionCal
   const fnDef = ctx.schema.findFunction(moduleName, leaf, call.args.length)
     ?? (moduleName === "default" ? undefined : ctx.schema.findFunction("default", leaf, call.args.length));
   if (!fnDef) return;
+  // Positional args map only to POSITIONAL parameters, in order; NAMED ONLY
+  // params are never matched positionally (`call1('-', 1, 2, suffix := 's')`
+  // must not bind `2` to `suffix`). Args beyond the declared positional params
+  // bind to a trailing VARIADIC param (its declared type is the element type).
+  const positionalParams = fnDef.params.filter((p) => !p.namedOnly);
+  const lastPositional = positionalParams[positionalParams.length - 1];
+  const variadicTail = lastPositional?.variadic ? lastPositional : undefined;
+  let positionalIdx = 0;
   for (let i = 0; i < call.args.length; i += 1) {
     const arg = call.args[i];
     if (arg.kind === "named_arg") continue;
-    const param = fnDef.params[Math.min(i, fnDef.params.length - 1)];
+    const param = positionalParams[positionalIdx] ?? variadicTail;
+    positionalIdx += 1;
     if (!param) continue;
-    const paramIsVariadicTail = param.variadic && i >= fnDef.params.length - 1;
-    if (i >= fnDef.params.length && !paramIsVariadicTail) continue;
     const paramType = param.type.replace(/^std::/, "");
     const literal = functionCallArgLiteral(ctx, arg);
     if (!literal) continue;
