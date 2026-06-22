@@ -5692,6 +5692,17 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
     }
 
     case "introspect_typeof": {
+      // Plain `INTROSPECT <name>` introspects a named TYPE. When the operand is
+      // a WITH binding (an expression alias) rather than a type — e.g.
+      // `WITH A := (SELECT schema::Type {…}) … INTROSPECT A` — EdgeQL errors
+      // with "type 'A' does not exist". (The `TYPEOF` form introspects the type
+      // of an expression and is fine over a binding.)
+      if ((expr as { typeofForm?: boolean }).typeofForm === false
+          && expr.expr.kind === "binding_ref"
+          && resolveBinding(ctx, (expr.expr as { name: string }).name)) {
+        const name = (expr.expr as { name: string }).name;
+        throw new AppError("E_SEMANTIC", `type '${name}' does not exist`, 1, 1);
+      }
       // `INTROSPECT TYPEOF expr` resolves to the schema type of `expr`. We
       // don't model schema::Type fully, but the only test patterns we see
       // ultimately read `.name` off the result. Build a synthetic set whose

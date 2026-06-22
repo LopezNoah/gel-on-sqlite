@@ -4062,17 +4062,22 @@ class Parser {
     // suffix / shape continues to use the postfix chain.
     if (this.peek().kind === "kw_introspect") {
       this.consume();
+      // `INTROSPECT TYPEOF expr` introspects the type OF an expression; plain
+      // `INTROSPECT <type>` introspects a named type directly (and errs if the
+      // operand isn't a type). Track which form so the compiler can enforce it.
+      let typeofForm = false;
       if (this.peek().kind === "kw_typeof") {
         this.consume();
+        typeofForm = true;
       }
       const inner = this.parseFreeObjectPostfixExpr();
-      return { kind: "introspect_typeof", expr: inner };
+      return { kind: "introspect_typeof", expr: inner, typeofForm };
     }
 
     if (this.peek().kind === "kw_typeof") {
       this.consume();
       const inner = this.parseFreeObjectPostfixExpr();
-      return { kind: "introspect_typeof", expr: inner };
+      return { kind: "introspect_typeof", expr: inner, typeofForm: true };
     }
 
     if (this.peek().kind === "str_interp_start") {

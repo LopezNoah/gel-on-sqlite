@@ -494,6 +494,9 @@ export type FreeObjectExpr =
   | {
       kind: "introspect_typeof";
       expr: FreeObjectExpr;
+      // True for the `INTROSPECT TYPEOF expr` / `TYPEOF expr` forms; false for
+      // a plain `INTROSPECT <type>` (which requires a type operand).
+      typeofForm?: boolean;
     }
   | {
       kind: "enum_path";
