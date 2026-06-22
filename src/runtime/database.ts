@@ -393,9 +393,14 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
       s === null ? null : [...String(s)].reverse().join(""));
     db.function("_gel_str_split", (s: string | null, delim: string | null) => {
       if (s === null || delim === null) return null;
-      // Empty delimiter splits into individual characters (Postgres
-      // string_to_array splits to chars on '').
-      const parts = delim === "" ? [...String(s)] : String(s).split(String(delim));
+      const str = String(s);
+      // An empty delimiter splits into individual characters (Gel lowers this
+      // to `regexp_split_to_array(s, '')`). A non-empty delimiter uses
+      // `string_to_array`, which yields the empty array for empty input —
+      // not a single empty-string element the way JS `''.split(d)` would.
+      const parts = delim === ""
+        ? [...str]
+        : str === "" ? [] : str.split(String(delim));
       return JSON.stringify(parts);
     });
     // `std::array_replace(arr, old, new)` — replace every occurrence.
