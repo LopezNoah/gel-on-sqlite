@@ -4717,12 +4717,17 @@ class Parser {
 
     while (true) {
       if (this.peek().kind === "coalesce") {
-        const precedence = 5;
+        // EdgeQL `??` binds TIGHTER than `+`/`*` (and is right-associative):
+        // `a + b ?? c` is `a + (b ?? c)`, `a ?? b ?? c` is `a ?? (b ?? c)`.
+        // See edb/edgeql/parser/grammar/precedence.py (P_DOUBLEQMARK_OP sits
+        // between P_MUL_OP and P_POW_OP). Right operand parses at the same
+        // precedence (not +1) for right-associativity.
+        const precedence = 45;
         if (precedence < minPrecedence) {
           break;
         }
         this.consume();
-        const right = this.parseFreeObjectExprWithPrecedence(precedence + 1);
+        const right = this.parseFreeObjectExprWithPrecedence(precedence);
         left = { kind: "coalesce", left, right };
         continue;
       }
