@@ -5904,6 +5904,14 @@ const compileFilterTarget = (target: FilterTarget, subject: Set, ctx: IRCompileC
       const segment = segments[i];
       const ptrref = resolvePointerRef(ctx, result.typeref, segment);
       if (!ptrref) {
+        // A schema-declared computed property (`FILTER .elemental_cost = …`)
+        // isn't a pointer; substitute its lowered body before surfacing the
+        // "no link or property" error, mirroring the field-access path.
+        const computedSet = tryLowerComputedPropertyOnTypePath(ctx, result, segment);
+        if (computedSet) {
+          result = computedSet;
+          continue;
+        }
         // `.field` against a known schema type — surface the "no link or
         // property" error so typos in FILTER don't silently match nothing.
         // Skip when this is the leading segment and the name happens to

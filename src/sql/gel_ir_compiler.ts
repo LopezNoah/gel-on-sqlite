@@ -12653,7 +12653,7 @@ const compilePointerArrayExpr = (
   // ORDER BY) so they reach the inner FROM. Without this, e.g. an
   // `ORDER BY .cost DESC LIMIT 1` on a `deck: { id }` shape sorts by NULL.
   const projectedCols = collectProjectedColumns(targetShape, modifiers?.where, modifiers?.orderBy);
-  const rowExpr = compileShapeObjectExpr(targetAlias, targetShape, params, options, target, depth, joinAlias);
+  const rowExpr = compileShapeObjectExpr(targetAlias, targetShape, params, options, target, depth, joinAlias, pointer);
 
   if (pointer.direction === "inbound") {
     return compileBacklinkArrayExpr(pointer, sourceAlias, targetAlias, joinAlias, projectedCols, rowExpr, options, modifiers, params, target, narrowedTarget);
@@ -13277,6 +13277,13 @@ const compileShapeObjectExpr = (
   target: RuntimeTarget,
   depth: number,
   linkPropertyAlias?: string,
+  // The link pointer whose target rows this shape iterates (`User.deck` for a
+  // `deck: {…}` shape). A computed element body resolves its own fields as the
+  // full outer chain (`User.deck.cost`); rewriting that chain prefix to the
+  // iterated link lets the leaf collapse to `sourceAlias.col` (the element's
+  // own column) instead of re-walking the link as a correlated subquery. Mirrors
+  // the rewrite already applied to the link's FILTER / ORDER BY clauses.
+  iteratedPointer?: Pointer,
 ): string => {
   const pairs = [
     `${quoteLiteral("id")}, ${sourceAlias}.${quoteIdent("id")}`,
@@ -13343,7 +13350,14 @@ const compileShapeObjectExpr = (
       continue;
     }
 
-    const computed = compileValueSetSQL(element.expr, sourceAlias, params, target, options);
+    // A computed element body (`c2 := .cost + 1`) holds the leaf as the full
+    // outer chain (`User.deck.cost`). When this shape iterates a link, collapse
+    // that chain prefix so the leaf reads the element's own column
+    // (`sourceAlias.cost`) rather than re-walking the link as a subquery.
+    const computedExpr = iteratedPointer
+      ? rewriteFilterAgainstPointerChain(element.expr, iteratedPointer)
+      : element.expr;
+    const computed = compileValueSetSQL(computedExpr, sourceAlias, params, target, options);
     if (computed) {
       pairs.push(`${quoteLiteral(shapeAliasForElement(element, element.expr, depth))}, ${computed}`);
     }
