@@ -405,33 +405,74 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
       const arr = typeof arrRaw === "string" ? parseJsonArg("std::array_replace", arrRaw) : arrRaw as unknown[];
       return JSON.stringify(arr.map((v) => (v === oldV ? newV : v)));
     });
-    // Numeric parsers (`to_int64('1,234', '9,999')` etc.). The optional
-    // format string follows Postgres to_number patterns; we support the
-    // common digit/comma/sign/FM shapes by stripping grouping characters
-    // and whitespace before parsing — invalid remainders raise the same
-    // "invalid input syntax" the server produces.
-    const toNumberImpl = (raw: unknown, fmt: unknown, typeName: string, integer: boolean): number | null => {
+    // Numeric parsers (`to_int64('1,234', '9,999')` etc.). The `fmt` argument
+    // is OPTIONAL, with three regimes mirroring the server's lib/std defs:
+    //   - absent (NULL / empty set) → a plain string→number cast, which
+    //     rejects any non-numeric (or, for integer targets, non-integer)
+    //     input with "invalid input syntax", like `str_to_int64`.
+    //   - an explicit empty string → an error, since to_number needs a
+    //     non-empty template.
+    //   - a non-empty string → a Postgres `to_number` template. The template
+    //     positions are advisory; we read the signed numeric value out of the
+    //     input, honouring the angle-bracket negative form (the `PR` pattern)
+    //     and any sign, and discarding grouping, currency, padding and
+    //     ordinal-suffix characters.
+    const toNumberImpl = (
+      raw: unknown,
+      fmt: unknown,
+      fnName: string,
+      typeName: string,
+      integer: boolean,
+    ): number | null => {
       if (raw === null || raw === undefined) return null;
-      let s = String(raw).trim();
-      if (fmt !== null && fmt !== undefined) {
-        // Grouping separators and currency/sign placeholders are cosmetic
-        // for parsing purposes — strip them from the input.
-        s = s.replace(/[,\s$]/g, "");
+      const rawStr = String(raw);
+      if (fmt === "") {
+        throw new AppError("E_VALIDATION", `${fnName}(): "fmt" argument must be a non-empty string`);
       }
-      const num = Number(s);
-      if (s === "" || !Number.isFinite(num) || (integer && !Number.isInteger(num))) {
-        if (integer && Number.isFinite(num)) return Math.trunc(num);
-        throw new AppError("E_VALIDATION", `invalid input syntax for type ${typeName}: '${String(raw)}'`);
+      if (fmt === null || fmt === undefined) {
+        const s = rawStr.trim();
+        const num = Number(s);
+        if (s === "" || !Number.isFinite(num) || (integer && !Number.isInteger(num))) {
+          throw new AppError("E_VALIDATION", `invalid input syntax for type ${typeName}: '${rawStr}'`);
+        }
+        return num;
       }
-      return num;
+      const fmtStr = String(fmt);
+      const negativeOnBrackets = fmtStr.includes("PR");
+      let negative = false;
+      let digits = "";
+      let sawDecimal = false;
+      for (const ch of rawStr) {
+        if (ch >= "0" && ch <= "9") {
+          digits += ch;
+        } else if (ch === ".") {
+          if (!sawDecimal) {
+            digits += ".";
+            sawDecimal = true;
+          }
+        } else if (ch === "-") {
+          negative = true;
+        } else if ((ch === "<" || ch === ">") && negativeOnBrackets) {
+          negative = true;
+        }
+        // '+', grouping (',' / spaces), currency ('$'), zero-padding and
+        // ordinal-suffix letters ('st'/'nd'/'rd'/'th') carry no value.
+      }
+      let num = digits === "" || digits === "." ? Number.NaN : Number(digits);
+      if (!Number.isFinite(num)) {
+        throw new AppError("E_VALIDATION", `${fnName}(): format '${fmtStr}' is invalid`);
+      }
+      if (negative) num = -num;
+      // `to_number(...)::bigint` rounds to the nearest integer.
+      return integer ? Math.round(num) : num;
     };
-    db.function("_gel_to_int16", { varargs: true }, (...a: unknown[]) => toNumberImpl(a[0], a[1], "std::int16", true));
-    db.function("_gel_to_int32", { varargs: true }, (...a: unknown[]) => toNumberImpl(a[0], a[1], "std::int32", true));
-    db.function("_gel_to_int64", { varargs: true }, (...a: unknown[]) => toNumberImpl(a[0], a[1], "std::int64", true));
-    db.function("_gel_to_float32", { varargs: true }, (...a: unknown[]) => toNumberImpl(a[0], a[1], "std::float32", false));
-    db.function("_gel_to_float64", { varargs: true }, (...a: unknown[]) => toNumberImpl(a[0], a[1], "std::float64", false));
-    db.function("_gel_to_bigint", { varargs: true }, (...a: unknown[]) => toNumberImpl(a[0], a[1], "std::bigint", true));
-    db.function("_gel_to_decimal", { varargs: true }, (...a: unknown[]) => toNumberImpl(a[0], a[1], "std::decimal", false));
+    db.function("_gel_to_int16", { varargs: true }, (...a: unknown[]) => toNumberImpl(a[0], a[1], "to_int16", "std::int16", true));
+    db.function("_gel_to_int32", { varargs: true }, (...a: unknown[]) => toNumberImpl(a[0], a[1], "to_int32", "std::int32", true));
+    db.function("_gel_to_int64", { varargs: true }, (...a: unknown[]) => toNumberImpl(a[0], a[1], "to_int64", "std::int64", true));
+    db.function("_gel_to_float32", { varargs: true }, (...a: unknown[]) => toNumberImpl(a[0], a[1], "to_float32", "std::float32", false));
+    db.function("_gel_to_float64", { varargs: true }, (...a: unknown[]) => toNumberImpl(a[0], a[1], "to_float64", "std::float64", false));
+    db.function("_gel_to_bigint", { varargs: true }, (...a: unknown[]) => toNumberImpl(a[0], a[1], "to_bigint", "std::bigint", true));
+    db.function("_gel_to_decimal", { varargs: true }, (...a: unknown[]) => toNumberImpl(a[0], a[1], "to_decimal", "std::decimal", false));
 
     // Range family. Ranges are JSON objects `{lower, upper, inc_lower,
     // inc_upper, empty}` mirroring EdgeQL's JSON encoding. Discrete (integer)
