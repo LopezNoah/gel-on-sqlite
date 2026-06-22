@@ -8783,6 +8783,13 @@ class Parser {
     if (expr.kind === "select") {
       return [{ kind: "object_ref", name: expr.typeName }];
     }
+    // A leading dot (`.deck`) roots at the current iteration subject. Mapping
+    // it to the `__current__` object_ref lets a `[is T]` postfix on a partial
+    // path (`.deck[is SpecialCard].name`) become a type-intersection step like
+    // a rooted path does, rather than falling back to a boolean `is_type`.
+    if (expr.kind === "current_item") {
+      return [{ kind: "object_ref", name: "__current__" }];
+    }
     if (expr.kind === "field_access") {
       const base = this.exprToPathSteps(expr.expr);
       if (!base) {
