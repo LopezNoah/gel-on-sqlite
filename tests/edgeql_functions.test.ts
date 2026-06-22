@@ -18528,7 +18528,8 @@ describe("TestEdgeQLFunctions", () => {
     assertQueryResult(
       h,
       `SELECT to_int64('987654321st', <str>$0);`,
-      unorderedSet([987654321])
+      unorderedSet([987654321]),
+      { variables: ["FM999999999th"] }
     );
     expect(() => {
       h.query(
@@ -18606,7 +18607,8 @@ describe("TestEdgeQLFunctions", () => {
     assertQueryResult(
       h,
       `SELECT to_int32('987654321st', <str>$0);`,
-      unorderedSet([987654321])
+      unorderedSet([987654321]),
+      { variables: ["FM999999999th"] }
     );
     expect(() => {
       h.query(
@@ -18684,7 +18686,8 @@ describe("TestEdgeQLFunctions", () => {
     assertQueryResult(
       h,
       `SELECT to_int16('4321st', <str>$0);`,
-      unorderedSet([4321])
+      unorderedSet([4321]),
+      { variables: ["FM999999999th"] }
     );
     expect(() => {
       h.query(
@@ -18717,7 +18720,8 @@ describe("TestEdgeQLFunctions", () => {
     assertQueryResult(
       h,
       `SELECT to_float64('123.456789', <str>$0);`,
-      unorderedSet([123.456789])
+      unorderedSet([123.456789]),
+      { variables: ["FM999.999999999"] }
     );
     expect(() => {
       h.query(
