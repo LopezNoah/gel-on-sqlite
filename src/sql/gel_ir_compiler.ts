@@ -4713,6 +4713,13 @@ const compileScalarSelectSQLInner = (
         && Array.from(outerWhereSources.keys()).every((id) => valueSourceIds.has(id)));
   const valueIsSetOfWrapped = outerWheres.length > 0 && valueExprWrapsPointerInSelectExpr(sourceSet);
   const appliedOuterWheres = (outerWheresMatchValueSources && !valueIsSetOfWrapped) ? outerWheres : [];
+  // Outer FILTERs that reference a FOREIGN extent (sources not a subset of the
+  // value's — `SELECT Issue.number FILTER Status.name = 'x'`) are not dropped
+  // but applied existentially: EdgeQL keeps the row when ANY element of that
+  // extent satisfies the predicate. They compile to free-root EXISTS subqueries
+  // (see tryCompileFreeRootExistsWhere) AND-ed into the WHERE. A SET OF wrapped
+  // value keeps the independent-filter semantics, so it stays excluded.
+  const freeRootOuterWheres = (!outerWheresMatchValueSources && !valueIsSetOfWrapped) ? outerWheres : [];
   const innerWheres = collectInnerWhereClauses(sourceSet);
   const preValueCheckpoint = params.length;
   // For a single-source optional compare, the iteration root is a scoped
@@ -5063,6 +5070,18 @@ const compileScalarSelectSQLInner = (
     const compiled = compileWhere(where);
     if (!compiled) return null;
     whereSqls.push(compiled);
+  }
+  // Foreign-extent FILTERs: existential EXISTS over their own roots, correlated
+  // to the value's row via `g0`. Best-effort — an uncompilable one falls back
+  // to the pre-existing drop rather than failing the whole compile.
+  for (const where of freeRootOuterWheres) {
+    const checkpoint = params.length;
+    const existsSql = tryCompileFreeRootExistsWhere(where, "g0", sourceSet, params, target, options);
+    if (existsSql) {
+      whereSqls.push(existsSql);
+    } else {
+      params.length = checkpoint;
+    }
   }
   if (whereSqls.length > 0) {
     sql += ` WHERE ${whereSqls.join(" AND ")}`;
