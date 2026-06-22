@@ -9126,7 +9126,7 @@ const compileShapeLeafThroughForeignLink = (
   // and is already joined). compileProjectedSourceColumnRef would wrongly read
   // the leaf column off the outer source (yielding `NULL AS …`), so lower it as
   // a correlated subquery over the link's target rows.
-  const leafThroughForeignLink = ((): { leaf: Pointer; linkPtr: Pointer } | null => {
+  const leafThroughForeignLink = ((): { leaf: Pointer; linkPtr: Pointer; linkSet: Set } | null => {
     if (shapeExpr.result.expr.kind !== "pointer") return null;
     const leaf = shapeExpr.result.expr as Pointer;
     if (!leaf.ptrref.outTarget.isScalar || leaf.ptrref.isLinkProperty) return null;
@@ -9139,29 +9139,32 @@ const compileShapeLeafThroughForeignLink = (
     while (src.expr.kind === "select_expr") src = (src.expr as SelectExpr).result;
     if (src.expr.kind !== "pointer") return null;
     const linkPtr = src.expr as Pointer;
-    // Must be a single forward object link rooted directly at the shape subject
-    // (`.bar.a`); deeper / inbound / multi chains keep their existing lowering
-    // so this stays a narrow, provably-correct single-row correlation.
+    // A forward object link rooted directly at the shape subject (`.bar.a`,
+    // `.deck.name`). Single links read one correlated leaf; MULTI links
+    // aggregate the per-target leaves into a JSON array (see the return below).
+    // Deeper / inbound chains keep their existing lowering.
     if (linkPtr.direction === "inbound" || linkPtr.ptrref.outTarget.isScalar) return null;
-    if (linkPtr.ptrref.outCardinality === "many" || linkPtr.ptrref.outCardinality === "at_least_one") return null;
     if (linkPtr.source.expr.kind !== "type_root") return null;
     // Shape-on-path (`Issue.owner { name }`): the link IS the shape subject and
     // already joined into `g0` — keep the direct-column read. Detect that by
     // comparing path identity with the shape source.
     if (shape.source && pathIdKey(src) === pathIdKey(shape.source)) return null;
-    return { leaf, linkPtr };
+    return { leaf, linkPtr, linkSet: src };
   })();
   if (leafThroughForeignLink) {
-    const { leaf, linkPtr } = leafThroughForeignLink;
+    const { leaf, linkPtr, linkSet } = leafThroughForeignLink;
     const alias = shapeAliasForElement(shape, shapeExpr.result, depth);
     const leafCol = columnForPointer(leaf);
+    // `.deck[IS SpecialCard].name` narrows the link's TARGET — scan only the
+    // narrowed concrete type(s), not the link's declared target.
+    const scanTarget = narrowedLinkTarget(linkSet) ?? linkPtr.ptrref.outTarget;
     // The link is single, so the leaf scalar is at_most_one — pick one row.
     // Project the link's target rows correlated to the outer subject row, then
     // read the scalar leaf column off them. For an inline single link the FK
     // lives on the subject (`<subject>.bar_id = <Bar>.id`); a single link that
     // carries link properties routes through its link table.
     const targetAlias = `sfl${depth}`;
-    const targetSql = compilePolymorphicSource(linkPtr.ptrref.outTarget, false, targetAlias, ["id", leafCol], options);
+    const targetSql = compilePolymorphicSource(scanTarget, false, targetAlias, ["id", leafCol], options);
     // `[is BaseOriginB].dest.name` — the link's source was intersection-narrowed
     // to a SIBLING type reachable only through a common subtype (`narrowed` !=
     // the underlying type_root). A subject row contributes only when its
@@ -9193,6 +9196,14 @@ const compileShapeLeafThroughForeignLink = (
         + (narrowGuard ? ` AND ${narrowGuard}` : "");
     }
     const value = shapeScalarColumnValue(`${targetAlias}.${quoteIdent(leafCol)}`, leaf.ptrref.outTarget);
+    // A multi link yields one leaf per linked object — aggregate them into a
+    // JSON array (correlated to the subject via the FROM above); a single link
+    // reads the one correlated value.
+    const linkIsMany = linkPtr.ptrref.outCardinality === "many"
+      || linkPtr.ptrref.outCardinality === "at_least_one";
+    if (linkIsMany) {
+      return `COALESCE((SELECT json_group_array(${value}) FROM ${fromSql}), '[]') AS ${quoteIdent(alias)}`;
+    }
     return `(SELECT ${value} FROM ${fromSql} LIMIT 1) AS ${quoteIdent(alias)}`;
   }
   return null;
