@@ -9295,6 +9295,65 @@ const compileShapeProjection = (
     const alias = shapeAliasForElement(shape, shape.expr, depth);
     return `${compileEmbeddedGroupSQL(shapeExpr.result.expr, sourceAlias, params, options, target, depth)} AS ${quoteIdent(alias)}`;
   }
+  // Computed FOR over a link correlated to the subject
+  // (`cards := (FOR d IN .deck SELECT (d.name, d@count))`): iterate the link
+  // table correlated to the subject row, binding the FOR variable to the
+  // target rows (and its link-property alias to the link row), then aggregate
+  // the body into a JSON array. Reuses the link-array iteration FROM so the
+  // link's `@count` reads off the link row rather than collapsing to
+  // `sourceAlias.@count`.
+  if (shapeExpr.result.expr.kind === "for_expr") {
+    const forExpr = shapeExpr.result.expr as ForExpr;
+    const iterPtr = forExpr.iterator.expr.kind === "pointer" ? forExpr.iterator.expr as Pointer : undefined;
+    let iterRoot: Set | undefined = iterPtr?.source;
+    while (iterRoot && iterRoot.expr.kind === "select_expr") iterRoot = (iterRoot.expr as SelectExpr).result;
+    if (iterPtr && iterRoot?.expr.kind === "type_root"
+        && !iterPtr.ptrref.isLinkProperty && !iterPtr.ptrref.outTarget.isScalar) {
+      const depthN = depth + 1;
+      const targetAlias = `p${depthN}`;
+      const joinAlias = `j${depthN}`;
+      const iterKey = pathIdKey(forExpr.iterator);
+      const bindingAliases = new Map<string, string>([[iterKey, targetAlias]]);
+      const linkPropertyAliases = new Map<string, string>([[iterKey, joinAlias]]);
+      const cp = params.length;
+      const rowExpr = compileValueSetSQLWithAliases(
+        forExpr.body, bindingAliases, targetAlias, params, target, options, linkPropertyAliases,
+      );
+      if (rowExpr) {
+        const projectedCols = [...new globalThis.Set<string>(["id", ...collectReferencedColumns(forExpr.body)])];
+        const narrowed = narrowedLinkTarget(forExpr.iterator);
+        const resetPtr = resetPointerSourceToRoot(iterPtr);
+        // `(FOR … SELECT tuple) ORDER BY .0` sorts the result by a tuple slot;
+        // map each `.N` order key to the body tuple's Nth element so it sorts
+        // by a real target column / link property, then pass it as a link
+        // modifier (compileLinkedInnerSelect rewrites the chain to the target).
+        let modifiers: SelectExpr | undefined;
+        const orderByList = shapeExpr.selectExpr?.orderBy;
+        if (orderByList && orderByList.length > 0) {
+          let bodyResult: Set = forExpr.body;
+          while (bodyResult.expr.kind === "select_expr") bodyResult = (bodyResult.expr as SelectExpr).result;
+          const bodyTuple = bodyResult.expr.kind === "tuple" ? bodyResult.expr as Tuple : undefined;
+          const mapped = orderByList.map((entry) => {
+            let p: Set = entry.path;
+            while (p.expr.kind === "select_expr") p = (p.expr as SelectExpr).result;
+            if (p.expr.kind === "index_expr" && bodyTuple) {
+              const idx = extractNumericLiteral((p.expr as IndexExpr).index);
+              if (idx !== undefined && bodyTuple.elements[idx]) {
+                return { ...entry, path: bodyTuple.elements[idx].val };
+              }
+            }
+            return entry;
+          });
+          modifiers = { ...shapeExpr.selectExpr, orderBy: mapped } as SelectExpr;
+        }
+        const arr = iterPtr.direction === "inbound"
+          ? compileBacklinkArrayExpr(resetPtr, sourceAlias, targetAlias, joinAlias, projectedCols, rowExpr, options, modifiers, params, target, narrowed)
+          : compileOutboundLinkArrayExpr(resetPtr, sourceAlias, targetAlias, joinAlias, projectedCols, rowExpr, options, modifiers, params, target, narrowed);
+        return `${arr} AS ${quoteIdent(shapeAliasForElement(shape, shape.expr, depth))}`;
+      }
+      params.length = cp;
+    }
+  }
   // Computed link-property projection (`count := X.<deck[IS User]@count`): the
   // value path would collapse `@count` onto a nonexistent `sourceAlias.@count`.
   // Lower it as a correlated link-table scan and aggregate the per-link values.
