@@ -3875,6 +3875,16 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
 
       const source = compileFreeObjectExpr(expr.expr, ctx);
 
+      // `X.__type__` (e.g. inside `__type__ := (select Issue.__type__ { name })`)
+      // has no schema pointer. Synthesize the schema::ObjectType pointer — same
+      // as the path-step resolver — so a trailing `{ name }` shape attaches and
+      // the SQL layer reads the row's `__source_type`, rather than falling
+      // through to the anytype-pointer fallback that scans a nonexistent
+      // `std__anytype` table.
+      if (expr.field === "__type__") {
+        return synthesizeTypePointerSet(source);
+      }
+
       // Field access into a tuple-valued computed (`.b.d` where
       // b := { c := 3, d := … } possibly produced per-iteration by a FOR):
       // resolve to the tuple element's value Set. Without this the generic
