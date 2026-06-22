@@ -4806,6 +4806,11 @@ const compileScalarSelectSQLInner = (
     const emptyOnNull = (() => {
       let cur: Set = sourceSet;
       while (cur.expr.kind === "select_expr") cur = (cur.expr as SelectExpr).result;
+      // A slice over an empty-set operand/bound (`arr[1:<int64>{}]`) is the
+      // empty set, surfaced as a NULL value by the slice lowering — drop it so
+      // the result is zero rows, not a phantom NULL row. (An empty *array* slice
+      // yields '[]', which is non-NULL and correctly kept as one row.)
+      if (cur.expr.kind === "slice_expr") return true;
       if (cur.expr.kind !== "function_call") return false;
       return EMPTY_ON_NULL_FUNCTIONS.has((cur.expr as FunctionCall).functionName.split("::").pop() ?? "");
     })();
@@ -12170,13 +12175,28 @@ const compileValueSetSQL = (
     // property with no value), preserve NULL — EdgeQL's `<empty>[a:b]` is
     // also empty / null. Negative indices fold to len+idx to match
     // EdgeQL semantics.
-    const lenExpr = `json_array_length(${base})`;
-    const norm = (idx: string): string => `CASE WHEN ${idx} < 0 THEN ${lenExpr} + ${idx} ELSE ${idx} END`;
-    const startNorm = norm(start);
-    const sliceSql = end
-      ? `(SELECT json_group_array("value") FROM json_each(${base}) WHERE "key" >= (${startNorm}) AND "key" < (${norm(end)}))`
-      : `(SELECT json_group_array("value") FROM json_each(${base}) WHERE "key" >= (${startNorm}))`;
-    return `CASE WHEN ${base} IS NULL THEN NULL ELSE COALESCE(${sliceSql}, '[]') END`;
+    // Bind base/start/end ONCE in an inner SELECT so each (with its own `?`
+    // placeholders) is consumed exactly once — the negative-index `CASE`
+    // references the normalized bound three times, which would otherwise
+    // over-consume parameters when a bound is a non-literal value
+    // (`arr[1:<int64>{}]`). A present-but-empty bound (SQL NULL) makes the whole
+    // slice the empty set (EdgeQL strict semantics) — the surrounding scalar
+    // select drops the NULL row.
+    const lenExpr = `json_array_length(b)`;
+    const norm = (col: string): string => `CASE WHEN ${col} < 0 THEN ${lenExpr} + ${col} ELSE ${col} END`;
+    const cond = end
+      ? `"key" >= (${norm("s")}) AND "key" < (${norm("e")})`
+      : `"key" >= (${norm("s")})`;
+    const nullBound = [
+      sliceExpr.start ? "s IS NULL" : null,
+      end ? "e IS NULL" : null,
+    ].filter((c): c is string => c !== null);
+    const nullGuard = nullBound.length > 0 ? ` WHEN ${nullBound.join(" OR ")} THEN NULL` : "";
+    const bindings = [`(${base}) AS b`, `(${start}) AS s`, end ? `(${end}) AS e` : null]
+      .filter((c): c is string => c !== null).join(", ");
+    return `(SELECT CASE WHEN b IS NULL THEN NULL${nullGuard}`
+      + ` ELSE COALESCE((SELECT json_group_array("value") FROM json_each(b) WHERE ${cond}), '[]') END`
+      + ` FROM (SELECT ${bindings}))`;
   }
 
   if (expr.kind === "parameter" || expr.kind === "query_parameter" || expr.kind === "function_parameter") {
