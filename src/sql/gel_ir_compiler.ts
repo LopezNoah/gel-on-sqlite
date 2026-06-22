@@ -9237,6 +9237,20 @@ const compileShapeProjection = (
       return `${sourceAlias}.${quoteIdent("__source_type")} AS ${quoteIdent(shapeAliasForElement(shape, shapeExpr.result, depth))}`;
     }
   }
+  // `__type__ := (select X.__type__ { name, id })` — a SHAPE on the synthetic
+  // `__type__` pointer. There is no schema::ObjectType storage table; build the
+  // type object directly from the row's `__source_type` (both `name` and `id`
+  // resolve to the dynamic type label, matching the direct `__type__: {…}` and
+  // `.__type__.name` paths). Single-cardinality, so emit a bare object.
+  if (shapeExpr.result.expr.kind === "pointer"
+      && (shapeExpr.result.expr as Pointer).ptrref.shortName === "__type__") {
+    const requested = (shapeExpr.result.shape ?? [])
+      .map((el) => el.name)
+      .filter((n): n is string => n === "name" || n === "id");
+    const fields = requested.length > 0 ? requested : ["name"];
+    const pairs = fields.map((f) => `${quoteLiteral(f)}, ${sourceAlias}.${quoteIdent("__source_type")}`);
+    return `json_object(${pairs.join(", ")}) AS ${quoteIdent(shapeAliasForElement(shape, shape.expr, depth))}`;
+  }
   if (shapeExpr.result.expr.kind === "embedded_group") {
     const alias = shapeAliasForElement(shape, shape.expr, depth);
     return `${compileEmbeddedGroupSQL(shapeExpr.result.expr, sourceAlias, params, options, target, depth)} AS ${quoteIdent(alias)}`;
