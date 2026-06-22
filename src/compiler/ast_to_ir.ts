@@ -2533,9 +2533,13 @@ const inferAstExprTypeName = (expr: FreeObjectExpr, ctx: IRCompileContext): stri
       if (shortName === "len") return "std::int64";
       if (shortName === "to_str" || shortName === "str_lower" || shortName === "str_upper"
         || shortName === "str_trim" || shortName === "str_pad_start" || shortName === "str_pad_end"
-        || shortName === "str_repeat" || shortName === "str_split" || shortName === "re_replace") {
+        || shortName === "str_repeat" || shortName === "re_replace") {
         return "std::str";
       }
+      // `str_split(s, delimiter)` returns a single `array<std::str>` value.
+      // Marking it as such (like re_match) lets the result codec JSON-decode
+      // the array rather than surfacing the raw JSON text.
+      if (shortName === "str_split") return "array<std::str>";
       if (shortName === "round") return first ?? "std::float64";
       if (shortName === "ceil" || shortName === "floor") {
         // EdgeQL `math::ceil` / `math::floor` return int64 for any integer

@@ -853,9 +853,10 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
     runtime: (args) => String(extractScalar(args[0]) ?? "").toUpperCase(),
   },
   {
-    // str_split returns a set of strings — not a single value. Multiplicity
-    // inference treats it as a regular function (no SET OF params), so the
-    // result can be DUPLICATE when the operand is multi.
+    // str_split returns a single `array<std::str>` value (see the return-type
+    // inference in ast_to_ir). Multiplicity inference treats it as a regular
+    // function (no SET OF params), so the result can be DUPLICATE when the
+    // operand is multi.
     name: "std::str_split",
     meta: { minArgs: 2, maxArgs: 2 },
     sql: (argSql) => argSql[0] && argSql[1] ? `_gel_str_split(${argSql[0]}, ${argSql[1]})` : null,
