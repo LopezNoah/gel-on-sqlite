@@ -1717,27 +1717,35 @@ describe("TestEdgeQLSelectInterpreter", () => {
   });
 
   it("test_edgeql_select_interpreter_tvariant_bad_01", () => {
-    h.script(
-      "\n                SELECT User {\n                    name := 1\n                }\n            "
-    );
+    expect(() => {
+      h.script(
+        "\n                SELECT User {\n                    name := 1\n                }\n            "
+      );
+    }).toThrow(new RegExp("cannot redefine property 'name' of object type 'default::User' as scalar type 'std::int64'"));
   });
 
   it("test_edgeql_select_interpreter_tvariant_bad_02", () => {
-    h.script(
-      "\n                SELECT User {\n                    name := Issue\n                }\n            "
-    );
+    expect(() => {
+      h.script(
+        "\n                SELECT User {\n                    name := Issue\n                }\n            "
+      );
+    }).toThrow(new RegExp("cannot redefine property 'name' of object type 'default::User' as object type 'default::Issue'"));
   });
 
   it("test_edgeql_select_interpreter_tvariant_bad_03", () => {
-    h.script(
-      "\n                SELECT Issue {\n                    related_to := 1\n                }\n            "
-    );
+    expect(() => {
+      h.script(
+        "\n                SELECT Issue {\n                    related_to := 1\n                }\n            "
+      );
+    }).toThrow(new RegExp("cannot redefine link 'related_to' of object type 'default::Issue' as scalar type 'std::int64'"));
   });
 
   it("test_edgeql_select_interpreter_tvariant_bad_04", () => {
-    h.script(
-      "\n                SELECT Issue {\n                    related_to := Text\n                }\n            "
-    );
+    expect(() => {
+      h.script(
+        "\n                SELECT Issue {\n                    related_to := Text\n                }\n            "
+      );
+    }).toThrow(new RegExp("cannot redefine link 'related_to' of object type 'default::Issue' as object type 'default::Text'"));
   });
 
   it("test_edgeql_select_interpreter_tvariant_bad_05", () => {
