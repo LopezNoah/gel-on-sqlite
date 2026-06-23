@@ -857,6 +857,36 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
       return n;
     });
 
+    // `<str>` of a float64 — SQLite's `CAST(x AS TEXT)` is lossy (15 sig
+    // digits) and appends a spurious `.0` to whole numbers; it also drops the
+    // sign of -0.0. Match Postgres `float8out`: the shortest decimal that
+    // round-trips (JS `Number.toString()` is exactly that), with "Infinity"/
+    // "-Infinity"/"NaN" spellings and a sign-preserving "-0".
+    db.function("_gel_float_to_str", (v: unknown) => {
+      if (v === null || v === undefined) return null;
+      const n = typeof v === "number" ? v : Number(v);
+      if (Number.isNaN(n)) return "NaN";
+      if (n === Infinity) return "Infinity";
+      if (n === -Infinity) return "-Infinity";
+      if (Object.is(n, -0)) return "-0";
+      let s = n.toString();
+      // Postgres pads the exponent to >=2 digits with an explicit sign
+      // (`1e-07`, `1e+20`); JS emits `1e-7` / `1e+21`.
+      const eIdx = s.indexOf("e");
+      if (eIdx >= 0) {
+        const mantissa = s.slice(0, eIdx);
+        let exp = s.slice(eIdx + 1);
+        let sign = "+";
+        if (exp[0] === "+" || exp[0] === "-") {
+          sign = exp[0];
+          exp = exp.slice(1);
+        }
+        if (exp.length < 2) exp = `0${exp}`;
+        s = `${mantissa}e${sign}${exp}`;
+      }
+      return s;
+    });
+
     // `std::round` — float64 rounds half-to-even (Postgres float8), decimal
     // and bigint round half-away-from-zero (Postgres numeric). `digits` may
     // be negative (rounds left of the decimal point).
