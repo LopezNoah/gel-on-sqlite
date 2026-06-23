@@ -834,7 +834,8 @@ describe("TestExpressions", () => {
   });
 
   it("test_edgeql_expr_mod_01", () => {
-    let types = undefined;
+    // Python: `types = [v.typename for v in VALUES.values() if v.anyreal]`
+    const types = get_test_items({ anyreal: true }).map(([, desc]: any) => desc.typename);
     for (const t of (types as any)) {
       assertQueryResult(
         h,

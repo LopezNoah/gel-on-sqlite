@@ -368,6 +368,37 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
       return count;
     });
 
+    // EdgeQL `//` is FLOOR division and `%` is the FLOORED ("Python") modulo:
+    // the result follows the sign of the divisor, unlike SQLite's truncated `/`
+    // and sign-of-dividend `%`. Registered with safeIntegers so int64 operands
+    // arrive as BigInt (exact division beyond 2^53).
+    db.function("_gel_floordiv", { safeIntegers: true }, (a: unknown, b: unknown) => {
+      if (a === null || a === undefined || b === null || b === undefined) return null;
+      if (typeof a === "bigint" && typeof b === "bigint") {
+        if (b === 0n) throw new AppError("E_VALIDATION", "division by zero");
+        let q = a / b;
+        // BigInt `/` truncates toward zero; subtract one when the signs differ
+        // and the division was inexact to reach the floor.
+        if (a % b !== 0n && (a < 0n) !== (b < 0n)) q -= 1n;
+        return q;
+      }
+      const an = Number(a);
+      const bn = Number(b);
+      if (bn === 0) throw new AppError("E_VALIDATION", "division by zero");
+      return Math.floor(an / bn);
+    });
+    db.function("_gel_mod", { safeIntegers: true }, (a: unknown, b: unknown) => {
+      if (a === null || a === undefined || b === null || b === undefined) return null;
+      if (typeof a === "bigint" && typeof b === "bigint") {
+        if (b === 0n) throw new AppError("E_VALIDATION", "division by zero");
+        return ((a % b) + b) % b;
+      }
+      const an = Number(a);
+      const bn = Number(b);
+      if (bn === 0) throw new AppError("E_VALIDATION", "division by zero");
+      return an - Math.floor(an / bn) * bn;
+    });
+
     // String utilities without SQLite built-ins. Pads repeat the fill string
     // and truncate to the target length (Postgres lpad/rpad semantics);
     // lengths shorter than the input truncate the input.
