@@ -8210,6 +8210,21 @@ class Parser {
     }
 
     if (this.peek().kind === "lbracket") {
+      // Try the full expression parser first (mirrors the set-literal `{`
+      // branch above): an array whose elements are non-literal — tuples
+      // (`[(1, 2)]`), nested arrays, computed exprs — is a real array
+      // constructor the restrictive `readScalarValue` reader can't handle.
+      const exprBinding = this.attempt(() => {
+        const expr = this.parseFreeObjectExpr();
+        if (this.isWithBindingValueTerminator()) {
+          return { kind: "subquery_expr" as const, expr };
+        }
+        return undefined;
+      });
+      if (exprBinding) {
+        return exprBinding;
+      }
+
       this.consume();
       const values = this.parseDelimited("rbracket", () => this.readScalarValue(), "Expected ',' in array literal with binding");
       this.expect("rbracket", "Expected ']' after array literal with binding");
