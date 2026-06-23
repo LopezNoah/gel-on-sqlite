@@ -3651,7 +3651,7 @@ const compileScalarSelectSQLInner = (
         const infix = operatorToInfixSql(op);
         if (infix && pieces.length === 2 && infix !== "UNION" && infix !== "IS DISTINCT FROM") {
           const like = likeOperatorSql(op, pieces[0], pieces[1]);
-          lowered = like ?? `(${pieces[0]} ${infix} ${pieces[1]})`;
+          lowered = like ?? flooredArithBinarySql(op, pieces[0], pieces[1]) ?? `(${pieces[0]} ${infix} ${pieces[1]})`;
         }
       }
     }
@@ -4486,6 +4486,7 @@ const compileScalarSelectSQLInner = (
         }
         if (ok && fromSources.length > 0) {
           const valueExpr = likeOperatorSql(opCall.operator, argSqls[0], argSqls[1])
+            ?? flooredArithBinarySql(opCall.operator, argSqls[0], argSqls[1])
             ?? `(${argSqls[0]} ${op} ${argSqls[1]})`;
           return `SELECT ${valueExpr} AS ${quoteIdent("value")} FROM ${fromSources.join(", ")}`;
         }
@@ -8063,7 +8064,7 @@ const compileValueSetSQLWithAliases = (
       if (cmpOp) {
         return `(SELECT CASE WHEN l IS NULL OR r IS NULL THEN NULL WHEN l ${cmpOp} r THEN json('true') ELSE json('false') END FROM (SELECT (${left}) AS l, (${right}) AS r))`;
       }
-      return `(${left} ${op} ${right})`;
+      return flooredArithBinarySql(call.operator, left, right) ?? `(${left} ${op} ${right})`;
     }
   }
 
@@ -12556,6 +12557,10 @@ const compileOperatorValueSQL = (
         : "_gel_range_difference";
       return `${rangeFn}(${compiled[0]}, ${compiled[1]})`;
     }
+    if (compiled.length === 2) {
+      const floored = flooredArithBinarySql(call.operator, compiled[0], compiled[1]);
+      if (floored) return floored;
+    }
     return `(${compiled.join(` ${infixOperator} `)})`;
   }
 
@@ -13560,6 +13565,18 @@ const resolveShapeElementPointer = (element: ShapeElement): PointerRef | undefin
     return (element.expr.expr as Pointer).ptrref;
   }
   return undefined;
+};
+
+// EdgeQL `//` (floor division) and `%` (floored modulo) need Python/Postgres
+// semantics — the result follows the sign of the divisor — which SQLite's
+// truncated `/` and sign-of-dividend `%` do not provide. Route them through
+// the `_gel_floordiv` / `_gel_mod` runtime functions (each operand referenced
+// once, so param ordering is preserved). Returns null for every other operator
+// so callers fall back to the plain infix emit.
+const flooredArithBinarySql = (operator: string, left: string, right: string): string | null => {
+  if (operator === "//") return `_gel_floordiv(${left}, ${right})`;
+  if (operator === "%") return `_gel_mod(${left}, ${right})`;
+  return null;
 };
 
 const operatorToInfixSql = (operator: string): string | null => {

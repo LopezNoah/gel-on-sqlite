@@ -3712,14 +3712,12 @@ class Parser {
         expr: this.parseFreeObjectNotExpr(),
       };
     }
-    if (this.peek().kind === "minus") {
-      this.consume();
-      return {
-        kind: "unary",
-        op: "neg",
-        expr: this.parseFreeObjectNotExpr(),
-      };
-    }
+    // NOTE: a leading unary `-` is NOT handled here. EdgeQL binds unary minus
+    // TIGHTER than the additive/multiplicative operators (and comparisons), so
+    // `-1 + 2 * 3` is `(-1) + (2 * 3)` and `-5 % 3` is `(-5) % 3` — not
+    // `-(1 + 2 * 3)` / `-(5 % 3)`. The tight binding is provided by
+    // `parseFreeObjectUnaryAtom` (the atom level of the precedence climber);
+    // catching `minus` here would (incorrectly) wrap the whole expression.
     return this.parseFreeObjectComparisonExpr();
   }
 
@@ -4707,7 +4705,11 @@ class Parser {
   private parseFreeObjectUnaryAtom(): FreeObjectExpr {
     if (this.peek().kind === "minus") {
       this.consume();
-      return { kind: "unary", op: "neg", expr: this.parseFreeObjectUnaryAtom() };
+      // Unary minus binds tighter than `+`/`-`/`*`/`/`/`//`/`%` but LOOSER
+      // than `^` (power): `-2 ^ 2` is `-(2 ^ 2)`, not `(-2) ^ 2`. Parse the
+      // operand at the pow precedence (50) so a trailing `^` is folded into
+      // the negated operand while additive/multiplicative operators are not.
+      return { kind: "unary", op: "neg", expr: this.parseFreeObjectExprWithPrecedence(50) };
     }
     if (this.peek().kind === "plus") {
       // Unary `+` is a no-op (the value is unchanged). Consume and recurse.
