@@ -5596,6 +5596,21 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
     }
 
     case "array_literal_expr": {
+      // A heterogeneous array constructor has no common element type
+      // (`[1, '1']` — int64 vs str). Numeric scalars promote to a common
+      // numeric type, so they share the "numeric" category and mix freely;
+      // two or more DISTINCT categories among the elements whose types we can
+      // determine means there is no common array element type. Unknown /
+      // anytype elements stay permissive (no false rejection).
+      const elementCategories = new globalThis.Set(
+        expr.values
+          .map((value) => inferAstExprTypeName(value, ctx))
+          .filter((name): name is string => name !== undefined && name !== "std::anytype")
+          .map((name) => typeCategory(name)),
+      );
+      if (elementCategories.size > 1) {
+        failSemantic("could not determine array type");
+      }
       const values = expr.values.map((value) => compileFreeObjectExpr(value, ctx));
       const elementType = values[0]?.typeref ?? { id: "std::anytype", nameHint: "anytype", module: "std", isView: false, isScalar: false, isAbstract: false } as TypeRef;
       const arrayTypeRef: TypeRef = {
