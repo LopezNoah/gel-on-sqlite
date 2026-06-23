@@ -37,6 +37,12 @@ export const normalizeGelSQLValue = (value: unknown): unknown => {
 // `keepInternalId`). `scalarResultIsStr` keeps JSON-looking plain text verbatim
 // for statically-`std::str` results (only quoted JSON strings are unwrapped).
 // An all-null object row materializes to `null` (the empty object link case).
+// Sentinel marking a scalar row whose value is SQL NULL — EdgeQL has no scalar
+// `null`, so such a row represents the empty set and is dropped from the result
+// (e.g. `array_get(arr, out_of_range)` and `max(<int64>{})` yield `{}`, not
+// `{null}`). Object rows keep their existing all-null → `null` mapping.
+const DROP_SCALAR_NULL = Symbol("drop-scalar-null");
+
 export const materializeGelSQLRows = (
   rows: Record<string, unknown>[],
   options: { keepInternalId: boolean; scalarResultIsStr?: boolean },
@@ -45,6 +51,9 @@ export const materializeGelSQLRows = (
   // Scalar select: Gel SQL projects a single `value` column. Parse JSON-shaped
   // strings while preserving plain numeric strings produced by text casts.
   if (keys.length === 1 && Object.prototype.hasOwnProperty.call(row, "value")) {
+    if (row.value === null || row.value === undefined) {
+      return DROP_SCALAR_NULL;
+    }
     if (options.scalarResultIsStr && typeof row.value === "string") {
       if (row.value.startsWith("\"")) {
         try {
@@ -74,4 +83,4 @@ export const materializeGelSQLRows = (
     if (allNull) return null;
   }
   return out;
-});
+}).filter((value) => value !== DROP_SCALAR_NULL);
