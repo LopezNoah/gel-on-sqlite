@@ -2542,12 +2542,29 @@ const inferAstExprTypeName = (expr: FreeObjectExpr, ctx: IRCompileContext): stri
       if (shortName === "str_split") return "array<std::str>";
       if (shortName === "round") return first ?? "std::float64";
       if (shortName === "ceil" || shortName === "floor") {
-        // EdgeQL `math::ceil` / `math::floor` return int64 for any integer
-        // input and the matching float / decimal otherwise.
-        const integers = new Set(["std::int16", "std::int32", "std::int64", "std::bigint"]);
-        if (first && integers.has(first)) return "std::int64";
+        // EdgeQL `math::ceil` / `math::floor` return int64 for the small
+        // integer inputs, bigint for bigint, decimal for decimal, and float64
+        // for either float width (no float32 overload — it promotes to f64).
+        const smallInts = new Set(["std::int16", "std::int32", "std::int64"]);
+        if (first && smallInts.has(first)) return "std::int64";
+        if (first === "std::bigint") return "std::bigint";
         if (first === "std::decimal") return "std::decimal";
+        if (first === "std::float32" || first === "std::float64") return "std::float64";
         return first ?? "std::float64";
+      }
+      // `math::exp/ln/lg/sqrt` return decimal for decimal input, float64 for
+      // any float/integer input (the integer args implicitly cast to float64).
+      if (shortName === "exp" || shortName === "ln" || shortName === "lg"
+        || shortName === "sqrt") {
+        return first === "std::decimal" ? "std::decimal" : "std::float64";
+      }
+      // `math::pi/e` are nullary float64 constants; the trig family
+      // (sin/cos/tan/cot/asin/acos/atan/atan2) has only float64 overloads.
+      if (shortName === "pi" || shortName === "e"
+        || shortName === "sin" || shortName === "cos" || shortName === "tan"
+        || shortName === "cot" || shortName === "asin" || shortName === "acos"
+        || shortName === "atan" || shortName === "atan2") {
+        return "std::float64";
       }
       if (shortName === "abs") return first;
       // Cardinality/identity assertions pass their argument's type through
@@ -5160,8 +5177,12 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
       if (expr.op === "neg" && expr.expr.kind === "literal") {
         const value = expr.expr.value;
         if (typeof value === "number") {
-          const folded = expr.op === "neg" ? -value : value;
-          return compileFreeObjectExpr({ kind: "literal", value: folded } as typeof expr.expr, ctx);
+          const folded = -value;
+          // Carry the lexical `numericKind` so `-0.0` stays a float constant
+          // (not a demoted integer `0`) and `-0` keeps its sign — both are
+          // needed for `<str>` of a float to render "-0" rather than "0".
+          const numericKind = (expr.expr as { numericKind?: "integer" | "float" | "bigint" | "decimal" }).numericKind;
+          return compileFreeObjectExpr({ kind: "literal", value: folded, numericKind } as typeof expr.expr, ctx);
         }
       }
       // Reject unary -/+/NOT on operands whose declared type cannot accept it,

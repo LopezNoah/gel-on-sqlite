@@ -2835,6 +2835,12 @@ const compileTypeCastScalarSource = (
         : jsonCastTarget ? `CAST(${extracted} AS ${jsonCastTarget})` : extracted;
       return `SELECT CASE WHEN json_type(json(${quoteIdent("value")})) = 'null' THEN NULL ELSE ${jsonValueExpr} END AS ${quoteIdent("value")} FROM (${innerScalarSql})`;
     }
+    // `<str>` of a float source: Postgres `float8out` formatting, not the
+    // lossy `CAST(x AS TEXT)` (drops precision, appends `.0`, loses -0).
+    if (qualifyTypeName(castExpr.toType) === "std::str"
+      && isFloatTypeName(qualifyTypeName(castExpr.expr.typeref))) {
+      return `SELECT _gel_float_to_str(${quoteIdent("value")}) AS ${quoteIdent("value")} FROM (${innerScalarSql})`;
+    }
     const castTarget = sqlCastTarget(castExpr.toType);
     const valueExpr = isFloatTypeName(qualifyTypeName(castExpr.toType))
       ? `_gel_float_cast(${quoteIdent("value")})`
