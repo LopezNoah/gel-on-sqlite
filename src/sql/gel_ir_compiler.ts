@@ -4564,7 +4564,14 @@ const compileScalarSelectSQLInner = (
         for (const el of (e as ArrayExpr).elements) collectReachableUnions(el);
       }
     };
-    for (const arg of args) {
+    // `IN` / `NOT IN`: the right operand is a membership SET tested as a
+    // whole, not an element-wise operand — so only the LHS distributes over
+    // its union branches. Distributing the RHS too would cross-product the
+    // check (`{1,2,3} IN {3,4}` would yield 6 rows instead of 3).
+    const distributableArgs = (opCall.operator === "in" || opCall.operator === "not in")
+      ? args.slice(0, 1)
+      : args;
+    for (const arg of distributableArgs) {
       collectReachableUnions(arg.expr);
     }
     // Substitute a Set by reference identity throughout an expression tree,
