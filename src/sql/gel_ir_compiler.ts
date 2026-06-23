@@ -3213,6 +3213,32 @@ const compileScalarSelectSQLInner = (
       return `SELECT NULL AS ${quoteIdent("value")} WHERE 0`;
     }
   }
+  // EdgeQL `A EXCEPT B` / `A INTERSECT B` are MULTISET operators — they keep
+  // per-element multiplicity, unlike SQLite's set-deduping EXCEPT/INTERSECT.
+  // Number each occurrence of a value in A (rank within its value group), then
+  // keep it based on how many copies B holds: EXCEPT keeps occurrences beyond
+  // B's count (rank > countB), INTERSECT keeps up to B's count (rank <= countB).
+  // `{1,1,1,2,2,3} except {1,3,3,2}` → `{1,1,2}`; `… intersect {1,3,3,2,2,5}`
+  // → `{1,2,2,3}`. Values compare NULL-safely via `IS`.
+  if (sourceSet.expr.kind === "operator_call"
+    && ((sourceSet.expr as OperatorCall).operator === "except"
+      || (sourceSet.expr as OperatorCall).operator === "intersect")) {
+    const setOp = sourceSet.expr as OperatorCall;
+    const opArgs = orderedCallArgs(setOp.args);
+    if (opArgs.length === 2) {
+      const cp = params.length;
+      const leftRows = compileScalarSelectSQL(opArgs[0].expr, params, target, options);
+      const rightRows = leftRows ? compileScalarSelectSQL(opArgs[1].expr, params, target, options) : null;
+      if (leftRows && rightRows) {
+        const cmp = setOp.operator === "except" ? ">" : "<=";
+        const v = quoteIdent("value");
+        return `SELECT ${v} FROM `
+          + `(SELECT ${v}, ROW_NUMBER() OVER (PARTITION BY ${v}) AS __rn FROM (${leftRows})) lx `
+          + `WHERE lx.__rn ${cmp} (SELECT COUNT(*) FROM (${rightRows}) rx WHERE rx.${v} IS lx.${v})`;
+      }
+      params.length = cp;
+    }
+  }
   // Expression-position group rows (`group_rows`) as a value source — one
   // `value` row per group, with any attached projection applied. Lets an
   // outer GROUP use an inner (projected) group as its subject. Peel no-op
