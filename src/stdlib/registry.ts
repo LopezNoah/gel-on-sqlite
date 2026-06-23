@@ -738,8 +738,13 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
       // order (array, index, default) identical to the push order so positional
       // params still line up.
       const inner = `SELECT ${argSql[0]} AS a, ${argSql[1]} AS i${argSql[2] ? `, ${argSql[2]} AS d` : ""}`;
-      const idx = `CASE WHEN i < 0 THEN json_array_length(a) + i ELSE i END`;
-      const lookup = `json_extract(a, '$[' || (${idx}) || ']')`;
+      // Normalize a negative index from the end. An index that is still out of
+      // bounds (negative underflow OR >= length) must yield NULL — feeding a
+      // negative path like `$[-17]` to json_extract raises "bad JSON path",
+      // not the empty-set/`default` result EdgeQL expects. `a`/`i` are bound as
+      // columns in the inner SELECT (no `?`), so repeating them is param-safe.
+      const ni = `(CASE WHEN i < 0 THEN json_array_length(a) + i ELSE i END)`;
+      const lookup = `CASE WHEN ${ni} >= 0 AND ${ni} < json_array_length(a) THEN json_extract(a, '$[' || ${ni} || ']') END`;
       const body = argSql[2] ? `IFNULL(${lookup}, d)` : lookup;
       return `(SELECT ${body} FROM (${inner}))`;
     },
