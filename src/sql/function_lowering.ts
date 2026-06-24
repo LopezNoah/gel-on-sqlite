@@ -15,7 +15,7 @@ import type {
 } from "../ir/gel_ir.js";
 import type { RuntimeTarget } from "../runtime/target.js";
 import type { ScalarValue } from "../types.js";
-import type { GelIRCompileOptions } from "./compiler_types.js";
+import type { GelIRCompileOptions, ScalarPointerPath } from "./compiler_types.js";
 import { lowerStdlibFunctionSql } from "./stdlib_lowering.js";
 
 // Functions returning `optional T` where a SQL NULL means "no value" — at a
@@ -146,6 +146,13 @@ export interface SqlLoweringContext {
   linkTableNameForPointer(pointer: Pointer, options?: GelIRCompileOptions): string;
   columnForPointer(pointer: Pointer): string;
   pathIdKey(set: Set): string;
+  // Additionally consumed by the path-existence lowering module
+  // (existence_proof.ts):
+  extractScalarPointerPath(set: Set): ScalarPointerPath | null;
+  pointerPathAliasColumns(path: ScalarPointerPath): string[][];
+  isTrulyPolymorphicTypeRef(typeRef: TypeRef): boolean;
+  collectProjectedColumns(shape: ShapeElement[], where?: Set, orderBy?: SortExpr[]): string[];
+  NON_STRICT_STDLIB: globalThis.Set<string>;
 }
 
 const orderedCallArgs = (args: Record<string, CallArg>): CallArg[] => {

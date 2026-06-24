@@ -1,6 +1,21 @@
-import type { GroupRowProjection, TypeRef } from "../ir/gel_ir.js";
+import type { GroupRowProjection, Pointer, Set, TypeRef } from "../ir/gel_ir.js";
 import type { RuntimeTarget } from "../runtime/target.js";
 import type { ScalarValue } from "../types.js";
+
+// A pointer chain ending in a scalar (or, for object-identity existence
+// checks, an object) leaf: the root set, the leaf pointer, the intermediate
+// links, and the narrowed scan type for each link. Shared by the SQL compiler
+// and the path-existence lowering module (existence_proof.ts).
+export type ScalarPointerPath = {
+  root: Set;
+  leaf: Pointer;
+  links: Pointer[];
+  // The narrowed scan type for each link in `links` (same order): the wrapping
+  // set's typeref, which a `[IS T]` intersection replaces with the narrowed
+  // type. `effectiveStepType` reads this so the narrowing falls out of the
+  // id-equijoin against the link's targets.
+  linkTargets: TypeRef[];
+};
 
 export interface GelIRSQLArtifact {
   sql: string;
