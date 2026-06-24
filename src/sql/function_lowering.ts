@@ -132,6 +132,20 @@ export interface SqlLoweringContext {
   ): string | null;
   extractNumericLiteral(set: Set | undefined): number | undefined;
   orderedCallArgs(args: Record<string, CallArg>): CallArg[];
+  // Pure pointer/path/collector helpers (consumed by the set-level
+  // optional-comparison and path-existence lowering modules). They live in
+  // gel_ir_compiler.ts and are reached here so those modules don't import it
+  // directly (no-cycle discipline, ADR 0006).
+  collectTypeRootIds(set: Set | undefined, ids: globalThis.Set<string>, bareOnly?: boolean): void;
+  collectPathIdKeys(set: Set | undefined, keys: globalThis.Set<string>): void;
+  collectScalarPointerSources(set: Set, sources: Map<string, TypeRef>): void;
+  collectInnerWhereClauses(set: Set): Set[];
+  collectReferencedColumns(set: Set): string[];
+  referencesUnboundAlias(sql: string, alias: string, options: GelIRCompileOptions): boolean;
+  shouldUseLinkTable(pointer: Pointer): boolean;
+  linkTableNameForPointer(pointer: Pointer, options?: GelIRCompileOptions): string;
+  columnForPointer(pointer: Pointer): string;
+  pathIdKey(set: Set): string;
 }
 
 const orderedCallArgs = (args: Record<string, CallArg>): CallArg[] => {
