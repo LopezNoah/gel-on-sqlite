@@ -8579,13 +8579,27 @@ const compileShapeLeafThroughForeignLink = (
     // reads the one correlated value.
     const linkIsMany = linkPtr.ptrref.outCardinality === "many"
       || linkPtr.ptrref.outCardinality === "at_least_one";
-    if (linkIsMany) {
-      return `COALESCE((SELECT json_group_array(${value}) FROM ${fromSql}), '[]') AS ${quoteIdent(alias)}`;
-    }
-    return `(SELECT ${value} FROM ${fromSql} LIMIT 1) AS ${quoteIdent(alias)}`;
+    return wrapCorrelatedShapeSubquery(value, fromSql, linkIsMany, alias);
   }
   return null;
 };
+
+// The result wrapper for a correlated shape-subquery element: a multi-cardinality
+// element aggregates to a JSON array (COALESCE'd to '[]' when empty); a single
+// element peels the first row with LIMIT 1. `valueExpr` is the projected value
+// SQL, `sourceSql` the text that follows FROM (already parenthesized / aliased
+// by the caller), `alias` the shape element's output column name. This names the
+// "build a correlated shape subquery" result shape ADR 0049 deferred as the
+// prerequisite for carving the entangled shape-projection cases (ADR 0056).
+const wrapCorrelatedShapeSubquery = (
+  valueExpr: string,
+  sourceSql: string,
+  isMany: boolean,
+  alias: string,
+): string =>
+  isMany
+    ? `COALESCE((SELECT json_group_array(${valueExpr}) FROM ${sourceSql}), '[]') AS ${quoteIdent(alias)}`
+    : `(SELECT ${valueExpr} FROM ${sourceSql} LIMIT 1) AS ${quoteIdent(alias)}`;
 
 const compileShapeProjection = (
   shape: ShapeElement,
@@ -8714,13 +8728,10 @@ const compileShapeProjection = (
       const selfOrder = shapeExpr.selectExpr?.orderBy?.[0];
       const orderClause = selfOrder ? ` ORDER BY ${quoteIdent("value")} ${selfOrder.direction.toUpperCase()}` : "";
       const isMany = shape.cardinality === "many" || shape.cardinality === "at_least_one";
-      if (isMany) {
-        // ORDER BY lives INSIDE the row subquery so json_group_array aggregates
-        // the values in order (an outer ORDER BY on the single aggregate row is
-        // a no-op).
-        return `COALESCE((SELECT json_group_array(${quoteIdent("value")}) FROM (${corrLinkProp}${orderClause})), '[]') AS ${quoteIdent(alias)}`;
-      }
-      return `(SELECT ${quoteIdent("value")} FROM (${corrLinkProp}${orderClause}) LIMIT 1) AS ${quoteIdent(alias)}`;
+      // ORDER BY lives INSIDE the row subquery so json_group_array aggregates
+      // the values in order (an outer ORDER BY on the single aggregate row is
+      // a no-op).
+      return wrapCorrelatedShapeSubquery(quoteIdent("value"), `(${corrLinkProp}${orderClause})`, isMany, alias);
     }
   }
   if (shapeExpr.result.expr.kind === "pointer" && !shapeExpr.result.typeref.isScalar) {
@@ -8859,10 +8870,10 @@ const compileShapeProjection = (
     if (setSql) {
       params.push(...scratchParams);
       const alias = shapeAliasForElement(shape, shapeExpr.result, depth);
-      if (shape.cardinality === "many" || shape.cardinality === "at_least_one") {
-        return `COALESCE((SELECT json_group_array(${quoteIdent("value")}) FROM (${setSql})), '[]') AS ${quoteIdent(alias)}`;
-      }
-      return `(SELECT ${quoteIdent("value")} FROM (${setSql}) LIMIT 1) AS ${quoteIdent(alias)}`;
+      return wrapCorrelatedShapeSubquery(
+        quoteIdent("value"), `(${setSql})`,
+        shape.cardinality === "many" || shape.cardinality === "at_least_one", alias,
+      );
     }
   }
   // Computed shape field that projects a scalar leaf off the OBJECT a UDF /
@@ -8929,10 +8940,7 @@ const compileShapeProjection = (
       params.push(...scratch);
       const colExpr = `${compiled.alias}.${quoteIdent(leafCol)}`;
       const value = shapeScalarColumnValue(colExpr, leaf.ptrref.outTarget);
-      if (isMany) {
-        return `COALESCE((SELECT json_group_array(${value}) FROM ${compiled.sql}), '[]') AS ${quoteIdent(alias)}`;
-      }
-      return `(SELECT ${value} FROM ${compiled.sql} LIMIT 1) AS ${quoteIdent(alias)}`;
+      return wrapCorrelatedShapeSubquery(value, compiled.sql, isMany, alias);
     }
   }
   // Computed shape field that projects a scalar leaf through an intermediate
@@ -9121,10 +9129,10 @@ const compileShapeProjection = (
       const alias = shapeAliasForElement(shape, shape.expr, depth);
       // Single-cardinality default: peel the first item out of the grouped
       // array. Multi shows up as a JSON array.
-      if (shape.cardinality === "many" || shape.cardinality === "at_least_one") {
-        return `COALESCE((SELECT json_group_array(json("item")) FROM (${subSql})), '[]') AS ${quoteIdent(alias)}`;
-      }
-      return `(SELECT json("item") FROM (${subSql}) LIMIT 1) AS ${quoteIdent(alias)}`;
+      return wrapCorrelatedShapeSubquery(
+        `json("item")`, `(${subSql})`,
+        shape.cardinality === "many" || shape.cardinality === "at_least_one", alias,
+      );
     }
   }
 
