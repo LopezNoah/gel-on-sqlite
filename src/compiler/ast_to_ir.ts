@@ -4361,7 +4361,10 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
             // element access is legal there.
             && sourceTypeName !== "std::tuple"
             && !sourceTypeName.startsWith("array<") && !sourceTypeName.startsWith("tuple<")) {
-          failSemantic(`index indirection cannot be applied to '${sourceTypeName}'`);
+          const scalarWord = sourceCat === "numeric" || sourceCat === "bool"
+            || sourceCat === "uuid" || sourceCat === "datetime" || sourceCat === "duration"
+            ? "scalar type " : "";
+          failSemantic(`index indirection cannot be applied to ${scalarWord}'${sourceTypeName}'`);
         }
       }
       const source = compileFreeObjectExpr(expr.expr, ctx);
@@ -4411,6 +4414,15 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
           failSemantic(`cannot slice ${targetWord} by '${t}'`);
         }
       };
+      // A slice applies only to str / bytes / array / tuple (and json) — a
+      // non-sliceable scalar source (`1[1:3]`) is an error.
+      const sliceSrcName = inferAstExprTypeName(expr.expr, ctx);
+      const sliceSrcCat = typeCategory(sliceSrcName);
+      if (sliceSrcName
+          && (sliceSrcCat === "numeric" || sliceSrcCat === "bool"
+            || sliceSrcCat === "uuid" || sliceSrcCat === "datetime" || sliceSrcCat === "duration")) {
+        failSemantic(`scalar type '${sliceSrcName}' cannot be sliced`);
+      }
       checkSliceBound(expr.startExpr, expr.start);
       checkSliceBound(expr.endExpr, expr.end);
       const source = compileFreeObjectExpr(expr.expr, ctx);
