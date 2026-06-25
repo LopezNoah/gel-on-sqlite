@@ -4,6 +4,7 @@ import { AppError } from "../errors.js";
 import type { RuntimeTarget } from "../runtime/target.js";
 import { lowerStdlibFunctionSql } from "./stdlib_lowering.js";
 import { ShapeLoweringMiss, type GelIRCompileOptions, type GelIRSQLArtifact, type ScalarPointerPath } from "./compiler_types.js";
+import { bindOperandsOnce } from "./sql_fragment.js";
 import {
   compileGroupRowsStatementSQL,
   compileGroupRowsValueSQL,
@@ -7412,7 +7413,10 @@ const compileValueSetSQLWithAliases = (
       // layer (predicate consumers re-normalize truthiness). The one-row
       // subquery binds each side once so `?` params aren't consumed twice.
       if (cmpOp) {
-        return `(SELECT CASE WHEN l IS NULL OR r IS NULL THEN NULL WHEN l ${cmpOp} r THEN json('true') ELSE json('false') END FROM (SELECT (${left}) AS l, (${right}) AS r))`;
+        return bindOperandsOnce(
+          [{ alias: "l", sql: left }, { alias: "r", sql: right }],
+          `CASE WHEN l IS NULL OR r IS NULL THEN NULL WHEN l ${cmpOp} r THEN json('true') ELSE json('false') END`,
+        );
       }
       return flooredArithBinarySql(call.operator, left, right) ?? `(${left} ${op} ${right})`;
     }
@@ -7605,7 +7609,10 @@ const compilePredicateWithAliases = (
   // The value layer emits JSON booleans (json('true') is the TEXT 'true',
   // falsy as a bare WHERE expression) — normalize JSON and native boolean
   // shapes to a SQL truth value, binding the value once.
-  return `(SELECT CASE WHEN p IS NULL THEN 0 WHEN p = json('true') THEN 1 WHEN p = json('false') THEN 0 WHEN p THEN 1 ELSE 0 END FROM (SELECT (${value}) AS p))`;
+  return bindOperandsOnce(
+    [{ alias: "p", sql: value }],
+    `CASE WHEN p IS NULL THEN 0 WHEN p = json('true') THEN 1 WHEN p = json('false') THEN 0 WHEN p THEN 1 ELSE 0 END`,
+  );
 };
 
 const compileForExprSort = (order: SortExpr, valueAlias: string): string => {
@@ -9709,7 +9716,10 @@ const compilePredicateSetSQL = (
     // which is falsy as a bare WHERE expression) — normalize both JSON and
     // native boolean shapes to a SQL truth value, binding the value once.
     if (value) {
-      return `(SELECT CASE WHEN p IS NULL THEN 0 WHEN p = json('true') THEN 1 WHEN p = json('false') THEN 0 WHEN p THEN 1 ELSE 0 END FROM (SELECT (${value}) AS p))`;
+      return bindOperandsOnce(
+    [{ alias: "p", sql: value }],
+    `CASE WHEN p IS NULL THEN 0 WHEN p = json('true') THEN 1 WHEN p = json('false') THEN 0 WHEN p THEN 1 ELSE 0 END`,
+  );
     }
     params.length = checkpoint;
     return null;
@@ -11242,12 +11252,18 @@ const compileOperatorValueSQL = (
     if (call.operator === "not") {
       if (operandSqls.length < 1) return null;
       const p = operandSqls[0];
-      return `(SELECT CASE WHEN p IS NULL THEN NULL WHEN p = json('true') THEN json('false') WHEN p = json('false') THEN json('true') WHEN p THEN json('false') ELSE json('true') END FROM (SELECT (${p}) AS p))`;
+      return bindOperandsOnce(
+        [{ alias: "p", sql: p }],
+        `CASE WHEN p IS NULL THEN NULL WHEN p = json('true') THEN json('false') WHEN p = json('false') THEN json('true') WHEN p THEN json('false') ELSE json('true') END`,
+      );
     }
     if (operandSqls.length < 2) return null;
     const [a, b] = operandSqls;
     const op = call.operator === "and" ? "AND" : "OR";
-    return `(SELECT CASE WHEN a IS NULL OR b IS NULL THEN NULL WHEN ${truthy("a")} ${op} ${truthy("b")} THEN json('true') ELSE json('false') END FROM (SELECT (${a}) AS a, (${b}) AS b))`;
+    return bindOperandsOnce(
+      [{ alias: "a", sql: a }, { alias: "b", sql: b }],
+      `CASE WHEN a IS NULL OR b IS NULL THEN NULL WHEN ${truthy("a")} ${op} ${truthy("b")} THEN json('true') ELSE json('false') END`,
+    );
   }
   if (call.operator === "neg" || call.operator === "pos") {
     const args = orderedCallArgs(call.args);
@@ -11278,7 +11294,10 @@ const compileOperatorValueSQL = (
     // operand is NULL the comparison's value is the empty set, surfaced as
     // JSON null. The one-row subquery binds each side once so SQL `?`
     // placeholders are not consumed twice.
-    return `(SELECT CASE WHEN l IS NULL OR r IS NULL THEN NULL WHEN l ${op} r THEN json('true') ELSE json('false') END FROM (SELECT (${left}) AS l, (${right}) AS r))`;
+    return bindOperandsOnce(
+      [{ alias: "l", sql: left }, { alias: "r", sql: right }],
+      `CASE WHEN l IS NULL OR r IS NULL THEN NULL WHEN l ${op} r THEN json('true') ELSE json('false') END`,
+    );
   }
   if (call.operator === "??") {
     const args = orderedCallArgs(call.args);

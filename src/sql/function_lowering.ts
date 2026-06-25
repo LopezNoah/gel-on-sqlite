@@ -17,6 +17,7 @@ import type { RuntimeTarget } from "../runtime/target.js";
 import type { ScalarValue } from "../types.js";
 import type { GelIRCompileOptions, ScalarPointerPath } from "./compiler_types.js";
 import { lowerStdlibFunctionSql } from "./stdlib_lowering.js";
+import { bindOperandsOnce } from "./sql_fragment.js";
 
 // Functions returning `optional T` where a SQL NULL means "no value" — at a
 // top-level scalar select that's the EMPTY SET (zero rows), not a NULL row.
@@ -665,7 +666,10 @@ export const compileFunctionCallSQL = (
     // (call.typeref is often `std::anytype` — stdlib return types aren't
     // inferred — so consult the explicit name list as well.)
     if (deps.qualifyTypeName(call.typeref) === "std::bool" || BOOL_RETURNING_STDLIB.has(shortName)) {
-      return `(SELECT CASE WHEN p IS NULL THEN NULL WHEN p = json('true') THEN json('true') WHEN p = json('false') THEN json('false') WHEN p THEN json('true') ELSE json('false') END FROM (SELECT (${lowered}) AS p))`;
+      return bindOperandsOnce(
+        [{ alias: "p", sql: lowered }],
+        `CASE WHEN p IS NULL THEN NULL WHEN p = json('true') THEN json('true') WHEN p = json('false') THEN json('false') WHEN p THEN json('true') ELSE json('false') END`,
+      );
     }
     return lowered;
   }
