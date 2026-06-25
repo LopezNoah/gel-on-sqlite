@@ -8062,7 +8062,7 @@ const fieldsFromShape = (shape: SelectStatement["shape"]): string[] => {
   return [...fields];
 };
 
-const typeDefForTable = (schema: SchemaSnapshot, table: string): TypeDef | undefined =>
+export const typeDefForTable = (schema: SchemaSnapshot, table: string): TypeDef | undefined =>
   schema.listTypes().find((candidate) => tableNameForType(qualifiedTypeName(candidate)) === table);
 
 const typeDefForInsertIR = (schema: SchemaSnapshot, table: string): TypeDef | undefined =>
@@ -9054,7 +9054,7 @@ function* applyOnTargetDeletePoliciesEffect(
   }
 }
 
-function* deleteWriteEffect(
+export function* deleteWriteEffect(
   schema: SchemaSnapshot,
   ir: DeleteIR,
   sqlArtifact: SQLArtifact,

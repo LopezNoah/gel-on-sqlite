@@ -105,7 +105,7 @@ describe("connectDO — Durable Object executor (reads + writes)", () => {
   });
 });
 
-describe("connectD1 — D1 executor (read-only)", () => {
+describe("connectD1 — D1 executor (reads + deletes)", () => {
   it("runs reads and parameterized queries", async () => {
     const { db } = makeDb();
     const client = await connectD1(makeFakeD1(db));
@@ -120,11 +120,24 @@ describe("connectD1 — D1 executor (read-only)", () => {
     expect(byName).toEqual({ name: "Bob", age: 25 });
   });
 
-  it("rejects writes (Tier-1 async path is read-only)", async () => {
+  it("executes a DELETE via the decolored async write path", async () => {
+    const { db } = makeDb();
+    const client = await connectD1(makeFakeD1(db));
+
+    await client.query("delete default::Person filter .name = <str>$name;", { name: "Alice" });
+
+    const remaining = await client.query<{ name: string }>("select default::Person { name } order by .name;");
+    expect(remaining.map((r) => r.name)).toEqual(["Bob"]);
+  });
+
+  it("still rejects INSERT/UPDATE (not yet decolored)", async () => {
     const { db } = makeDb();
     const client = await connectD1(makeFakeD1(db));
     await expect(
       client.query("insert default::Person { name := 'Nope', age := 1 };"),
+    ).rejects.toBeInstanceOf(AsyncUnsupportedError);
+    await expect(
+      client.query("update default::Person filter .name = 'Bob' set { age := 99 };"),
     ).rejects.toBeInstanceOf(AsyncUnsupportedError);
   });
 
