@@ -21,6 +21,8 @@ import type {
   AsyncRuntimeDatabaseAdapter,
   AsyncRuntimeStatement,
   BatchStatement,
+  RuntimeDatabaseAdapter,
+  RuntimeStatement,
 } from "./adapter.js";
 import { normalizeBindParams, wrapBackendError } from "./async_backend_util.js";
 
@@ -76,6 +78,51 @@ export const createDOSqlAdapter = (sql: SqlStorageLike): AsyncRuntimeDatabaseAda
   },
   close: async () => {},
   exec: async (query: string) => {
+    try {
+      sql.exec(query);
+    } catch (err) {
+      throw wrapBackendError("durable-object", err);
+    }
+  },
+});
+
+// SYNCHRONOUS Durable Objects adapter.
+//
+// Because `ctx.storage.sql.exec` is synchronous, a DO can run the *full*
+// synchronous engine (`executeQuery`) — SELECT, GROUP, the interpreter
+// fallback, AND writes (INSERT/UPDATE/DELETE) — with no async/Tier-2 work at
+// all. (D1's async API can't; that's why the D1 path is read-only Tier-1.) The
+// engine bundles for workerd now that engine.ts no longer pulls the native
+// driver (materializeSchema lives in schema_materialize.ts).
+//
+// `executeQuery` types its db as `SQLiteDatabase`, but at runtime only uses
+// `prepare()` (whose statements are `{ all, run }`, identical to
+// `RuntimeStatement`) and `target`. So this `RuntimeDatabaseAdapter` is
+// structurally sufficient — call `executeQuery(adapter as unknown as
+// SQLiteDatabase, ...)`. `target` stays "d1" so the compatibility rules (no
+// custom `_gel_*` functions) apply, since DO SQL can't host them either.
+export const createDOSqlSyncAdapter = (sql: SqlStorageLike): RuntimeDatabaseAdapter => ({
+  target: "d1",
+  prepare: (query: string): RuntimeStatement => ({
+    all: (...params: ScalarValue[]) => {
+      try {
+        return run(sql, query, params).toArray();
+      } catch (err) {
+        throw wrapBackendError("durable-object", err);
+      }
+    },
+    run: (...params: ScalarValue[]) => {
+      try {
+        const cursor = run(sql, query, params);
+        cursor.toArray();
+        return { changes: cursor.rowsWritten ?? 0 };
+      } catch (err) {
+        throw wrapBackendError("durable-object", err);
+      }
+    },
+  }),
+  close: () => {},
+  exec: (query: string) => {
     try {
       sql.exec(query);
     } catch (err) {

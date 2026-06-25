@@ -34,26 +34,34 @@ wrangler dev
 curl 'http://localhost:8799/?q=select default::Person { name, age } order by .name;'
 ```
 
-### Durable Objects instead of D1
+### Durable Objects: the FULL sync engine (incl. writes)
 
-The DO SQL API is synchronous and full SQLite, but (like D1) can't host custom
-functions, so it reuses the same path via `createDOSqlAdapter`:
+DO SQL storage is **synchronous**, so a DO can run the complete engine
+(`executeQuery` — SELECT, GROUP, interpreter fallback, **and** INSERT/UPDATE/
+DELETE) with no async path at all. This works because `engine.ts` is now
+bundle-safe (the native driver was split into `database.ts`; `materializeSchema`
+lives in `schema_materialize.ts`). See `do_worker.ts`:
 
 ```ts
-import { createDOSqlAdapter } from "../src/runtime/do_adapter.js";
-import { loadSchemaAsync } from "../src/runtime/async_schema.js";
-import { executeSelectAsync } from "../src/runtime/async_query.js";
+import { createDOSqlSyncAdapter } from "../src/runtime/do_adapter.js";
+import { executeQuery } from "../src/runtime/engine.js";
+import { deserializeSchemaFromInstdata } from "../src/schema/gel_persistence.js";
 
-export class MyDO {
+export class GelDurableObject {
   constructor(private ctx: DurableObjectState) {}
   async fetch(req: Request) {
-    const db = createDOSqlAdapter(this.ctx.storage.sql);
-    const schema = await loadSchemaAsync(db);
-    const { rows } = await executeSelectAsync(db, schema, "select default::Person { name };");
-    return Response.json(rows);
+    const db = createDOSqlSyncAdapter(this.ctx.storage.sql) as unknown as SQLiteDatabase;
+    const schema = deserializeSchemaFromInstdata(db)!;
+    const q = new URL(req.url).searchParams.get("q")!;
+    const result = executeQuery(db, schema, q); // reads AND writes
+    return Response.json(result.rows ?? { changes: result.changes });
   }
 }
 ```
+
+(D1, being async, stays read-only Tier-1 via `createDOSqlAdapter`/
+`executeSelectAsync` — see above. DO can't host custom `_gel_*` functions
+either, so those queries are still unsupported on both.)
 
 ## Bundling
 

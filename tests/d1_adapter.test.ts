@@ -3,8 +3,12 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { toAsyncAdapter } from "../src/runtime/adapter.js";
 import { executeManyAsync, executeSelectAsync } from "../src/runtime/async_query.js";
 import { createD1Adapter, type D1DatabaseLike } from "../src/runtime/d1_adapter.js";
-import { materializeSchema, openSQLite } from "../src/runtime/database.js";
-import { createDOSqlAdapter, type SqlStorageLike } from "../src/runtime/do_adapter.js";
+import { materializeSchema, openSQLite, type SQLiteDatabase } from "../src/runtime/database.js";
+import {
+  createDOSqlAdapter,
+  createDOSqlSyncAdapter,
+  type SqlStorageLike,
+} from "../src/runtime/do_adapter.js";
 import { executeQuery } from "../src/runtime/engine.js";
 import { AppError } from "../src/errors.js";
 import {
@@ -164,6 +168,29 @@ describe("D1/DO adapter improvements", () => {
     const q = "select default::Person { name, age } order by .name;";
     const viaDO = await executeSelectAsync(adapter, schema, q);
     expect(viaDO.rows).toEqual(executeQuery(db, schema, q).rows);
+  });
+
+  it("runs the FULL sync engine — including writes — through a synchronous DO adapter", () => {
+    // Fresh DB so writes don't perturb the shared fixture. DO SQL is sync, so
+    // the complete engine (executeQuery) works with no async path at all.
+    const { db: doDb } = openSQLite(":memory:");
+    materializeSchema(doDb, schema);
+    ensureGelSchemaTables(doDb);
+    serializeSchemaToGelTables(doDb, schema);
+    serializeSchemaToInstdata(doDb, schema);
+    const syncDO = createDOSqlSyncAdapter(makeFakeDO(doDb)) as unknown as SQLiteDatabase;
+
+    executeQuery(syncDO, schema, "insert default::Person { name := 'Dave', age := 50 };");
+    executeQuery(syncDO, schema, "insert default::Person { name := 'Eve', age := 22 };");
+    const read = executeQuery(
+      syncDO,
+      schema,
+      "select default::Person { name, age } order by .name;",
+    );
+    expect(read.rows).toEqual([
+      { name: "Dave", age: 50 },
+      { name: "Eve", age: 22 },
+    ]);
   });
 
   it("the DO adapter supports batched reads via executeManyAsync", async () => {
