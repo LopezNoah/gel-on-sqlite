@@ -8825,9 +8825,22 @@ const compileShapeProjection = (
   // peel it and re-dispatch on the inner object link-shape.
   if (shapeExpr.result.expr.kind === "function_call") {
     const innerObject = unwrapObjectPassthrough(shapeExpr.result);
-    if (innerObject && innerObject.expr.kind === "pointer" && !innerObject.typeref.isScalar) {
+    // The unwrapped argument may still sit behind clause-free `select_expr`
+    // fences — e.g. `assert_exists((WITH Q := … SELECT Q { … }))`, where the
+    // re-projected link binding compiles to `select_expr → select_expr →
+    // pointer`. Peel those to reach the underlying link pointer (a fence that
+    // carries a FILTER/LIMIT/ORDER BY stops the peel, since its clause would
+    // be lost).
+    let peeledInner: Set | undefined = innerObject ?? undefined;
+    for (let i = 0; i < 8 && peeledInner?.expr.kind === "select_expr"; i += 1) {
+      const se = peeledInner.expr as SelectExpr;
+      if (se.where || se.limit !== undefined || se.offset !== undefined
+          || (se.orderBy && se.orderBy.length > 0)) break;
+      peeledInner = se.result;
+    }
+    if (peeledInner && peeledInner.expr.kind === "pointer" && !peeledInner.typeref.isScalar) {
       const recompiled = compileShapeProjection(
-        { ...shape, expr: innerObject }, sourceAlias, params, options, target, depth,
+        { ...shape, expr: peeledInner }, sourceAlias, params, options, target, depth,
       );
       if (recompiled) return recompiled;
     }
