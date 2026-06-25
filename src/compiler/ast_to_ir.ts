@@ -1908,9 +1908,31 @@ const withBindings = (ctx: IRCompileContext, bindings: WithBinding[] | undefined
       case "enum_path":
         set = literalToSet(binding.value.member);
         break;
-      case "subquery":
-        set = setFromTypeRoot(resolveTypeRef(scoped, binding.value.query.typeName));
+      case "subquery": {
+        // `setFromTypeRoot` dropped the binding's projection shape, so
+        // `WITH U := User { c := … }` lost the computed `c` and every `U.c`
+        // then errored "no link or property". Re-compile the shaped select to
+        // keep it — but ONLY for a genuine projection shape with no clauses.
+        // A clause-bearing / implicit-`{id}`-only subquery is how an
+        // INSERT-in-WITH (pre-executed, rewritten to `SELECT T FILTER .id IN
+        // {…}`) and bare filtered selects arrive; recompiling those flips their
+        // cardinality (single insert result → multi filtered scan) and breaks
+        // dependent re-projections, so they keep the type-root behaviour.
+        const q = binding.value.query;
+        const hasProjection = q.shape.some((el) => {
+          const name = (el as { name?: string }).name;
+          const op = (el as { operation?: string }).operation;
+          return name !== undefined && name !== "id" && (op === "assign" || op === "materialize");
+        });
+        const hasClauses = Object.keys(q.clauses ?? {}).length > 0;
+        set = (hasProjection && !hasClauses)
+          ? compileFreeObjectExpr(
+            { kind: "select", typeName: q.typeName, shape: q.shape, clauses: q.clauses },
+            scoped,
+          )
+          : setFromTypeRoot(resolveTypeRef(scoped, q.typeName));
         break;
+      }
       case "subquery_expr":
         set = compileFreeObjectExpr(binding.value.expr, scoped);
         break;
