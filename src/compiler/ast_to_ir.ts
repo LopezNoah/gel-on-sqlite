@@ -6162,6 +6162,21 @@ const compileFilterTarget = (target: FilterTarget, subject: Set, ctx: IRCompileC
           result = computedSet;
           continue;
         }
+        // A query-local computed defined in the SELECT's own shape
+        // (`SELECT User { title := … } FILTER .title = …`) isn't a schema
+        // pointer or schema computed, so resolve it against the subject's
+        // projected shape — same lookup the field-access path uses.
+        const shapedComputed = result.shape?.find(
+          (entry) =>
+            entry.name === segment
+            && entry.shapeOrigin === "explicit"
+            && entry.targetPtr === undefined
+            && !segment.startsWith("@"),
+        );
+        if (shapedComputed) {
+          result = shapedComputed.expr;
+          continue;
+        }
         // `.field` against a known schema type — surface the "no link or
         // property" error so typos in FILTER don't silently match nothing.
         // Skip when this is the leading segment and the name happens to
