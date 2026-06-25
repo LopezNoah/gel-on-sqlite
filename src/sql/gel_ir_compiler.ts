@@ -12048,7 +12048,10 @@ const compilePublicShapeObjectExpr = (
       if (column.startsWith("@") && linkPropertyAlias) {
         const rawValue = `${linkPropertyAlias}.${quoteIdent(column.slice(1))}`;
         const value = shapeScalarColumnValue(rawValue, element.expr.typeref);
-        pairs.push(`${quoteLiteral(column)}, ${value}`);
+        // Key on the element's declared name so a renamed link property
+        // (`x := @count`) projects under `x`, not the `@count` column name —
+        // matching the plain-scalar branch (`element.name ?? column`).
+        pairs.push(`${quoteLiteral(element.name ?? column)}, ${value}`);
         continue;
       }
       const rawValue = `${sourceAlias}.${quoteIdent(column)}`;
@@ -12172,7 +12175,10 @@ const compileShapeObjectExpr = (
       if (column.startsWith("@") && linkPropertyAlias) {
         const rawValue = `${linkPropertyAlias}.${quoteIdent(column.slice(1))}`;
         const value = shapeScalarColumnValue(rawValue, element.expr.typeref);
-        pairs.push(`${quoteLiteral(column)}, ${value}`);
+        // Key on the element's declared name so a renamed link property
+        // (`x := @count`) projects under `x`, not the `@count` column name —
+        // matching the plain-scalar branch (`element.name ?? column`).
+        pairs.push(`${quoteLiteral(element.name ?? column)}, ${value}`);
         continue;
       }
       const rawValue = `${sourceAlias}.${quoteIdent(column)}`;

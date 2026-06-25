@@ -3857,9 +3857,13 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
           continue;
         }
         if (step.kind === "type_intersection") {
-          // `Issue[IS Named]` — intersecting with a SUPERTYPE is a no-op:
-          // the set stays the (narrower) current type. Only narrow when the
-          // intersection type is NOT an ancestor of the current type.
+          // `Issue[IS Named]` — intersecting with a SUPERTYPE is a no-op: the
+          // set stays the (narrower) current type. Only narrow when the
+          // intersection type is NOT an ancestor of the current type. (Source
+          // narrowing for the statement subject `SELECT Ba[IS Bb & Bc] {…}` is
+          // handled via typeFilterExprs in compileSelectStatement; doing it
+          // here would also rewrite correlated link paths like
+          // `FILTER Text[IS Owned].owner`, dropping the link-column projection.)
           const intersected = resolveTypeRef(ctx, step.typeName);
           if (!isSubtypeOf(ctx, out.typeref.id, intersected.id)) {
             out = { ...out, typeref: intersected };
@@ -6634,6 +6638,89 @@ const evalTypeExprConcreteNames = (
   return new globalThis.Set([...left].filter((id) => right.has(id)));
 };
 
+// Narrow a running source typeref by a `[IS …]` intersection step. The step
+// admits a set of concrete type names — the structured `&`/`|` expression when
+// present, else the single named branch's concrete closure. The result is the
+// INTERSECTION of that set with the running source closure, so `Ba[IS Bb]`
+// keeps only the types that are both a `Ba` and a `Bb`, and a chained
+// `[IS Bb][IS Bc]` intersects cumulatively (the caller threads `running`).
+// Returns the narrowed concrete set plus a `|`-union typeref (mirroring the
+// backlink / polymorphic-field-ref precedent), `null` for an empty
+// intersection (→ empty set), or `undefined` when the schema is unavailable
+// (leave the typeref as the resolved branch, the pre-existing behaviour).
+const narrowTypeIntersectionStep = (
+  ctx: IRCompileContext,
+  baseTyperef: TypeRef,
+  running: globalThis.Set<string> | undefined,
+  step: { typeName: string; typeExpr?: TypeExpr },
+): { concrete: globalThis.Set<string>; typeref: TypeRef } | null | undefined => {
+  if (!ctx.schema) return undefined;
+  const branch = step.typeExpr
+    ? evalTypeExprConcreteNames(ctx, step.typeExpr)
+    : new globalThis.Set(ctx.schema.concreteTypeNamesUnder(qualifyTypeName(step.typeName, ctx.module)));
+  if (!branch) return undefined;
+  // Build the narrowed typeref from the concrete names themselves, NOT by
+  // spreading the base typeref: the SQL polymorphic source derives a non-`|`
+  // typeref's table from its `nameHint`/`id`, so a stale base `nameHint` would
+  // leak the base extent. A single concrete name is a clean leaf typeref; a
+  // multi-name set is a `|`-union (the SQL union path splits the `id`) whose
+  // `children` are the concrete leaves so the non-union path agrees.
+  const asTyperef = (concrete: globalThis.Set<string>): TypeRef => {
+    const names = [...concrete];
+    const leaves = names
+      .map((name) => getSchemaTypeByQualifiedName(ctx, name))
+      .filter((def): def is TypeDef => !!def)
+      .map((def) => typeRefFromTypeDef(ctx, def));
+    if (leaves.length === 1) return leaves[0];
+    const unionId = names.join(" | ");
+    return {
+      ...baseTyperef,
+      id: unionId,
+      nameHint: unionId,
+      isScalar: false,
+      isAbstract: false,
+      children: leaves.length > 0 ? leaves : undefined,
+    };
+  };
+  const baseNames = running ?? new globalThis.Set(ctx.schema.concreteTypeNamesUnder(baseTyperef.id));
+  // A base closure we cannot resolve (e.g. an already-`|`-union binding
+  // typeref) means we cannot intersect safely — narrow to the branch set alone
+  // rather than wrongly emptying the result.
+  if (baseNames.size === 0) {
+    return branch.size === 0 ? null : { concrete: branch, typeref: asTyperef(branch) };
+  }
+  const narrowed = new globalThis.Set([...baseNames].filter((id) => branch.has(id)));
+  if (narrowed.size === 0) return null;
+  // When the narrowing doesn't reduce the concrete set, only treat it as a
+  // no-op (keep the base typeref) if the branch is an ANCESTOR of the base
+  // (`Issue[IS Named]`): the base already inherits the branch's members, so
+  // there's no need to broaden the typeref representation. A sibling/mixin with
+  // the same closure (`Text[IS Owned]`, every Text is also Owned) must still
+  // narrow to the concrete union so the branch's own members (`owner`) resolve
+  // via the union probe. A compound `&`/`|` branch never no-ops.
+  const singleBranchName = step.typeName
+    || (step.typeExpr?.kind === "type_name" ? step.typeExpr.name : undefined);
+  if (
+    narrowed.size === baseNames.size
+    && singleBranchName
+    && isSubtypeOf(ctx, baseTyperef.id, qualifyTypeName(singleBranchName, ctx.module))
+  ) {
+    return { concrete: baseNames, typeref: baseTyperef };
+  }
+  return { concrete: narrowed, typeref: asTyperef(narrowed) };
+};
+
+// Apply a `[IS …]`-narrowed typeref to a path set. The SQL source builder reads
+// the **type_root expr's** own typeref (not the set's), so a narrowing has to
+// reach the expr too — otherwise a single-concrete narrowing (a non-`|` id)
+// silently reverts to the root extent. A multi-branch union already worked via
+// the set typeref, and stays correct here. Non-type_root sources (binding /
+// pointer chains) keep the set-level typeref only.
+const withNarrowedSource = (set: Set, typeref: TypeRef): Set =>
+  set.expr.kind === "type_root"
+    ? { ...set, typeref, expr: { ...set.expr, typeref } }
+    : { ...set, typeref };
+
 // The fullest TypeDef available, including `computeds` — `getSchemaTypeByQualifiedName`
 // prefers the generated schema model, which omits computed pointers, so the
 // intersection-pointer checks (which must see computeds) read the snapshot.
@@ -7585,8 +7672,14 @@ const compileShape = (
     };
   };
 
-  const compileLinkPropertyExpr = (el: Extract<EdgeQLShapeElement, { kind: "field" | "computed" }>): ShapeElement | undefined => {
-    const propertyName = el.name;
+  // `propertyName` is the `@…` link property to READ (it drives the column the
+  // SQL emitter slices and the pointer's shortName); the element's OUTPUT key
+  // stays `el.name`. They differ for a renamed projection `x := @count`, where
+  // the value comes from `@count` but the JSON key is `x`.
+  const compileLinkPropertyExpr = (
+    el: Extract<EdgeQLShapeElement, { kind: "field" | "computed" }>,
+    propertyName: string = el.name,
+  ): ShapeElement | undefined => {
     const subjectExpr = subject.expr;
     let linkPtrRef: PointerRef | undefined;
     if (subjectExpr.kind === "pointer") {
@@ -7821,6 +7914,19 @@ const compileShape = (
       validateComputedShapeElement(el, subject, ctx);
       if (el.expr.kind === "field_ref") {
         const fieldName = el.expr.field;
+        // A renamed link property (`x := @count`): the value is a link-property
+        // read, but the element name is the alias `x`. Route it through the
+        // link-property compiler with the `@…` source so it projects the
+        // junction column under the new key (the same structural `@`-on-the-
+        // expression test as `shapeRequestsLinkProperty`), instead of falling
+        // into resolvePointerRef (which has no `@` pointers) and being dropped.
+        if (fieldName.startsWith("@")) {
+          const result = compileLinkPropertyExpr(el, fieldName);
+          if (result) {
+            out.push(result);
+          }
+          continue;
+        }
         const ptrref = resolvePointerRef(ctx, subject.typeref, fieldName);
         if (!ptrref) {
           // Not a schema pointer — may be a computed the binding materialised
@@ -8671,7 +8777,24 @@ const compileSelectStatement = (rawStatement: SelectStatement, ctx: IRCompileCon
       }
     }
   }
-  const subject = bound ?? setFromTypeRoot(resolveTypeRef(scoped, statement.typeName));
+  let subject = bound ?? setFromTypeRoot(resolveTypeRef(scoped, statement.typeName));
+  // `SELECT Ba[IS Bb & Bc] { … }` / `SELECT Ba[IS Bb][IS Bc] { … }` carry the
+  // source `[IS …]` narrowing as statement-level typeFilterExprs (each a `&`/`|`
+  // type expression; a chained intersection produces several). Fold them into
+  // the subject source — intersecting the running concrete closure, exactly as
+  // a path-step `[IS …]` does — so the source EXTENT is the type intersection,
+  // not just the per-shape-member gates. An empty intersection is left to the
+  // member gates (no statement-level narrowing) since no source rows qualify.
+  {
+    let running: globalThis.Set<string> | undefined;
+    for (const filterExpr of statement.typeFilterExprs ?? []) {
+      const narrowed = narrowTypeIntersectionStep(scoped, subject.typeref, running, { typeName: "", typeExpr: filterExpr });
+      if (narrowed) {
+        running = narrowed.concrete;
+        subject = withNarrowedSource(subject, narrowed.typeref);
+      }
+    }
+  }
   bindValue(scoped, "__subject__", subject);
   bindValue(scoped, "__current__", subject);
   const shaped = compileShape(subject, statement.shape, scoped);
@@ -8829,8 +8952,19 @@ const compileInsertStatement = (statement: InsertStatement, ctx: IRCompileContex
 
 const compileUpdateStatement = (statement: UpdateStatement, ctx: IRCompileContext): UpdateStmt => {
   const scoped = withBindings(ctx, statement.with);
-  const subject = resolveSubjectTypeRef(scoped, statement.typeName);
-  const subjectSet = setFromTypeRoot(subject);
+  let subject = resolveSubjectTypeRef(scoped, statement.typeName);
+  let subjectSet = setFromTypeRoot(subject);
+  // `UPDATE Ba[is Bb] SET …` keeps the `[is …]` narrowing in `target` (a path
+  // ending in the type intersection). Resolve it so the update's subject extent
+  // — and the pointers the SET clause may reference (`bb := .bb + 1`, where `bb`
+  // lives on the intersected side) — is the type intersection, not the base.
+  if (statement.target) {
+    const narrowedTarget = compileFreeObjectExpr(statement.target, scoped);
+    if (!narrowedTarget.typeref.isScalar && narrowedTarget.typeref.id !== subject.id) {
+      subjectSet = narrowedTarget;
+      subject = narrowedTarget.typeref;
+    }
+  }
   bindValue(scoped, "__subject__", subjectSet);
   bindValue(scoped, "__current__", subjectSet);
   const shape: ShapeElement[] = Object.entries(statement.values).map(([name, value]) => {
