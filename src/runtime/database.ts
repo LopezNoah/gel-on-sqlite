@@ -1105,6 +1105,8 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
         case "minutes": p.us = Math.trunc(p.us / 6e7) * 6e7; break;
         case "seconds": p.us = Math.trunc(p.us / 1e6) * 1e6; break;
         case "milliseconds": p.us = Math.trunc(p.us / 1000) * 1000; break;
+        // `p.us` is already microsecond-precision, so truncating to µs is a no-op.
+        case "microseconds": break;
         default: return invalidUnit("std::duration_truncate", u);
       }
       return formatDur(p);
