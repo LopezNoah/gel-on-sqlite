@@ -5708,7 +5708,16 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
         expr: {
           kind: "select_expr",
           result: inner,
-          where: clauses.filter ? compileFreeObjectExpr(clauses.filter, clauseCtx) : undefined,
+          // A comparison filter (`FILTER .name = X`) parses as a `predicate`
+          // FilterExpr, which compileFreeObjectExpr can't lower — decompose it
+          // via compileFilterExpr (matching the `case "select"` path), while a
+          // bare boolean expression keeps the free-expr compile.
+          where: clauses.filter
+            ? (["predicate", "and", "or", "not", "in_predicate", "free_expr"]
+                .includes((clauses.filter as { kind: string }).kind)
+              ? compileFilterExpr(clauses.filter as unknown as FilterExpr, inner, clauseCtx)
+              : compileFreeObjectExpr(clauses.filter, clauseCtx))
+            : undefined,
           orderBy: clauses.orderBy ? compileSelectOrderExprChain(clauses.orderBy, clauseCtx) : undefined,
           offset: clauses.offset === undefined ? undefined : literalToSet(clauses.offset),
           limit: clauses.limit === undefined ? undefined : literalToSet(clauses.limit),
@@ -7712,7 +7721,20 @@ const compileShape = (
       bindValue(scoped, "__subject__", expr);
       return scoped;
     })();
-    const where = el.where ? compileFreeObjectExpr(el.where, filterCtx) : undefined;
+    // A per-link FILTER is usually a bare boolean expression (`EXISTS .x`,
+    // `.a OR .b`) that compileFreeObjectExpr handles, but a comparison
+    // (`FILTER .name = X`) parses as a `predicate` FilterExpr — those (and the
+    // and/or/not/in connective forms) must be decomposed by compileFilterExpr,
+    // which builds the operator_call from target/op/value. Routed against the
+    // link's target rows (the bound `__subject__`).
+    const whereIsFilterExpr = el.where !== undefined
+      && ["predicate", "and", "or", "not", "in_predicate", "free_expr"]
+        .includes((el.where as { kind: string }).kind);
+    const where = el.where
+      ? (whereIsFilterExpr
+        ? compileFilterExpr(el.where as unknown as FilterExpr, expr, filterCtx)
+        : compileFreeObjectExpr(el.where, filterCtx))
+      : undefined;
     const orderBy = el.orderBy?.map((entry) => {
       // `ORDER BY @prop` — a link-property sort key on the link being shaped
       // (`ancestors: {…} ORDER BY @index`). Build a link-property pointer so
