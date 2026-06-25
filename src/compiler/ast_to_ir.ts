@@ -817,6 +817,26 @@ const extendPathSet = (source: Set, ptrref: PointerRef): Set =>
   // rather than special-casing the flag at every call site.
   extendPathSetDirectional(source, ptrref, ptrref.computedLinkAliasIsBackward ? "inbound" : "outbound");
 
+// Re-root a compiled pointer-chain `body` onto `newRoot`, replacing its leftmost
+// subject `type_root` (of type `subjectTypeId`). A computed body like
+// `User.name` accessed through a rebinding/filter (`(SELECT U FILTER …).tag`,
+// `tag := User.name`) then reads off the filtered iterator ROW instead of a
+// fresh `User` extent — correlated, no CROSS JOIN. Returns null when the body
+// is not a pure pointer chain rooted at the subject type (caller keeps the
+// for_expr fallback for those).
+const rerootSetSubject = (body: Set, newRoot: Set, subjectTypeId: string): Set | null => {
+  if (body.expr.kind === "type_root") {
+    return body.typeref.id === subjectTypeId ? newRoot : null;
+  }
+  if (body.expr.kind === "pointer") {
+    const ptr = body.expr as Pointer;
+    const rerootedSource = rerootSetSubject(ptr.source, newRoot, subjectTypeId);
+    if (!rerootedSource) return null;
+    return { ...body, expr: { ...ptr, source: rerootedSource } };
+  }
+  return null;
+};
+
 // The cardinality of a pointer step as seen from the *result* of traversing it.
 // A forward step uses `outCardinality`; a backward-traversed computed alias
 // (`link winner := .<awards[is User]`) uses `inCardinality` — e.g. an exclusive
@@ -4117,6 +4137,12 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
           return (cur.expr.kind === "type_root" || cur.expr.kind === "pointer") && !cur.typeref.isScalar;
         })();
         if (sourceHasClauses && !computedIsObjectSet) {
+          // If the computed body is a pointer chain rooted at the subject's own
+          // type, re-root it onto the (filtered/rebound) source so it reads off
+          // that row — correlated — instead of a for_expr whose body is a fresh
+          // extent the SQL layer CROSS JOINs.
+          const rerooted = rerootSetSubject(computedSet, source, source.typeref.id);
+          if (rerooted) return rerooted;
           return {
             kind: "set",
             expr: {
@@ -4185,6 +4211,11 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
           return cur.expr.kind === "group_row_field";
         })();
         if ((sourceHasClauses || computedIsGroupRowChain) && !computedIsObjectPath) {
+          // Re-root a subject-rooted pointer-chain computed onto the
+          // (filtered/rebound) source so it correlates to that row instead of
+          // a for_expr CROSS JOINing a fresh extent.
+          const rerooted = rerootSetSubject(shapedElement.expr, source, source.typeref.id);
+          if (rerooted) return rerooted;
           return {
             kind: "set",
             expr: {
