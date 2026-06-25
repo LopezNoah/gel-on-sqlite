@@ -77,3 +77,44 @@ describe("db_effect — uncolored write core, two drivers", () => {
     expect(await runDbEffectAsync(upsertFirstOrMore(), awaitedExec(adb))).toBe("first,more");
   });
 });
+
+// A failing DB op must surface inside the generator so the write logic's own
+// catch/finally runs (the ROLLBACK-on-error the write executor depends on).
+function* failingWriteWithFinally(log: string[]): DbEffect<void> {
+  try {
+    yield* dbRun("INSERT INTO t (id, name) VALUES (1, 'a')");
+    yield* dbRun("INSERT INTO t (id, name) VALUES (1, 'b')"); // PK conflict → exec throws
+  } finally {
+    log.push("finally-ran");
+  }
+}
+
+function* catchAndRecover(): DbEffect<string> {
+  try {
+    yield* dbRun("INSERT INTO t (id, name) VALUES (1, 'a')");
+    yield* dbRun("INSERT INTO t (id, name) VALUES (1, 'b')"); // throws
+    return "no-error";
+  } catch {
+    const rows = yield* dbAll("SELECT count(*) AS c FROM t");
+    return `recovered:${rows[0].c}`;
+  }
+}
+
+describe("db_effect — error propagation into the generator", () => {
+  it("runs finally and rethrows when a DB op fails (sync)", () => {
+    const log: string[] = [];
+    expect(() => runDbEffectSync(failingWriteWithFinally(log), syncDbExec(freshDb()))).toThrow();
+    expect(log).toEqual(["finally-ran"]);
+  });
+
+  it("runs finally and rejects when a DB op fails (async)", async () => {
+    const log: string[] = [];
+    await expect(runDbEffectAsync(failingWriteWithFinally(log), awaitedExec(freshDb()))).rejects.toThrow();
+    expect(log).toEqual(["finally-ran"]);
+  });
+
+  it("lets the generator catch the failure and keep yielding, identically under both drivers", async () => {
+    expect(runDbEffectSync(catchAndRecover(), syncDbExec(freshDb()))).toBe("recovered:1");
+    expect(await runDbEffectAsync(catchAndRecover(), awaitedExec(freshDb()))).toBe("recovered:1");
+  });
+});

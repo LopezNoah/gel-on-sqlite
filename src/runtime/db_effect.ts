@@ -61,11 +61,25 @@ export function* dbRun(sql: string, ...params: ScalarValue[]): DbEffect<DbChange
 export type SyncDbExec = (op: DbOp) => DbResult;
 export type AsyncDbExec = (op: DbOp) => Promise<DbResult>;
 
+// A failed DB op is injected back INTO the generator via `.throw()`, so the
+// write logic's own `try/catch/finally` runs (e.g. ROLLBACK on a constraint
+// violation) under both drivers. If the generator rethrows, it propagates out
+// — after its `finally` blocks have run.
+
 /** Drive a DB effect synchronously (better-sqlite3 / Durable Object / WASM). */
 export const runDbEffectSync = <T>(effect: DbEffect<T>, exec: SyncDbExec): T => {
   let step = effect.next();
   while (!step.done) {
-    step = effect.next(exec(step.value));
+    let result: DbResult;
+    try {
+      result = exec(step.value);
+    } catch (err) {
+      // Inject the failure into the generator (outside this try) so its own
+      // catch/finally runs; an uncaught rethrow propagates out of the driver.
+      step = effect.throw(err);
+      continue;
+    }
+    step = effect.next(result);
   }
   return step.value;
 };
@@ -74,7 +88,14 @@ export const runDbEffectSync = <T>(effect: DbEffect<T>, exec: SyncDbExec): T => 
 export const runDbEffectAsync = async <T>(effect: DbEffect<T>, exec: AsyncDbExec): Promise<T> => {
   let step = effect.next();
   while (!step.done) {
-    step = effect.next(await exec(step.value));
+    let result: DbResult;
+    try {
+      result = await exec(step.value);
+    } catch (err) {
+      step = effect.throw(err);
+      continue;
+    }
+    step = effect.next(result);
   }
   return step.value;
 };
