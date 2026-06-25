@@ -6321,8 +6321,37 @@ const compileSelectSource = (
     previousTyperef = targetType;
   }
   void previousTyperef;
+  // A shape over this link source can project link properties of the leaf link
+  // (`User.deck {name, @count}`). Those live on the leaf's junction row
+  // (`j{leaf}`), not the target row that `${previousAlias}.*` surfaces, so the
+  // downstream shape compiler's `g0."@count"` reference would dangle. Surface
+  // each referenced leaf link property as a column named after the property
+  // (`j{leaf}."count" AS "@count"`) so it resolves.
+  const leafLink = links[links.length - 1];
+  const leafLinkColumns: string[] = [];
+  if (shouldUseLinkTable(leafLink)) {
+    const leafLinkAlias = `j${links.length - 1}`;
+    const seenLinkProps = new globalThis.Set<string>();
+    const shapePointers: Pointer[] = [];
+    for (const element of sourceSet.shape ?? []) collectPointers(element.expr, shapePointers);
+    for (const ptr of shapePointers) {
+      if (!ptr.ptrref.isLinkProperty) continue;
+      let linkSrc: Set = ptr.source;
+      while (linkSrc.expr.kind === "select_expr") linkSrc = (linkSrc.expr as SelectExpr).result;
+      if (linkSrc.expr.kind !== "pointer"
+          || (linkSrc.expr as Pointer).ptrref.id !== leafLink.ptrref.id) continue;
+      const asName = columnForPointer(ptr);
+      if (seenLinkProps.has(asName)) continue;
+      seenLinkProps.add(asName);
+      const junctionCol = asName.startsWith("@") ? asName.slice(1) : asName;
+      leafLinkColumns.push(`${leafLinkAlias}.${quoteIdent(junctionCol)} AS ${quoteIdent(asName)}`);
+    }
+  }
+  const projection = leafLinkColumns.length > 0
+    ? `${previousAlias}.*, ${leafLinkColumns.join(", ")}`
+    : `${previousAlias}.*`;
   return {
-    sql: `(SELECT ${previousAlias}.* FROM ${fromSql}) ${alias}`,
+    sql: `(SELECT ${projection} FROM ${fromSql}) ${alias}`,
     alias,
   };
 };
@@ -8787,6 +8816,22 @@ const compileShapeProjection = (
   }
 
   const shapeExpr = unwrapSelectExprSet(shape.expr);
+  // A computed shape field wrapping an object link-shape in assert_exists /
+  // assert_single / assert_distinct (`cards := assert_exists(.deck {name,
+  // @count})`) must still compile through the correlated link-array path
+  // below — otherwise it falls to the uncorrelated materialized-source value
+  // fallback, which cross-joins every subject's links and loses the per-row
+  // correlation. The assertion is a runtime no-op over a non-empty link, so
+  // peel it and re-dispatch on the inner object link-shape.
+  if (shapeExpr.result.expr.kind === "function_call") {
+    const innerObject = unwrapObjectPassthrough(shapeExpr.result);
+    if (innerObject && innerObject.expr.kind === "pointer" && !innerObject.typeref.isScalar) {
+      const recompiled = compileShapeProjection(
+        { ...shape, expr: innerObject }, sourceAlias, params, options, target, depth,
+      );
+      if (recompiled) return recompiled;
+    }
+  }
   // `type_name := X.__type__.name` — `__type__` has no storage table; the
   // dynamic type label is the row's `__source_type` column.
   if (shapeExpr.result.expr.kind === "pointer") {
