@@ -3002,7 +3002,7 @@ const compileScalarSelectSQLInner = (
         const infix = operatorToInfixSql(op);
         if (infix && pieces.length === 2 && infix !== "UNION" && infix !== "IS DISTINCT FROM") {
           const like = likeOperatorSql(op, pieces[0], pieces[1]);
-          lowered = like ?? flooredArithBinarySql(op, pieces[0], pieces[1]) ?? `(${pieces[0]} ${infix} ${pieces[1]})`;
+          lowered = like ?? flooredArithBinarySql(op, pieces[0], pieces[1], target) ?? `(${pieces[0]} ${infix} ${pieces[1]})`;
         }
       }
     }
@@ -3841,7 +3841,7 @@ const compileScalarSelectSQLInner = (
         }
         if (ok && fromSources.length > 0) {
           const valueExpr = likeOperatorSql(opCall.operator, argSqls[0], argSqls[1])
-            ?? flooredArithBinarySql(opCall.operator, argSqls[0], argSqls[1])
+            ?? flooredArithBinarySql(opCall.operator, argSqls[0], argSqls[1], target)
             ?? `(${argSqls[0]} ${op} ${argSqls[1]})`;
           return `SELECT ${valueExpr} AS ${quoteIdent("value")} FROM ${fromSources.join(", ")}`;
         }
@@ -7418,7 +7418,7 @@ const compileValueSetSQLWithAliases = (
           `CASE WHEN l IS NULL OR r IS NULL THEN NULL WHEN l ${cmpOp} r THEN json('true') ELSE json('false') END`,
         );
       }
-      return flooredArithBinarySql(call.operator, left, right) ?? `(${left} ${op} ${right})`;
+      return flooredArithBinarySql(call.operator, left, right, target) ?? `(${left} ${op} ${right})`;
     }
   }
 
@@ -11430,7 +11430,7 @@ const compileOperatorValueSQL = (
       return `${rangeFn}(${compiled[0]}, ${compiled[1]})`;
     }
     if (compiled.length === 2) {
-      const floored = flooredArithBinarySql(call.operator, compiled[0], compiled[1]);
+      const floored = flooredArithBinarySql(call.operator, compiled[0], compiled[1], target);
       if (floored) return floored;
     }
     return `(${compiled.join(` ${infixOperator} `)})`;
@@ -12451,10 +12451,27 @@ const resolveShapeElementPointer = (element: ShapeElement): PointerRef | undefin
 // the `_gel_floordiv` / `_gel_mod` runtime functions (each operand referenced
 // once, so param ordering is preserved). Returns null for every other operator
 // so callers fall back to the plain infix emit.
-const flooredArithBinarySql = (operator: string, left: string, right: string): string | null => {
+const flooredArithBinarySql = (
+  operator: string,
+  left: string,
+  right: string,
+  target: RuntimeTarget,
+): string | null => {
+  if (operator !== "//" && operator !== "%") return null;
+  // On D1 / Durable Objects (no custom functions) emit native floored
+  // arithmetic that matches Gel's sign-of-divisor semantics. `//` uses floor();
+  // `%` binds the operands once in a subquery so each compiled arg (which may
+  // be a `?` param) appears exactly once while the floored-modulo formula
+  // (`x - floor(x/y)*y`, which also gives correct float modulo unlike SQLite's
+  // integer `%`) references them freely. Only division-by-zero differs
+  // (NULL vs raise) — see KNOWN_LIMITATIONS.md. The better-sqlite3 target keeps
+  // `_gel_*` for exact bigint handling and the raise-on-zero behaviour.
+  if (target === "d1") {
+    if (operator === "//") return `floor(${left} * 1.0 / ${right})`;
+    return `(SELECT x - floor(x * 1.0 / y) * y FROM (SELECT ${left} AS x, ${right} AS y))`;
+  }
   if (operator === "//") return `_gel_floordiv(${left}, ${right})`;
-  if (operator === "%") return `_gel_mod(${left}, ${right})`;
-  return null;
+  return `_gel_mod(${left}, ${right})`;
 };
 
 const operatorToInfixSql = (operator: string): string | null => {

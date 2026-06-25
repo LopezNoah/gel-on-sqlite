@@ -30,31 +30,41 @@ const jsToTs = {
   },
 };
 
-await esbuild.build({
-  entryPoints: [path.join(here, "worker.ts")],
-  outfile,
-  bundle: true,
-  minify: true,
-  format: "esm",
-  target: "es2022",
-  platform: "neutral",
-  conditions: ["workerd", "worker", "browser", "import", "default"],
-  mainFields: ["module", "main"],
-  // The engine reads dev-only `process.env.DBG_*` flags. Inject a tiny
-  // `process` shim so those reads return undefined without needing a node
-  // `process` global — and therefore without the `nodejs_compat` flag.
-  banner: { js: "var process = globalThis.process ?? { env: {} };" },
-  plugins: [jsToTs],
-  logLevel: "warning",
-});
+// Both workers: worker.ts (D1, read-only Tier-1) and do_worker.ts (Durable
+// Objects, the FULL sync engine incl. writes). The DO bundle succeeding is the
+// proof that engine.ts is bundle-safe for workerd.
+const entries = [
+  { in: "worker.ts", out: outfile },
+  { in: "do_worker.ts", out: path.join(here, "dist/do_worker.js") },
+];
 
-const code = fs.readFileSync(outfile, "utf8");
-const forbidden = ['from "node:', 'require("', "better-sqlite3"];
-const offenders = forbidden.filter((f) => code.includes(f));
-if (offenders.length > 0) {
-  console.error(`bundle is NOT self-contained — found: ${offenders.join(", ")}`);
-  process.exit(1);
+for (const entry of entries) {
+  await esbuild.build({
+    entryPoints: [path.join(here, entry.in)],
+    outfile: entry.out,
+    bundle: true,
+    minify: true,
+    format: "esm",
+    target: "es2022",
+    platform: "neutral",
+    conditions: ["workerd", "worker", "browser", "import", "default"],
+    mainFields: ["module", "main"],
+    // The engine reads dev-only `process.env.DBG_*` flags. Inject a tiny
+    // `process` shim so those reads return undefined without needing a node
+    // `process` global — and therefore without the `nodejs_compat` flag.
+    banner: { js: "var process = globalThis.process ?? { env: {} };" },
+    plugins: [jsToTs],
+    logLevel: "warning",
+  });
+
+  const code = fs.readFileSync(entry.out, "utf8");
+  const forbidden = ['from "node:', 'require("', "better-sqlite3"];
+  const offenders = forbidden.filter((f) => code.includes(f));
+  if (offenders.length > 0) {
+    console.error(`${entry.in} bundle is NOT self-contained — found: ${offenders.join(", ")}`);
+    process.exit(1);
+  }
+  console.log(
+    `bundled ${entry.in} → ${path.relative(process.cwd(), entry.out)} (${(fs.statSync(entry.out).size / 1024).toFixed(1)} KB), self-contained ✓`,
+  );
 }
-console.log(
-  `bundled → ${path.relative(process.cwd(), outfile)} (${(fs.statSync(outfile).size / 1024).toFixed(1)} KB), self-contained ✓`,
-);

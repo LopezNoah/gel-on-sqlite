@@ -11,6 +11,12 @@ export interface AsyncRuntimeStatement {
   run: (...params: ScalarValue[]) => Promise<{ changes: number }>;
 }
 
+// One statement (SQL + positional params) for a batched async execution.
+export interface BatchStatement {
+  sql: string;
+  params: ScalarValue[];
+}
+
 export interface RuntimeDatabaseAdapter {
   target: RuntimeTarget;
   prepare: (sql: string) => RuntimeStatement;
@@ -25,6 +31,10 @@ export interface AsyncRuntimeDatabaseAdapter {
   close: () => Promise<void>;
   pragma?: (value: string) => Promise<unknown>;
   exec?: (sql: string) => Promise<void>;
+  // Run several read statements together. Backends with a native batch (D1's
+  // single round-trip) implement it; callers that need batching fall back to
+  // sequential `prepare().all()` when this is absent.
+  batch?: (statements: BatchStatement[]) => Promise<Record<string, unknown>[][]>;
 }
 
 export interface RuntimeInstance<TAdapter extends RuntimeDatabaseAdapter = RuntimeDatabaseAdapter> {
@@ -46,6 +56,10 @@ export const toAsyncAdapter = (adapter: RuntimeDatabaseAdapter): AsyncRuntimeDat
       run: async (...params) => stmt.run(...params),
     };
   },
+  // A sync adapter has no native batch; emulate it sequentially so callers can
+  // rely on `batch` being present here (used in tests and the sequential path).
+  batch: async (statements) =>
+    statements.map((s) => adapter.prepare(s.sql).all(...s.params)),
   close: async () => {
     adapter.close();
   },
