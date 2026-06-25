@@ -7966,6 +7966,32 @@ const compileShape = (
           });
           continue;
         }
+        // `@c := <expr>` defines/aliases a link property from a computed value.
+        // A bare or renamed projection (`@count`, normalized to `@count :=
+        // @count`) arrives as a `field_ref` and is read straight off the
+        // junction by compileLinkPropertyExpr. But a computed body that is a
+        // path or other expression (`@c := User.deck@count`) must be lowered
+        // like a non-`@` computed — compiling the value and projecting it
+        // under the element name — otherwise compileLinkPropertyExpr looks up
+        // a *stored* property named `c`, finds none, and emits a dangling
+        // `j.c` column reference.
+        if (el.expr.kind !== "field_ref") {
+          const lpCtx = childScope(ctx);
+          bindValue(lpCtx, "__subject__", subject);
+          bindValue(lpCtx, "__current__", subject);
+          const compiledExpr = compileFreeObjectExpr(el.expr, lpCtx);
+          out.push({
+            kind: "shape_element",
+            source: subject,
+            expr: withShapeModifiers(compiledExpr, el),
+            shapeOp: el.operation,
+            shapeOrigin: resolveShapeOrigin(el),
+            required: el.required ?? false,
+            cardinality: el.cardinality ?? "at_most_one",
+            name: el.name,
+          });
+          continue;
+        }
         const result = compileLinkPropertyExpr(el);
         if (result) {
           out.push(result);
