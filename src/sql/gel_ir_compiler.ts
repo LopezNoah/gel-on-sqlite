@@ -653,12 +653,16 @@ export const compileGelIRToSQL = (
   const stmtOffset = statement.offset ?? topSelect.selectExpr?.offset;
   let limitSql: string | null = null;
   let offsetSql: string | null = null;
+  // LIMIT / OFFSET are SIBLING scopes to the SELECT body — flag it so a
+  // for_expr inside (a computed accessed on a filtered binding) materializes
+  // its own iterator source instead of dangling on the subject alias.
+  const limitOffsetOptions: GelIRCompileOptions = { ...options, siblingScopeLimitOffset: true };
   if (stmtLimit) {
     const limitN = extractNumericLiteral(stmtLimit);
     if (limitN !== undefined) {
       limitSql = String(limitN);
     } else {
-      limitSql = compileValueSetSQL(stmtLimit, sourceAlias, params, target, options);
+      limitSql = compileValueSetSQL(stmtLimit, sourceAlias, params, target, limitOffsetOptions);
     }
   }
   if (stmtOffset) {
@@ -666,7 +670,7 @@ export const compileGelIRToSQL = (
     if (offsetN !== undefined) {
       offsetSql = String(offsetN);
     } else {
-      offsetSql = compileValueSetSQL(stmtOffset, sourceAlias, params, target, options);
+      offsetSql = compileValueSetSQL(stmtOffset, sourceAlias, params, target, limitOffsetOptions);
     }
   }
   // SQLite requires LIMIT before OFFSET. When the user supplied OFFSET but
@@ -10877,6 +10881,28 @@ const compileValueSetSQL = (
 
   if (expr.kind === "for_expr") {
     const forExpr = expr as ForExpr;
+    // When the iterator is an OBJECT set the body paths off — e.g.
+    // `F.deck_cost` where `F := (SELECT User FILTER …)` lowers (via the
+    // field-access computed-substitution FOR-wrap) to `for_expr(iterator=F,
+    // body=sum(.deck.cost))` — the iterator must be MATERIALIZED so the body's
+    // `.deck` correlates to F's rows. Compiling the body alone against the
+    // ambient `sourceAlias` dangles on an unbound `g0` (e.g. in a sibling-scope
+    // LIMIT/OFFSET clause). Route through the scalar-source builder, which
+    // builds the iterator's FROM, and wrap it as a scalar subquery. A scalar
+    // (union-literal) iterator keeps the naive body compile below — the body
+    // references the iterator as a value, not a correlation source.
+    // Only in a sibling-scope LIMIT/OFFSET expression, where the for_expr is
+    // guaranteed independent of the subject row. Elsewhere (GROUP iteration,
+    // co-iteration) the body correlates to an enclosing row and the naive
+    // body compile below is correct — re-materializing would wrongly detach it.
+    if (options.siblingScopeLimitOffset && !forExpr.iterator.typeref.isScalar) {
+      const cp = params.length;
+      const scalarSource = compileForExprScalarSource(set, params, target, options, []);
+      if (scalarSource) {
+        return `(SELECT ${quoteIdent("value")} FROM (${scalarSource}))`;
+      }
+      params.length = cp;
+    }
     const body = compileValueSetSQL(forExpr.body, sourceAlias, params, target, options, linkPropertyAlias);
     if (!body) {
       params.length = checkpoint;

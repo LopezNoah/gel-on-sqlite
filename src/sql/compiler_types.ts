@@ -116,6 +116,13 @@ export interface GelIRCompileOptions {
   // with its own FROM. Left unset (path-sharing semantics apply) when a row
   // source exists, so `Issue.number ++ (SELECT Issue.number)` stays correlated.
   allowIndependentSubquery?: boolean;
+  // Set when compiling a LIMIT/OFFSET expression, which in EdgeQL is a SIBLING
+  // scope to the SELECT body: it is evaluated once for the whole query and
+  // cannot correlate to the per-row subject alias. A for_expr over an object
+  // iterator inside it (`F.deck_cost` where `F := (SELECT User FILTER …)`)
+  // must therefore materialize its own iterator source rather than dangling on
+  // the unbound subject alias `g0`.
+  siblingScopeLimitOffset?: boolean;
 }
 
 // See GelIRCompileOptions.strictShape.
