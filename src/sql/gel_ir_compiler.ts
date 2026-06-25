@@ -10324,6 +10324,21 @@ const tryResolveOuterScopeIdRef = (
   return `${match.alias}.${quoteIdent("id")}`;
 };
 
+// A set produces a STRING value when it is str-typed, a string literal, or an
+// index/slice CHAIN bottoming out in one (`'f'[0][0]`). Bare string literals
+// carry `unknown:std::anyscalar` and intermediate index/slice results lose the
+// str type, so the typeref alone under-detects.
+const isStringValuedSet = (set: Set): boolean => {
+  let cur: Set = set;
+  while (cur.expr.kind === "select_expr") cur = (cur.expr as SelectExpr).result;
+  if (qualifyTypeName(cur.typeref) === "std::str") return true;
+  const e = cur.expr;
+  if (e.kind === "string_constant") return true;
+  if (e.kind === "index_expr") return isStringValuedSet((e as IndexExpr).expr);
+  if (e.kind === "slice_expr") return isStringValuedSet((e as SliceExpr).expr);
+  return false;
+};
+
 const compileValueSetSQL = (
   set: Set,
   sourceAlias: string,
@@ -11058,7 +11073,11 @@ const compileValueSetSQL = (
     }
     const base = compileValueSetSQL(indexExpr.expr, sourceAlias, params, target, options, linkPropertyAlias);
     const baseType = qualifyTypeName(indexExpr.expr.typeref);
-    if (base && numericIndex !== undefined && (baseType === "std::str" || baseType === "std::bytes")) {
+    // A bare string literal carries `unknown:std::anyscalar`, not `std::str`,
+    // so indexing it would wrongly lower as JSON-array access (`'qwerty'[2]`).
+    // Detect a string-valued source (incl. chained `'f'[0][0]`) → substr.
+    const sourceIsStr = baseType === "std::str" || isStringValuedSet(indexExpr.expr);
+    if (base && numericIndex !== undefined && (sourceIsStr || baseType === "std::bytes")) {
       return `substr(${base}, ${numericIndex >= 0 ? numericIndex + 1 : numericIndex}, 1)`;
     }
     if (base && numericIndex !== undefined) {
@@ -11108,14 +11127,31 @@ const compileValueSetSQL = (
     // negative indices over `length()` and clamp to [0, len] to match EdgeQL's
     // Python-style semantics.
     const baseTypeId = (sliceExpr.expr.typeref?.id ?? sliceExpr.expr.typeref?.nameHint ?? "").toLowerCase();
-    const isStringSlice = baseTypeId === "std::str" || baseTypeId.endsWith("::str") || baseTypeId === "str";
+    // A bare string literal carries `unknown:std::anyscalar`, not `std::str` —
+    // detect a string-valued source (incl. chains) so slicing uses substr, not
+    // the JSON array path (which raises "malformed JSON" on text).
+    const isStringSlice = baseTypeId === "std::str" || baseTypeId.endsWith("::str") || baseTypeId === "str"
+      || isStringValuedSet(sliceExpr.expr);
     if (isStringSlice) {
-      const lenExpr = `length(${base})`;
+      // The base/bounds are each referenced several times below. When any
+      // carries a `?` param (a string LITERAL base is a single `?`), inline
+      // them once in a subquery and reference the bound aliases — otherwise the
+      // repeated `?` placeholders out-number the pushed params. A column base
+      // (no `?`) keeps the simpler inline form.
+      const paramInlined = base.includes("?") || start.includes("?") || (end?.includes("?") ?? false);
+      const b = paramInlined ? "b" : base;
+      const s = paramInlined ? "s" : start;
+      const eRef = paramInlined ? (end ? "e" : null) : end;
+      const lenExpr = `length(${b})`;
       const fold = (idx: string): string => `(CASE WHEN (${idx}) < 0 THEN ${lenExpr} + (${idx}) ELSE (${idx}) END)`;
       const clamp = (e: string): string => `MAX(0, MIN(${lenExpr}, ${e}))`;
-      const startC = clamp(fold(start));
-      const endC = end ? clamp(fold(end)) : lenExpr;
-      return `CASE WHEN ${base} IS NULL THEN NULL ELSE substr(${base}, (${startC}) + 1, MAX(0, (${endC}) - (${startC}))) END`;
+      const startC = clamp(fold(s));
+      const endC = eRef ? clamp(fold(eRef)) : lenExpr;
+      const core = `CASE WHEN ${b} IS NULL THEN NULL ELSE substr(${b}, (${startC}) + 1, MAX(0, (${endC}) - (${startC}))) END`;
+      if (!paramInlined) return core;
+      const binds = [`(${base}) AS b`, `(${start}) AS s`, end ? `(${end}) AS e` : null]
+        .filter((c): c is string => c !== null).join(", ");
+      return `(SELECT ${core} FROM (SELECT ${binds}))`;
     }
     // SQLite's json_extract path syntax doesn't support `$[start:end]` slices,
     // so we iterate the JSON array's elements with json_each and filter by
