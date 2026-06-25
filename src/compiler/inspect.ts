@@ -15,6 +15,7 @@
 import type { Statement } from "../edgeql/ast.js";
 import { parseEdgeQLScript } from "../edgeql/parser.js";
 import { lowersToSingleSql, type GelIRSQLArtifact } from "../sql/compiler_types.js";
+import { valueFactsOf, type ValueFacts } from "../ir/value_facts.js";
 import { classifyExecutionStrategy, type ExecutionStrategy } from "./execution_strategy.js";
 import { loadSchema } from "../schema/load.js";
 import type { SchemaSnapshot } from "../schema/schema.js";
@@ -49,6 +50,11 @@ export interface CompileFacts {
   cteCount: number;
   /** Node-kind skeleton of the Live IR (gelIr). */
   irKindTree: IRNodeKind;
+  /** Value-kind facts of the statement's result set — what kind of value it
+   *  produces (scalar/collection/object + qualified type). This is the
+   *  first-party seam (src/ir/value_facts.ts) the SQL compiler consults instead
+   *  of re-peeling IR shapes at each lowering leaf (ADR 0057). */
+  valueFacts: ValueFacts;
 }
 
 export interface InspectError {
@@ -134,6 +140,7 @@ export function inspect(
     subqueryCount: countMatches(canonical, /\(\s*select\b/gi),
     cteCount: countMatches(canonical, /\bwith\b/gi),
     irKindTree: irKindTree(artifact.gelIr),
+    valueFacts: valueFactsOf(artifact.gelIr.expr),
   };
 
   return {

@@ -66,6 +66,7 @@ import type {
   Tuple,
   UpdateStmt,
 } from "../ir/gel_ir.js";
+import { isBytesValued, isStrValued, qualifiedTypeRefName } from "../ir/value_facts.js";
 import type { ScalarValue } from "../types.js";
 export type { GelIRCompileOptions, GelIRSQLArtifact } from "./compiler_types.js";
 
@@ -3083,8 +3084,12 @@ const compileScalarSelectSQLInner = (
       }
     }
     // `arr[{0, 1}]` — set-valued indexing produces multiple results. Lower
-    // to a json_extract per index in the index set.
-    if (idxLit === undefined) {
+    // to a json_extract per index in the index set. A string/bytes base is
+    // NOT a JSON array, so skip this branch for one (`'qwerty'[<int16>2]`) and
+    // fall through to the generic value path, where compileValueSetSQL indexes
+    // it char/byte-wise via substr (ADR 0057). A literal-index string base
+    // already falls through here because idxLit is defined.
+    if (idxLit === undefined && !isStrValued(idxExpr.expr) && !isBytesValued(idxExpr.expr)) {
       const cp = params.length;
       const idxSelect = compileScalarSelectSQL(idxExpr.index, params, target, options);
       if (idxSelect) {
@@ -10324,21 +10329,6 @@ const tryResolveOuterScopeIdRef = (
   return `${match.alias}.${quoteIdent("id")}`;
 };
 
-// A set produces a STRING value when it is str-typed, a string literal, or an
-// index/slice CHAIN bottoming out in one (`'f'[0][0]`). Bare string literals
-// carry `unknown:std::anyscalar` and intermediate index/slice results lose the
-// str type, so the typeref alone under-detects.
-const isStringValuedSet = (set: Set): boolean => {
-  let cur: Set = set;
-  while (cur.expr.kind === "select_expr") cur = (cur.expr as SelectExpr).result;
-  if (qualifyTypeName(cur.typeref) === "std::str") return true;
-  const e = cur.expr;
-  if (e.kind === "string_constant") return true;
-  if (e.kind === "index_expr") return isStringValuedSet((e as IndexExpr).expr);
-  if (e.kind === "slice_expr") return isStringValuedSet((e as SliceExpr).expr);
-  return false;
-};
-
 const compileValueSetSQL = (
   set: Set,
   sourceAlias: string,
@@ -11076,12 +11066,14 @@ const compileValueSetSQL = (
       }
     }
     const base = compileValueSetSQL(indexExpr.expr, sourceAlias, params, target, options, linkPropertyAlias);
-    const baseType = qualifyTypeName(indexExpr.expr.typeref);
-    // A bare string literal carries `unknown:std::anyscalar`, not `std::str`,
-    // so indexing it would wrongly lower as JSON-array access (`'qwerty'[2]`).
-    // Detect a string-valued source (incl. chained `'f'[0][0]`) → substr.
-    const sourceIsStr = baseType === "std::str" || isStringValuedSet(indexExpr.expr);
-    if (base && numericIndex !== undefined && (sourceIsStr || baseType === "std::bytes")) {
+    // A string/bytes source is indexed char/byte-wise via `substr`, never the
+    // JSON-array idiom below. A bare string literal carries
+    // `unknown:std::anyscalar` (not `std::str`), and index/slice chains lose
+    // the scalar type — so we ask the value-facts seam, which folds in those
+    // cases, rather than trusting the typeref alone (ADR 0057).
+    const sourceIsStr = isStrValued(indexExpr.expr);
+    const sourceIsBytes = isBytesValued(indexExpr.expr);
+    if (base && numericIndex !== undefined && (sourceIsStr || sourceIsBytes)) {
       return `substr(${base}, ${numericIndex >= 0 ? numericIndex + 1 : numericIndex}, 1)`;
     }
     if (base && numericIndex !== undefined) {
@@ -11102,6 +11094,20 @@ const compileValueSetSQL = (
         && (indexUnwrapped.result.expr as OperatorCall).operator === "union") {
       params.length = checkpoint;
       return null;
+    }
+    // A string/bytes source with a NON-literal scalar index (`s[<int16>2]`,
+    // `s[$i]`) still indexes char/byte-wise — the JSON-array path below would
+    // `json_extract` over text and fail. Compute a 1-based `substr` position
+    // (negative indices offset from length), binding base + index once so a
+    // `?` in either isn't duplicated. Mirrors the literal substr branch above
+    // for the dynamic case; this is the fact-driven dispatch the seam enables.
+    if (base && (sourceIsStr || sourceIsBytes)) {
+      const dynIndex = compileValueSetSQL(indexExpr.index, sourceAlias, params, target, options, linkPropertyAlias);
+      if (!dynIndex) {
+        params.length = checkpoint;
+        return null;
+      }
+      return `(SELECT substr(b, CASE WHEN i < 0 THEN length(b) + i + 1 ELSE i + 1 END, 1) FROM (SELECT (${base}) AS b, CAST(${dynIndex} AS INTEGER) AS i))`;
     }
     const index = compileValueSetSQL(indexExpr.index, sourceAlias, params, target, options, linkPropertyAlias);
     if (!base || !index) {
@@ -11135,7 +11141,7 @@ const compileValueSetSQL = (
     // detect a string-valued source (incl. chains) so slicing uses substr, not
     // the JSON array path (which raises "malformed JSON" on text).
     const isStringSlice = baseTypeId === "std::str" || baseTypeId.endsWith("::str") || baseTypeId === "str"
-      || isStringValuedSet(sliceExpr.expr);
+      || isStrValued(sliceExpr.expr);
     if (isStringSlice) {
       // The base/bounds are each referenced several times below. When any
       // carries a `?` param (a string LITERAL base is a single `?`), inline
@@ -12647,12 +12653,9 @@ const resolveInputValue = (
   return legacyGlobal === undefined ? null : legacyGlobal;
 };
 
-const qualifyTypeName = (typeRef: TypeRef): string => {
-  if (typeRef.nameHint.includes("::")) {
-    return typeRef.nameHint;
-  }
-  return `${typeRef.module}::${typeRef.nameHint}`;
-};
+// Delegates to the single IR-TypeRef name-qualifier (src/ir/value_facts.ts);
+// see ADR 0057.
+const qualifyTypeName = (typeRef: TypeRef): string => qualifiedTypeRefName(typeRef);
 
 const resolveTypeTableName = (typeRef: TypeRef, options: GelIRCompileOptions): string => {
   const qualified = qualifyTypeName(typeRef);
