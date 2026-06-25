@@ -137,6 +137,11 @@ describe.skipIf(!wranglerAvailable)("real local D1 integration", () => {
       "select default::Person { name, age } order by .name;",
       "select count(default::Person);",
       "select default::Person { name } filter .age > 26 order by .name;",
+      // Math functions: the sync engine computes these via the `_gel_*` custom
+      // functions; on real D1 they lower to native SQLite math. Both must agree.
+      "select math::sqrt(16.0);",
+      "select math::cos(0.0);",
+      "select math::ln(1.0);",
     ]) {
       const actual = (await executeSelectAsync(wranglerD1Adapter, asyncSchema, q)).rows;
       expect(actual).toEqual(executeQuery(db, schema, q).rows);
