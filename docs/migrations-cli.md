@@ -81,11 +81,41 @@ const client = await connectD1(env.DB);
 const people = await allPeople(client);
 ```
 
-Import from `client/d1` / `client/do` directly (not `client/index`, which pulls
-the native driver). Both wrappers apply the same row codec as `Client`, so the
-generated result types are accurate on every backend. Provision the schema first
-(`gel migrate`/`push` against a local file, then ship the SQLite to D1, or run
-migrations against the DO storage).
+```ts
+// Browser / WASM (sql.js): synchronous, so full engine — reads + writes.
+import initSqlJs from "sql.js";
+import { createSqlJsAdapter, connectWasm } from "sqlite-ts/client/wasm";
+import { push } from "sqlite-ts/migrate/migrator"; // provisioning (dev) only
+
+const SQL = await initSqlJs({ locateFile: (f) => `/sql-wasm.wasm` });
+const db = new SQL.Database(savedBytes /* from IndexedDB */ ?? undefined);
+if (!savedBytes) push(createSqlJsAdapter(db), SDL); // or load a DB exported elsewhere
+const client = connectWasm(db);
+await createPerson(client, { name: "Ada" });        // writes work in the browser
+const people = await allPeople(client);
+localStorage.setItem("db", /* persist */ db.export());
+```
+
+Import from `client/d1` / `client/do` / `client/wasm` directly (not
+`client/index`, which pulls the native driver). All wrappers apply the same row
+codec as `Client`, so the generated result types are accurate on every backend.
+Provision the schema first (`gel migrate`/`push` against a local file, then ship
+the SQLite to D1; run migrations against DO storage; or `push` in-browser /
+load an exported DB for WASM).
+
+### Backend support matrix
+
+| Backend | Storage | Reads | Writes | Custom `_gel_*` fns |
+| --- | --- | --- | --- | --- |
+| better-sqlite3 (`Client`) | sync, native | ✓ | ✓ | ✓ (full fidelity) |
+| Durable Object (`connectDO`) | sync | ✓ | ✓ | native-lowered subset |
+| Browser / WASM (`connectWasm`) | sync (sql.js) | ✓ | ✓ | native-lowered subset |
+| Cloudflare D1 (`connectD1`) | async | ✓ | ✗ (read-only) | native-lowered subset |
+
+D1 writes are deferred — see `docs/adr/0060`. The native-lowered subset (math,
+datetime, bitwise, stddev, floored `//`/`%`) covers ~94% of the conformance
+suite; `_gel_*`-only features (regex, ranges, some casts) need the better-sqlite3
+backend until those impls are lifted into a bundle-safe module.
 
 ## Known limitations
 
