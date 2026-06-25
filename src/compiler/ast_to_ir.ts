@@ -1928,6 +1928,24 @@ const withBindings = (ctx: IRCompileContext, bindings: WithBinding[] | undefined
     if (set.expr.kind === "select_expr") {
       set = { ...set, isWithBinding: true } as Set;
     }
+    // A `count(...)` WITH binding is FACTORED — its argument is the whole set,
+    // not a per-row correlation. Mark the argument so SQL count-lowering counts
+    // the full set rather than correlating it to a later shape's row (which
+    // would give the per-row 0/1). Inline-shape counts carry no such mark and
+    // DO correlate. After WITH-binding inlining the two are otherwise
+    // IR-identical, so this mark is the only thing that distinguishes them.
+    // (ADR 0059)
+    if (
+      set.expr.kind === "function_call"
+      && (set.expr.functionName.split("::").pop() ?? "") === "count"
+    ) {
+      const call = set.expr as IRFunctionCall;
+      const markedArgs: Record<string, CallArg> = {};
+      for (const [key, arg] of Object.entries(call.args)) {
+        markedArgs[key] = { ...arg, expr: { ...arg.expr, isWithBinding: true } as Set };
+      }
+      set = { ...set, expr: { ...call, args: markedArgs } } as Set;
+    }
     // Tag object identity aliases so a later bare reference to the same type
     // is distinguishable from the WITH binding in SQL outer-scope matching.
     if (

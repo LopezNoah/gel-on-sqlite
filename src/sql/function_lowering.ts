@@ -117,6 +117,7 @@ export interface SqlLoweringContext {
   innermostForExprBody(sourceSet: Set): Set;
   isTopLevelEmptySetMarker(set: Set, options?: GelIRCompileOptions): boolean;
   pickSourcePathAlias(set: Set, options: GelIRCompileOptions): string | null;
+  correlatedDirectScalarPropertyLeaf(set: Set, options: GelIRCompileOptions): string | null;
   resetPointerSourceToRoot(pointer: Pointer): Pointer;
   narrowedLinkTarget(set: Set): TypeRef | undefined;
   setValueIsJson(set: Set): boolean;
@@ -325,6 +326,19 @@ export const compileCountOfSetSQL = (
 
   if (expr.kind === "pointer") {
     const checkpoint = params.length;
+    // `count(Card.name)` written INLINE in a computed shape
+    // (`Card { foo := … count(Card.name) }`) is per-row: `Card` correlates to
+    // the enclosing row, so the count is 0/1 on that row's single property. A
+    // FACTORED `WITH a := count({Card.name})` counts the WHOLE set instead, and
+    // its argument carries `isWithBinding` (stamped by the IR builder) so it
+    // skips this branch and falls through to the full-set scan below. The two
+    // are otherwise IR-identical after WITH-binding inlining. (ADR 0059)
+    if (!(set as { isWithBinding?: boolean }).isWithBinding) {
+      const correlatedLeaf = deps.correlatedDirectScalarPropertyLeaf(set, options);
+      if (correlatedLeaf) {
+        return `(CASE WHEN ${correlatedLeaf} IS NULL THEN 0 ELSE 1 END)`;
+      }
+    }
     const scalarSql = deps.compileScalarSelectSQL(set, params, target, options);
     if (scalarSql) {
       return `(SELECT count(*) FROM (${scalarSql}))`;

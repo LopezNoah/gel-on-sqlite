@@ -102,6 +102,7 @@ const sqlLoweringContext: () => SqlLoweringContext = (() => {
       innermostForExprBody,
       isTopLevelEmptySetMarker,
       pickSourcePathAlias,
+      correlatedDirectScalarPropertyLeaf,
       resetPointerSourceToRoot,
       narrowedLinkTarget,
       qualifyTypeName,
@@ -4690,6 +4691,30 @@ const pickOuterScopeAliasForExpr = (set: Set, options: GelIRCompileOptions): str
     options,
   );
   return match ? match.alias : null;
+};
+
+// For a single-valued, outbound, direct scalar property whose root type_root
+// matches an enclosing iteration scope (`Card.name` inside `Card { … }`),
+// return the RAW correlated column reference (`<alias>."name"`) — unwrapped, so
+// an `IS NULL` test reads the column directly rather than a json-quoted form.
+// Returns null unless the property is a direct single scalar off an outer scope.
+// Used by count-of-property correlation (ADR 0059): `count(Card.name)` written
+// inline in a shape is per-row (0/1 on the single value), unlike a factored
+// `WITH a := count({Card.name})` which counts the whole set.
+const correlatedDirectScalarPropertyLeaf = (
+  set: Set,
+  options: GelIRCompileOptions,
+): string | null => {
+  if (set.expr.kind !== "pointer") return null;
+  const ptr = set.expr as Pointer;
+  if (ptr.direction !== "outbound" || ptr.ptrref.isLinkProperty) return null;
+  if (!ptr.ptrref.outTarget.isScalar) return null;
+  const single = ptr.ptrref.outCardinality === "one" || ptr.ptrref.outCardinality === "at_most_one";
+  if (!single) return null;
+  if (ptr.source.expr.kind !== "type_root") return null;
+  const alias = pickOuterScopeAliasForExpr(set, options);
+  if (!alias) return null;
+  return `${alias}.${quoteIdent(columnForPointer(ptr))}`;
 };
 
 const pickSourcePathAlias = (set: Set, options: GelIRCompileOptions): string | null => {
