@@ -19,6 +19,8 @@ apply only when running on D1 / Durable Objects.
 | `math::sin/cos/tan/asin/acos/ln/lg/log/exp/sqrt/cot` | throws on out-of-domain / non-finite input | returns `NULL` (SQLite domain behaviour) |
 | `math::round` | banker's rounding (half to **even**) — `round(2.5) = 2` | half **away from zero** — `round(2.5) = 3` |
 | `math::mean` | exact | native `avg` (identical for valid input; `NULL` over the empty set instead of raising) |
+| `//` (floor div), `%` (mod) | floored (sign of divisor); raises on division by zero | native `floor()`-based — **values match exactly, including negatives**; division by zero yields `NULL` instead of raising. (`//` result is float-typed.) |
+| `math::var`, `var_pop`, `stddev`, `stddev_pop` | numerically-stable; raises on empty / single-element | reimplemented via `avg`/`sum` (`var_pop = E[x²]−E[x]²`): correct to within float **ULPs**; `NULL` (not raise) over empty set or single element |
 
 ## Datetime
 
@@ -44,10 +46,6 @@ equivalent / not yet lowered) and will raise `no such function` on D1/DO:
 - **Regex** (`re_test`, `re_match`, `re_replace`): D1 has no `regexp`.
 - **Ranges / multiranges**: the whole `range_*` / `multirange_*` family.
 - **`str_repeat`, `str_reverse`, `str_split`**: no native SQLite equivalent.
-- **`stddev` / `var`**: SQLite has no native variance aggregate (reimplementable
-  via `avg`/`sum`; not yet done).
-- **`%` (mod), `//` (floordiv)**: Gel uses floored modulo/division; SQLite is
-  truncated — not yet lowered natively (would change results on negatives).
 
 ## Operators already native (no difference)
 

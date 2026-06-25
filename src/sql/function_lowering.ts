@@ -425,18 +425,32 @@ export const compileFunctionCallSQL = (
   // share the generic "compile the arg as a scalar value set, then wrap in
   // the SQL aggregate" shape.
   const shortName = call.functionName.split("::").pop() ?? "";
-  // `math::mean` is the arithmetic mean — exactly SQLite's native `avg`, which
-  // D1 and Durable Objects both allow. On those custom-function-less targets we
-  // emit `avg` so the query runs natively; the better-sqlite3 target keeps
-  // `_gel_mean` for its exact empty-set semantics (raises "not enough
-  // elements"; `avg` over zero rows yields NULL — the same accepted edge-case
-  // difference as the native math lowerings). stddev/var have no native SQLite
-  // equivalent (they're absent from D1's allow-list) and would need an
-  // avg/sum-based expression rewrite, so they stay `_gel_*` for now.
+  // The statistical aggregates. On the better-sqlite3 target they use the
+  // `_gel_*` custom aggregates (exact Gel semantics: raises on empty / <2
+  // elements, numerically-stable). D1 / Durable Objects can't host custom
+  // functions, so `statAggSql` rewrites them to native SQLite: mean=avg,
+  // population variance = E[x²]−E[x]², sample variance = var_pop·n/(n−1),
+  // stddev = sqrt(var). The aggregate argument is the `value` column (not a
+  // param), so repeating it is safe. KNOWN LIMITATIONS on D1/DO: NULL instead
+  // of raising over the empty set; NULL for sample stats over a single element
+  // (division by zero); last-ULP differences vs Gel's stable algorithm. See
+  // KNOWN_LIMITATIONS.md.
   const STAT_AGG_SQL: Record<string, string> = {
-    mean: target === "d1" ? "avg" : "_gel_mean",
-    stddev: "_gel_stddev", stddev_pop: "_gel_stddev_pop",
+    mean: "_gel_mean", stddev: "_gel_stddev", stddev_pop: "_gel_stddev_pop",
     var: "_gel_var", var_pop: "_gel_var_pop",
+  };
+  const statAggSql = (name: string, col: string): string => {
+    if (target !== "d1") return `${STAT_AGG_SQL[name]}(${col})`;
+    const varPop = `(avg(${col}*${col}) - avg(${col})*avg(${col}))`;
+    const varSamp = `(${varPop} * count(${col}) / (count(${col}) - 1.0))`;
+    switch (name) {
+      case "mean": return `avg(${col})`;
+      case "var_pop": return varPop;
+      case "var": return varSamp;
+      case "stddev_pop": return `sqrt(${varPop})`;
+      case "stddev": return `sqrt(${varSamp})`;
+      default: return `${STAT_AGG_SQL[name]}(${col})`;
+    }
   };
   const aggregateOfType = ["count", "min", "max", "sum", "avg", "array_agg", "all", "any"].includes(shortName)
     || shortName in STAT_AGG_SQL;
@@ -456,7 +470,7 @@ export const compileFunctionCallSQL = (
       // Statistical aggregates raise "not enough elements" on the empty set —
       // run the aggregate over zero rows so its finalizer throws.
       if (shortName in STAT_AGG_SQL) {
-        return `(SELECT ${STAT_AGG_SQL[shortName]}(${quoteIdent("value")}) FROM (SELECT NULL AS ${quoteIdent("value")} WHERE 0))`;
+        return `(SELECT ${statAggSql(shortName, quoteIdent("value"))} FROM (SELECT NULL AS ${quoteIdent("value")} WHERE 0))`;
       }
     }
     if (shortName === "count" && argList.length === 1) {
@@ -552,7 +566,7 @@ export const compileFunctionCallSQL = (
         const sqlAgg = shortName === "array_agg"
           ? `json_group_array(${quoteIdent("value")})`
           : shortName in STAT_AGG_SQL
-            ? `${STAT_AGG_SQL[shortName]}(${quoteIdent("value")})`
+            ? statAggSql(shortName, quoteIdent("value"))
             : shortName === "sum"
               // EdgeQL `sum` has identity 0 over the (runtime-)empty set;
               // SQL `sum` over zero rows is NULL.
@@ -572,7 +586,7 @@ export const compileFunctionCallSQL = (
         const sqlAgg = shortName === "array_agg"
           ? `json_group_array(${deps.setValueIsJson(argList[0].expr) ? `json(${quoteIdent("value")})` : quoteIdent("value")})`
           : shortName in STAT_AGG_SQL
-            ? `${STAT_AGG_SQL[shortName]}(${quoteIdent("value")})`
+            ? statAggSql(shortName, quoteIdent("value"))
             : shortName === "sum"
               // EdgeQL `sum` identity is 0 over the runtime-empty set.
               ? `IFNULL(sum(${quoteIdent("value")}), 0)`

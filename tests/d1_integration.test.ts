@@ -144,6 +144,13 @@ describe.skipIf(!wranglerAvailable)("real local D1 integration", () => {
       "select math::ln(1.0);",
       // math::mean lowers to native `avg` on D1 (no `_gel_mean`).
       "select math::mean({2.0, 4.0, 6.0});",
+      // Floored `//` and `%` match Gel exactly via native floor() — including
+      // negative operands (sign of divisor), where SQLite's raw `/` and `%`
+      // would differ.
+      "select 7 // 2;",
+      "select -7 // 2;",
+      "select 7 % 3;",
+      "select -7 % 3;",
     ]) {
       const actual = (await executeSelectAsync(wranglerD1Adapter, asyncSchema, q)).rows;
       expect(actual).toEqual(executeQuery(db, schema, q).rows);
@@ -163,5 +170,12 @@ describe.skipIf(!wranglerAvailable)("real local D1 integration", () => {
     expect(await run(`select std::datetime_get(${dt}, 'year');`)).toEqual([2020]);
     expect(await run(`select std::datetime_get(${dt}, 'month');`)).toEqual([6]);
     expect(await run(`select std::datetime_get(${dt}, 'day');`)).toEqual([15]);
+
+    // stddev/var reimplemented via avg: correct to within float tolerance (the
+    // naive E[x²]−E[x]² formula differs from Gel's stable algorithm by ULPs).
+    const [varVal] = await run("select math::var({2.0, 4.0, 6.0});");
+    expect(varVal as number).toBeCloseTo(4, 6);
+    const [stddevVal] = await run("select math::stddev({2.0, 4.0, 6.0});");
+    expect(stddevVal as number).toBeCloseTo(2, 6);
   }, 60_000);
 });
