@@ -76,14 +76,43 @@ const nativeDatetimePart = (dt: string, unit: string): string =>
   ` WHEN 'epochseconds' THEN CAST(strftime('%s',u.dt) AS REAL)` +
   ` END) FROM (SELECT ${dt} AS dt, ${unit} AS un) AS u)`;
 
+// `datetime_truncate` to a unit boundary, via strftime. `std::datetime` is
+// UTC, so the result carries the `+00:00` suffix to match Gel's canonical form.
+// Common units (seconds…years) are handled; quarter/week/decade/century/
+// millennium yield NULL (documented), and sub-second fractional formatting may
+// differ. Operands bound once in a subquery for param safety.
+const nativeDatetimeTruncate = (dt: string, unit: string): string =>
+  `(SELECT (CASE lower(u.un)` +
+  ` WHEN 'seconds' THEN strftime('%Y-%m-%dT%H:%M:%S',u.dt)||'+00:00'` +
+  ` WHEN 'minutes' THEN strftime('%Y-%m-%dT%H:%M:00',u.dt)||'+00:00'` +
+  ` WHEN 'hours' THEN strftime('%Y-%m-%dT%H:00:00',u.dt)||'+00:00'` +
+  ` WHEN 'days' THEN strftime('%Y-%m-%dT00:00:00',u.dt)||'+00:00'` +
+  ` WHEN 'months' THEN strftime('%Y-%m-01T00:00:00',u.dt)||'+00:00'` +
+  ` WHEN 'years' THEN strftime('%Y-01-01T00:00:00',u.dt)||'+00:00'` +
+  ` END) FROM (SELECT ${dt} AS dt, ${unit} AS un) AS u)`;
+
 // Datetime/date/time part extractors share the strftime CASE (extra units for
-// a given type simply never match a valid query's unit). Truncation and the
-// duration accessors are NOT yet lowered natively (date-string round-trip /
-// interval semantics) — they stay `_gel_*`, i.e. unsupported on D1/DO for now.
+// a given type simply never match a valid query's unit). The duration
+// accessors stay `_gel_*` (interval semantics), i.e. unsupported on D1/DO.
 const NATIVE_DATETIME_FOR_RESTRICTED_TARGET: Record<string, (a: string[]) => string | null> = {
   "std::datetime_get": (a) => (a[0] && a[1] ? nativeDatetimePart(a[0], a[1]) : null),
   "cal::date_get": (a) => (a[0] && a[1] ? nativeDatetimePart(a[0], a[1]) : null),
   "cal::time_get": (a) => (a[0] && a[1] ? nativeDatetimePart(a[0], a[1]) : null),
+  "std::datetime_truncate": (a) => (a[0] && a[1] ? nativeDatetimeTruncate(a[0], a[1]) : null),
+};
+
+// Bitwise ops on D1/DO. `bit_and`/`bit_or`/`bit_not` already lower to native
+// operators; these three use `_gel_*`. `bit_xor` is width-independent so its
+// native form (`(x|y)-(x&y)`, operands bound once for param safety) matches
+// exactly. `bit_lshift`/`bit_rshift` use native `<<`/`>>` and drop the width
+// arg — identical for int64; on int16/int32 they do NOT wrap to the type width
+// (a documented difference). `bit_count` has no native popcount → stays
+// `_gel_*` (unsupported on D1/DO).
+const NATIVE_BITOP_FOR_RESTRICTED_TARGET: Record<string, (a: string[]) => string | null> = {
+  "std::bit_xor": (a) =>
+    a[0] && a[1] ? `(SELECT (x | y) - (x & y) FROM (SELECT ${a[0]} AS x, ${a[1]} AS y))` : null,
+  "std::bit_lshift": (a) => (a[0] && a[1] ? `(${a[0]} << ${a[1]})` : null),
+  "std::bit_rshift": (a) => (a[0] && a[1] ? `(${a[0]} >> ${a[1]})` : null),
 };
 
 // D1 and Durable Objects share the no-custom-functions constraint; the DO sync
@@ -109,7 +138,8 @@ export const lowerStdlibFunctionSql = (
     if (targetForbidsCustomFunctions(target)) {
       const native =
         NATIVE_MATH_FOR_RESTRICTED_TARGET[candidate]?.(args) ??
-        NATIVE_DATETIME_FOR_RESTRICTED_TARGET[candidate]?.(args);
+        NATIVE_DATETIME_FOR_RESTRICTED_TARGET[candidate]?.(args) ??
+        NATIVE_BITOP_FOR_RESTRICTED_TARGET[candidate]?.(args);
       if (native) return native;
     }
     const template = getStdlibSqlTemplate(candidate);

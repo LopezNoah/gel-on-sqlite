@@ -151,6 +151,13 @@ describe.skipIf(!wranglerAvailable)("real local D1 integration", () => {
       "select -7 // 2;",
       "select 7 % 3;",
       "select -7 % 3;",
+      // Bitwise ops: native on D1, exact for int64.
+      "select std::bit_xor(5, 3);",
+      "select std::bit_lshift(1, 4);",
+      "select std::bit_rshift(16, 2);",
+      // datetime_truncate to common units via strftime (UTC → +00:00 suffix).
+      "select <str>std::datetime_truncate(<datetime>'2020-06-15T12:30:45+00:00', 'hours');",
+      "select <str>std::datetime_truncate(<datetime>'2020-06-15T12:30:45+00:00', 'days');",
     ]) {
       const actual = (await executeSelectAsync(wranglerD1Adapter, asyncSchema, q)).rows;
       expect(actual).toEqual(executeQuery(db, schema, q).rows);

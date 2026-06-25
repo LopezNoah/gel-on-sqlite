@@ -42,12 +42,23 @@ describe("native math lowering for custom-function-less targets", () => {
     expect(lowerStdlibFunctionSql("sqlite", "std::round", ["x"])).toContain("_gel_round");
   });
 
-  it("datetime extractors → native strftime CASE on d1, _gel_* on sqlite", () => {
-    for (const fn of ["std::datetime_get", "cal::date_get", "cal::time_get"]) {
+  it("datetime extractors + truncate → native strftime on d1, _gel_* on sqlite", () => {
+    for (const fn of ["std::datetime_get", "cal::date_get", "cal::time_get", "std::datetime_truncate"]) {
       const d1 = lowerStdlibFunctionSql("d1", fn, ["dt", "'year'"]) ?? "";
       expect(d1).toContain("strftime");
       expect(d1).not.toContain("_gel_");
       expect(lowerStdlibFunctionSql("sqlite", fn, ["dt", "'year'"])).toContain("_gel_");
     }
+  });
+
+  it("bit_xor/lshift/rshift → native on d1, _gel_* on sqlite (bit_count stays _gel_)", () => {
+    expect(lowerStdlibFunctionSql("d1", "std::bit_xor", ["a", "b"])).toContain("(x | y) - (x & y)");
+    expect(lowerStdlibFunctionSql("d1", "std::bit_lshift", ["a", "b"])).toBe("(a << b)");
+    expect(lowerStdlibFunctionSql("d1", "std::bit_rshift", ["a", "b"])).toBe("(a >> b)");
+    for (const fn of ["std::bit_xor", "std::bit_lshift", "std::bit_rshift"]) {
+      expect(lowerStdlibFunctionSql("sqlite", fn, ["a", "b"])).toContain("_gel_");
+    }
+    // bit_count has no native popcount → _gel_ on both.
+    expect(lowerStdlibFunctionSql("d1", "std::bit_count", ["a"])).toContain("_gel_");
   });
 });

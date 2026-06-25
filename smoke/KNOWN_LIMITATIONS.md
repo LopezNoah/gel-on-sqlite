@@ -31,13 +31,27 @@ apply only when running on D1 / Durable Objects.
   **millisecond-precision** (SQLite `strftime('%f')`), not Gel's microsecond.
 - An **out-of-range unit** yields `NULL` rather than raising a validation error.
 
+`std::datetime_truncate` lowers to `strftime` for the common units (`seconds`,
+`minutes`, `hours`, `days`, `months`, `years`) — exact match to Gel. The
+`quarter`/`week`/`decade`/`century`/`millennium` units yield `NULL` (not yet
+lowered).
+
+## Bitwise
+
+| Function | D1 / DO |
+|---|---|
+| `bit_and`, `bit_or`, `bit_not` | already native (`&`, `\|`, `~`) — identical |
+| `bit_xor` | native `(x\|y)-(x&y)` — identical for all widths |
+| `bit_lshift`, `bit_rshift` | native `<<` / `>>` — identical for `int64`; on `int16`/`int32` they do **not** wrap to the type width |
+| `bit_count` | no native popcount — **unsupported** (`no such function: _gel_bit_count`) |
+
 ## Not yet supported on D1 / DO
 
 These still require the `_gel_*` custom functions (no native SQLite
 equivalent / not yet lowered) and will raise `no such function` on D1/DO:
 
-- **Datetime/duration**: `datetime_truncate`, `duration_get`, `duration_truncate`,
-  `duration_to_seconds` (date-string round-trip / interval semantics).
+- **Duration**: `duration_get`, `duration_truncate`, `duration_to_seconds`
+  (interval semantics).
 - **`std::to_int*/to_float*/to_bigint/to_decimal`**: these are the
   format-string parsers (`to_int64(str, fmt)`); SQLite `CAST` can't replicate
   format parsing. (The `<int64>x` cast *operator* already uses native `CAST`.)
