@@ -15,7 +15,7 @@
 
 import { parseEdgeQL } from "../edgeql/parser.js";
 import { type AsyncQueryContext, executeSelectAsync } from "../runtime/async_query.js";
-import { executeDeleteAsync } from "../runtime/async_write.js";
+import { executeDeleteAsync, executeUpdateAsync } from "../runtime/async_write.js";
 import { loadSchemaAsync } from "../runtime/async_schema.js";
 import { createD1Adapter, type D1DatabaseLike } from "../runtime/d1_adapter.js";
 import {
@@ -41,10 +41,13 @@ export const connectD1 = async (
   const schema = await loadSchemaAsync(adapter);
   return buildExecutor(async (query, args) => {
     const ctx: AsyncQueryContext = { params: args as AsyncQueryContext["params"] };
+    const kind = parseEdgeQL(query).kind;
     const rows =
-      parseEdgeQL(query).kind === "delete"
+      kind === "delete"
         ? (await executeDeleteAsync(adapter, schema, query, ctx)).rows
-        : (await executeSelectAsync(adapter, schema, query, ctx)).rows;
+        : kind === "update"
+          ? (await executeUpdateAsync(adapter, schema, query, ctx)).rows
+          : (await executeSelectAsync(adapter, schema, query, ctx)).rows;
     return decodeRows(schema, query, rows, opts);
   });
 };

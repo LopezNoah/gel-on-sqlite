@@ -9073,6 +9073,79 @@ export function* deleteWriteEffect(
   return { changes: writeResult.changes };
 }
 
+// ── Decolored UPDATE write core ─────────────────────────────────────────────
+// Same shape as the delete core: the decolorable DB ops (pre-read, the UPDATE
+// statement, the post-write read) yield; the interleaved sync-only work
+// (policies, multi-scalar props, link assignments — the last can nest INSERTs)
+// is injected as callbacks, real on the sync path and guarded out on async.
+
+function* readTargetRowsForAssignableTypesEffect(
+  schema: SchemaSnapshot,
+  typeDef: TypeDef,
+  filter: { column: string; value: ScalarValue } | undefined,
+): DbEffect<Record<string, unknown>[]> {
+  const rows: Record<string, unknown>[] = [];
+  const baseTypeName = qualifiedTypeName(typeDef);
+  for (const concreteType of schema.listConcreteTypesAssignableTo(baseTypeName)) {
+    const concreteName = qualifiedTypeName(concreteType);
+    const tableRows = yield* readTargetRowsForFilterEffect(tableNameForType(concreteName), filter);
+    for (const row of tableRows) {
+      rows.push({ ...row, __source_type: concreteName });
+    }
+  }
+  return rows;
+}
+
+function* readRowsByIdsEffect(table: string, ids: string[]): DbEffect<Record<string, unknown>[]> {
+  if (ids.length === 0) {
+    return [];
+  }
+  const placeholders = ids.map(() => "?").join(", ");
+  return yield* dbAll(
+    `SELECT * FROM ${quoteIdent(table)} WHERE ${quoteIdent("id")} IN (${placeholders})`,
+    ...ids,
+  );
+}
+
+export function* updateWriteEffect(
+  schema: SchemaSnapshot,
+  ir: UpdateIR,
+  sqlArtifact: SQLArtifact,
+  subjectType: TypeDef,
+  astPos: { line: number; column: number },
+  isUpdateAst: boolean,
+  enforceReadPolicies: (preRows: Record<string, unknown>[]) => void,
+  applyLinksAndMulti: (sourceIds: string[]) => void,
+  enforceWritePolicies: (updatedRows: Record<string, unknown>[]) => void,
+): DbEffect<{ changes: number }> {
+  const preRows = isUpdateAst
+    ? yield* readTargetRowsForAssignableTypesEffect(schema, subjectType, ir.filter)
+    : yield* readTargetRowsForFilterEffect(ir.table, ir.filter);
+  enforceReadPolicies(preRows);
+
+  // An UPDATE assigning only links degrades to a no-op self-assignment; its
+  // matched-row count is the pre-read count and the real work is in the links.
+  const baseIsNoop = /SET "id" = g0_w\."id" (?:FROM|WHERE)/.test(sqlArtifact.sql);
+  let writeResult: { changes: number };
+  if (baseIsNoop) {
+    writeResult = { changes: preRows.length };
+  } else {
+    try {
+      writeResult = yield* dbRun(sqlArtifact.sql, ...sqlArtifact.params);
+    } catch (writeErr) {
+      throw translateExclusivityWriteError(writeErr, astPos.line, astPos.column);
+    }
+  }
+
+  const sourceIds = preRows.map((row) => String(row.id));
+  if (isUpdateAst) {
+    applyLinksAndMulti(sourceIds);
+  }
+  const updatedRows = sourceIds.length > 0 ? yield* readRowsByIdsEffect(ir.table, sourceIds) : [];
+  enforceWritePolicies(updatedRows);
+  return { changes: writeResult.changes };
+}
+
 const runWriteWithAccessPolicies = (
   db: SQLiteDatabase,
   schema: SchemaSnapshot,
@@ -9494,51 +9567,30 @@ const runWriteWithAccessPolicies = (
     }
 
     if (ir.kind === "update") {
-      const preRows = ast.kind === "update"
-        ? readTargetRowsForAssignableTypes(db, schema, subjectType, ir.filter)
-        : readTargetRowsForFilter(db, ir.table, ir.filter);
-      enforceUpdateReadPolicies(subjectType, preRows, context, ast.pos.line, ast.pos.column, policyExprEvaluator(db, schema, context, subjectType));
-      // When an UPDATE assigns only links (or `SET {}`), the column-level base
-      // statement degrades to a no-op self-assignment (`SET "id" = g0_w."id"`).
-      // Skip running it — the real work happens in applyUpdateLinkAssignments,
-      // and the matched-row count is just the pre-read row count.
-      const baseIsNoop = /SET "id" = g0_w\."id" (?:FROM|WHERE)/.test(sqlArtifact.sql);
-      let writeResult: { changes: number };
-      if (baseIsNoop) {
-        writeResult = { changes: preRows.length };
-      } else {
-        try {
-          writeResult = db.prepare(sqlArtifact.sql).run(...sqlArtifact.params);
-        } catch (writeErr) {
-          // An UPDATE that drives a value into an existing exclusive value trips
-          // a UNIQUE failure (same-table index or shared cross-type table).
-          // Translate it to EdgeQL's exclusivity wording before it propagates.
-          throw translateExclusivityWriteError(writeErr, ast.pos.line, ast.pos.column);
-        }
-      }
-      if (ast.kind === "update") {
-        applyUpdateMultiScalarProps(
-          db,
+      // One update core (updateWriteEffect), driven synchronously here and
+      // asynchronously on D1. Multi-scalar / link assignments and policy
+      // enforcement run db-direct as injected callbacks (sync only).
+      const result = runDbEffectSync(
+        updateWriteEffect(
           schema,
+          ir,
+          sqlArtifact,
           subjectType,
-          ir,
-          ast,
-          preRows.map((row) => String(row.id)),
           ast.pos,
-        );
-        applyUpdateLinkAssignments(
-          db,
-          schema,
-          ir,
-          ast,
-          preRows.map((row) => String(row.id)),
-          context,
-        );
-      }
-      const updatedRows = preRows.length > 0 ? readRowsByIds(db, ir.table, preRows.map((row) => String(row.id))) : [];
-      enforceUpdateWritePolicies(subjectType, updatedRows, context, ast.pos.line, ast.pos.column, policyExprEvaluator(db, schema, context, subjectType));
+          ast.kind === "update",
+          (preRows) =>
+            enforceUpdateReadPolicies(subjectType, preRows, context, ast.pos.line, ast.pos.column, policyExprEvaluator(db, schema, context, subjectType)),
+          (sourceIds) => {
+            applyUpdateMultiScalarProps(db, schema, subjectType, ir, ast as UpdateStatement, sourceIds, ast.pos);
+            applyUpdateLinkAssignments(db, schema, ir, ast as UpdateStatement, sourceIds, context);
+          },
+          (updatedRows) =>
+            enforceUpdateWritePolicies(subjectType, updatedRows, context, ast.pos.line, ast.pos.column, policyExprEvaluator(db, schema, context, subjectType)),
+        ),
+        syncDbExec(db),
+      );
       db.prepare(dmlUsesSavepoint ? "RELEASE gel_dml" : "COMMIT").run();
-      return { changes: writeResult.changes };
+      return result;
     }
 
     if (ir.kind === "delete") {
