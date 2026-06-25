@@ -540,10 +540,18 @@ const tokenizeImpl = (input: string): TokenizeResult => {
       case 118: return "\v";
       // '0' is 48 — null char
       case 48: return "\0";
-      // Line continuation: `\` immediately followed by LF — both consumed,
-      // contributes nothing to the literal.
+      // Line continuation: `\` immediately followed by a line break (LF / CR /
+      // CRLF) consumes the break AND the next line's leading whitespace — the
+      // whole thing contributes nothing to the literal (`'a\<NL>   b'` → "ab").
+      case CC_CR:
       case CC_LF: {
+        if (esc === CC_CR && i < len && input.charCodeAt(i) === CC_LF) {
+          i += 1;
+        }
         lineStarts.push(i);
+        while (i < len && (input.charCodeAt(i) === CC_SPACE || input.charCodeAt(i) === CC_TAB)) {
+          i += 1;
+        }
         return "";
       }
       default:

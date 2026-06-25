@@ -5240,10 +5240,10 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
         // "pos" node (unary `+` is absorbed during parsing), so the former
         // `op === "pos"` branch here was dead and has been removed.
         if (expr.op === "neg" && !canApplyUnaryArith(innerTypeName)) {
-          failSemantic(`operator '-' cannot be applied to operand of type '${innerTypeName}'`);
+          failSemantic(`operator '-' cannot be applied to operands of type '${innerTypeName}'`);
         }
         if (expr.op === "not" && innerTypeName !== "std::bool") {
-          failSemantic(`operator 'NOT' cannot be applied to operand of type '${innerTypeName}'`);
+          failSemantic(`operator 'NOT' cannot be applied to operands of type '${innerTypeName}'`);
         }
       }
       const inner = compileFreeObjectExpr(expr.expr, ctx);
