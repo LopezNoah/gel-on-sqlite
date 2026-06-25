@@ -3949,9 +3949,11 @@ class Parser {
       this.consume();
       return {
         kind: "distinct",
-        // Use the full postfix chain (indexes / tuple-index / shapes), so
-        // `DISTINCT (1,2).1` and `DISTINCT enumerate(...).1` parse.
-        expr: this.applyPostfixExprChain(this.parseFreeObjectPrimaryExpr()),
+        // Enable index / tuple-index postfix so `DISTINCT (1,2).1` and
+        // `DISTINCT enumerate(...).1` parse — but NOT the full chain
+        // (path-steps / shape-projections would over-consume a following
+        // clause, e.g. `DISTINCT {…} ORDER BY …`).
+        expr: this.parsePostfixChain(this.parseFreeObjectPrimaryExpr(), { indexes: true }),
       };
     }
 
