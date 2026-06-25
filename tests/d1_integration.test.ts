@@ -142,6 +142,8 @@ describe.skipIf(!wranglerAvailable)("real local D1 integration", () => {
       "select math::sqrt(16.0);",
       "select math::cos(0.0);",
       "select math::ln(1.0);",
+      // math::mean lowers to native `avg` on D1 (no `_gel_mean`).
+      "select math::mean({2.0, 4.0, 6.0});",
     ]) {
       const actual = (await executeSelectAsync(wranglerD1Adapter, asyncSchema, q)).rows;
       expect(actual).toEqual(executeQuery(db, schema, q).rows);

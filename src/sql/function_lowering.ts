@@ -425,8 +425,17 @@ export const compileFunctionCallSQL = (
   // share the generic "compile the arg as a scalar value set, then wrap in
   // the SQL aggregate" shape.
   const shortName = call.functionName.split("::").pop() ?? "";
+  // `math::mean` is the arithmetic mean — exactly SQLite's native `avg`, which
+  // D1 and Durable Objects both allow. On those custom-function-less targets we
+  // emit `avg` so the query runs natively; the better-sqlite3 target keeps
+  // `_gel_mean` for its exact empty-set semantics (raises "not enough
+  // elements"; `avg` over zero rows yields NULL — the same accepted edge-case
+  // difference as the native math lowerings). stddev/var have no native SQLite
+  // equivalent (they're absent from D1's allow-list) and would need an
+  // avg/sum-based expression rewrite, so they stay `_gel_*` for now.
   const STAT_AGG_SQL: Record<string, string> = {
-    mean: "_gel_mean", stddev: "_gel_stddev", stddev_pop: "_gel_stddev_pop",
+    mean: target === "d1" ? "avg" : "_gel_mean",
+    stddev: "_gel_stddev", stddev_pop: "_gel_stddev_pop",
     var: "_gel_var", var_pop: "_gel_var_pop",
   };
   const aggregateOfType = ["count", "min", "max", "sum", "avg", "array_agg", "all", "any"].includes(shortName)
