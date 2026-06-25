@@ -1,5 +1,3 @@
-import { createHash } from "node:crypto";
-
 import "../codegen/generated/schema_model.js";
 
 import type { Statement } from "../edgeql/ast.js";
@@ -179,21 +177,22 @@ export const buildCompileCacheKey = (schema: SchemaSnapshot, statement: Statemen
   const globalsFingerprint = stableJson(context.globals ?? {});
   const paramsFingerprint = stableJson(context.params ?? {});
   const targetFingerprint = context.target ?? "sqlite";
-  return createHash("sha256")
-    .update(schemaFingerprint)
-    .update("|")
-    .update(statementFingerprint)
-    .update("|")
-    .update(overlaysFingerprint)
-    .update("|")
-    .update(globalsFingerprint)
-    .update("|")
-    .update(paramsFingerprint)
-    .update("|")
-    .update(targetFingerprint)
-    .update("|")
-    .update(context.allowUserSpecifiedId ? "uid" : "")
-    .digest("hex");
+  // A structural key (JSON array of the fingerprint strings) rather than a
+  // hash: it is collision-free (array boundaries are unambiguous, so distinct
+  // inputs can never coincide) and — unlike a crypto digest — needs no
+  // `node:crypto`, so the compile path bundles for workerd without the
+  // `nodejs_compat` flag. `schemaFingerprint` is already a compact memoized
+  // value, so the key stays bounded by the (small) statement fingerprint. The
+  // key only affects cache hit/miss, never correctness.
+  return JSON.stringify([
+    schemaFingerprint,
+    statementFingerprint,
+    overlaysFingerprint,
+    globalsFingerprint,
+    paramsFingerprint,
+    targetFingerprint,
+    context.allowUserSpecifiedId ? "uid" : "",
+  ]);
 };
 
 const compileSqlFromGelIR = (

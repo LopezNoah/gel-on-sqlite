@@ -2,3 +2,4 @@
 .wrangler/
 seed.sqlite
 seed.sql
+dist/
