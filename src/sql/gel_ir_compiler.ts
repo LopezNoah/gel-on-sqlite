@@ -10944,6 +10944,10 @@ const compileValueSetSQL = (
     const placeholders = matchTypes.map(() => "?").join(", ");
     params.push(...matchTypes);
     const op = typeCheck.op === "is" ? "IN" : "NOT IN";
+    // NOTE: this value-path result is ALSO consumed as a FILTER predicate (via
+    // compilePredicateSetSQL's fallback to compileValueSetSQL), so it must stay
+    // a SQL boolean — wrapping it as json('true') breaks `FILTER X IS T`. The
+    // shape-value JSON-bool case (`a := Object IS Ba`) needs a separate seam.
     return `(${tagSql} ${op} (${placeholders}))`;
   }
 
