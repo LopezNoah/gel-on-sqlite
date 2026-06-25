@@ -369,24 +369,10 @@ export const compileGelIRToSQL = (
       if (scalarSql) {
         let sql = scalarSql;
         if (selectOrderBy && selectOrderBy.length > 0) {
-          let orderSql = compileValueSortExprs(selectOrderBy, quoteIdent("value"), target, options.resolveEnumMembers, options.resolveFieldEnumMembers);
-          if (!orderSql) {
-            // Sort paths over a tuple source (`SELECT (Status.name, count(…))
-            // ORDER BY Status.name`) sort by the matching tuple slot.
-            let tupleCursor: Set = sourceSet;
-            while (tupleCursor.expr.kind === "select_expr") tupleCursor = (tupleCursor.expr as SelectExpr).result;
-            if (tupleCursor.expr.kind === "tuple") {
-              const tupleExpr = tupleCursor.expr as Tuple;
-              const slotByKey = new Map<string, number>();
-              tupleExpr.elements.forEach((el, i) => slotByKey.set(pathIdKey(el.val), i));
-              const parts = selectOrderBy.map((entry) => {
-                const slot = slotByKey.get(pathIdKey(entry.path));
-                if (slot === undefined) return "";
-                return `json_extract(${quoteIdent("value")}, '$[${slot}]') ${entry.direction.toUpperCase()}${sortNullsClause(entry)}`;
-              }).filter((p) => p.length > 0);
-              if (parts.length === selectOrderBy.length) orderSql = parts.join(", ");
-            }
-          }
+          // Prefer the tuple-slot-aware resolver (handles `_.1` AND `_.0.name`)
+          // for a tuple source; fall back to the generic value-sort compile.
+          let orderSql = compileTupleSortExprs(selectOrderBy, sourceSet, quoteIdent("value"), target, options.resolveEnumMembers, options.resolveFieldEnumMembers)
+            ?? (compileValueSortExprs(selectOrderBy, quoteIdent("value"), target, options.resolveEnumMembers, options.resolveFieldEnumMembers) || null);
           if (!orderSql) {
             // `SELECT X.p ORDER BY X.p` — the scalar body projects exactly the
             // path the ORDER BY references, so the per-row sort key is the
@@ -2438,7 +2424,8 @@ const compileSelectExprScalarSource = (
     const inner = compileScalarSelectSQL(result, params, target, options, innerWheres);
     if (!inner) return null;
     let sql = `SELECT ${quoteIdent("value")} AS ${quoteIdent("value")} FROM (${inner})`;
-    const orderSql = compileValueSortExprs(selectExpr.orderBy, quoteIdent("value"), target, options.resolveEnumMembers, options.resolveFieldEnumMembers);
+    const orderSql = compileTupleSortExprs(selectExpr.orderBy, result, quoteIdent("value"), target, options.resolveEnumMembers, options.resolveFieldEnumMembers)
+      ?? compileValueSortExprs(selectExpr.orderBy, quoteIdent("value"), target, options.resolveEnumMembers, options.resolveFieldEnumMembers);
     if (orderSql) {
       sql += ` ORDER BY ${orderSql}`;
     } else if (selectExpr.orderBy && selectExpr.orderBy.length > 0) {
@@ -7712,6 +7699,56 @@ const compileValueSortExprs = (
     })
     .filter((entry) => entry.length > 0)
     .join(", ");
+};
+
+// Order keys over a tuple-valued result (`SELECT (U{name}, A) ORDER BY _.1
+// THEN _.0.name`). The output `value` is a json_array, so each key extracts
+// its tuple slot (`$[slot]`) or a field off a slot (`$[slot].field`). Resolves
+// EVERY key — a partial would silently reorder the result — preferring
+// compileValueSortPath (enum/index_expr aware) and falling back to the slot
+// map (which also catches `_.0.name`, whose IR drops the index, resolving to
+// `pointer(name, source=<slot-0 element>)`). Returns null when the source is
+// not a tuple or any key can't be resolved.
+const compileTupleSortExprs = (
+  orderBy: SortExpr[] | undefined,
+  tupleSource: Set,
+  valueSql: string,
+  target: RuntimeTarget = "sqlite",
+  enumMembersByName?: (name: string) => string[] | undefined,
+  fieldEnumMembers?: (typeName: string, fieldName: string) => string[] | undefined,
+): string | null => {
+  if (!orderBy || orderBy.length === 0) return null;
+  let cur: Set = tupleSource;
+  while (cur.expr.kind === "select_expr") cur = (cur.expr as SelectExpr).result;
+  if (cur.expr.kind !== "tuple") return null;
+  const slotByKey = new Map<string, number>();
+  (cur.expr as Tuple).elements.forEach((el, i) => slotByKey.set(pathIdKey(el.val), i));
+  const slotAwareKey = (path: Set): string | null => {
+    const direct = slotByKey.get(pathIdKey(path));
+    if (direct !== undefined) return `json_extract(${valueSql}, '$[${direct}]')`;
+    if (path.expr.kind === "pointer") {
+      const ptr = path.expr as Pointer;
+      const slot = slotByKey.get(pathIdKey(ptr.source));
+      if (slot !== undefined && !ptr.ptrref.isLinkProperty) {
+        return `json_extract(${valueSql}, '$[${slot}].${ptr.ptrref.shortName.replaceAll("'", "''")}')`;
+      }
+    }
+    return null;
+  };
+  const parts = orderBy.map((entry) => {
+    const dir = ` ${entry.direction.toUpperCase()}${sortNullsClause(entry)}`;
+    // `ORDER BY _` where `_` is the whole tuple — order element-wise, one
+    // json_extract per slot (sorting the raw json text would be lexical).
+    let pcur: Set = entry.path;
+    while (pcur.expr.kind === "select_expr") pcur = (pcur.expr as SelectExpr).result;
+    if (pcur.expr.kind === "tuple" && !(pcur.expr as Tuple).named && (pcur.expr as Tuple).elements.length > 0) {
+      return (pcur.expr as Tuple).elements.map((_, i) => `json_extract(${valueSql}, '$[${i}]')${dir}`).join(", ");
+    }
+    const key = compileValueSortPath(entry.path, valueSql, target, enumMembersByName, fieldEnumMembers)
+      ?? slotAwareKey(entry.path);
+    return key ? `${key}${dir}` : "";
+  });
+  return parts.every((p) => p.length > 0) ? parts.join(", ") : null;
 };
 
 // Returns the enum member list when every arm of a union dereferences a
