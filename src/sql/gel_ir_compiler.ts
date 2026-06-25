@@ -12467,12 +12467,22 @@ const compileShapeObjectExpr = (
       }
       const rawValue = `${sourceAlias}.${quoteIdent(column)}`;
       // A multi scalar property's column stores a JSON-encoded array —
-      // embed it as nested JSON, not as a quoted string.
-      const isMultiScalar = element.cardinality === "many" || element.cardinality === "at_least_one";
+      // embed it as nested JSON, not as a quoted string. Guard on the leaf
+      // pointer's own cardinality too: a re-projected single property
+      // (`el2 := U.el` where `el` reads a single `str`) carries a stale
+      // `many` shape cardinality from pre-flatten inference, but its column
+      // holds a bare scalar, so `json('Water')` would be malformed JSON.
+      const leafPtr = element.expr.expr.kind === "pointer" ? element.expr.expr as Pointer : undefined;
+      const leafIsMulti = leafPtr
+        ? (leafPtr.ptrref.outCardinality === "many" || leafPtr.ptrref.outCardinality === "at_least_one")
+        : true;
+      const isMultiScalar = (element.cardinality === "many" || element.cardinality === "at_least_one") && leafIsMulti;
       const value = isMultiScalar
         ? `json(${rawValue})`
         : shapeScalarColumnValue(rawValue, element.expr.typeref);
-      pairs.push(`${quoteLiteral(column)}, ${value}`);
+      // Honour the element's declared name so a renamed projection
+      // (`el2 := U.el`) keys under `el2`, not the underlying column `element`.
+      pairs.push(`${quoteLiteral(element.name ?? column)}, ${value}`);
       continue;
     }
 
