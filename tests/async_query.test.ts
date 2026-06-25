@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 import { toAsyncAdapter } from "../src/runtime/adapter.js";
 import { AsyncUnsupportedError, executeSelectAsync } from "../src/runtime/async_query.js";
+import { loadSchemaAsync } from "../src/runtime/async_schema.js";
 import { createD1Adapter, type D1DatabaseLike } from "../src/runtime/d1_adapter.js";
 import { materializeSchema, openSQLite } from "../src/runtime/database.js";
 import { executeQuery } from "../src/runtime/engine.js";
@@ -33,8 +34,8 @@ const fakeD1 = (db: ReturnType<typeof openSQLite>["db"]): D1DatabaseLike => ({
         bound = values;
         return stmt;
       },
-      async all() {
-        return { results: db.prepare(sql).all(...bound) };
+      async all<T = Record<string, unknown>>() {
+        return { results: db.prepare(sql).all(...bound) as T[] };
       },
       async run() {
         const r = db.prepare(sql).run(...bound);
@@ -87,6 +88,19 @@ describe("executeSelectAsync (Tier 1: await-at-edge)", () => {
     const sync = executeQuery(db, schema, q);
     const viaD1 = await executeSelectAsync(createD1Adapter(fakeD1(db)), schema, q);
     expect(viaD1.rows).toEqual(sync.rows);
+  });
+
+  it("loadSchemaAsync reconstructs a functionally-equivalent schema", async () => {
+    const loaded = await loadSchemaAsync(toAsyncAdapter(db));
+    expect(loaded.listTypes().map((t) => t.name).sort()).toEqual(
+      schema.listTypes().map((t) => t.name).sort(),
+    );
+    // End-to-end: a query run against the async-loaded schema returns the same
+    // rows as the same query against the original in-memory snapshot.
+    const q = "select default::Person { name, age } order by .name;";
+    const fromLoaded = await executeSelectAsync(toAsyncAdapter(db), loaded, q);
+    const fromOriginal = executeQuery(db, schema, q);
+    expect(fromLoaded.rows).toEqual(fromOriginal.rows);
   });
 
   it("rejects mutations with AsyncUnsupportedError", async () => {

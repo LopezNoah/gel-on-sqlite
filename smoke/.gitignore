@@ -1,0 +1,4 @@
+# local D1 / miniflare state + generated provisioning artifacts
+.wrangler/
+seed.sqlite
+seed.sql
