@@ -8004,10 +8004,11 @@ class Parser {
           // keyword-like token here when the next token is the `:=` operator.
           const nameTok = this.consume();
           const name = nameTok.lexeme;
-          if (names.has(name)) {
-            const token = this.peek();
-            throw new AppError("E_SYNTAX", `Duplicate with binding '${name}'`, ...this.posPair(token));
-          }
+          // EdgeQL lets a WITH alias shadow an earlier one in the same block
+          // (`WITH User := User, User := User`): each binding's RHS resolves
+          // against the previous binding of that name, so a repeat re-binds
+          // rather than erroring. withBindings evaluates them in order and the
+          // resolver picks the latest, so just record the name.
           names.add(name);
           this.expect("assign", "Expected ':=' in with binding");
           bindings.push({ name, value: this.parseWithBindingValue() });
