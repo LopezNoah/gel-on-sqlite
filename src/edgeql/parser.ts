@@ -3949,7 +3949,9 @@ class Parser {
       this.consume();
       return {
         kind: "distinct",
-        expr: this.parsePostfixChain(this.parseFreeObjectPrimaryExpr()),
+        // Use the full postfix chain (indexes / tuple-index / shapes), so
+        // `DISTINCT (1,2).1` and `DISTINCT enumerate(...).1` parse.
+        expr: this.applyPostfixExprChain(this.parseFreeObjectPrimaryExpr()),
       };
     }
 
@@ -6289,7 +6291,8 @@ class Parser {
     // Named argument: `name := expr`. Parse the name + `:=` and wrap the
     // recursively-parsed value with a `named_arg` envelope so the rest of
     // the pipeline keeps treating it like any other call argument.
-    if (this.isNameToken(this.peek()) && this.peekNext().kind === "assign") {
+    if ((this.isNameToken(this.peek()) || this.peek().kind === "kw_empty")
+        && this.peekNext().kind === "assign") {
       const nameToken = this.consume();
       this.expect("assign", "Expected ':=' in named function argument");
       const inner = this.parseFunctionCallArgExpr(allowExpressionArgs);

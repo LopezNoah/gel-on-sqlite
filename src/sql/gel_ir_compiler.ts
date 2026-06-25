@@ -2135,7 +2135,10 @@ const compileTypeCastScalarSource = (
       const srcIsObjectShape = castSourceIsObjectShape(castExpr.expr);
       const srcIsJsonAlready = srcType.collection !== undefined
         || qualifyTypeName(srcType) === "std::json"
-        || srcIsObjectShape;
+        || srcIsObjectShape
+        // A range/multirange already lowers to a JSON value; json_quote would
+        // double-encode it as a string.
+        || setLooksLikeRange(castExpr.expr);
       const jsonExpr = srcIsJsonAlready ? quoteIdent("value") : `json_quote(${quoteIdent("value")})`;
       return `SELECT ${jsonExpr} AS ${quoteIdent("value")} FROM (${innerScalarSql})`;
     }
@@ -10683,7 +10686,10 @@ const compileValueSetSQL = (
       const srcIsObjectShape = castSourceIsObjectShape(castExpr.expr);
       const srcIsJsonAlready = srcType.collection !== undefined
         || qualifyTypeName(srcType) === "std::json"
-        || srcIsObjectShape;
+        || srcIsObjectShape
+        // A range/multirange already lowers to a JSON value; json_quote would
+        // double-encode it as a string.
+        || setLooksLikeRange(castExpr.expr);
       return srcIsJsonAlready ? inner : `json_quote(${inner})`;
     }
     // Casting FROM std::json: JSON `null` is the EMPTY SET (SQL NULL), and
