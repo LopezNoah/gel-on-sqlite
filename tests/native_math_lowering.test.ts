@@ -35,4 +35,19 @@ describe("native math lowering for custom-function-less targets", () => {
       expect(lowerStdlibFunctionSql("d1", fn, ["x"])).toBe(native);
     }
   });
+
+  it("std::round → native round on d1 (1- and 2-arg), _gel_round on sqlite", () => {
+    expect(lowerStdlibFunctionSql("d1", "std::round", ["x"])).toBe("round(x)");
+    expect(lowerStdlibFunctionSql("d1", "std::round", ["x", "2"])).toBe("round(x, 2)");
+    expect(lowerStdlibFunctionSql("sqlite", "std::round", ["x"])).toContain("_gel_round");
+  });
+
+  it("datetime extractors → native strftime CASE on d1, _gel_* on sqlite", () => {
+    for (const fn of ["std::datetime_get", "cal::date_get", "cal::time_get"]) {
+      const d1 = lowerStdlibFunctionSql("d1", fn, ["dt", "'year'"]) ?? "";
+      expect(d1).toContain("strftime");
+      expect(d1).not.toContain("_gel_");
+      expect(lowerStdlibFunctionSql("sqlite", fn, ["dt", "'year'"])).toContain("_gel_");
+    }
+  });
 });

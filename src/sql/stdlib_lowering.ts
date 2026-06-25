@@ -38,6 +38,52 @@ const NATIVE_MATH_FOR_RESTRICTED_TARGET: Record<string, (a: string[]) => string 
   "math::log": (a) => (a[0] && a[1] ? `log(${a[1]}, ${a[0]})` : null),
   "math::exp": (a) => (a[0] ? `exp(${a[0]})` : null),
   "math::sqrt": (a) => (a[0] ? `sqrt(${a[0]})` : null),
+  // KNOWN LIMITATION on D1/DO: native `round` rounds half AWAY from zero;
+  // Gel's default is banker's rounding (half to even). Results differ on exact
+  // .5 cases. Accepted as SQLite-native behaviour (see KNOWN_LIMITATIONS.md).
+  "std::round": (a) => (a[0] ? (a[1] ? `round(${a[0]}, ${a[1]})` : `round(${a[0]})`) : null),
+};
+
+// Native datetime-part extraction via `strftime`, for D1/DO. The unit may be
+// any SQL expression (literal or dynamic), so we branch with a CASE. KNOWN
+// LIMITATION on D1/DO: sub-second units are millisecond-precision (SQLite
+// `strftime('%f')`), not Gel's microsecond; and an out-of-range unit yields
+// NULL rather than raising. The better-sqlite3 target keeps `_gel_*` for exact
+// semantics. See KNOWN_LIMITATIONS.md.
+// The CASE references the datetime and unit many times; binding them once in a
+// subquery (`u.dt`, `u.un`) keeps each compiled arg — which may be a `?` param
+// — appearing exactly once in the emitted SQL, so the parameter count stays
+// correct.
+const nativeDatetimePart = (dt: string, unit: string): string =>
+  `(SELECT (CASE lower(u.un)` +
+  ` WHEN 'year' THEN CAST(strftime('%Y',u.dt) AS INTEGER)` +
+  ` WHEN 'month' THEN CAST(strftime('%m',u.dt) AS INTEGER)` +
+  ` WHEN 'day' THEN CAST(strftime('%d',u.dt) AS INTEGER)` +
+  ` WHEN 'hour' THEN CAST(strftime('%H',u.dt) AS INTEGER)` +
+  ` WHEN 'minute' THEN CAST(strftime('%M',u.dt) AS INTEGER)` +
+  ` WHEN 'minutes' THEN CAST(strftime('%M',u.dt) AS INTEGER)` +
+  ` WHEN 'second' THEN CAST(strftime('%f',u.dt) AS REAL)` +
+  ` WHEN 'seconds' THEN CAST(strftime('%f',u.dt) AS REAL)` +
+  ` WHEN 'milliseconds' THEN CAST(strftime('%f',u.dt) AS REAL)*1000` +
+  ` WHEN 'microseconds' THEN CAST(strftime('%f',u.dt) AS REAL)*1000000` +
+  ` WHEN 'quarter' THEN (CAST(strftime('%m',u.dt) AS INTEGER)+2)/3` +
+  ` WHEN 'dow' THEN CAST(strftime('%w',u.dt) AS INTEGER)` +
+  ` WHEN 'isodow' THEN (CASE strftime('%w',u.dt) WHEN '0' THEN 7 ELSE CAST(strftime('%w',u.dt) AS INTEGER) END)` +
+  ` WHEN 'doy' THEN CAST(strftime('%j',u.dt) AS INTEGER)` +
+  ` WHEN 'decade' THEN CAST(strftime('%Y',u.dt) AS INTEGER)/10` +
+  ` WHEN 'century' THEN (CAST(strftime('%Y',u.dt) AS INTEGER)+99)/100` +
+  ` WHEN 'millennium' THEN (CAST(strftime('%Y',u.dt) AS INTEGER)+999)/1000` +
+  ` WHEN 'epochseconds' THEN CAST(strftime('%s',u.dt) AS REAL)` +
+  ` END) FROM (SELECT ${dt} AS dt, ${unit} AS un) AS u)`;
+
+// Datetime/date/time part extractors share the strftime CASE (extra units for
+// a given type simply never match a valid query's unit). Truncation and the
+// duration accessors are NOT yet lowered natively (date-string round-trip /
+// interval semantics) — they stay `_gel_*`, i.e. unsupported on D1/DO for now.
+const NATIVE_DATETIME_FOR_RESTRICTED_TARGET: Record<string, (a: string[]) => string | null> = {
+  "std::datetime_get": (a) => (a[0] && a[1] ? nativeDatetimePart(a[0], a[1]) : null),
+  "cal::date_get": (a) => (a[0] && a[1] ? nativeDatetimePart(a[0], a[1]) : null),
+  "cal::time_get": (a) => (a[0] && a[1] ? nativeDatetimePart(a[0], a[1]) : null),
 };
 
 // D1 and Durable Objects share the no-custom-functions constraint; the DO sync
@@ -58,10 +104,12 @@ export const lowerStdlibFunctionSql = (
     : [`std::${functionName}`, `math::${functionName}`, `cal::${functionName}`];
   for (const candidate of candidates) {
     if (!canLowerStdlibFunctionSql(target, candidate)) continue;
-    // On custom-function-less targets, prefer the native math form over the
-    // `_gel_*` template so the query runs at all.
+    // On custom-function-less targets, prefer the native SQLite form (math,
+    // datetime extractors) over the `_gel_*` template so the query runs at all.
     if (targetForbidsCustomFunctions(target)) {
-      const native = NATIVE_MATH_FOR_RESTRICTED_TARGET[candidate]?.(args);
+      const native =
+        NATIVE_MATH_FOR_RESTRICTED_TARGET[candidate]?.(args) ??
+        NATIVE_DATETIME_FOR_RESTRICTED_TARGET[candidate]?.(args);
       if (native) return native;
     }
     const template = getStdlibSqlTemplate(candidate);

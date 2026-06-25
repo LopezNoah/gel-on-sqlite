@@ -149,4 +149,19 @@ describe.skipIf(!wranglerAvailable)("real local D1 integration", () => {
       expect(actual).toEqual(executeQuery(db, schema, q).rows);
     }
   }, 60_000);
+
+  // Documented SQLite-native divergences (see smoke/KNOWN_LIMITATIONS.md): these
+  // assert the D1-native result, NOT Gel parity.
+  it("uses native SQLite semantics for round / datetime on real D1", async () => {
+    const asyncSchema = await loadSchemaAsync(wranglerD1Adapter);
+    const run = async (q: string) => (await executeSelectAsync(wranglerD1Adapter, asyncSchema, q)).rows;
+
+    // round half away from zero (Gel would give 2 via banker's rounding).
+    expect(await run("select round(2.5);")).toEqual([3]);
+    // datetime part extraction via strftime.
+    const dt = "<datetime>'2020-06-15T12:30:45+00:00'";
+    expect(await run(`select std::datetime_get(${dt}, 'year');`)).toEqual([2020]);
+    expect(await run(`select std::datetime_get(${dt}, 'month');`)).toEqual([6]);
+    expect(await run(`select std::datetime_get(${dt}, 'day');`)).toEqual([15]);
+  }, 60_000);
 });
