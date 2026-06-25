@@ -213,6 +213,14 @@ const buildAlterTypeSteps = (
       continue;
     }
 
+    // A single (non-multi) property whose scalar type or required-ness changed:
+    // preserve the existing data by casting it into a shadow column, instead of
+    // the destructive drop-then-re-add below (which would lose every value).
+    if (existing && isSingleProperty(existing) && isSingleProperty(member)) {
+      steps.push(...buildPropertyConversionSteps(toType, member));
+      continue;
+    }
+
     if (existing && !areMembersStorageCompatible(existing, member)) {
       steps.push(...buildDropMemberStorageSteps(toType, existing));
     }
@@ -362,6 +370,47 @@ const buildDropMemberStorageSteps = (typeDecl: ObjectTypeDeclaration, member: Ty
     {
       description: `drop link table ${qualifiedTypeName(typeDecl)}.${member.name}`,
       sql: `DROP TABLE IF EXISTS ${quoteIdent(linkTable(typeDecl, member))}`,
+    },
+  ];
+};
+
+const isSingleProperty = (member: TypeMember): member is PropertyMember =>
+  member.kind === "property" && !member.multi;
+
+// SQLite cannot `ALTER COLUMN ... TYPE` in place, so a property type/required
+// change is done with a data-preserving shadow column: add the new-typed column,
+// CAST existing values into it, drop the old, rename into place. This is the
+// column-level equivalent of the table-rebuild pattern, without having to
+// recreate the table's triggers and indexes.
+const buildPropertyConversionSteps = (
+  typeDecl: ObjectTypeDeclaration,
+  to: PropertyMember,
+): MigrationStep[] => {
+  const table = quoteIdent(tableName(typeDecl));
+  const col = quoteIdent(to.name);
+  const tmp = quoteIdent(`${to.name}__gel_convert`);
+  const newType = sqlType(to.scalar);
+  const q = qualifiedTypeName(typeDecl);
+  // A required column must stay non-null for every existing row; null values
+  // fall back to '' (the same default the ADD COLUMN path uses for required).
+  const castSource = to.required ? `COALESCE(${col}, '')` : col;
+
+  return [
+    {
+      description: `convert ${q}.${to.name} to ${to.scalar}: add shadow column`,
+      sql: `ALTER TABLE ${table} ADD COLUMN ${tmp} ${newType}${to.required ? " NOT NULL DEFAULT ''" : ""}`,
+    },
+    {
+      description: `convert ${q}.${to.name} to ${to.scalar}: cast existing values`,
+      sql: `UPDATE ${table} SET ${tmp} = CAST(${castSource} AS ${newType})`,
+    },
+    {
+      description: `convert ${q}.${to.name} to ${to.scalar}: drop old column`,
+      sql: `ALTER TABLE ${table} DROP COLUMN ${col}`,
+    },
+    {
+      description: `convert ${q}.${to.name} to ${to.scalar}: rename shadow column`,
+      sql: `ALTER TABLE ${table} RENAME COLUMN ${tmp} TO ${col}`,
     },
   ];
 };

@@ -13,6 +13,7 @@
     "test:dist": "node scripts/build-dist.mjs && VITEST_USE_DIST=1 vitest run",
     "test:convert-py": "python3 scripts/convert_py_query_test.py",
     "db:materialize": "tsx scripts/materialize-test-schema.ts",
+    "gel": "tsx bin/gel.ts",
     "codegen:schema-model": "tsx scripts/generate-schema-model.ts",
     "dev:all": "node scripts/dev-all.mjs",
     "ui:dev": "npm --prefix ui run dev",

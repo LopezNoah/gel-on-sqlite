@@ -50,10 +50,10 @@ interface SecurityContextLike {
 // The query-running surface shared by Client and Transaction.
 export interface Executor {
   execute(query: string): Promise<void>;
-  query<T = unknown>(query: string): Promise<T[]>;
-  queryRequired<T = unknown>(query: string): Promise<[T, ...T[]]>;
-  querySingle<T = unknown>(query: string): Promise<T | null>;
-  queryRequiredSingle<T = unknown>(query: string): Promise<T>;
+  query<T = unknown>(query: string, args?: QueryVariables): Promise<T[]>;
+  queryRequired<T = unknown>(query: string, args?: QueryVariables): Promise<[T, ...T[]]>;
+  querySingle<T = unknown>(query: string, args?: QueryVariables): Promise<T | null>;
+  queryRequiredSingle<T = unknown>(query: string, args?: QueryVariables): Promise<T>;
   queryJSON(query: string): Promise<string>;
   queryRequiredJSON(query: string): Promise<string>;
   querySingleJSON(query: string): Promise<string>;
@@ -78,10 +78,10 @@ export class Transaction implements Executor {
   constructor(private readonly client: Client) {}
 
   execute(query: string): Promise<void> { return this.client.execute(query); }
-  query<T = unknown>(query: string): Promise<T[]> { return this.client.query<T>(query); }
-  queryRequired<T = unknown>(query: string): Promise<[T, ...T[]]> { return this.client.queryRequired<T>(query); }
-  querySingle<T = unknown>(query: string): Promise<T | null> { return this.client.querySingle<T>(query); }
-  queryRequiredSingle<T = unknown>(query: string): Promise<T> { return this.client.queryRequiredSingle<T>(query); }
+  query<T = unknown>(query: string, args?: QueryVariables): Promise<T[]> { return this.client.query<T>(query, args); }
+  queryRequired<T = unknown>(query: string, args?: QueryVariables): Promise<[T, ...T[]]> { return this.client.queryRequired<T>(query, args); }
+  querySingle<T = unknown>(query: string, args?: QueryVariables): Promise<T | null> { return this.client.querySingle<T>(query, args); }
+  queryRequiredSingle<T = unknown>(query: string, args?: QueryVariables): Promise<T> { return this.client.queryRequiredSingle<T>(query, args); }
   queryJSON(query: string): Promise<string> { return this.client.queryJSON(query); }
   queryRequiredJSON(query: string): Promise<string> { return this.client.queryRequiredJSON(query); }
   querySingleJSON(query: string): Promise<string> { return this.client.querySingleJSON(query); }
@@ -152,8 +152,8 @@ export class Client implements Executor {
     }, variables);
   }
 
-  private decodedRows(query: string): unknown[] {
-    const envelope = this.querySyncEnvelope(query);
+  private decodedRows(query: string, args?: QueryVariables): unknown[] {
+    const envelope = this.querySyncEnvelope(query, args);
     const rows = envelope.rows ?? [];
     if (this.options.rawResults) {
       return rows;
@@ -177,20 +177,20 @@ export class Client implements Executor {
     this.scriptSyncEnvelope(query);
   }
 
-  async query<T = unknown>(query: string): Promise<T[]> {
-    return this.decodedRows(query) as T[];
+  async query<T = unknown>(query: string, args?: QueryVariables): Promise<T[]> {
+    return this.decodedRows(query, args) as T[];
   }
 
-  async queryRequired<T = unknown>(query: string): Promise<[T, ...T[]]> {
-    const rows = this.decodedRows(query) as T[];
+  async queryRequired<T = unknown>(query: string, args?: QueryVariables): Promise<[T, ...T[]]> {
+    const rows = this.decodedRows(query, args) as T[];
     if (rows.length === 0) {
       throw new ResultCardinalityMismatchError("query returned no elements, at least one was expected");
     }
     return rows as [T, ...T[]];
   }
 
-  async querySingle<T = unknown>(query: string): Promise<T | null> {
-    const rows = this.decodedRows(query) as T[];
+  async querySingle<T = unknown>(query: string, args?: QueryVariables): Promise<T | null> {
+    const rows = this.decodedRows(query, args) as T[];
     if (rows.length > 1) {
       throw new ResultCardinalityMismatchError(
         `query returned ${rows.length} elements, at most one was expected`,
@@ -199,8 +199,8 @@ export class Client implements Executor {
     return rows.length === 1 ? rows[0] : null;
   }
 
-  async queryRequiredSingle<T = unknown>(query: string): Promise<T> {
-    const rows = this.decodedRows(query) as T[];
+  async queryRequiredSingle<T = unknown>(query: string, args?: QueryVariables): Promise<T> {
+    const rows = this.decodedRows(query, args) as T[];
     if (rows.length === 0) {
       throw new NoDataError("query returned no elements, exactly one was expected");
     }
