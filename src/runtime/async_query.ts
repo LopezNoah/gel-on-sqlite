@@ -17,8 +17,12 @@ import { parseEdgeQL } from "../edgeql/parser.js";
 import type { SchemaSnapshot } from "../schema/schema.js";
 import { lowersToSingleSql } from "../sql/compiler_types.js";
 import type { ScalarValue } from "../types.js";
-import type { AsyncRuntimeDatabaseAdapter } from "./adapter.js";
-import { gelSelectDecodeOptions, gelStatementSourceType } from "./gel_select_decode.js";
+import type { AsyncRuntimeDatabaseAdapter, BatchStatement } from "./adapter.js";
+import {
+  gelSelectDecodeOptions,
+  gelStatementSourceType,
+  type GelSelectDecodeOptions,
+} from "./gel_select_decode.js";
 import { materializeGelSQLRows } from "./row_codec.js";
 
 export class AsyncUnsupportedError extends Error {
@@ -55,12 +59,24 @@ const NON_READ_KINDS = new Set([
 const typeHasAccessPolicies = (schema: SchemaSnapshot, qualifiedName: string): boolean =>
   (schema.getType(qualifiedName)?.accessPolicies?.length ?? 0) > 0;
 
-export const executeSelectAsync = async (
-  db: AsyncRuntimeDatabaseAdapter,
+// A read that passed every async-path guard: the single SQL statement to run
+// plus how to decode its rows.
+interface CompiledRead {
+  sql: string;
+  params: ScalarValue[];
+  decode: GelSelectDecodeOptions;
+}
+
+// Parse + compile a single read and apply all the async-path guards (non-read
+// kinds, mutations, interpreter fallback, access policies). Throws
+// `AsyncUnsupportedError` for anything the async path can't run. Compilation is
+// pure/sync and DB-free, so this works the same for one query or a batch.
+const compileReadOrThrow = (
   schema: SchemaSnapshot,
   query: string,
-  context: AsyncQueryContext = {},
-): Promise<AsyncQueryResult> => {
+  target: AsyncRuntimeDatabaseAdapter["target"],
+  context: AsyncQueryContext,
+): CompiledRead => {
   const ast = parseEdgeQL(query);
   if (NON_READ_KINDS.has(ast.kind)) {
     throw new AsyncUnsupportedError(
@@ -71,7 +87,7 @@ export const executeSelectAsync = async (
   const compiled = getCompilerService().compile(schema, ast, {
     globals: context.globals,
     params: context.params,
-    target: db.target,
+    target,
   });
 
   if (compiled.ir !== undefined) {
@@ -94,9 +110,48 @@ export const executeSelectAsync = async (
     );
   }
 
-  const rows = (await db
-    .prepare(compiled.sql.sql)
-    .all(...compiled.sql.params)) as Record<string, unknown>[];
-  const out = materializeGelSQLRows(rows, gelSelectDecodeOptions(compiled.gelIr));
-  return { kind: "select", rows: out };
+  return {
+    sql: compiled.sql.sql,
+    params: compiled.sql.params,
+    decode: gelSelectDecodeOptions(compiled.gelIr),
+  };
+};
+
+export const executeSelectAsync = async (
+  db: AsyncRuntimeDatabaseAdapter,
+  schema: SchemaSnapshot,
+  query: string,
+  context: AsyncQueryContext = {},
+): Promise<AsyncQueryResult> => {
+  const read = compileReadOrThrow(schema, query, db.target, context);
+  const rows = (await db.prepare(read.sql).all(...read.params)) as Record<string, unknown>[];
+  return { kind: "select", rows: materializeGelSQLRows(rows, read.decode) };
+};
+
+// Run several reads together. When the backend exposes `batch` (D1's single
+// round-trip), all statements go in one trip; otherwise they run sequentially.
+// Each query is compiled and guarded independently, so one unsupported query
+// rejects the whole call before any I/O.
+export const executeManyAsync = async (
+  db: AsyncRuntimeDatabaseAdapter,
+  schema: SchemaSnapshot,
+  queries: string[],
+  context: AsyncQueryContext = {},
+): Promise<AsyncQueryResult[]> => {
+  const reads = queries.map((q) => compileReadOrThrow(schema, q, db.target, context));
+
+  const rowsPerQuery: Record<string, unknown>[][] = db.batch
+    ? ((await db.batch(
+        reads.map((r): BatchStatement => ({ sql: r.sql, params: r.params })),
+      )) as Record<string, unknown>[][])
+    : await Promise.all(
+        reads.map(
+          async (r) => (await db.prepare(r.sql).all(...r.params)) as Record<string, unknown>[],
+        ),
+      );
+
+  return reads.map((r, i) => ({
+    kind: "select" as const,
+    rows: materializeGelSQLRows(rowsPerQuery[i], r.decode),
+  }));
 };
