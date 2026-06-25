@@ -8601,6 +8601,123 @@ const wrapCorrelatedShapeSubquery = (
     ? `COALESCE((SELECT json_group_array(${valueExpr}) FROM ${sourceSql}), '[]') AS ${quoteIdent(alias)}`
     : `(SELECT ${valueExpr} FROM ${sourceSql} LIMIT 1) AS ${quoteIdent(alias)}`;
 
+// Peel set-preserving wrappers (`select` parens, casts, identity functions like
+// `assert_distinct`/`assert_exists`/`assert_single` — those keep the upper
+// cardinality, unlike `count`) to find a `FOR … UNION (…)` underneath.
+const peelToForExpr = (set: Set): Set | undefined => {
+  let cur: Set = set;
+  for (;;) {
+    const e = cur.expr;
+    if (e.kind === "for_expr") return cur;
+    if (e.kind === "select_expr") { cur = (e as SelectExpr).result; continue; }
+    if (e.kind === "type_cast") { cur = (e as TypeCast).expr; continue; }
+    // `DISTINCT (FOR …)` — the prefix DISTINCT operator dedups but preserves the
+    // set, so peel into its single operand.
+    if (e.kind === "operator_call" && (e as OperatorCall).operator === "distinct") {
+      const args = orderedCallArgs((e as OperatorCall).args);
+      if (args.length >= 1) { cur = args[0].expr; continue; }
+    }
+    if (e.kind === "function_call") {
+      // The set-passthrough identity guards return their argument's set
+      // unchanged (mirrors the `setValueIsJson` peel) — peel into the arg.
+      const fn = ((e as FunctionCall).functionName ?? "").split("::").pop();
+      if (fn === "assert_single" || fn === "assert_exists"
+        || fn === "assert_distinct" || fn === "distinct") {
+        const args = orderedCallArgs((e as FunctionCall).args);
+        if (args.length >= 1) { cur = args[0].expr; continue; }
+      }
+    }
+    return undefined;
+  }
+};
+
+// GATE (FOR-in-computed-shape, literal-iterator + shape body): lower
+// `field := FOR v IN {lit, …} UNION (SELECT subject.<link> { … [@]tag := v … }
+// FILTER pred)` — a literal iteration whose body shapes the OUTER subject's link
+// and tags each row with the loop value. The result is a JSON array over the
+// cross-product (iterator × correlated link rows), filtered. Built directly
+// (rather than via the link-array helpers) so the loop var resolves through
+// scalarBindingAliases and the iterator rows get a depth-disjoint alias (the
+// generic FOR source mints `g0`, which collides with the outer subject `g0`).
+// NOTE(merge): a sibling gate should later cover the scalar-leaf body
+// (`.deck.name`) and inline-FK links; once 3+ shapes exist, fold them together.
+const compileForInShapeField = (
+  forSet: Set,
+  shape: ShapeElement,
+  sourceAlias: string,
+  params: ScalarValue[],
+  options: GelIRCompileOptions,
+  target: RuntimeTarget,
+  depth: number,
+): string | null => {
+  const forExpr = forSet.expr as ForExpr;
+  const iter = forExpr.iterator;
+  if (iter.expr.kind !== "operator_call" || (iter.expr as OperatorCall).operator !== "union") return null;
+  const iterArgs = orderedCallArgs((iter.expr as OperatorCall).args);
+  const constants: ScalarValue[] = [];
+  for (const a of iterArgs) {
+    const c = extractScalarConstant(a.expr);
+    if (c === undefined) return null;
+    constants.push(c);
+  }
+  if (constants.length === 0) return null;
+  // Peel the body's `select` wrappers, collecting their FILTERs.
+  let bodyCur: Set = forExpr.body;
+  const wheres: Set[] = [];
+  while (bodyCur.expr.kind === "select_expr") {
+    const se = bodyCur.expr as SelectExpr;
+    if (se.where) wheres.push(se.where);
+    bodyCur = se.result;
+  }
+  // The body must shape an outbound, junction-stored, object multi-link.
+  if (bodyCur.expr.kind !== "pointer") return null;
+  const linkPtr0 = bodyCur.expr as Pointer;
+  if (linkPtr0.ptrref.isLinkProperty || linkPtr0.ptrref.outTarget.isScalar
+      || linkPtr0.direction !== "outbound") return null;
+  const shapeEls = bodyCur.shape ?? [];
+  if (shapeEls.length === 0) return null;
+  const linkPtr = resetPointerSourceToRoot(linkPtr0);
+  if (!shouldUseLinkTable(linkPtr)) return null;
+  const dN = depth + 1;
+  const itAlias = `fi${dN}`;
+  const targetAlias = `fp${dN}`;
+  const joinAlias = `fj${dN}`;
+  const iterRows = constants
+    .map((c, i) => { params.push(c); return i === 0 ? `SELECT ? AS ${quoteIdent("value")}` : "SELECT ?"; })
+    .join(" UNION ALL ");
+  const iterKey = pathIdKey(forExpr.iterator);
+  const linkKey = pathIdKey(bodyCur);
+  const scalarBindings = new Map<string, string>([[iterKey, itAlias]]);
+  const bindingAliases = new Map<string, string>([[linkKey, targetAlias]]);
+  const linkPropAliases = new Map<string, string>([[linkKey, joinAlias]]);
+  const projectedCols = [...new globalThis.Set<string>(["id", ...collectReferencedColumns(bodyCur)])];
+  const narrowed = narrowedLinkTarget(bodyCur);
+  const targetSource = compilePolymorphicSource(narrowed ?? linkPtr.ptrref.outTarget, false, targetAlias, projectedCols, options);
+  const linkTableRef = linkTableSourceForPointer(linkPtr, options);
+  const pairs: string[] = [];
+  for (const el of shapeEls) {
+    if (!el.name) return null;
+    const v = compileValueSetSQLWithAliases(el.expr, bindingAliases, targetAlias, params, target, options, linkPropAliases, scalarBindings);
+    if (!v) return null;
+    pairs.push(`${quoteLiteral(el.name)}, ${v}`);
+  }
+  const rowExpr = `json_object(${pairs.join(", ")})`;
+  let filterSql = "";
+  for (const w of wheres) {
+    // The FILTER must be a SQL boolean predicate, not a JSON-wrapped value
+    // (`json('true')` in a WHERE is the truthy-less string 'true').
+    const f = compilePredicateWithAliases(w, bindingAliases, params, target, options, linkPropAliases, scalarBindings);
+    if (f) filterSql += ` AND ${f}`;
+  }
+  const alias = shapeAliasForElement(shape, shape.expr, depth);
+  return `COALESCE((SELECT json_group_array(json(${quoteIdent("item")})) FROM (`
+    + `SELECT ${rowExpr} AS ${quoteIdent("item")} FROM (${iterRows}) ${itAlias}`
+    + ` CROSS JOIN ${targetSource}`
+    + ` JOIN ${linkTableRef} ${joinAlias} ON ${joinAlias}.${quoteIdent("target")} = ${targetAlias}.${quoteIdent("id")}`
+    + ` WHERE ${joinAlias}.${quoteIdent("source")} = ${sourceAlias}.${quoteIdent("id")}${filterSql}`
+    + `)), '[]') AS ${quoteIdent(alias)}`;
+};
+
 const compileShapeProjection = (
   shape: ShapeElement,
   sourceAlias: string,
@@ -8714,6 +8831,19 @@ const compileShapeProjection = (
           : compileOutboundLinkArrayExpr(resetPtr, sourceAlias, targetAlias, joinAlias, projectedCols, rowExpr, options, modifiers, params, target, narrowed);
         return `${arr} AS ${quoteIdent(shapeAliasForElement(shape, shape.expr, depth))}`;
       }
+      params.length = cp;
+    }
+  }
+  // GATE: `field := FOR v IN {literals} UNION (SELECT subject.link { … } FILTER …)`
+  // — a literal-iteration FOR whose body shapes the outer subject's link (the
+  // branch above handled `FOR x IN .link`). Fires regardless of inferred
+  // cardinality, like that branch.
+  {
+    const forSet = peelToForExpr(shapeExpr.result);
+    if (forSet) {
+      const cp = params.length;
+      const built = compileForInShapeField(forSet, shape, sourceAlias, params, options, target, depth);
+      if (built) return built;
       params.length = cp;
     }
   }
