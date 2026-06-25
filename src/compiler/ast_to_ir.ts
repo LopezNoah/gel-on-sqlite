@@ -3653,12 +3653,38 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
         };
       }
       if (expr.shape.length > 0) {
+        // Re-projecting a WITH binding that wraps a shaped link/object
+        // (`U := select X.link { c := … }`; then `select U { name, out := U.c }`)
+        // must attach the new shape to the underlying link POINTER, not the
+        // `select_expr` binding wrapper. Left on the wrapper, the SQL layer
+        // can't iterate it as a correlated link array and the projection
+        // collapses (every outer row gets the binding's inner shape over its
+        // own columns). Compile the shape against `root` (so `out := U.c` still
+        // resolves through the bound shape), then — when the binding peels
+        // clause-free to a non-scalar link pointer — attach the compiled shape
+        // to that pointer, yielding the same IR shape as a direct `X.link {…}`.
         const compiledShape = compileShape(root, expr.shape, scoped);
         augmentGroupRowFieldShape(root, expr.shape, compiledShape);
-        root = {
-          ...root,
-          shape: compiledShape,
-        };
+        // Only an EXPLICIT user re-projection re-roots. A bare binding
+        // reference (`U` inside `U.c`) is modelled as `select U { id }` with an
+        // implicit (`origin: "default"`) id element — re-rooting that would
+        // strip the binding's own computed shape and break the path access.
+        const hasExplicitProjection = expr.shape.some(
+          (el) => el.origin === undefined || el.origin === "explicit",
+        );
+        const reRootTarget = (bound && hasExplicitProjection) ? ((): Set | undefined => {
+          let cur: Set = root;
+          for (let i = 0; i < 8 && cur.expr.kind === "select_expr"; i += 1) {
+            const se = cur.expr as SelectExpr;
+            if (se.where || se.limit !== undefined || se.offset !== undefined
+                || (se.orderBy && se.orderBy.length > 0)) return undefined;
+            cur = se.result;
+          }
+          return cur.expr.kind === "pointer" && !cur.typeref.isScalar ? cur : undefined;
+        })() : undefined;
+        root = reRootTarget
+          ? { ...reRootTarget, shape: compiledShape }
+          : { ...root, shape: compiledShape };
       }
       const clauses = expr.clauses;
       const hasClauses = clauses && (
@@ -4189,14 +4215,29 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
       // change the meaning of the access from "the underlying pointer" to
       // "the projected shape value", which is wrong for cross-product queries
       // that rely on the pointer reaching through to the row source.
-      const shapedElement = source.shape?.find(
-        (entry) =>
-          entry.name !== undefined
-          && entry.name === expr.field
-          && entry.shapeOrigin === "explicit"
-          && entry.targetPtr === undefined
-          && !expr.field.startsWith("@"),
-      );
+      const matchShapeEntry = (entries: ShapeElement[] | undefined): ShapeElement | undefined =>
+        entries?.find(
+          (entry) =>
+            entry.name !== undefined
+            && entry.name === expr.field
+            && entry.shapeOrigin === "explicit"
+            && entry.targetPtr === undefined
+            && !expr.field.startsWith("@"),
+        );
+      let shapedElement = matchShapeEntry(source.shape);
+      // A WITH binding to a shaped object/link (`U := select X.link { c := … }`)
+      // carries its computed elements on the select_expr's RESULT, not on the
+      // wrapper set — so `U.c` finds nothing in `source.shape` (which holds only
+      // the implicit `{id}`). Peel the select_expr layers to reach the bound
+      // shape and resolve the computed there.
+      if (!shapedElement) {
+        let inner: Set = source;
+        for (let i = 0; i < 8 && inner.expr.kind === "select_expr"; i += 1) {
+          inner = (inner.expr as SelectExpr).result;
+          shapedElement = matchShapeEntry(inner.shape);
+          if (shapedElement) break;
+        }
+      }
       if (shapedElement) {
         // `(SELECT T { c := E } FILTER F).c` — the computed body alone loses
         // the subject's iteration scope and FILTER. Wrap it in a FOR over the
