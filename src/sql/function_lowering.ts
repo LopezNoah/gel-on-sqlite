@@ -242,27 +242,43 @@ export const setLooksLikeRange = (set: Set): boolean => {
 // over scalars) — those evaluate to a single scalar value in compileScalarSelectSQL,
 // which would incorrectly count as 1 instead of preserving EdgeQL's set
 // semantics for the operand.
-// WIP (not main-ready — see caveat): `count((S.a, S.b, …))` where every tuple
-// element is a single-valued scalar pointer off the SAME object source set `S`
-// (e.g. both `Card.owners.name` and `Card.owners.cost` are off `Card.owners`).
-// Builds `S` ONCE as a structured Relation source (path_rvar_map: a single
-// shared provider rvar for the prefix) and counts its rows instead of the
-// per-element product.
+// `count((S.a, S.b, …))` where every tuple element is a single-valued scalar
+// pointer off the SAME object source set `S` (e.g. both `Card.owners.name` and
+// `Card.owners.cost` are off `Card.owners`). When the shared prefix is
+// CORRELATED here, the tuple ZIPS over it (count = prefix rows) rather than
+// crossing — so the Relation can resolve `S` once (path_rvar_map: a single
+// shared provider rvar) and we count its rows.
 //
-// CAVEAT: this assumes the shared prefix is CORRELATED (zip). It is WRONG when
-// the prefix is FACTORED through a WITH-binding — `count((U.cards.name,
-// U.cards.cost))` with `U := User {cards := …}` must stay the cartesian PRODUCT
-// (scope_computables_07a/b/c; this branch regresses 07b 81→9). The factored-vs-
-// correlated decision belongs to the scope tree (scope_tree.ts: sharedFactorPrefix
-// + factoringFence), which isn't consumed by lowering yet. The prize cases
-// (scope_computables_08 / 11a) ALSO have computed (`function_call`) leaves this
-// simple-pointer gate can't match. Kept as a reviewable demonstration of using
-// Relation for compilation; gate on the scope tree before enabling.
+// SOUNDNESS — why this is currently DISABLED, and what re-enables it:
+// Whether the shared prefix may collapse is a FACTORING decision, and the
+// authority for factoring is the scope tree, not path resolution. The Relation
+// answers "can I resolve this prefix once?" (yes); the scope tree must answer
+// "am I allowed to correlate it here?". The two answers diverge for a prefix
+// reached through a factored `WITH`/computable:
+//
+//   correlated:  SELECT count((Card.name, Card.cost))                       -> 9
+//   factored:    WITH U := User { cards := Card }
+//                SELECT count((U.cards.name, U.cards.cost))                  -> 81  (cartesian)
+//
+// These must differ, BUT after `ast_to_ir` WITH-inlining they compile to
+// BYTE-IDENTICAL IR — same pathId keys, same source keys, no surviving
+// namespace / `isWithBinding` / `view` residue (verified empirically). The
+// factoring fence is destroyed at inlining, so NO post-IR analysis — Relation
+// or `buildScopeAnalysis` — can separate them. `scope_tree.ts` exposes the
+// intended gate (`sharedFactorPrefix` + `factoringFence`), but the IR never
+// populates a fence for these, so consulting it cannot help yet.
+//
+// Therefore we DECLINE universally and fall back to the product path (exact
+// pre-Relation behaviour). The structural detection below is retained as the
+// live seam: once the WITH-binding fence survives inlining (an upstream
+// `ast_to_ir`/scope-tree change), replace the soundness gate with a
+// `buildScopeAnalysis` query and this begins to fire correctly. See
+// docs/adr/0061-shared-prefix-count-factoring.md.
 const tryCompileSharedPrefixTupleCount = (
   tuple: Tuple,
-  params: ScalarValue[],
-  target: RuntimeTarget,
-  options: GelIRCompileOptions,
+  _params: ScalarValue[],
+  _target: RuntimeTarget,
+  _options: GelIRCompileOptions,
   deps: SqlLoweringContext,
 ): string | null => {
   if (tuple.elements.length < 2) return null;
@@ -283,14 +299,12 @@ const tryCompileSharedPrefixTupleCount = (
     else if (deps.pathIdKey(src) !== deps.pathIdKey(shared)) return null;
   }
   if (!shared) return null;
-  const checkpoint = params.length;
-  const source = deps.compileSelectSourceRelation(shared, undefined, undefined, options, params, target, "sp0")
-    ?? deps.compileSelectSource(shared, undefined, undefined, options, params, target, "sp0");
-  if (!source) {
-    params.length = checkpoint;
-    return null;
-  }
-  return `(SELECT count(*) FROM ${source.sql})`;
+
+  // SOUNDNESS GATE: the scope tree is the factoring authority, but the IR has
+  // erased the fence that would let it (or the Relation) prove this prefix is
+  // correlated rather than factored (see the comment above). Decline until a
+  // fence-aware `buildScopeAnalysis` proof is available.
+  return null;
 };
 
 export const compileCountOfSetSQL = (
