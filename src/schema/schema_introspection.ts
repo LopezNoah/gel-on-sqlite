@@ -281,6 +281,16 @@ export const schemaIntrospectionTypeDefs = (): TypeDef[] => [
       { name: "to_type", targetType: "schema::Type" },
     ],
   },
+  // ── sys:: and cfg:: system extents ──────────────────────────────────────
+  // Registered so a fresh branch exposes the system meta-schema like real Gel
+  // (sys.edgeql / cfg.edgeql). Link-free + standalone (no extends) to stay on
+  // the denormalized-extent model that keeps counts correct.
+  { name: "SystemObject", module: "sys", abstract: true, fields: [{ name: "name", type: "str" }] },
+  { name: "Branch", module: "sys", fields: [{ name: "name", type: "str", required: true }] },
+  { name: "Database", module: "sys", fields: [{ name: "name", type: "str", required: true }] },
+  { name: "ConfigObject", module: "cfg", abstract: true, fields: [{ name: "name", type: "str" }] },
+  { name: "AbstractConfig", module: "cfg", abstract: true, fields: [{ name: "name", type: "str" }] },
+  { name: "Config", module: "cfg", fields: [{ name: "name", type: "str" }] },
 ];
 
 // SQLite database surface needed for populating introspection rows. Kept
@@ -291,6 +301,12 @@ interface IntrospectionDB {
     run: (...params: (string | number | boolean | null)[]) => { changes: number };
   };
 }
+
+// The meta/system intro modules whose types are materialized into their OWN
+// concrete tables (schema__*, sys__*, cfg__*) rather than folded into the
+// generic schema::Type / schema::ObjectType extents.
+const isSystemMetaTypeName = (name: string): boolean =>
+  name.startsWith("schema::") || name.startsWith("sys::") || name.startsWith("cfg::");
 
 const SCHEMA_TYPE_TABLE = "schema__type";
 const quoteIdent = (ident: string): string => `"${ident.replaceAll('"', '""')}"`;
@@ -315,10 +331,10 @@ export const populateSchemaIntrospection = (
   extraAliasNames: readonly string[] = [],
   runtimeExprAliases?: RuntimeExprAliasMap,
 ): void => {
-  const typeNames = schemaIntrospectionTypeDefs().map((typeDef) => `schema::${typeDef.name}`);
+  const typeNames = schemaIntrospectionTypeDefs().map((typeDef) => `${typeDef.module ?? "schema"}::${typeDef.name}`);
   const tableNames = typeNames.map(tableNameForType);
   const linkTableNames = schemaIntrospectionTypeDefs().flatMap((typeDef) => {
-    const ownerName = `schema::${typeDef.name}`;
+    const ownerName = `${typeDef.module ?? "schema"}::${typeDef.name}`;
     return (typeDef.links ?? [])
       .filter((link) => Boolean(link.multi) || (link.properties?.length ?? 0) > 0)
       .map((link) => `${tableNameForType(ownerName)}__${link.name.toLowerCase()}`);
@@ -405,10 +421,10 @@ export const populateSchemaIntrospection = (
 
   for (const typeDef of schema.listTypes()) {
     const name = qualifiedTypeName(typeDef);
-    if (name.startsWith("schema::")) {
-      // Skip the introspection types themselves in schema::Type; user queries
-      // mostly want application and std rows here, while each schema subtype
-      // has its own concrete table below.
+    if (isSystemMetaTypeName(name)) {
+      // Skip the meta/system intro types (schema::/sys::/cfg::) in schema::Type;
+      // user queries want application + std rows here, and each meta subtype has
+      // its own concrete table below.
       continue;
     }
     writeTypeRow(name, false, Boolean(typeDef.abstract));
@@ -430,7 +446,7 @@ export const populateSchemaIntrospection = (
 
   for (const typeDef of schema.listTypes()) {
     const name = qualifiedTypeName(typeDef);
-    if (name.startsWith("schema::") || isScalarTypeDef(typeDef)) {
+    if (isSystemMetaTypeName(name) || isScalarTypeDef(typeDef)) {
       continue;
     }
     populateObjectType(db, schema, insertRow, insertLink, linkAnnotations, ensureTypeRow, typeDef);
@@ -458,6 +474,22 @@ export const populateSchemaIntrospection = (
   populateAbstractConstraints(insertRow);
   populateOperators(insertRow);
   populateCasts(insertRow, ensureTypeRow);
+  populateSystemObjects(insertRow);
+};
+
+// sys::/cfg:: singletons a fresh Gel branch always has: the current branch, its
+// database alias, and the config object (mirrored into its abstract bases so
+// count(cfg::AbstractConfig)/count(cfg::ConfigObject) resolve via the
+// denormalized-extent model). Gives count(sys::Branch)/count(sys::Database)>0.
+const populateSystemObjects = (insertRow: InsertRow): void => {
+  insertRow("sys__branch", { id: scopedIdFor("sys::Branch", "main"), name: "main" });
+  insertRow("sys__database", { id: scopedIdFor("sys::Database", "main"), name: "main" });
+  // Mirror the single config object into its abstract bases for the
+  // denormalized-extent counts. Distinct ids per table — every row is gid-stamped
+  // by an AFTER INSERT trigger and __gel_global_ids.id is UNIQUE.
+  insertRow("cfg__config", { id: scopedIdFor("cfg::Config", "main"), name: "cfg::Config" });
+  insertRow("cfg__abstractconfig", { id: scopedIdFor("cfg::AbstractConfig", "main"), name: "cfg::Config" });
+  insertRow("cfg__configobject", { id: scopedIdFor("cfg::ConfigObject", "main"), name: "cfg::Config" });
 };
 
 // The standard infix/prefix/postfix/ternary operators (edb/lib/std). Immutable.
