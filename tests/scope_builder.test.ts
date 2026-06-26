@@ -3,10 +3,13 @@ import { parseEdgeQL } from "../src/edgeql/parser.js";
 import { buildScopeTreeFromAst } from "../src/ir/scope_builder.js";
 import type { ScopeTreeNode } from "../src/ir/gel_ir.js";
 
-// Phase-1 layer-1 foundation: the scope tree is POPULATED (not the old empty
-// stub) with fences + prefix-fused path nodes walked from the AST. These pin the
-// structural shape; the correlated-vs-factored namespace discriminator (layer 2)
-// is deferred (see docs/adr/0061).
+// Phase 1: the scope tree is POPULATED (not the old empty stub) with fences +
+// path nodes walked from the AST.
+//   layer 1 - prefix fusing: `(Card.name, Card.cost)` share a `Card` node.
+//   layer 2 - the correlated-vs-factored discriminator: a path through an inline
+//     alias-shape view computable (`U.cards`) gets a fresh per-occurrence
+//     namespace, so repeated traversals SPLIT into siblings (factored), while
+//     schema pointers / direct extents FUSE (correlated). See docs/adr/0061.
 
 const treeOf = (q: string): ScopeTreeNode => {
   const ast = parseEdgeQL(q) as unknown;
@@ -14,6 +17,8 @@ const treeOf = (q: string): ScopeTreeNode => {
   return buildScopeTreeFromAst(stmt);
 };
 
+// node name = its segment chain, IGNORING the view namespace (so the two
+// `U.cards@vnsN` siblings both read as "U.cards").
 const seg = (n: ScopeTreeNode): string =>
   (n.pathId?.steps ?? []).map((s) => (s.type as { nameHint?: string })?.nameHint ?? "?").join(".");
 
@@ -26,48 +31,74 @@ const find = (n: ScopeTreeNode, name: string): ScopeTreeNode | undefined => {
   return undefined;
 };
 
-describe("scope_builder (Phase 1, layer 1)", () => {
+// How many distinct nodes carry this segment chain. A CORRELATED prefix appears
+// once (refs fuse); a FACTORED one appears once per occurrence (refs split).
+const countByName = (n: ScopeTreeNode, name: string): number => {
+  let total = seg(n) === name ? 1 : 0;
+  for (const c of n.children) total += countByName(c, name);
+  return total;
+};
+
+describe("scope_builder (Phase 1)", () => {
   it("populates a real tree (not the empty stub)", () => {
     const root = treeOf("SELECT count((Card.name, Card.cost))");
     expect(root.fenced).toBe(true); // statement boundary is a fence
     expect(root.children.length).toBeGreaterThan(0); // not the empty stub
   });
 
-  it("fuses a shared prefix: Card.name and Card.cost share one Card node", () => {
+  // --- layer 1: prefix fusing ---
+
+  it("CORRELATED: Card.name and Card.cost fuse at a single Card node", () => {
     const root = treeOf("SELECT count((Card.name, Card.cost))");
-    const card = find(root, "Card");
-    expect(card).toBeDefined();
-    const leaves = card!.children.map(seg).sort();
-    expect(leaves).toEqual(["Card.cost", "Card.name"]);
+    expect(countByName(root, "Card")).toBe(1);
+    const card = find(root, "Card")!;
+    expect(card.children.map(seg).sort()).toEqual(["Card.cost", "Card.name"]);
   });
 
-  it("fuses a pointer-chain prefix: Card.owners.{name,deck_cost} share Card.owners", () => {
+  it("CORRELATED: a schema-computed link (Card.owners) still fuses", () => {
+    // `owners := .<deck[IS User]` is computed but is a SCHEMA pointer, not an
+    // inline view computable, so its refs correlate (cf. scope_computables_08).
     const root = treeOf("SELECT count((Card.owners.name, Card.owners.deck_cost))");
-    const owners = find(root, "Card.owners");
-    expect(owners).toBeDefined();
-    expect(owners!.children.map(seg).sort()).toEqual([
+    expect(countByName(root, "Card.owners")).toBe(1);
+    const owners = find(root, "Card.owners")!;
+    expect(owners.children.map(seg).sort()).toEqual([
       "Card.owners.deck_cost",
       "Card.owners.name",
     ]);
   });
 
-  it("a WITH-binding body is a fenced sub-scope", () => {
+  // --- layer 2: the factoring discriminator ---
+
+  it("FACTORED: a WITH-alias view computable (U.cards) splits per occurrence", () => {
     const root = treeOf(
       "WITH U := User { cards := Card }, SELECT count((U.cards.name, U.cards.cost))",
     );
-    // The binding body (User { ... }) lives under its own fence node.
-    const userNode = find(root, "User");
-    expect(userNode).toBeDefined();
-    const fenceChildren = root.children.filter((c) => c.fenced);
-    expect(fenceChildren.length).toBeGreaterThan(0);
-    // The U references still fuse structurally at U.cards (layer 1); the
-    // per-occurrence namespace that splits them (factored vs correlated) is layer 2.
-    const uCards = find(root, "U.cards");
-    expect(uCards).toBeDefined();
-    expect(uCards!.children.map(seg).sort()).toEqual([
-      "U.cards.cost",
-      "U.cards.name",
-    ]);
+    // The binding body lives under its own fence.
+    expect(find(root, "User")).toBeDefined();
+    expect(root.children.some((c) => c.fenced)).toBe(true);
+    // `cards` is an inline `:=` view computable -> the two U.cards refs do NOT
+    // fuse: there are two distinct U.cards nodes (factored), while their alias
+    // prefix `U` still fuses (correlated/visible).
+    expect(countByName(root, "U")).toBe(1);
+    expect(countByName(root, "U.cards")).toBe(2);
+  });
+
+  it("FACTORED: a computed link (cards := .deck) also splits", () => {
+    const root = treeOf(
+      "WITH U := User { cards := .deck }, SELECT count((U.cards.name, U.cards.cost))",
+    );
+    expect(countByName(root, "U.cards")).toBe(2);
+  });
+
+  it("FACTORED at the computable only: U.deck (real link) fuses, U.deck.a (computable) splits", () => {
+    const root = treeOf(
+      "WITH U := (SELECT User { deck: {name, a := Award} }), " +
+        "SELECT count((U.deck.a.name, U.deck.a.id, U.deck.name))",
+    );
+    // `deck` is a real link projection (no `:=`) -> fuses; `a := Award` is a view
+    // computable -> the two U.deck.a refs split.
+    expect(countByName(root, "U.deck")).toBe(1);
+    expect(countByName(root, "U.deck.a")).toBe(2);
   });
 
   it("does not throw on non-select statements", () => {

@@ -1,9 +1,9 @@
 # 0061 — Shared-prefix tuple `count` is a factoring decision; the fence is lost at IR inlining
 
 ## Status
-Accepted. Phase 0 (gate disabled) + Phase 1 layer 1 (scope-tree population,
-structural) done. Phase 1 layer 2 (view-namespace discriminator) and Phase 1
-layer 3 (factoring-query authority + wiring) proposed.
+Accepted. Phase 0 (gate disabled) + Phase 1 layer 1 (scope-tree population) +
+Phase 1 layer 2 (view-namespace discriminator) done. Phase 1 layer 3
+(factoring-query authority + wiring) proposed.
 
 ## Context
 
@@ -96,11 +96,18 @@ is already exercised by detached-EXISTS via `existence_proof.ts`).
    signatures (segment names) — enough for prefix fusing/visibility; real IR
    PathIds come with layer 3 wiring. `Statement.scopeTree` is no longer the
    `createRootScope()` stub.
-   - **layer 2 (TODO):** the per-occurrence view namespace — alias/view-shape
+   - **layer 2 (DONE):** the per-occurrence view namespace — alias/view-shape
      computables compile DETACHED with a fresh `path_id_namespace`
      (`context.py:768`, `stmtctx.py:143`), so repeated `U.cards` don't fuse
      (product) while schema pointers (even computed `owners`) fuse (correlate).
-     This is the discriminator the count gate needs; mint it in the walker.
+     Reproduced in the walker: a path step traversing an inline alias-shape view
+     computable (a `:=`-defined shape element of a WITH binding's body) opens a
+     fresh per-occurrence namespace, carried by that step and below. Verified on
+     the tree: `(Card.name,Card.cost)` and `(Card.owners.name,Card.owners.deck_cost)`
+     fuse (correlated); `(U.cards.name,U.cards.cost)` split into sibling
+     `U.cards@vns1`/`@vns2` (factored), and in `U.deck.a.*` only the computable
+     `a` splits while the real link `deck` fuses. Behaviour-neutral (scopeTree
+     still unconsumed — nothing on the execution path reads it).
 2. **Factoring-query authority** in `src/ir/scope_tree.ts` — port
    `find_factorable_nodes` and expose `shouldFactorTogether(a, b)`,
    `sharedFactorPrefix(elements)`, `isAcrossFactoringFence(a, b)`.

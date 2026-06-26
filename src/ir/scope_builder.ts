@@ -1,4 +1,4 @@
-// Scope-tree POPULATION (Phase 1, layer 1 - structural foundation).
+// Scope-tree POPULATION (Phase 1).
 //
 // Gel builds its scope tree DURING ast_to_ir (`attach_path`/`attach_fence`,
 // edb/ir/scopetree.py:405) so fences survive before inlining erases them; the
@@ -16,28 +16,47 @@
 //     prefixes (mirroring `attach_path`), so `(Card.name, Card.cost)` share a
 //     `Card` node.
 //
-// It is invoked additively (like `inferStatementVolatility`) and is STRICTLY
-// behaviour-neutral: nothing on the execution path reads `Statement.scopeTree`,
-// so this only decorates the IR. Path identities here are STRUCTURAL signatures
-// (segment names), sufficient for prefix fusing and visibility; resolving them to
-// real IR PathIds - and the per-occurrence view namespace that distinguishes a
-// FACTORED alias-view traversal from a CORRELATED one (the `U.cards` vs `Card`
-// case) - is layer 2, deferred (see ADR 0061).
+// LAYER 2 - the correlated-vs-factored discriminator. EdgeQL factors (zips) two
+// path references at their longest common prefix UNLESS that prefix is reached
+// through a factored view. Gel realizes this by compiling an alias/view-shape
+// computable in a DETACHED context that mints a FRESH `path_id_namespace` per
+// occurrence (edb/edgeql/compiler/context.py:768, stmtctx.py:143): two refs to
+// `U.cards` get different namespaces -> don't fuse -> cross-product (factored).
+// Schema pointers - even computed ones like `owners := .<deck[IS User]` - share
+// the namespace -> fuse -> correlated. We reproduce that here: a path step that
+// traverses an inline alias-shape view computable (a `:=`-defined shape element
+// of a WITH binding's body) gets a fresh per-occurrence namespace, so repeated
+// traversals split into sibling nodes.
+//
+// Invoked additively (like `inferStatementVolatility`) and STRICTLY
+// behaviour-neutral: nothing on the execution path reads `Statement.scopeTree`.
+// Path identities are STRUCTURAL signatures (segment names + view namespaces),
+// sufficient for prefix fusing / factoring; resolving them to real IR PathIds is
+// layer 3 (the find_factorable_nodes wiring), deferred (see ADR 0061).
 
 import type { ScopeTreeNode, PathId } from "./gel_ir.js";
 import { pathIdKey } from "./scope_tree.js";
 
 interface BuildState {
   nextId: number;
+  nextNs: number;
   // Guard against revisiting shared AST sub-objects (the AST is a tree but refs
   // can alias) so the generic recursion can never loop or blow the stack.
   seen: WeakSet<object>;
 }
 
-const newNode = (
-  state: BuildState,
-  init: Partial<ScopeTreeNode>,
-): ScopeTreeNode => {
+// Visible WITH/alias bindings: name -> its body's top-level shape elements (used
+// to decide whether a traversed field is an inline view computable).
+type Bindings = Map<string, { shape: any[] }>;
+
+// One path segment: its name and whether it traverses an inline view computable
+// (and therefore opens a fresh per-occurrence namespace).
+interface Seg {
+  name: string;
+  computable: boolean;
+}
+
+const newNode = (state: BuildState, init: Partial<ScopeTreeNode>): ScopeTreeNode => {
   state.nextId += 1;
   return {
     kind: "scope_tree_node",
@@ -62,14 +81,14 @@ const attachBranch = (parent: ScopeTreeNode, state: BuildState): ScopeTreeNode =
   return node;
 };
 
-// A structural path identity: synthetic PathId whose steps key off segment
-// names. JSON.stringify (the backend's `pathIdKey`) over this gives a stable
-// fusing key, so two references to the same path share a node.
-const sigToPathId = (segments: string[]): PathId => ({
+// A structural path identity: synthetic PathId whose steps key off segment names
+// and whose namespace carries any view namespace. JSON.stringify (the backend's
+// `pathIdKey`) over this gives a stable fusing key.
+const sigToPathId = (names: string[], ns: string[]): PathId => ({
   kind: "path_id",
-  namespace: [],
-  isPointerPath: segments.length > 1,
-  steps: segments.map((name) => ({
+  namespace: ns,
+  isPointerPath: names.length > 1,
+  steps: names.map((name) => ({
     type: {
       kind: "type_ref",
       id: `sig:${name}`,
@@ -84,77 +103,122 @@ const sigToPathId = (segments: string[]): PathId => ({
   })) as PathId["steps"],
 });
 
-// Attach a path (given as a segment signature) under `scope`, nesting by prefix
-// and fusing existing prefix nodes - mirrors scopetree.py `attach_path`.
-const attachPath = (scope: ScopeTreeNode, segments: string[], state: BuildState): void => {
-  if (segments.length === 0) return;
+// Attach a path (a list of segments) under `scope`, nesting by prefix and fusing
+// existing prefix nodes - mirrors scopetree.py `attach_path`. The first segment
+// that traverses an inline view computable opens a FRESH namespace for this
+// occurrence; that namespace is carried by it and every segment below, so two
+// occurrences of the same view path split into sibling nodes (factored), while
+// the prefix above the computable still fuses (visible/correlated).
+const attachPath = (scope: ScopeTreeNode, segs: Seg[], state: BuildState): void => {
+  if (segs.length === 0) return;
   let parent = scope;
-  for (let i = 0; i < segments.length; i += 1) {
-    const prefixId = sigToPathId(segments.slice(0, i + 1));
+  let ns: string[] = [];
+  for (let i = 0; i < segs.length; i += 1) {
+    if (segs[i]!.computable && ns.length === 0) {
+      state.nextNs += 1;
+      ns = [`vns${state.nextNs}`];
+    }
+    const prefixId = sigToPathId(segs.slice(0, i + 1).map((s) => s.name), ns);
     const key = pathIdKey(prefixId);
     let child = parent.children.find(
       (c) => c.pathId !== undefined && pathIdKey(c.pathId) === key,
     );
     if (!child) {
-      child = newNode(state, { pathId: prefixId });
+      child = newNode(state, { pathId: prefixId, namespaces: [...ns] });
       parent.children.push(child);
     }
     parent = child;
   }
 };
 
-// Best-effort segment signature for an AST path-ish expr (`field_access`,
-// `binding_ref`, `path`, `path_chain`). Returns null when the expr is not a
-// simple path (e.g. its head is a sub-expression we should recurse into).
-const pathSignature = (e: any): string[] | null => {
+const aliasShapeOf = (v: any): any[] => {
+  if (!v || typeof v !== "object") return [];
+  if (Array.isArray(v.shape)) return v.shape;
+  if (v.query && Array.isArray(v.query.shape)) return v.query.shape;
+  if (v.expr) return aliasShapeOf(v.expr);
+  return [];
+};
+
+// Flatten a `field_access` chain (and simple path heads) into a head expr + the
+// trailing field names. Returns null for a non-path expr.
+const flattenPath = (e: any): { head: any; fields: string[] } | null => {
   if (!e || typeof e !== "object") return null;
   switch (e.kind) {
-    case "binding_ref":
-      return e.name ? [e.name] : null;
     case "field_access": {
-      const base = pathSignature(e.expr);
-      if (!base) {
-        // `(SELECT Card).name`: head is itself an extent - seed from its type.
-        const headType = e.expr?.kind === "select" ? e.expr.typeName : undefined;
-        return headType && e.field ? [headType, e.field] : null;
-      }
-      return e.field ? [...base, e.field] : base;
+      const inner = flattenPath(e.expr);
+      if (inner) return { head: inner.head, fields: [...inner.fields, e.field] };
+      return { head: e.expr, fields: [e.field] };
     }
-    case "path":
-      return e.head ? [e.head, ...(e.tail ? [e.tail] : [])] : null;
-    case "path_chain":
-      return Array.isArray(e.parts) && e.parts.length ? [...e.parts] : null;
+    case "binding_ref":
     case "select":
-      return e.typeName ? [e.typeName] : null;
+      return { head: e, fields: [] };
+    case "path":
+      return { head: { kind: "object_head", name: e.head }, fields: e.tail ? [e.tail] : [] };
+    case "path_chain": {
+      const [head, ...tail] = e.parts ?? [];
+      return head ? { head: { kind: "object_head", name: head }, fields: tail } : null;
+    }
     default:
       return null;
   }
+};
+
+// Resolve a path-ish expr to segments, marking inline view-computable steps.
+// Returns null when the expr is not a simple path (so the walker recurses).
+const pathSegments = (e: any, bindings: Bindings): Seg[] | null => {
+  const flat = flattenPath(e);
+  if (!flat) return null;
+  const head = flat.head;
+
+  let baseName: string | undefined;
+  let shapeCursor: any[] | null = null;
+  if (head.kind === "binding_ref" || head.kind === "object_head") {
+    baseName = head.name;
+    shapeCursor = bindings.get(head.name)?.shape ?? null;
+  } else if (head.kind === "select") {
+    baseName = head.typeName; // a direct extent - no view shape to track
+  } else {
+    return null; // head is a sub-expression; let the walker recurse into it
+  }
+  if (!baseName) return null;
+
+  const segs: Seg[] = [{ name: baseName, computable: false }];
+  for (const field of flat.fields) {
+    let computable = false;
+    if (shapeCursor) {
+      const el = shapeCursor.find((x) => x && x.name === field);
+      // A `:=`-defined shape element (has `expr`) is a view computable; a plain
+      // projected link (`deck: { ... }`) has a sub-shape but no `expr`.
+      if (el && el.expr != null) computable = true;
+      shapeCursor = (el && (el.shape ?? el.query?.shape)) ?? null;
+    }
+    segs.push({ name: field, computable });
+  }
+  return segs;
 };
 
 // Expr kinds that introduce a fenced sub-scope (a SET OF / subquery boundary).
 const FENCE_KINDS = new Set(["select", "exists"]);
 
 // Recursively walk an AST expr, attaching paths and fences under `scope`.
-const walkExpr = (e: any, scope: ScopeTreeNode, state: BuildState): void => {
+const walkExpr = (e: any, scope: ScopeTreeNode, state: BuildState, bindings: Bindings): void => {
   if (!e || typeof e !== "object") return;
   if (state.seen.has(e)) return;
   state.seen.add(e);
 
-  // Path-ish expr: attach it (fusing prefixes) and stop - its internals are the
-  // path chain, already captured by the signature.
-  const sig = pathSignature(e);
-  if (sig) {
-    attachPath(scope, sig, state);
+  // Path-ish expr: attach it (fusing prefixes, splitting view computables) and
+  // stop - its internals are the path chain, already captured.
+  const segs = pathSegments(e, bindings);
+  if (segs) {
+    attachPath(scope, segs, state);
     return;
   }
 
   if (e.kind === "for_expr") {
-    // Iterator evaluated in the enclosing scope; body in a child branch where
-    // the iterator is visible.
-    walkExpr(e.iterator, scope, state);
+    walkExpr(e.iterator, scope, state, bindings);
     const body = attachBranch(scope, state);
-    if (e.variable) attachPath(body, [e.variable], state);
-    walkExpr(e.body, body, state);
+    if (e.variable) attachPath(body, [{ name: e.variable, computable: false }], state);
+    walkExpr(e.body, body, state, bindings);
     return;
   }
 
@@ -162,15 +226,21 @@ const walkExpr = (e: any, scope: ScopeTreeNode, state: BuildState): void => {
   const childScope = FENCE_KINDS.has(e.kind) ? attachFence(scope, state) : scope;
 
   // WITH bindings (on a `select_expr`/`select`): each binding body is a detached
-  // fenced scope.
-  if (Array.isArray(e.with)) {
+  // fenced scope; register the binding's shape so later references can tell an
+  // inline view computable from a schema pointer.
+  let childBindings = bindings;
+  if (Array.isArray(e.with) && e.with.length > 0) {
+    childBindings = new Map(bindings);
+    for (const binding of e.with) {
+      if (binding?.name) childBindings.set(binding.name, { shape: aliasShapeOf(binding.value) });
+    }
     for (const binding of e.with) {
       const bScope = attachFence(childScope, state);
-      walkExpr(binding?.value, bScope, state);
+      walkExpr(binding?.value, bScope, state, childBindings);
     }
   }
   if (e.kind === "subquery" && e.query) {
-    walkExpr(e.query, childScope, state);
+    walkExpr(e.query, childScope, state, childBindings);
     return;
   }
 
@@ -178,16 +248,16 @@ const walkExpr = (e: any, scope: ScopeTreeNode, state: BuildState): void => {
   // unmodelled expr kinds still get attached.
   for (const [k, v] of Object.entries(e)) {
     if (k === "with" || k === "span" || k === "pos") continue;
-    if (Array.isArray(v)) v.forEach((c) => walkExpr(c, childScope, state));
-    else if (v && typeof v === "object") walkExpr(v, childScope, state);
+    if (Array.isArray(v)) v.forEach((c) => walkExpr(c, childScope, state, childBindings));
+    else if (v && typeof v === "object") walkExpr(v, childScope, state, childBindings);
   }
 };
 
 // Build a populated scope tree from an EdgeQL statement AST. The root is a fence
 // (the statement boundary), mirroring Gel. Purely structural; behaviour-neutral.
 export const buildScopeTreeFromAst = (statement: any): ScopeTreeNode => {
-  const state: BuildState = { nextId: 1, seen: new WeakSet<object>() };
+  const state: BuildState = { nextId: 1, nextNs: 0, seen: new WeakSet<object>() };
   const root = newNode(state, { fenced: true });
-  walkExpr(statement, root, state);
+  walkExpr(statement, root, state, new Map());
   return root;
 };
