@@ -3,7 +3,7 @@ import { parseEdgeQL } from "../src/edgeql/parser.js";
 import { loadSchema } from "../src/schema/load.js";
 import { resolveSchemaModelForCompile } from "../src/codegen/schema_loader.js";
 import { AliasGenerator } from "../src/ir/derived_names.js";
-import { compileFreeObjectExpr } from "../src/compiler/ast_to_ir.js";
+import { compileFreeObjectExpr, qlastPathDeps } from "../src/compiler/ast_to_ir.js";
 import type { IRCompileContext } from "../src/compiler/ast_to_ir.js";
 import { compilePathQlast } from "../src/compiler/qlast_setgen.js";
 import { astPathExprToQlast } from "../src/compiler/ast_to_qlast.js";
@@ -27,7 +27,9 @@ const schema = loadSchema(
   `module default {
     type Movie {
       required title: str;
-      multi reviews: Review;
+      multi reviews: Review {
+        rating: int64;
+      }
     }
     type Film extending Movie;
     type Review {
@@ -104,7 +106,7 @@ const parityStatus = (query: string): Status => {
 
   let ported: IRSet;
   try {
-    ported = compilePathQlast(qlPath, makeCtx());
+    ported = compilePathQlast(qlPath, makeCtx(), qlastPathDeps);
   } catch (error) {
     return `ported-threw:${(error as Error).message.split(" (")[0]}`;
   }
@@ -137,6 +139,7 @@ const CORPUS: { query: string; expect: Status }[] = [
   { query: "SELECT Movie[IS Film]", expect: "match" },
   { query: "SELECT Movie[IS Film].title", expect: "match" },
   { query: "SELECT Review.<reviews[IS Movie]", expect: "match" },
+  { query: "SELECT Movie.reviews@rating", expect: "match" }, // link property — now ported
   // ── deferred frontier (bridge returns null; live compiler still handles) ──
   { query: "SELECT Movie { title }", expect: "adapter-null" }, // shaped select, not a pure path
   { query: "SELECT Review.<reviews[IS Movie].title", expect: "adapter-null" }, // backlink+access (parsed as for_expr)
@@ -146,6 +149,37 @@ describe("qlast path parity: bridge + compilePathQlast vs live compiler", () => 
   for (const { query, expect: expected } of CORPUS) {
     it(`${query}  →  ${expected}`, () => {
       expect(parityStatus(query)).toBe(expected);
+    });
+  }
+});
+
+// The gate itself: with GEL_QLAST_PATHS=1, compileFreeObjectExpr routes path
+// expressions through compilePathQlast. Proves that routing is behaviour-neutral
+// — the routed IR's path signature equals the legacy compiler's.
+describe("gate GEL_QLAST_PATHS=1 routes paths and preserves behaviour", () => {
+  const ROUTED = [
+    "SELECT Movie.title",
+    "SELECT Movie.reviews.body",
+    "SELECT Movie[IS Film].title",
+    "SELECT Movie.reviews@rating",
+  ];
+  for (const query of ROUTED) {
+    it(`routed == legacy: ${query}`, () => {
+      const ast = parseEdgeQL(query);
+      const stmt = Array.isArray(ast) ? ast[0] : ast;
+      const pathExpr = findPathExpr(stmt);
+      expect(pathExpr).toBeTruthy();
+
+      const legacy = compileFreeObjectExpr(pathExpr!, makeCtx());
+      const prev = process.env.GEL_QLAST_PATHS;
+      process.env.GEL_QLAST_PATHS = "1";
+      try {
+        const routed = compileFreeObjectExpr(pathExpr!, makeCtx());
+        expect(pathSig(routed)).toBe(pathSig(legacy));
+      } finally {
+        if (prev === undefined) delete process.env.GEL_QLAST_PATHS;
+        else process.env.GEL_QLAST_PATHS = prev;
+      }
     });
   }
 });

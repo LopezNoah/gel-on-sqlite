@@ -4,6 +4,7 @@ import { resolveSchemaModelForCompile } from "../src/codegen/schema_loader.js";
 import { AliasGenerator } from "../src/ir/derived_names.js";
 import { serializePathId } from "../src/ir/pathid_format.js";
 import { compilePathQlast } from "../src/compiler/qlast_setgen.js";
+import { qlastPathDeps } from "../src/compiler/ast_to_ir.js";
 import type { IRCompileContext } from "../src/compiler/ast_to_ir.js";
 import type { Pointer, TypeRoot } from "../src/ir/gel_ir.js";
 import type {
@@ -44,6 +45,8 @@ const makeCtx = (): IRCompileContext => ({
   aliases: new AliasGenerator(),
 });
 
+const runPath = (p: Path, ctx: IRCompileContext) => compilePathQlast(p, ctx, qlastPathDeps);
+
 // ── qlast node-literal builders ──
 const objectRef = (name: string, module?: string): ObjectRef => ({
   __kind__: "ObjectRef",
@@ -72,7 +75,7 @@ const path = (steps: Path["steps"], partial = false): Path => ({
 
 describe("compilePathQlast (qlast → Live IR tracer bullet)", () => {
   it("builds a type-root Set for a bare object reference", () => {
-    const set = compilePathQlast(path([objectRef("Movie")]), makeCtx());
+    const set = runPath(path([objectRef("Movie")]), makeCtx());
     expect(set.kind).toBe("set");
     expect(set.expr.kind).toBe("type_root");
     expect((set.expr as TypeRoot).typeref.nameHint).toContain("Movie");
@@ -80,7 +83,7 @@ describe("compilePathQlast (qlast → Live IR tracer bullet)", () => {
   });
 
   it("builds a pointer Set for `Movie.title`", () => {
-    const set = compilePathQlast(path([objectRef("Movie"), ptr("title")]), makeCtx());
+    const set = runPath(path([objectRef("Movie"), ptr("title")]), makeCtx());
     expect(set.expr.kind).toBe("pointer");
     const p = set.expr as Pointer;
     expect(p.ptrref.shortName).toBe("title");
@@ -91,7 +94,7 @@ describe("compilePathQlast (qlast → Live IR tracer bullet)", () => {
   });
 
   it("chains pointer steps for `Movie.reviews.body`", () => {
-    const set = compilePathQlast(
+    const set = runPath(
       path([objectRef("Movie"), ptr("reviews"), ptr("body")]),
       makeCtx(),
     );
@@ -107,7 +110,7 @@ describe("compilePathQlast (qlast → Live IR tracer bullet)", () => {
   });
 
   it("narrows on `Movie[is Film]`", () => {
-    const set = compilePathQlast(
+    const set = runPath(
       path([objectRef("Movie"), typeIntersection("Film")]),
       makeCtx(),
     );
@@ -117,26 +120,26 @@ describe("compilePathQlast (qlast → Live IR tracer bullet)", () => {
   it("resolves a partial path `.title` against the bound subject", () => {
     const ctx = makeCtx();
     // Seed `__subject__` as a Movie extent — what a shape/FILTER context binds.
-    const movie = compilePathQlast(path([objectRef("Movie")]), ctx);
+    const movie = runPath(path([objectRef("Movie")]), ctx);
     ctx.bindingScopes[ctx.bindingScopes.length - 1]!.set("__subject__", movie);
 
-    const set = compilePathQlast(path([ptr("title")], true), ctx);
+    const set = runPath(path([ptr("title")], true), ctx);
     expect(set.expr.kind).toBe("pointer");
     expect((set.expr as Pointer).ptrref.shortName).toBe("title");
   });
 
-  it("rejects an unknown pointer", () => {
+  it("defers an unresolved pointer (so the gate falls back to legacy)", () => {
     expect(() =>
-      compilePathQlast(path([objectRef("Movie"), ptr("nope")]), makeCtx()),
-    ).toThrow(/unknown pointer 'nope'/);
+      runPath(path([objectRef("Movie"), ptr("nope")]), makeCtx()),
+    ).toThrow(/unresolved pointer 'nope'/);
   });
 
-  it("marks link-property steps as DEFERRED (honest gap, not a silent bug)", () => {
+  it("ports link-property access: rejects a property the link lacks", () => {
+    // `reviews` is a link with no `@rating` property — the ported link-property
+    // step resolves the link, finds no such property, and errors (matching the
+    // live compiler), rather than silently fabricating a pointer.
     expect(() =>
-      compilePathQlast(
-        path([objectRef("Movie"), ptr("reviews"), ptr("@rating")]),
-        makeCtx(),
-      ),
-    ).toThrow(/DEFERRED: link-property/);
+      runPath(path([objectRef("Movie"), ptr("reviews"), ptr("@rating")]), makeCtx()),
+    ).toThrow(/link 'reviews' has no property 'rating'/);
   });
 });

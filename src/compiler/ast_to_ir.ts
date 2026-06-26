@@ -78,6 +78,8 @@ import type { FieldDef, FunctionDef, LinkDef, LinkPropertyDef, ScalarType, Scala
 import { qualifiedTypeName, type SchemaSnapshot } from "../schema/schema.js";
 import type { GeneratedSchema, GeneratedSchemaType } from "../codegen/schema.js";
 import { resolveSchemaModelForCompile } from "../codegen/schema_loader.js";
+import { astPathExprToQlast } from "./ast_to_qlast.js";
+import { compilePathQlast, isQlastDeferred, type QlastPathDeps } from "./qlast_setgen.js";
 
 // Reject a GROUP BY clause that uses one name in conflicting roles (a USING
 // alias vs a direct field, or a link property vs an object property). Relocated
@@ -3583,6 +3585,23 @@ const compileEmbeddedGroup = (
 // can use the live path compiler as the differential oracle for
 // `compilePathQlast`. Behaviour-neutral.
 export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompileContext): Set => {
+  // Gate: route path-shaped expressions through the qlast-consuming path
+  // compiler (`compilePathQlast`). OFF by default so this is behaviour-neutral;
+  // enable with GEL_QLAST_PATHS=1. On a not-yet-ported case compilePathQlast
+  // throws QLAST_DEFERRED and we fall through to the legacy compiler below; the
+  // differential parity harness verifies routed == legacy. See ADR-pending.
+  if (qlastPathRoutingEnabled() && QLAST_GATED_PATH_KINDS.has((expr as { kind?: string }).kind ?? "")) {
+    const qlPath = astPathExprToQlast(expr as FreeObjectExpr);
+    if (qlPath) {
+      try {
+        return compilePathQlast(qlPath, ctx, qlastPathDeps);
+      } catch (error) {
+        if (!isQlastDeferred(error)) throw error;
+        // DEFERRED — fall through to the legacy path compiler.
+      }
+    }
+  }
+
   const resolveHeadSet = (name: string): Set => {
     const bound = resolveBinding(ctx, name);
     if (bound) return bound;
@@ -10858,4 +10877,34 @@ export const validateParsedStatement = (
     aliases: new AliasGenerator(),
   };
   collectStatementShapesForValidation(statement, ctx);
+};
+
+// ─── qlast path-routing gate (consumed by compileFreeObjectExpr) ────────────
+// The path-shaped expression kinds eligible for routing through the
+// qlast-consuming path compiler.
+const QLAST_GATED_PATH_KINDS = new globalThis.Set<string>(["path", "path_chain", "path_steps", "field_access"]);
+
+const qlastPathRoutingEnabled = (): boolean =>
+  typeof process !== "undefined" && process.env?.GEL_QLAST_PATHS === "1";
+
+// The live schema/IR helper kit `compilePathQlast` runs on — defined here, after
+// every helper, so the qlast path compiler emits IR identical to the legacy
+// path compiler (it calls the SAME functions). Exported for the parity harness.
+export const qlastPathDeps: QlastPathDeps = {
+  resolveBinding,
+  setFromTypeRoot,
+  resolveTypeRef,
+  resolvePointerRef,
+  extendPathSetDirectional,
+  extendPathSet,
+  synthesizeTypePointerSet,
+  synthesizeTypeNamePointerSet,
+  validateTypeIntersectionOperand,
+  validateTypeIntersectionPointer,
+  lookupEnumScalar,
+  resolvePathToEnumLiteral,
+  literalToSet,
+  failSemantic,
+  scalarTypeRef: (scalar) => scalarTypeRef(scalar as ScalarType),
+  getResolvedSchemaType,
 };

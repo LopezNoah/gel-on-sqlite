@@ -1,142 +1,228 @@
-// Tracer bullet for the qlast-based AST→IR port.
+// qlast-consuming path compiler — a faithful port of Gel's
+// `edb/edgeql/compiler/setgen.py::compile_path`, consuming the grammar-faithful
+// `qlast.ts` AST and producing the Live IR `Set` (`gel_ir.ts`).
 //
-// A faithful, structure-preserving port of Gel's
-// `edb/edgeql/compiler/setgen.py::compile_path` (setgen.py:321) — the function
-// that turns an EdgeQL path expression into an `ir.Set` — but consuming the
-// grammar-faithful `qlast.ts` AST instead of the bespoke `ast.ts`, and producing
-// the existing Live IR `Set` from `gel_ir.ts`.
-//
-// PURPOSE: measure how clean the Python→TS transcription becomes once the AST
-// node shapes match Gel 1:1. The control flow below is a near-line-for-line
-// mirror of `compile_path`; the only substitutions are the schema/IR calls,
-// which bind to the EXISTING sqlite-ts helpers (`resolveTypeRef`,
-// `resolvePointerRef`, `extendPathSetDirectional`, …) re-exported from
-// `ast_to_ir.ts`. Wherever Gel reaches into machinery sqlite-ts hasn't grown a
-// home for yet (schema views, materialization, scope-tree surgery,
-// link-property force-table), the step is marked DEFERRED with its upstream
-// `setgen.py` reference rather than faked.
-//
-// NOT WIRED into the live compiler — the parser still emits `ast.ts`. This file
-// exists only to validate the porting approach against real schema + IR. See
-// the migration plan: parser→qlast, then migrate `ast_to_ir.ts` piecewise.
+// It mirrors the live `compilePathSteps` (ast_to_ir.ts) case-for-case, reusing
+// the SAME schema/IR helpers via an injected `QlastPathDeps` bundle (the ADR
+// dependency-seam pattern) so its output is identical to the legacy compiler
+// for the ported cases. Cases not yet ported (computed-property in-place
+// lowering, group-row fields, named-tuple access, polymorphic link properties)
+// throw a tagged `QLAST_DEFERRED` error; the gate in `compileFreeObjectExpr`
+// catches it and falls back to the legacy path compiler. Coverage grows by
+// converting `DEFERRED` cases into real ports, each guarded by the differential
+// parity harness (tests/qlast_path_parity.test.ts).
 
 import type {
+  IRAnchor as QlIRAnchor,
+  ObjectRef as QlObjectRef,
   Path as QlPath,
   Ptr as QlPtr,
-  ObjectRef as QlObjectRef,
-  TypeIntersection as QlTypeIntersection,
   SpecialAnchor as QlSpecialAnchor,
-  IRAnchor as QlIRAnchor,
   TypeExpr as QlTypeExpr,
+  TypeIntersection as QlTypeIntersection,
   TypeName as QlTypeName,
 } from "../edgeql/qlast.js";
-import type { Set as IRSet } from "../ir/gel_ir.js";
-import {
-  type IRCompileContext,
-  resolveTypeRef,
-  setFromTypeRoot,
-  resolvePointerRef,
-  extendPathSetDirectional,
-  resolveBinding,
-} from "./ast_to_ir.js";
+import type { Pointer, PointerRef, Set as IRSet, TypeRef, TypeRoot } from "../ir/gel_ir.js";
+import type { IRCompileContext } from "./ast_to_ir.js";
+
+// The schema/IR helper kit `compilePathQlast` needs, injected from ast_to_ir.ts
+// (where these are defined) to avoid duplicating them and to guarantee the
+// emitted IR matches the legacy compiler exactly. `getResolvedSchemaType` is
+// typed structurally for the only fields the link-property port reads.
+export interface QlastPathDeps {
+  resolveBinding: (ctx: IRCompileContext, name: string) => IRSet | undefined;
+  setFromTypeRoot: (typeref: TypeRef) => IRSet;
+  resolveTypeRef: (ctx: IRCompileContext, name: string) => TypeRef;
+  resolvePointerRef: (ctx: IRCompileContext, source: TypeRef, field: string) => PointerRef | undefined;
+  extendPathSetDirectional: (source: IRSet, ptrref: PointerRef, direction: "outbound" | "inbound") => IRSet;
+  extendPathSet: (source: IRSet, ptrref: PointerRef) => IRSet;
+  synthesizeTypePointerSet: (source: IRSet) => IRSet;
+  synthesizeTypeNamePointerSet: (typeSet: IRSet) => IRSet;
+  validateTypeIntersectionOperand: (ctx: IRCompileContext, baseRef: TypeRef, targetRef: TypeRef) => void;
+  validateTypeIntersectionPointer: (
+    ctx: IRCompileContext,
+    baseTypeId: string,
+    intersectTypeId: string,
+    ptrName: string,
+  ) => void;
+  lookupEnumScalar: (ctx: IRCompileContext, name: string) => { qualifiedName: string; members: string[] } | undefined;
+  resolvePathToEnumLiteral: (ctx: IRCompileContext, head: string, tail: string | undefined) => IRSet | undefined;
+  literalToSet: (value: string | number | boolean | null) => IRSet;
+  failSemantic: (message: string) => never;
+  scalarTypeRef: (scalar: string) => TypeRef;
+  getResolvedSchemaType: (
+    ctx: IRCompileContext,
+    qualifiedName: string,
+  ) =>
+    | { resolvedLinks: ReadonlyArray<{ name: string; properties?: ReadonlyArray<{ name: string; type: string; required?: boolean }> }> }
+    | undefined;
+}
+
+const QLAST_DEFERRED = "QLAST_DEFERRED";
+const deferred = (reason: string): Error => new Error(`${QLAST_DEFERRED}: ${reason}`);
+/** True for the tagged error compilePathQlast throws on a not-yet-ported case. */
+export const isQlastDeferred = (error: unknown): boolean =>
+  error instanceof Error && error.message.startsWith(QLAST_DEFERRED);
 
 const kindOf = (node: unknown): string | undefined =>
   (node as { __kind__?: string } | null | undefined)?.__kind__;
 
-// `module::Name` qualification for a qlast ObjectRef root.
 const qualifyObjectRef = (ref: QlObjectRef): string =>
   ref.module ? `${ref.module}::${ref.name}` : ref.name;
 
-// Pull a type name out of a qlast TypeExpr for an `[IS T]` intersection step —
-// the data ast.ts flattens onto its `type_intersection` step's `typeName`.
 const typeExprName = (typeExpr: QlTypeExpr): string => {
   if (typeExpr.name) return typeExpr.name;
   if (kindOf(typeExpr) === "TypeName") {
     const main = (typeExpr as QlTypeName).maintype as { name?: string; module?: string };
     if (main?.name) return main.module ? `${main.module}::${main.name}` : main.name;
   }
-  throw new Error(`cannot resolve a type name from TypeExpr '${kindOf(typeExpr)}'`);
+  throw deferred(`cannot resolve a type name from TypeExpr '${kindOf(typeExpr)}'`);
+};
+
+// `@prop` step. Faithful port of the single-link case in the live field_access
+// handler (ast_to_ir.ts): build a link-property PointerRef off the preceding
+// link pointer and extend. Polymorphic (union) links are deferred to legacy.
+const compileLinkPropertyStep = (
+  linkSet: IRSet,
+  propName: string,
+  ctx: IRCompileContext,
+  deps: QlastPathDeps,
+): IRSet => {
+  if (linkSet.expr.kind !== "pointer") throw deferred(`link property '@${propName}' on a non-pointer source`);
+  const linkPointer = linkSet.expr as Pointer;
+  if (linkPointer.ptrref.isLinkProperty) throw deferred(`nested link property '@${propName}'`);
+  if (linkPointer.ptrref.unionComponents?.length) throw deferred(`polymorphic link property '@${propName}'`);
+
+  const linkOwnerTypeRef = linkPointer.direction === "inbound"
+    ? linkPointer.ptrref.outSource
+    : linkPointer.source.typeref;
+  const linkDef = deps
+    .getResolvedSchemaType(ctx, linkOwnerTypeRef.id)
+    ?.resolvedLinks.find((candidate) => candidate.name === linkPointer.ptrref.shortName);
+  if (!linkDef) throw deferred(`link-property owner type '${linkOwnerTypeRef.id}' not resolved`);
+
+  const propDef = linkDef.properties?.find((property) => property.name === propName);
+  if (!propDef) {
+    deps.failSemantic(`link '${linkPointer.ptrref.shortName}' has no property '${propName}'`);
+  }
+
+  const propertyPtrRef: PointerRef = {
+    kind: "pointer_ref",
+    id: `${linkPointer.ptrref.id}.@${propName}`,
+    name: `@${propName}`,
+    shortName: `@${propName}`,
+    outSource: linkSet.typeref,
+    outTarget: deps.scalarTypeRef(propDef.type),
+    outCardinality: propDef.required ? "one" : "at_most_one",
+    inCardinality: "many",
+    isComputed: false,
+    isLinkProperty: true,
+    hasProperties: false,
+  };
+  return deps.extendPathSet(linkSet, propertyPtrRef);
 };
 
 /**
  * Port of `edb/edgeql/compiler/setgen.py::compile_path` — build the Live IR
  * `Set` for an EdgeQL path expression from a grammar-faithful qlast `Path`.
+ * Throws `QLAST_DEFERRED` for cases not yet ported (caller falls back).
  */
-export const compilePathQlast = (expr: QlPath, ctx: IRCompileContext): IRSet => {
-  let pathTip: IRSet | undefined;
+export const compilePathQlast = (expr: QlPath, ctx: IRCompileContext, deps: QlastPathDeps): IRSet => {
+  const steps = expr.steps;
 
-  // setgen.py:325-358 — partial path (`.foo`). Gel uses `ctx.partial_path_prefix`;
-  // sqlite-ts threads the surrounding subject in as the `__current__` /
-  // `__subject__` binding (the same fallback `ast_to_ir.compilePathSteps` uses),
-  // so resolve against that. DEFERRED: the rich "did you mean…" anchor hint.
-  if (expr.partial) {
-    pathTip = resolveBinding(ctx, "__current__") ?? resolveBinding(ctx, "__subject__");
-    if (!pathTip) {
-      throw new Error("could not resolve partial path");
+  // Enum path: `EnumType.MEMBER` — the first ObjectRef names an enum scalar and
+  // resolves to a member literal, not a traversal. (setgen.py compile_enum_path)
+  const first = steps[0];
+  if (first && kindOf(first) === "ObjectRef") {
+    const ref = first as QlObjectRef;
+    if (!deps.resolveBinding(ctx, ref.name)) {
+      const enumInfo = deps.lookupEnumScalar(ctx, ref.name);
+      if (enumInfo) {
+        const ptrSteps = steps.slice(1).filter((step) => kindOf(step) === "Ptr") as QlPtr[];
+        if (ptrSteps.length === 0) {
+          deps.failSemantic(`enum path expression lacks an enum member name, as in '${ref.name}.${enumInfo.members[0]}'`);
+        }
+        if (ptrSteps.length > 1) {
+          deps.failSemantic(`invalid property reference on an expression of primitive type`);
+        }
+        return deps.resolvePathToEnumLiteral(ctx, ref.name, ptrSteps[0].name) ?? deps.literalToSet(null);
+      }
     }
   }
 
-  // setgen.py:363 — walk the steps, dispatching on node kind.
-  for (let i = 0; i < expr.steps.length; i += 1) {
-    const step = expr.steps[i];
+  let pathTip: IRSet | undefined;
+
+  // setgen.py:325-358 — partial path (`.foo`): resolve against the surrounding
+  // subject (the `__current__` / `__subject__` binding).
+  if (expr.partial) {
+    pathTip = deps.resolveBinding(ctx, "__current__") ?? deps.resolveBinding(ctx, "__subject__");
+    if (!pathTip) throw deferred("partial path with no subject in scope");
+  }
+
+  for (let i = 0; i < steps.length; i += 1) {
+    const step = steps[i];
     const kind = kindOf(step);
 
-    // setgen.py:367-368 — SpecialAnchor (`__subject__`, `__source__`, …).
-    if (kind === "SpecialAnchor") {
-      const anchor = step as QlSpecialAnchor;
-      pathTip = resolveBinding(ctx, anchor.name);
-      if (!pathTip) throw new Error(`anchor ${anchor.name} is missing`);
+    if (kind === "SpecialAnchor" || kind === "IRAnchor") {
+      const name = (step as QlSpecialAnchor | QlIRAnchor).name;
+      pathTip = deps.resolveBinding(ctx, name);
+      if (!pathTip) throw new Error(`anchor ${name} is missing`);
       continue;
     }
 
-    // setgen.py:370-386 — IRAnchor (a named anchor already in scope).
-    if (kind === "IRAnchor") {
-      const anchor = step as QlIRAnchor;
-      pathTip = resolveBinding(ctx, anchor.name);
-      if (!pathTip) throw new Error(`anchor ${anchor.name} is missing`);
-      // DEFERRED (setgen.py:377-386): `move_scope` reparents the anchor's
-      // path-scope node. Needs the scope tree live in the compile context.
-      continue;
-    }
-
-    // setgen.py:388-447 — ObjectRef, only valid as the first step.
     if (kind === "ObjectRef") {
-      if (i > 0) {
-        throw new Error("unexpected ObjectRef as a non-first path item");
-      }
+      if (i > 0) throw new Error("unexpected ObjectRef as a non-first path item");
       const ref = step as QlObjectRef;
-      // A WITH-/FOR-bound name (or anchor) resolves to an existing Set; an
-      // unbound name is a fresh type-root extent (`Movie` → SELECT FROM Movie).
-      const bound = !ref.module ? resolveBinding(ctx, ref.name) : undefined;
-      // DEFERRED (setgen.py:405-447): enum-path detection, schema-view
-      // declaration (`declare_view_from_schema`), WITH/inline `view_sets`
-      // lookup, and `maybe_materialize`. The tracer bullet covers the
-      // type-root and binding cases that dominate real queries.
-      pathTip = bound ?? setFromTypeRoot(resolveTypeRef(ctx, qualifyObjectRef(ref)));
+      const bound = !ref.module ? deps.resolveBinding(ctx, ref.name) : undefined;
+      // DEFERRED (setgen.py:405-447): schema/inline views + maybe_materialize.
+      pathTip = bound ?? deps.setFromTypeRoot(deps.resolveTypeRef(ctx, qualifyObjectRef(ref)));
       continue;
     }
 
-    // setgen.py:449-… — Ptr (a pointer-traversal step).
     if (kind === "Ptr") {
       const ptr = step as QlPtr;
-      if (!pathTip) {
-        throw new Error(`pointer '${ptr.name}' has no source set`);
-      }
-      // setgen.py:462-515 — link-property steps (`@prop`). DEFERRED: Gel walks
-      // back to the preceding link's ptrref and sets `force_link_table`, with
-      // visibility checks. sqlite-ts handles these in `PathId.extend` today.
+      if (!pathTip) throw new Error(`pointer '${ptr.name}' has no source set`);
+
+      // Link property (`@prop`): `type === 'property'` in Gel; the bridge also
+      // carries it as an `@`-prefixed name.
       if (ptr.type === "property" || ptr.name.startsWith("@")) {
-        throw new Error(`DEFERRED: link-property step '${ptr.name}' (setgen.py:462)`);
+        pathTip = compileLinkPropertyStep(pathTip, ptr.name.replace(/^@/, ""), ctx, deps);
+        continue;
       }
-      const direction =
-        ptr.direction === "<" || ptr.direction === "inbound" ? "inbound" : "outbound";
-      const ptrref = resolvePointerRef(ctx, pathTip.typeref, ptr.name);
+
+      // `__type__` — synthesize the schema::ObjectType pointer (no schema ptr).
+      if (ptr.name === "__type__") {
+        pathTip = deps.synthesizeTypePointerSet(pathTip);
+        continue;
+      }
+      // `.name` on a synthesized `__type__` pointer.
+      if (
+        ptr.name === "name"
+        && pathTip.expr.kind === "pointer"
+        && (pathTip.expr as Pointer).ptrref.shortName === "__type__"
+      ) {
+        pathTip = deps.synthesizeTypeNamePointerSet(pathTip);
+        continue;
+      }
+
+      // A real property/link reference on a primitive is invalid.
+      if (pathTip.typeref.isScalar && ptr.name !== "id" && ptr.name !== "__type__") {
+        deps.failSemantic(`invalid property reference on an expression of primitive type`);
+      }
+
+      let ptrref = deps.resolvePointerRef(ctx, pathTip.typeref, ptr.name);
+      // A `[IS Super]` narrowing keeps the original rows; a pointer the narrowed
+      // view lacks resolves against the underlying root type.
+      if (!ptrref && pathTip.expr.kind === "type_root" && (pathTip.expr as TypeRoot).typeref.id !== pathTip.typeref.id) {
+        ptrref = deps.resolvePointerRef(ctx, (pathTip.expr as TypeRoot).typeref, ptr.name);
+      }
       if (!ptrref) {
-        // setgen.py raises InvalidReferenceError here. DEFERRED: computed-
-        // property in-place lowering (ast_to_ir compilePathSteps:1870-1880).
-        throw new Error(`unknown pointer '${ptr.name}' on '${pathTip.typeref.nameHint}'`);
+        // DEFERRED: computed-property in-place lowering / group-row / named-tuple
+        // (ast_to_ir compilePathSteps). Legacy handles these via fallback.
+        throw deferred(`unresolved pointer '${ptr.name}' on '${pathTip.typeref.nameHint}'`);
       }
-      pathTip = extendPathSetDirectional(
+      const direction = ptr.direction === "<" || ptr.direction === "inbound" ? "inbound" : "outbound";
+      pathTip = deps.extendPathSetDirectional(
         pathTip,
         ptrref,
         ptrref.computedLinkAliasIsBackward ? "inbound" : direction,
@@ -144,26 +230,24 @@ export const compilePathQlast = (expr: QlPath, ctx: IRCompileContext): IRSet => 
       continue;
     }
 
-    // Path-level `[IS T]` narrowing.
     if (kind === "TypeIntersection") {
       const ti = step as QlTypeIntersection;
       if (!pathTip) throw new Error("type intersection has no source set");
-      const intersected = resolveTypeRef(ctx, typeExprName(ti.type));
-      // DEFERRED: operand validation + true closure narrowing
-      // (ast_to_ir compilePathSteps:1898-1910). Tracer bullet re-types the tip.
+      const intersected = deps.resolveTypeRef(ctx, typeExprName(ti.type));
+      deps.validateTypeIntersectionOperand(ctx, pathTip.typeref, intersected);
+      const next = steps[i + 1];
+      if (next && kindOf(next) === "Ptr") {
+        deps.validateTypeIntersectionPointer(ctx, pathTip.typeref.id, intersected.id, (next as QlPtr).name);
+      }
       pathTip = { ...pathTip, typeref: intersected };
       continue;
     }
 
-    // `*` / `**` are expanded by viewgen inside shapes; as a bare path step
-    // there is nothing to traverse. DEFERRED.
     if (kind === "Splat") continue;
 
-    throw new Error(`unsupported qlast path step '${kind}'`);
+    throw deferred(`unsupported qlast path step '${kind}'`);
   }
 
-  if (!pathTip) {
-    throw new Error("empty path expression");
-  }
+  if (!pathTip) throw new Error("empty path expression");
   return pathTip;
 };

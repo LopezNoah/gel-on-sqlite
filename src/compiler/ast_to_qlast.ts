@@ -44,6 +44,8 @@ const mkPtr = (name: string, direction?: string): Ptr => ({
 });
 const mkTypeIntersection = (type: QlTypeExpr): TypeIntersection => ({ __kind__: "TypeIntersection", type });
 const mkSplat = (depth: number): Splat => ({ __kind__: "Splat", depth });
+// A link-property step (`@prop`). Gel models this as a Ptr with `type: "property"`.
+const mkPropPtr = (name: string): Ptr => ({ __kind__: "Ptr", name, type: "property" });
 
 const qlTypeName = (name: string): TypeName => ({ __kind__: "TypeName", maintype: mkObjectRef(name) });
 
@@ -130,11 +132,11 @@ export const astPathExprToQlast = (expr: FreeObjectExpr): Path | null => {
     }
 
     case "field_access": {
-      // Link-property access (`@prop`) is a deferred subsystem in compilePathQlast.
-      if (expr.field.startsWith("@")) return null;
       const base = astPathExprToQlast(expr.expr);
       if (!base) return null;
-      return mkPath([...base.steps, mkPtr(expr.field)], base.partial);
+      // `@prop` → a link-property Ptr; otherwise a normal pointer step.
+      const step = expr.field.startsWith("@") ? mkPropPtr(expr.field.slice(1)) : mkPtr(expr.field);
+      return mkPath([...base.steps, step], base.partial);
     }
 
     case "select":
