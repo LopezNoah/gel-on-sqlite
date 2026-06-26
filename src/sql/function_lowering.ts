@@ -16,6 +16,7 @@ import type {
 import type { RuntimeTarget } from "../runtime/target.js";
 import type { ScalarValue } from "../types.js";
 import type { GelIRCompileOptions, ScalarPointerPath } from "./compiler_types.js";
+import type { Relation } from "./relation.js";
 import { lowerStdlibFunctionSql } from "./stdlib_lowering.js";
 import { bindOperandsOnce } from "./sql_fragment.js";
 import { countArgIsFactored } from "../ir/scope_tree.js";
@@ -74,6 +75,22 @@ export interface SqlLoweringContext {
     aliasOverride?: string,
     extraColumns?: string[],
   ): { sql: string; alias: string } | null;
+  // Structured-Relation variant of compileSelectSource: returns a `Relation`
+  // (carrying its own scope) for the simple `type_root` source kind, else null
+  // (caller falls back to the string `compileSelectSource`). `parent` links the
+  // built relation into the enclosing scope tree so its fresh root SHADOWS, and
+  // genuinely-outer paths correlate up. See gel_ir_compiler.compileSelectSourceRelation.
+  compileSelectSourceRelation(
+    sourceSet: Set,
+    where: Set | undefined,
+    orderBy: SortExpr[] | undefined,
+    options: GelIRCompileOptions,
+    params?: ScalarValue[],
+    target?: RuntimeTarget,
+    aliasOverride?: string,
+    extraColumns?: string[],
+    parent?: Relation,
+  ): { alias: string; sql: string; relation: Relation } | null;
   compileWhereClause(
     where: Set,
     sourceAlias: string,

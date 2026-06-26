@@ -1,6 +1,7 @@
 import type { GroupRowProjection, Pointer, Set, TypeRef } from "../ir/gel_ir.js";
 import type { RuntimeTarget } from "../runtime/target.js";
 import type { ScalarValue } from "../types.js";
+import type { Relation } from "./relation.js";
 
 // A pointer chain ending in a scalar (or, for object-identity existence
 // checks, an object) leaf: the root set, the leaf pointer, the intermediate
@@ -79,6 +80,15 @@ export interface GelIRCompileOptions {
   // source) are matched by path id so `.name` in FILTER/ORDER BY reads the
   // row currently being shaped instead of recompiling the full source set.
   sourcePathAliases?: ReadonlyArray<{ pathKey: string; alias: string }>;
+  // The structured `Relation` (src/sql/relation.ts) that owns the path→alias
+  // bindings for the construct currently being compiled — a `pathctx`-style
+  // scope authority. When present it is consulted FIRST (before the
+  // `outerScopes` / `sourcePathAliases` knobs) so a child relation's own scope
+  // SHADOWS any stale binding inherited from an enclosing scope. Only set where
+  // a lowering has genuinely built a Relation for its source (today: detached
+  // correlated `EXISTS` subqueries); unset everywhere else, so resolution is
+  // behaviour-identical until a construct opts in.
+  relation?: Relation;
   // When a multi-scalar pointer is being iterated via `json_each(col) je`,
   // the helper binds the iteration's pathId(s) to the SQL expression that
   // evaluates the json_each value column (`je."value"`). compileValueSetSQL

@@ -114,7 +114,16 @@ export class Relation {
   private readonly outputColumns: OutputColumn[] = [];
 
   // The registry: pathKey -> aspect -> SQL expression visible IN this relation.
+  // Mirrors Gel's `path_namespace` (edb/pgsql/ast.py): "what SQL expression
+  // represents this path here?".
   private readonly outputs = new Map<string, Map<Aspect, string>>();
+  // Gel's `path_rvar_map` (edb/pgsql/ast.py): which FROM range var PROVIDES a
+  // given (path, aspect) — distinct from `outputs` (the expression visible here)
+  // and from a child relation's own outputs (the column it exposes outside
+  // itself). When a path is registered to an rvar backed by a child Relation,
+  // getPathVar injects into THAT child directly instead of scanning every FROM
+  // source (which is what the backend does via put_path_rvar / include_rvar).
+  private readonly rvars = new Map<string, Map<Aspect, RangeVar>>();
   // Question (2): scopeKey (typeref.id + namespace) -> range-var alias, for a
   // fresh reference to an enclosing type-root iteration.
   private readonly scopes = new Map<string, string>();
@@ -145,6 +154,25 @@ export class Relation {
   /** Register a type-root range var so fresh references correlate (question 2). */
   registerScope(scopeKey: string, alias: string): void {
     this.scopes.set(scopeKey, alias);
+  }
+
+  /**
+   * Record which range var PROVIDES `pathKey`/`aspect` (Gel's put_path_rvar).
+   * Lets getPathVar resolve the path by going straight to that range var's
+   * relation instead of scanning every FROM source.
+   */
+  registerPathRvar(pathKey: string, aspect: Aspect, rv: RangeVar): void {
+    let m = this.rvars.get(pathKey);
+    if (!m) {
+      m = new Map();
+      this.rvars.set(pathKey, m);
+    }
+    m.set(aspect, rv);
+  }
+
+  /** The range var registered as providing `pathKey`/`aspect`, or null. */
+  getPathRvar(pathKey: string, aspect: Aspect): RangeVar | null {
+    return this.rvars.get(pathKey)?.get(aspect) ?? null;
   }
 
   /** Add an explicit output column (e.g. the SELECT projection). */
@@ -179,7 +207,13 @@ export class Relation {
     // (recursive column injection) a child subquery can compute it -- make it
     // expose the path as an output column, then reference it through the range
     // var. This is the capability string emission cannot provide.
-    for (const rv of this.fromSources) {
+    //
+    // Gel's path_rvar_map: when we KNOW which range var provides the path, go
+    // straight to that child rather than scanning every FROM source. Falls back
+    // to a scan for relations whose paths aren't registered to an rvar yet.
+    const mapped = this.getPathRvar(pathKey, aspect);
+    const candidates = mapped?.relation ? [mapped] : this.fromSources;
+    for (const rv of candidates) {
       const child = rv.relation;
       if (!child) continue;
       const inner = child.tryGetPathVar(pathKey, aspect);

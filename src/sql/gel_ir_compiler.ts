@@ -92,6 +92,7 @@ const sqlLoweringContext: () => SqlLoweringContext = (() => {
       setValueIsJson,
       unwrapSelectExprSet,
       compileSelectSource,
+      compileSelectSourceRelation,
       compileWhereClause,
       compilePolymorphicSource,
       compileForExprSource,
@@ -6362,6 +6363,52 @@ const compileSelectSource = (
   };
 };
 
+// A compiled SELECT source as a STRUCTURED `Relation` (src/sql/relation.ts)
+// rather than an already-serialized string. Today this covers only the simplest
+// source kind — a bare `type_root` — and returns null for everything else so a
+// caller falls back to the string `compileSelectSource` (the pgast-style
+// "keep string fallback for the rest" beachhead step). The Relation it builds
+// owns the source's own scope via `registerScope(type → alias)`, so an enclosing
+// construct can resolve the source's paths through ONE authority — and a child
+// relation's own scope SHADOWS a stale binding inherited from an enclosing scope
+// — instead of hand-threading `outerScopes` / `sourcePathAliases`. `sql` is the
+// byte-identical string source (serialization is unchanged); `relation` is the
+// structured view that opt-in consumers thread through `options.relation`.
+interface SourceResult {
+  alias: string;
+  sql: string;
+  relation: Relation;
+}
+
+const compileSelectSourceRelation = (
+  sourceSet: Set,
+  where: Set | undefined,
+  orderBy: SortExpr[] | undefined,
+  options: GelIRCompileOptions,
+  params: ScalarValue[] = [],
+  target: RuntimeTarget = options.target ?? "sqlite",
+  aliasOverride?: string,
+  extraColumns?: string[],
+  parent?: Relation,
+): SourceResult | null => {
+  if (sourceSet.expr.kind !== "type_root") return null;
+  // Reuse the string lowering for the SQL so the emitted source is
+  // byte-identical to the existing path (and matches any params it pushes).
+  const base = compileSelectSource(sourceSet, where, orderBy, options, params, target, aliasOverride, extraColumns);
+  if (!base) return null;
+  const root = (sourceSet.expr as TypeRoot).typeref;
+  const projectedColumns = [...new Set([
+    ...collectProjectedColumns(sourceSet.shape, where, orderBy),
+    ...(extraColumns ?? []),
+  ])];
+  const linkProjections = collectLinkProjectionsForSource(sourceSet.shape ?? [], where, orderBy, root.id);
+  const body = compilePolymorphicSourceBody(root, sourceSet.expr.skipSubtypes, projectedColumns, options, linkProjections);
+  const relation = new Relation(parent);
+  relation.addRangeVar({ alias: base.alias, sourceSql: body });
+  relation.registerScope(scopeKeyOf(root, sourceSet.pathId?.namespace ?? []), base.alias);
+  return { alias: base.alias, sql: base.sql, relation };
+};
+
 // Column projection helper for chain joins. The root level needs id (plus
 // the FK column if the first link is inline outbound from the root). Each
 // intermediate level needs only id plus the connecting FK if the next link
@@ -8437,6 +8484,19 @@ const compilePolymorphicSource = (
   projectedColumns: string[],
   options: GelIRCompileOptions,
   linkProjections: LinkProjection[] = [],
+): string => `${compilePolymorphicSourceBody(typeRef, skipSubtypes, projectedColumns, options, linkProjections)} ${alias}`;
+
+// The alias-less body of `compilePolymorphicSource` — the parenthesised
+// `(SELECT … UNION ALL …)` subquery, without the trailing range-var alias. Split
+// out so a `Relation` range var can carry the body and own the alias separately
+// (relation.ts emits `${sourceSql} ${alias}`), while `compilePolymorphicSource`
+// stays byte-identical for the many string callers.
+const compilePolymorphicSourceBody = (
+  typeRef: TypeRef,
+  skipSubtypes: boolean,
+  projectedColumns: string[],
+  options: GelIRCompileOptions,
+  linkProjections: LinkProjection[] = [],
 ): string => {
   const branches = expandUnionTypeRefBranches(typeRef);
   const isUnion = branches.length > 1;
@@ -8513,7 +8573,7 @@ const compilePolymorphicSource = (
     return `SELECT ${quoteLiteral(sourceTypeName)} AS ${quoteIdent("__source_type")}, ${allCols} FROM ${fromClause}`;
   });
 
-  return `(${selects.join(" UNION ALL ")}) ${alias}`;
+  return `(${selects.join(" UNION ALL ")})`;
 };
 
 // The qualified concrete type names a (possibly union-id) typeref admits —
@@ -10629,6 +10689,32 @@ const compileValueSetSQL = (
           return `(SELECT ${rowSrc.alias}.${quoteIdent(col)} FROM ${rowSrc.sql})`;
         }
         params.length = subCkpt;
+      }
+    }
+    // pathctx: when an enclosing construct built a structured Relation for this
+    // source (`options.relation`), that relation owns the path→alias binding for
+    // its OWN scope and SHADOWS any stale binding inherited from an enclosing
+    // scope via `sourcePathAliases` / `outerScopes`. Resolve a type-root-rooted
+    // leaf through `correlateScope` first (local scope wins, then outward) so a
+    // detached subquery's fresh root reads its own range var, not the outer
+    // alias the inlined path id still points at (select_subqueries_04).
+    if (options.relation && pointer.source.expr.kind === "type_root") {
+      const relAlias = options.relation.correlateScope(
+        scopeKeyOf((pointer.source.expr as TypeRoot).typeref, pointer.source.pathId?.namespace ?? []),
+      );
+      if (relAlias) {
+        if (pointer.ptrref.isIdPointer || pointer.ptrref.shortName === "id") {
+          return `${relAlias}.${quoteIdent("id")}`;
+        }
+        if (pointer.ptrref.outTarget.isScalar) {
+          return `${relAlias}.${quoteIdent(col)}`;
+        }
+        const isSingleLink = pointer.ptrref.outCardinality === "one"
+          || pointer.ptrref.outCardinality === "at_most_one";
+        if (pointer.direction === "outbound" && isSingleLink) {
+          return `${relAlias}.${quoteIdent(`${pointer.ptrref.shortName}_id`)}`;
+        }
+        // Otherwise fall through to the legacy resolution below.
       }
     }
     const currentSourceAlias = pickSourcePathAlias(pointer.source, options);

@@ -102,7 +102,56 @@ describe("PathRegistry — recursive column injection (#5, the string-emission g
   });
 });
 
+describe("path_rvar_map — which range var provides a path (Gel pgast.path_rvar_map)", () => {
+  it("registerPathRvar / getPathRvar round-trips", () => {
+    const r = new Relation();
+    const rv = r.addRangeVar({ alias: "a1", sourceSql: '"default__user"' });
+    r.registerPathRvar("Card.owners", "value", rv);
+    expect(r.getPathRvar("Card.owners", "value")).toBe(rv);
+    expect(r.getPathRvar("Card.owners", "identity")).toBeNull();
+    expect(r.getPathRvar("Card.name", "value")).toBeNull();
+  });
+
+  it("getPathVar injects into the rvar registered for the path, not a sibling that could also provide it", () => {
+    // Two child subqueries can both compute Card.cost. Without an rvar map,
+    // getPathVar would scan and inject into the FIRST (`s0`). With the map, it
+    // resolves through the registered provider (`s1`) — Gel's put_path_rvar.
+    const childA = new Relation();
+    childA.addRangeVar({ alias: "g0", sourceSql: '"default__card"' });
+    childA.registerPath("Card.cost", "value", 'g0."cost"');
+    const childB = new Relation();
+    childB.addRangeVar({ alias: "g1", sourceSql: '"default__card"' });
+    childB.registerPath("Card.cost", "value", 'g1."cost"');
+
+    const parent = new Relation();
+    parent.addRangeVar({ alias: "s0", sourceSql: "", relation: childA });
+    const rvB = parent.addRangeVar({ alias: "s1", sourceSql: "", relation: childB });
+    parent.registerPathRvar("Card.cost", "value", rvB);
+
+    expect(parent.getPathVar("Card.cost", "value")).toBe('s1."__inj0"');
+    // The chosen provider exposed the column; the sibling was left untouched.
+    expect(childB.toSql().sql).toContain('g1."cost" AS "__inj0"');
+    expect(childA.toSql().sql).not.toContain("__inj0");
+  });
+});
+
 describe("PathRegistry — question (2)/(3): correlation to an enclosing scope", () => {
+  it("a child's own scope SHADOWS a parent scope of the same key (detached subquery)", () => {
+    // The structural fact select_subqueries_04 relies on: `EXISTS (SELECT Issue
+    // FILTER Issue.number = …)` where `sub` is WITH-bound. The inner `Issue`
+    // must read the inner range var (ex0), NOT the outer one (g0) that the
+    // inlined path id still points at. Local registration wins over the parent.
+    const outer = new Relation();
+    const issueScope = scopeKeyOf({ id: "uuid-issue" }, []);
+    outer.registerScope(issueScope, "g0");
+
+    const inner = new Relation(outer);
+    inner.registerScope(issueScope, "ex0");
+
+    expect(inner.correlateScope(issueScope)).toBe("ex0"); // inner shadows outer
+    expect(outer.correlateScope(issueScope)).toBe("g0"); // outer still resolves itself
+  });
+
   it("an inner relation correlates a path up to its parent's range var", () => {
     // SELECT Card { foo := (SELECT ... FILTER ... = Card.name) } — the inner
     // subquery's fresh Card.name resolves to the OUTER row's column.

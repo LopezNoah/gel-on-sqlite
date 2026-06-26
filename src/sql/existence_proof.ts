@@ -11,6 +11,7 @@
 // to the originals; each destructures `deps` at the top.
 import { quoteIdent } from "../codegen/sql.js";
 import { pointerStepJoinSql } from "./pointer_join.js";
+import { Relation, scopeKeyOf } from "./relation.js";
 import type { RuntimeTarget } from "../runtime/target.js";
 import type { ScalarValue } from "../types.js";
 import type { GelIRCompileOptions, ScalarPointerPath } from "./compiler_types.js";
@@ -432,7 +433,8 @@ export const tryCompileCorrelatedExistsSelect = (
   deps: SqlLoweringContext,
 ): string | null => {
   const {
-    collectTypeRootIds, compileSelectSource, compilePredicateSetSQL, compileValueSetSQL,
+    collectTypeRootIds, compileSelectSource, compileSelectSourceRelation,
+    compilePredicateSetSQL, compileValueSetSQL,
   } = deps;
   let cursor: Set = set;
   const wheres: Set[] = [];
@@ -453,30 +455,48 @@ export const tryCompileCorrelatedExistsSelect = (
   for (const w of wheres) collectTypeRootIds(w, outerIds);
   outerIds.delete(innerType.id);
   const innerAlias = "ex0";
-  const innerOptions: GelIRCompileOptions = {
-    ...options,
-    outerScopes: [
-      // A WITH-bound subquery (`sub := (SELECT Issue …)`, marked
-      // isWithBinding by the IR builder) is DETACHED: an enclosing scope of
-      // the same type must not capture its inner references. Inline
-      // subqueries keep the outer capture (EdgeQL common-prefix sharing).
-      ...(options.outerScopes ?? []).filter((scope) =>
-        scope.typeref.id !== innerType.id
-        || !((set as { isWithBinding?: boolean }).isWithBinding
-          || (set.pathId?.namespace ?? []).some((ns) => ns.startsWith("with:")))),
-      ...[...outerIds].map((id) => ({
-        alias: sourceAlias,
-        typeref: { kind: "type_ref" as const, id, nameHint: id, isScalar: false } as TypeRef,
-        namespace: [] as string[],
-      })),
-    ],
-  };
+  // A WITH-bound subquery (`sub := (SELECT Issue …)`, marked isWithBinding by
+  // the IR builder) is DETACHED: an enclosing scope of the SAME type must not
+  // capture its fresh root. Inline subqueries keep the outer capture (EdgeQL
+  // common-prefix sharing).
+  const detached = (set as { isWithBinding?: boolean }).isWithBinding === true
+    || (set.pathId?.namespace ?? []).some((ns) => ns.startsWith("with:"));
+  const outerScopes = [
+    ...(options.outerScopes ?? []).filter((scope) =>
+      scope.typeref.id !== innerType.id || !detached),
+    ...[...outerIds].map((id) => ({
+      alias: sourceAlias,
+      typeref: { kind: "type_ref" as const, id, nameHint: id, isScalar: false } as TypeRef,
+      namespace: [] as string[],
+    })),
+  ];
+  // pathctx: build the inner source as a structured Relation whose parent holds
+  // the outer scopes. For a DETACHED subquery we thread that relation through
+  // `options.relation`, so the inner filter resolves the fresh root through the
+  // relation's OWN scope (`ex0`) — shadowing the stale `sourcePathAliases`
+  // binding the inlined path id still carries to the OUTER alias, which is why
+  // `EXISTS sub` previously read `g0."number"` instead of `ex0."number"`
+  // (select_subqueries_04). Inline subqueries leave `options.relation` unset, so
+  // their resolution (common-prefix sharing) is byte-identical to before.
+  const parentRel = new Relation();
+  for (const scope of outerScopes) {
+    parentRel.registerScope(scopeKeyOf(scope.typeref, scope.namespace ?? []), scope.alias);
+  }
   const checkpoint = params.length;
-  const innerSource = compileSelectSource(cursor, wheres[0], undefined, innerOptions, params, target, innerAlias);
+  const built = compileSelectSourceRelation(
+    cursor, wheres[0], undefined, { ...options, outerScopes }, params, target, innerAlias, undefined, parentRel,
+  );
+  const innerSource = built
+    ?? compileSelectSource(cursor, wheres[0], undefined, { ...options, outerScopes }, params, target, innerAlias);
   if (!innerSource) {
     params.length = checkpoint;
     return null;
   }
+  const innerOptions: GelIRCompileOptions = {
+    ...options,
+    outerScopes,
+    relation: detached ? built?.relation : undefined,
+  };
   const whereSqls: string[] = [];
   for (const w of wheres) {
     const ws = compilePredicateSetSQL(w, innerSource.alias, params, target, innerOptions)
