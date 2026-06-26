@@ -994,6 +994,22 @@ const normalizeBoolColumnValue = (ptr: PointerRef, valueSql: string): string => 
   return valueSql;
 };
 
+// Read-side counterpart of normalizeBoolColumnValue. Bool columns are stored as
+// integer 0/1, but every in-expression bool value (literals, comparison
+// operands, set members) is json('true')/json('false') — the SQLite TEXT
+// 'true'/'false'. When a bool column is read into a value/comparison context it
+// must be converted back, else e.g. `json('true') = a0.flag` becomes `'true' =
+// 1` and never matches. The SELECT shape serializer converts bool columns for
+// output via its own independent helper (shapeScalarColumnValue), so this does
+// NOT touch output. Bool detection mirrors normalizeBoolColumnValue exactly.
+const boolColumnReadValue = (ptr: PointerRef, sql: string): string => {
+  const targetId = ptr.outTarget.id ?? "";
+  const targetName = ptr.outTarget.nameHint ?? "";
+  const isBool = targetId === "std::bool" || targetName === "std::bool" || targetId === "bool" || targetName === "bool";
+  if (!isBool) return sql;
+  return `(CASE WHEN ${sql} IS NULL THEN NULL WHEN ${sql} THEN json('true') ELSE json('false') END)`;
+};
+
 const containsUnionOperator = (set: Set): boolean => {
   const expr = set.expr;
   if (expr.kind === "operator_call") {
@@ -5823,7 +5839,7 @@ const tryCompileCorrelatedScalarPointerPathSQL = (
 ): string | null => {
   const built = buildCorrelatedScalarPointerPath(set, sourceAlias, options);
   if (!built) return null;
-  const leafSql = `${built.leafAlias}.${quoteIdent(columnForPointer(built.path.leaf))}`;
+  const leafSql = boolColumnReadValue(built.path.leaf.ptrref, `${built.leafAlias}.${quoteIdent(columnForPointer(built.path.leaf))}`);
   return `(SELECT ${leafSql} FROM ${built.fromSql} WHERE ${built.anchorWhere})`;
 };
 
@@ -10684,6 +10700,10 @@ const compileValueSetSQL = (
   if (expr.kind === "pointer") {
     const pointer = expr as Pointer;
     const col = columnForPointer(pointer);
+    // Render this pointer's scalar leaf column, converting a stored bool 0/1
+    // back to json('true')/json('false') so it compares equal to bool literals.
+    // (Link properties are handled separately below and deliberately excluded.)
+    const colRef = (alias: string): string => boolColumnReadValue(pointer.ptrref, `${alias}.${quoteIdent(col)}`);
     if (pointer.ptrref.isLinkProperty) {
       const alias = linkPropertyAlias ?? sourceAlias;
       return `${alias}.${quoteIdent(col)}`;
@@ -10711,7 +10731,7 @@ const compileValueSetSQL = (
           pointer.source, undefined, undefined, options, params, target, "__clip", [col],
         );
         if (rowSrc) {
-          return `(SELECT ${rowSrc.alias}.${quoteIdent(col)} FROM ${rowSrc.sql})`;
+          return `(SELECT ${colRef(rowSrc.alias)} FROM ${rowSrc.sql})`;
         }
         params.length = subCkpt;
       }
@@ -10732,7 +10752,7 @@ const compileValueSetSQL = (
           return `${relAlias}.${quoteIdent("id")}`;
         }
         if (pointer.ptrref.outTarget.isScalar) {
-          return `${relAlias}.${quoteIdent(col)}`;
+          return colRef(relAlias);
         }
         const isSingleLink = pointer.ptrref.outCardinality === "one"
           || pointer.ptrref.outCardinality === "at_most_one";
@@ -10754,7 +10774,7 @@ const compileValueSetSQL = (
           ? `${currentSourceAlias}.${quoteIdent(`${pointer.ptrref.shortName}_id`)}`
           : null;
       }
-      return `${currentSourceAlias}.${quoteIdent(col)}`;
+      return colRef(currentSourceAlias);
     }
     // Pointer off a row-set source that isn't anchored on the caller's alias
     // (`user.id` / `x.name` where the source is `array_unpack(<array<T>>[])`):
@@ -10777,7 +10797,7 @@ const compileValueSetSQL = (
           }
           if (pointer.ptrref.outTarget.isScalar && !shouldUseLinkTable(pointer)) {
             const objSrc = compilePolymorphicSource(pointer.source.typeref, false, "g_psrc", ["id", col], options);
-            return `(SELECT g_psrc.${quoteIdent(col)} FROM (${idRows}) src_ids JOIN ${objSrc} ON g_psrc.${quoteIdent("id")} = src_ids.${quoteIdent("value")})`;
+            return `(SELECT ${colRef("g_psrc")} FROM (${idRows}) src_ids JOIN ${objSrc} ON g_psrc.${quoteIdent("id")} = src_ids.${quoteIdent("value")})`;
           }
         }
         params.length = fnCkpt;
@@ -10861,7 +10881,7 @@ const compileValueSetSQL = (
         options,
       );
       if (outerMatch) {
-        return `${outerMatch.alias}.${quoteIdent(col)}`;
+        return colRef(outerMatch.alias);
       }
     }
     // `X.__type__.name` — the row's dynamic type label. `__type__` isn't a
@@ -10896,7 +10916,7 @@ const compileValueSetSQL = (
     let leafSourceRoot: Set = pointer.source;
     while (leafSourceRoot.expr.kind === "select_expr") leafSourceRoot = (leafSourceRoot.expr as SelectExpr).result;
     if (leafSourceRoot.expr.kind === "type_root") {
-      return `${sourceAlias}.${quoteIdent(col)}`;
+      return colRef(sourceAlias);
     }
     return null;
   }
