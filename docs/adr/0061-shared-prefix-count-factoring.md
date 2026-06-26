@@ -130,6 +130,38 @@ is already exercised by detached-EXISTS via `existence_proof.ts`).
    matcher skips it), `07a`/`07c` (pre-existing failures from computed-link /
    filtered-binding lowering, not factoring).
 
+## Collapse is restricted to type-root prefixes (soundness)
+
+The collapse counts the shared prefix's SQL rows, which equals the correlated
+tuple count ONLY for a **type-root extent** (e.g. `Card` — no path dedup). A
+pointer-chain prefix is unsafe: EdgeQL deduplicates such paths by object
+identity, so counting raw join rows over-counts. Measured:
+`count((Card.owners.name, Card.owners.id))` zips to **22** where the dedup-aware
+answer is smaller. So the gate requires `shared.expr.kind === "type_root"`;
+pointer-chain prefixes revert to the product path. `count((Card.name,Card.cost))`
+still collapses to `9`. (A dedup-aware collapse for pointer prefixes is future
+work.)
+
+## Known-deeper failures this does NOT fix (diagnosed)
+
+These need core path/binding-lowering changes, orthogonal to factoring:
+
+- **`scope_computables_08`** `count((Card.owners.name, Card.owners.deck_cost))`
+  → want 16. `deck_cost` lowers as `sum(...)` (not a scalar pointer leaf), and a
+  collapse over `Card.owners` gives 22 anyway (backlink dedup). Blocked on
+  backlink path-dedup semantics, not the gate.
+- **`scope_computables_07a`** `WITH U := User{cards:=.deck}; count((U.cards.name,
+  U.cards.cost))` → want 81, gets 45. Root cause: `tryCompileScalarPointerPathSelectSQL`
+  (gel_ir_compiler.ts) emits `SELECT DISTINCT <leaf>` — dedups by scalar VALUE
+  (`cost`→5) instead of by the leaf's OWNING OBJECT (`card`→9). The DISTINCT is
+  load-bearing for multi-link scalar paths; the fix (dedup by owning object)
+  touches all of them and needs full-suite validation.
+- **`scope_computables_07c`** filtered `WITH U := (SELECT User{...} FILTER
+  .name="Phil")` → want 0, gets 81. Root cause: `U.cards` lowers to
+  `count(*) FROM (all cards)` with NO reference to `U` — the binding's
+  filter/correlation is erased; the computable `cards := Card` is evaluated
+  globally. A binding-correlation rework.
+
 ## Consequences
 
 - Correct-but-untested behaviour change is *deferred*: plain

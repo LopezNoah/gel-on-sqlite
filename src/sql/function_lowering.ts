@@ -292,10 +292,16 @@ const tryCompileSharedPrefixTupleCount = (
     const single = ptr.ptrref.outCardinality === "one" || ptr.ptrref.outCardinality === "at_most_one";
     if (!single) return null;
     const src = ptr.source;
-    // The shared prefix must be an OBJECT set (a pointer chain or type root) —
-    // not a scalar — and identical across every element (matched by path id).
+    // The shared prefix must be a TYPE-ROOT extent — counting its SQL rows then
+    // equals the correlated tuple count. A pointer-chain prefix (e.g. the
+    // backlink `Card.owners`) is NOT safe here: EdgeQL deduplicates such paths by
+    // object identity, so counting the raw join rows over-counts (e.g.
+    // `count((Card.owners.name, Card.owners.id))` would zip to 22 where the
+    // dedup-correct answer is smaller). Those revert to the product path until a
+    // dedup-aware collapse exists. The prefix must also be identical across every
+    // element (matched by path id).
     if (src.typeref.isScalar) return null;
-    if (src.expr.kind !== "pointer" && src.expr.kind !== "type_root") return null;
+    if (src.expr.kind !== "type_root") return null;
     if (shared === null) shared = src;
     else if (deps.pathIdKey(src) !== deps.pathIdKey(shared)) return null;
   }
