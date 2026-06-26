@@ -206,6 +206,14 @@ export const schemaIntrospectionTypeDefs = (): TypeDef[] => [
     links: [{ name: "type", targetType: "schema::Type" }],
   },
   {
+    // The three pseudo-types every Gel branch has (schema::PseudoType in
+    // schema.edgeql). Always present, so `count(schema::PseudoType) > 0` holds
+    // regardless of user schema.
+    name: "PseudoType",
+    module: "schema",
+    fields: typeFields(),
+  },
+  {
     name: "Tuple",
     module: "schema",
     fields: typeFields(),
@@ -388,10 +396,26 @@ export const populateSchemaIntrospection = (
   populateTupleAliases(insertRow, insertLink, ensureTypeRow, runtimeExprAliases);
 
   populateModules(insertRow, schema);
+  populatePseudoTypes(insertRow, ensureTypeRow);
   populateStdScalarTypes(db, insertRow, ensureTypeRow);
   populateStdlibFunctions(db, insertRow);
   populateAbstractConstraints(insertRow);
 };
+
+// schema::PseudoType — anytype/anytuple/anyobject. Always present in Gel.
+const populatePseudoTypes = (insertRow: InsertRow, ensureTypeRow: EnsureTypeRow): void => {
+  for (const name of ["anytype", "anytuple", "anyobject"]) {
+    insertRow("schema__pseudotype", {
+      id: scopedIdFor("schema::PseudoType", name),
+      name,
+      from_alias: 0,
+      abstract: 0,
+      is_abstract: 0,
+    });
+    ensureTypeRow(name);
+  }
+};
+
 
 // Names already written to a `schema__*` table this round — used so the std-lib
 // populators below don't double-insert a row a user definition already covers.
