@@ -4,6 +4,7 @@ import { AppError } from "../errors.js";
 import type { RuntimeTarget } from "../runtime/target.js";
 import { lowerStdlibFunctionSql } from "./stdlib_lowering.js";
 import { ShapeLoweringMiss, type GelIRCompileOptions, type GelIRSQLArtifact, type ScalarPointerPath } from "./compiler_types.js";
+import { Relation, scopeKeyOf } from "./relation.js";
 import { bindOperandsOnce } from "./sql_fragment.js";
 import {
   compileGroupRowsStatementSQL,
@@ -4703,7 +4704,21 @@ const correlatedDirectScalarPropertyLeaf = (
   const single = ptr.ptrref.outCardinality === "one" || ptr.ptrref.outCardinality === "at_most_one";
   if (!single) return null;
   if (ptr.source.expr.kind !== "type_root") return null;
-  const alias = pickOuterScopeAliasForExpr(set, options);
+  // pathctx beachhead: resolve the outer-scope correlation through the
+  // PathRegistry (src/sql/relation.ts) instead of the bespoke
+  // pickOuterScopeAliasForExpr lookup. Building a registry from
+  // options.outerScopes and asking correlateScope() is provably equivalent to
+  // findMatchingOuterScope -- its reverse-find over outerScopes (innermost
+  // wins) equals Map-overwrite for the matched key -- but expressed as the one
+  // central question the registry exists to answer.
+  const innerSet = innermostTypeRootSet(set);
+  if (!innerSet) return null;
+  const innerTyperef = (innerSet.expr as TypeRoot).typeref;
+  const registry = new Relation();
+  for (const scope of options.outerScopes ?? []) {
+    registry.registerScope(scopeKeyOf(scope.typeref, scope.namespace ?? []), scope.alias);
+  }
+  const alias = registry.correlateScope(scopeKeyOf(innerTyperef, innerSet.pathId?.namespace ?? []));
   if (!alias) return null;
   return `${alias}.${quoteIdent(columnForPointer(ptr))}`;
 };
