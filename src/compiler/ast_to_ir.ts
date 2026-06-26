@@ -72,7 +72,7 @@ import type {
   TypeRoot,
   Volatility,
 } from "../ir/gel_ir.js";
-import { buildScopeTreeFromAst } from "../ir/scope_builder.js";
+import { buildScopeTreeFromAst, tupleSharedPrefixCorrelated } from "../ir/scope_builder.js";
 import type { FieldDef, FunctionDef, LinkDef, LinkPropertyDef, ScalarType, ScalarValue, TypeDef } from "../types.js";
 import { qualifiedTypeName, type SchemaSnapshot } from "../schema/schema.js";
 import type { GeneratedSchema, GeneratedSchemaType } from "../codegen/schema.js";
@@ -129,6 +129,13 @@ export interface IRCompileContext {
   params: Map<string, Param>;
   globals: Map<string, Global>;
   bindingScopes: Map<string, Set>[];
+  // The AST values of the WITH bindings currently in scope (name -> binding
+  // value AST), kept alongside the compiled `bindingScopes`. WITH-inlining
+  // erases alias/view boundaries from the Live IR, but the scope-tree factoring
+  // authority needs them to tell a FACTORED alias-view traversal from a
+  // CORRELATED one (ADR 0061); the AST still carries them. Read only by the
+  // tuple-count factoring stamp.
+  bindingAst?: Map<string, unknown>;
   // Stack of schema aliases currently being inlined. Used to detect cycles
   // (e.g. alias A := SELECT B; alias B := SELECT A) and to skip alias
   // resolution within an alias's own body.
@@ -1863,6 +1870,12 @@ const withBindings = (ctx: IRCompileContext, bindings: WithBinding[] | undefined
     return ctx;
   }
   const scoped = childScope(ctx);
+  // Record the binding VALUE ASTs so the tuple-count factoring stamp can see
+  // alias/view boundaries that WITH-inlining erases from the Live IR (ADR 0061).
+  scoped.bindingAst = new Map(ctx.bindingAst ?? []);
+  for (const binding of bindings) {
+    scoped.bindingAst.set(binding.name, binding.value);
+  }
   for (const binding of bindings) {
     let set: Set;
     switch (binding.value.kind) {
@@ -4566,7 +4579,18 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
 
     case "tuple": {
       const elements = expr.values.map((value, index) => ({ name: String(index), val: compileFreeObjectExpr(value, ctx) }));
-      return {
+      // Stamp the scope-tree factoring verdict for the count gate (layer 3):
+      // does this tuple's elements share a CORRELATED object prefix (zip) or a
+      // FACTORED one (cross product)? Decided from the AST + WITH bindings, where
+      // alias/view boundaries survive (the Live IR erases them — ADR 0061).
+      // Additive; consumed only by compileCountOfSetSQL.
+      let correlated: boolean | null = null;
+      try {
+        correlated = tupleSharedPrefixCorrelated(expr.values, ctx.bindingAst ?? new Map());
+      } catch {
+        // additive stamp: a pathological tuple/binding shape must never break a compile
+      }
+      const tupleSet: Set = {
         kind: "set",
         expr: {
           kind: "tuple",
@@ -4580,6 +4604,8 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
         isMaterializedRef: false,
         isSchemaAlias: false,
       };
+      if (correlated !== null) (tupleSet as { sharedPrefixCorrelated?: boolean }).sharedPrefixCorrelated = correlated;
+      return tupleSet;
     }
 
     case "free_object_constructor": {

@@ -268,17 +268,18 @@ export const setLooksLikeRange = (set: Set): boolean => {
 // intended gate (`sharedFactorPrefix` + `factoringFence`), but the IR never
 // populates a fence for these, so consulting it cannot help yet.
 //
-// Therefore we DECLINE universally and fall back to the product path (exact
-// pre-Relation behaviour). The structural detection below is retained as the
-// live seam: once the WITH-binding fence survives inlining (an upstream
-// `ast_to_ir`/scope-tree change), replace the soundness gate with a
-// `buildScopeAnalysis` query and this begins to fire correctly. See
-// docs/adr/0061-shared-prefix-count-factoring.md.
+// The factoring decision is owned by the scope tree (the AST-built authority,
+// `scope_builder.tupleSharedPrefixCorrelated`), since the Live IR has erased the
+// alias/view boundary. ast_to_ir stamps that verdict on the tuple Set as
+// `sharedPrefixCorrelated`; this gate only fires when it is `true` (a CORRELATED
+// prefix). The structural checks below additionally require every element to be
+// a single-valued scalar pointer off the SAME object source, so the prefix rows
+// are exactly the zip. See docs/adr/0061-shared-prefix-count-factoring.md.
 const tryCompileSharedPrefixTupleCount = (
   tuple: Tuple,
-  _params: ScalarValue[],
-  _target: RuntimeTarget,
-  _options: GelIRCompileOptions,
+  params: ScalarValue[],
+  target: RuntimeTarget,
+  options: GelIRCompileOptions,
   deps: SqlLoweringContext,
 ): string | null => {
   if (tuple.elements.length < 2) return null;
@@ -300,11 +301,17 @@ const tryCompileSharedPrefixTupleCount = (
   }
   if (!shared) return null;
 
-  // SOUNDNESS GATE: the scope tree is the factoring authority, but the IR has
-  // erased the fence that would let it (or the Relation) prove this prefix is
-  // correlated rather than factored (see the comment above). Decline until a
-  // fence-aware `buildScopeAnalysis` proof is available.
-  return null;
+  // CORRELATED: build the shared prefix ONCE (via the Relation source) and count
+  // its rows. A FACTORED prefix (alias-view computable) is never reached here —
+  // the caller only invokes this gate when the scope-tree verdict is correlated.
+  const checkpoint = params.length;
+  const source = deps.compileSelectSourceRelation(shared, undefined, undefined, options, params, target, "sp0")
+    ?? deps.compileSelectSource(shared, undefined, undefined, options, params, target, "sp0");
+  if (!source) {
+    params.length = checkpoint;
+    return null;
+  }
+  return `(SELECT count(*) FROM ${source.sql})`;
 };
 
 export const compileCountOfSetSQL = (
@@ -332,12 +339,14 @@ export const compileCountOfSetSQL = (
     if (tuple.elements.length === 0) {
       return "0";
     }
-    // WIP demonstration of Relation-for-compilation: a shared object-prefix
-    // tuple is ZIPPED over its prefix (count = prefix rows), not crossed. See
-    // tryCompileSharedPrefixTupleCount's CAVEAT — needs the scope-tree factoring
-    // decision before this is sound (regresses scope_computables_07b as-is).
-    const sharedPrefix = tryCompileSharedPrefixTupleCount(tuple, params, target, options, deps);
-    if (sharedPrefix) return sharedPrefix;
+    // A shared object-prefix tuple whose elements the scope tree judged
+    // CORRELATED zips over its prefix (count = prefix rows) instead of crossing.
+    // The verdict is stamped on the Set by ast_to_ir (`sharedPrefixCorrelated`);
+    // a FACTORED tuple (alias-view computable) falls through to the product path.
+    if ((set as { sharedPrefixCorrelated?: boolean }).sharedPrefixCorrelated === true) {
+      const sharedPrefix = tryCompileSharedPrefixTupleCount(tuple, params, target, options, deps);
+      if (sharedPrefix) return sharedPrefix;
+    }
     // Independent elements (`count((A.x, B.y))`): the tuple set IS the cartesian
     // product, so its count is the product of the per-element counts.
     const checkpoint = params.length;

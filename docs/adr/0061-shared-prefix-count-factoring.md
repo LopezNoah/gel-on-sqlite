@@ -1,9 +1,10 @@
 # 0061 — Shared-prefix tuple `count` is a factoring decision; the fence is lost at IR inlining
 
 ## Status
-Accepted. Phase 0 (gate disabled) + Phase 1 layer 1 (scope-tree population) +
-Phase 1 layer 2 (view-namespace discriminator) done. Phase 1 layer 3
-(factoring-query authority + wiring) proposed.
+Accepted and IMPLEMENTED. Phase 0 (gate disabled) → Phase 1 layer 1 (scope-tree
+population) → layer 2 (view-namespace discriminator) → layer 3 (factoring-query
+authority + count-gate wiring). The shared-prefix tuple-count collapse is now
+sound: it fires for CORRELATED prefixes and declines for FACTORED ones.
 
 ## Context
 
@@ -108,12 +109,26 @@ is already exercised by detached-EXISTS via `existence_proof.ts`).
      `U.cards@vns1`/`@vns2` (factored), and in `U.deck.a.*` only the computable
      `a` splits while the real link `deck` fuses. Behaviour-neutral (scopeTree
      still unconsumed — nothing on the execution path reads it).
-2. **Factoring-query authority** in `src/ir/scope_tree.ts` — port
-   `find_factorable_nodes` and expose `shouldFactorTogether(a, b)`,
-   `sharedFactorPrefix(elements)`, `isAcrossFactoringFence(a, b)`.
-3. **Wire the count gate (and Relation) through it** — replace the Phase 0
-   soundness gate with a factoring-authority query (needs layers 1+2's tree to
-   carry real PathIds so IR leaves map to scope nodes).
+2. **Factoring-query authority** in `src/ir/scope_tree.ts` — **DONE**:
+   `analyzeTreeFactoring(root)` ports `find_factorable_nodes` over the populated
+   tree → `sharedFactorPrefix` / `shouldFactorTogether` / `isAcrossFactoringFence`
+   + `pathLeaves`.
+3. **Wire the count gate through it** — **DONE**, resolving the PathId question:
+   the AST walker can't know the lowered PathId because WITH-inlining erases the
+   alias spelling (07b→`Card`, 07a→`User.deck`, 07c→global `Card`), so we DON'T
+   make the walker emit real PathIds. Instead the verdict is computed from the
+   AST + the WITH-binding shapes (`scope_builder.tupleSharedPrefixCorrelated`,
+   which reuses the binding-aware segment logic) and STAMPED on the tuple's Live
+   IR Set as `sharedPrefixCorrelated` during `ast_to_ir`'s tuple compilation
+   (`ctx.bindingAst` carries the binding value ASTs). The count gate
+   (`tryCompileSharedPrefixTupleCount`) fires only when that stamp is `true`.
+   Result: `count((Card.name,Card.cost))` now zips to `9` (was the product `81`);
+   factored `count((U.cards.name,U.cards.cost))` stays `81`. Full suite: zero
+   regressions, zero test-flips (the fix has no prior test). Cases the gate still
+   can't reach are unchanged and orthogonal: `08` (`deck_cost` lowers as a
+   computed aggregate `sum(...)`, not a scalar pointer leaf, so the structural
+   matcher skips it), `07a`/`07c` (pre-existing failures from computed-link /
+   filtered-binding lowering, not factoring).
 
 ## Consequences
 

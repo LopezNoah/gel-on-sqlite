@@ -253,6 +253,37 @@ const walkExpr = (e: any, scope: ScopeTreeNode, state: BuildState, bindings: Bin
   }
 };
 
+// Decide, for a tuple of path expressions (e.g. a `count((a, b, ...))` arg),
+// whether its elements share a CORRELATED immediate object prefix (the tuple
+// ZIPS - count = prefix rows) or are FACTORED (cross product). This is the
+// layer-3 factoring verdict applied directly to the AST tuple + the WITH
+// bindings in scope, where alias/view boundaries are still visible (the Live IR
+// has erased them - see ADR 0061). Returns null when the rule does not apply
+// (not all elements are simple equal-depth shared-prefix paths) so the caller
+// falls back to the product path.
+export const tupleSharedPrefixCorrelated = (
+  elementAsts: any[],
+  astBindings: Map<string, any>,
+): boolean | null => {
+  if (elementAsts.length < 2) return null;
+  const bindings: Bindings = new Map();
+  for (const [name, value] of astBindings) bindings.set(name, { shape: aliasShapeOf(value) });
+  const segLists = elementAsts.map((e) => pathSegments(e, bindings));
+  if (segLists.some((s) => s === null)) return null;
+  const sl = segLists as Seg[][];
+  const depth = sl[0]!.length;
+  if (depth < 2) return null; // need at least <prefix>.<leaf>
+  const prefixLen = depth - 1;
+  for (const s of sl) {
+    if (s.length !== depth) return false; // different depth -> not a shared immediate prefix
+    for (let i = 0; i < prefixLen; i += 1) {
+      if (s[i]!.name !== sl[0]![i]!.name) return false; // independent prefixes
+      if (s[i]!.computable) return false; // view computable in the shared prefix -> factored
+    }
+  }
+  return true;
+};
+
 // Build a populated scope tree from an EdgeQL statement AST. The root is a fence
 // (the statement boundary), mirroring Gel. Purely structural; behaviour-neutral.
 export const buildScopeTreeFromAst = (statement: any): ScopeTreeNode => {
