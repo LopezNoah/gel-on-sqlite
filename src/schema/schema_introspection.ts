@@ -214,6 +214,23 @@ export const schemaIntrospectionTypeDefs = (): TypeDef[] => [
     fields: typeFields(),
   },
   {
+    // Abstract base of Array/Tuple/Range (schema::CollectionType). Backed by a
+    // denormalized "all collection types" table (the schema::Type pattern) so
+    // the relative-count goldens (Array < CollectionType < Type, Tuple <
+    // CollectionType) hold. Kept link-free: an element_type LINK to the
+    // abstract schema::Type confuses union/link resolution (regressed
+    // advtypes_overlapping_link_union); element_type is a follow-up.
+    name: "CollectionType",
+    module: "schema",
+    abstract: true,
+    fields: typeFields(),
+  },
+  {
+    name: "Array",
+    module: "schema",
+    fields: typeFields(),
+  },
+  {
     name: "Tuple",
     module: "schema",
     fields: typeFields(),
@@ -397,6 +414,7 @@ export const populateSchemaIntrospection = (
 
   populateModules(insertRow, schema);
   populatePseudoTypes(insertRow, ensureTypeRow);
+  populateCollectionTypes(db, insertRow, ensureTypeRow, schema);
   populateStdScalarTypes(db, insertRow, ensureTypeRow);
   populateStdlibFunctions(db, insertRow);
   populateAbstractConstraints(insertRow);
@@ -414,6 +432,51 @@ const populatePseudoTypes = (insertRow: InsertRow, ensureTypeRow: EnsureTypeRow)
     });
     ensureTypeRow(name);
   }
+};
+
+// schema::Array + the denormalized schema::CollectionType extent. Array types
+// are derived from the collection-typed properties the schema actually uses
+// (Gel only materializes a collection type when something references it);
+// existing tuple rows are mirrored into CollectionType so the relative-count
+// goldens (Array < CollectionType < Type) hold. Link-free (see CollectionType
+// catalog note): element_type is deferred.
+const populateCollectionTypes = (
+  db: IntrospectionDB,
+  insertRow: InsertRow,
+  ensureTypeRow: EnsureTypeRow,
+  schema: SchemaSnapshot,
+): void => {
+  const writeCollection = (name: string, fromAlias: boolean): void => {
+    insertRow("schema__collectiontype", {
+      id: scopedIdFor("schema::CollectionType", name),
+      name,
+      from_alias: fromAlias ? 1 : 0,
+      abstract: 0,
+      is_abstract: 0,
+    });
+  };
+
+  const arrayNames = new Set<string>();
+  for (const typeDef of schema.listTypes()) {
+    for (const field of typeDef.fields) {
+      const target = fieldTargetTypeName(field);
+      if (target.startsWith("array<")) arrayNames.add(target);
+    }
+  }
+  for (const name of [...arrayNames].sort()) {
+    insertRow("schema__array", {
+      id: scopedIdFor("schema::Array", name),
+      name,
+      from_alias: 0,
+      abstract: 0,
+      is_abstract: 0,
+    });
+    ensureTypeRow(name);
+    writeCollection(name, false);
+  }
+
+  const tupleRows = db.prepare("SELECT name, from_alias FROM schema__tuple").all() as Array<{ name: string; from_alias: number }>;
+  for (const tuple of tupleRows) writeCollection(tuple.name, Boolean(tuple.from_alias));
 };
 
 
