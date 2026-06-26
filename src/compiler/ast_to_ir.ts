@@ -72,6 +72,7 @@ import type {
   TypeRoot,
   Volatility,
 } from "../ir/gel_ir.js";
+import { buildScopeTreeFromAst } from "../ir/scope_builder.js";
 import type { FieldDef, FunctionDef, LinkDef, LinkPropertyDef, ScalarType, ScalarValue, TypeDef } from "../types.js";
 import { qualifiedTypeName, type SchemaSnapshot } from "../schema/schema.js";
 import type { GeneratedSchema, GeneratedSchemaType } from "../codegen/schema.js";
@@ -10617,6 +10618,19 @@ export const compileASTToGelIR = (statement: EdgeQLStatement, options: IRCompile
   };
 
   const result = buildResult();
+
+  // Populate the scope tree (Phase 1, layer 1). `statementBase` seeds it with an
+  // empty `createRootScope()` stub; replace it with a real tree of fences + path
+  // nodes walked from the AST (which still carries pre-inlining structure). This
+  // is the foundation for routing correlated-vs-factored decisions through a
+  // scope-tree authority (see docs/adr/0061). Purely additive and
+  // behaviour-neutral: nothing on the execution path reads `Statement.scopeTree`,
+  // so a pathological walk must never break a compile.
+  try {
+    (result as { scopeTree: ScopeTreeNode }).scopeTree = buildScopeTreeFromAst(statement);
+  } catch {
+    // leave the empty stub from statementBase
+  }
 
   // Populate statement-level volatility inference on the Live IR. Purely
   // additive — nothing on the execution path reads `Statement.volatility`; this

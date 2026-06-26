@@ -1,7 +1,9 @@
 # 0061 — Shared-prefix tuple `count` is a factoring decision; the fence is lost at IR inlining
 
 ## Status
-Accepted (Phase 0: gate disabled). Phases 1–3 proposed.
+Accepted. Phase 0 (gate disabled) + Phase 1 layer 1 (scope-tree population,
+structural) done. Phase 1 layer 2 (view-namespace discriminator) and Phase 1
+layer 3 (factoring-query authority + wiring) proposed.
 
 ## Context
 
@@ -83,16 +85,28 @@ is already exercised by detached-EXISTS via `existence_proof.ts`).
 
 ## Plan (Gel-aligned)
 
-1. **Populate the scope tree during `ast_to_ir`** — port `attach_path` /
-   `attach_fence` so WITH bindings, `SET OF`/optional args, sub-`SELECT`s and
-   `FOR` bodies install fence nodes as the IR is built. This is the actual
-   blocker; it is surgery on the mutually-recursive builder (cf. ADR 0040/0041),
-   and must be behaviour-neutral until consumed.
+1. **Populate the scope tree** — port `attach_path` / `attach_fence` so WITH
+   bindings, sub-`SELECT`s, `FOR` bodies and `EXISTS` install fence + path nodes.
+   **DONE (layer 1)** as `src/ir/scope_builder.ts` (`buildScopeTreeFromAst`),
+   invoked additively in `compileASTToGelIR` like `inferStatementVolatility`.
+   Implemented as an AST walk rather than threaded through the mutually-recursive
+   builder (cf. ADR 0040/0041): the AST still carries the pre-inlining structure,
+   and an additive pass is strictly behaviour-neutral (full suite unchanged:
+   747 fail / 3512 pass before and after). Path identities are STRUCTURAL
+   signatures (segment names) — enough for prefix fusing/visibility; real IR
+   PathIds come with layer 3 wiring. `Statement.scopeTree` is no longer the
+   `createRootScope()` stub.
+   - **layer 2 (TODO):** the per-occurrence view namespace — alias/view-shape
+     computables compile DETACHED with a fresh `path_id_namespace`
+     (`context.py:768`, `stmtctx.py:143`), so repeated `U.cards` don't fuse
+     (product) while schema pointers (even computed `owners`) fuse (correlate).
+     This is the discriminator the count gate needs; mint it in the walker.
 2. **Factoring-query authority** in `src/ir/scope_tree.ts` — port
    `find_factorable_nodes` and expose `shouldFactorTogether(a, b)`,
    `sharedFactorPrefix(elements)`, `isAcrossFactoringFence(a, b)`.
 3. **Wire the count gate (and Relation) through it** — replace the Phase 0
-   soundness gate with a factoring-authority query.
+   soundness gate with a factoring-authority query (needs layers 1+2's tree to
+   carry real PathIds so IR leaves map to scope nodes).
 
 ## Consequences
 
