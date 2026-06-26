@@ -6391,21 +6391,46 @@ const compileSelectSourceRelation = (
   extraColumns?: string[],
   parent?: Relation,
 ): SourceResult | null => {
-  if (sourceSet.expr.kind !== "type_root") return null;
+  const kind = sourceSet.expr.kind;
+  if (kind !== "type_root" && kind !== "pointer") return null;
   // Reuse the string lowering for the SQL so the emitted source is
   // byte-identical to the existing path (and matches any params it pushes).
   const base = compileSelectSource(sourceSet, where, orderBy, options, params, target, aliasOverride, extraColumns);
   if (!base) return null;
-  const root = (sourceSet.expr as TypeRoot).typeref;
-  const projectedColumns = [...new Set([
-    ...collectProjectedColumns(sourceSet.shape, where, orderBy),
-    ...(extraColumns ?? []),
-  ])];
-  const linkProjections = collectLinkProjectionsForSource(sourceSet.shape ?? [], where, orderBy, root.id);
-  const body = compilePolymorphicSourceBody(root, sourceSet.expr.skipSubtypes, projectedColumns, options, linkProjections);
   const relation = new Relation(parent);
-  relation.addRangeVar({ alias: base.alias, sourceSql: body });
-  relation.registerScope(scopeKeyOf(root, sourceSet.pathId?.namespace ?? []), base.alias);
+
+  if (kind === "type_root") {
+    const root = (sourceSet.expr as TypeRoot).typeref;
+    const projectedColumns = [...new Set([
+      ...collectProjectedColumns(sourceSet.shape, where, orderBy),
+      ...(extraColumns ?? []),
+    ])];
+    const linkProjections = collectLinkProjectionsForSource(sourceSet.shape ?? [], where, orderBy, root.id);
+    const body = compilePolymorphicSourceBody(root, sourceSet.expr.skipSubtypes, projectedColumns, options, linkProjections);
+    relation.addRangeVar({ alias: base.alias, sourceSql: body });
+    relation.registerScope(scopeKeyOf(root, sourceSet.pathId?.namespace ?? []), base.alias);
+    return { alias: base.alias, sql: base.sql, relation };
+  }
+
+  // Simple pointer-chain source (`Card.owners`, `User.deck`, …): the chain is
+  // joined inside one subquery whose LEAF row is exposed under `base.alias`. We
+  // treat that subquery as a single opaque range var and register the chain's
+  // leaf SET as the PROVIDER rvar for its path (Gel's path_rvar_map). A consumer
+  // reading two leaves off the same prefix (`(Card.owners.name,
+  // Card.owners.deck_cost)`) then resolves both through THIS one provider — they
+  // stay zipped (one owner row) instead of forming a cross product. `sql` stays
+  // byte-identical to the string path; the alias-less body (for the range var)
+  // is the subquery with its trailing ` ${alias}` removed (our own emission, so
+  // a controlled slice — not name parsing).
+  const suffix = ` ${base.alias}`;
+  const body = base.sql.endsWith(suffix) ? base.sql.slice(0, -suffix.length) : `(${base.sql})`;
+  const rv = relation.addRangeVar({ alias: base.alias, sourceSql: body });
+  if (sourceSet.pathId) {
+    const key = pathIdKey(sourceSet);
+    relation.registerPath(key, "identity", `${base.alias}.${quoteIdent("id")}`);
+    relation.registerPathRvar(key, "value", rv);
+    relation.registerPathRvar(key, "identity", rv);
+  }
   return { alias: base.alias, sql: base.sql, relation };
 };
 

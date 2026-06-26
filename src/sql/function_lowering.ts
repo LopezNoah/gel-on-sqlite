@@ -242,6 +242,57 @@ export const setLooksLikeRange = (set: Set): boolean => {
 // over scalars) — those evaluate to a single scalar value in compileScalarSelectSQL,
 // which would incorrectly count as 1 instead of preserving EdgeQL's set
 // semantics for the operand.
+// WIP (not main-ready — see caveat): `count((S.a, S.b, …))` where every tuple
+// element is a single-valued scalar pointer off the SAME object source set `S`
+// (e.g. both `Card.owners.name` and `Card.owners.cost` are off `Card.owners`).
+// Builds `S` ONCE as a structured Relation source (path_rvar_map: a single
+// shared provider rvar for the prefix) and counts its rows instead of the
+// per-element product.
+//
+// CAVEAT: this assumes the shared prefix is CORRELATED (zip). It is WRONG when
+// the prefix is FACTORED through a WITH-binding — `count((U.cards.name,
+// U.cards.cost))` with `U := User {cards := …}` must stay the cartesian PRODUCT
+// (scope_computables_07a/b/c; this branch regresses 07b 81→9). The factored-vs-
+// correlated decision belongs to the scope tree (scope_tree.ts: sharedFactorPrefix
+// + factoringFence), which isn't consumed by lowering yet. The prize cases
+// (scope_computables_08 / 11a) ALSO have computed (`function_call`) leaves this
+// simple-pointer gate can't match. Kept as a reviewable demonstration of using
+// Relation for compilation; gate on the scope tree before enabling.
+const tryCompileSharedPrefixTupleCount = (
+  tuple: Tuple,
+  params: ScalarValue[],
+  target: RuntimeTarget,
+  options: GelIRCompileOptions,
+  deps: SqlLoweringContext,
+): string | null => {
+  if (tuple.elements.length < 2) return null;
+  let shared: Set | null = null;
+  for (const element of tuple.elements) {
+    const e = element.val.expr;
+    if (e.kind !== "pointer") return null;
+    const ptr = e as Pointer;
+    if (ptr.ptrref.isLinkProperty || !ptr.ptrref.outTarget.isScalar) return null;
+    const single = ptr.ptrref.outCardinality === "one" || ptr.ptrref.outCardinality === "at_most_one";
+    if (!single) return null;
+    const src = ptr.source;
+    // The shared prefix must be an OBJECT set (a pointer chain or type root) —
+    // not a scalar — and identical across every element (matched by path id).
+    if (src.typeref.isScalar) return null;
+    if (src.expr.kind !== "pointer" && src.expr.kind !== "type_root") return null;
+    if (shared === null) shared = src;
+    else if (deps.pathIdKey(src) !== deps.pathIdKey(shared)) return null;
+  }
+  if (!shared) return null;
+  const checkpoint = params.length;
+  const source = deps.compileSelectSourceRelation(shared, undefined, undefined, options, params, target, "sp0")
+    ?? deps.compileSelectSource(shared, undefined, undefined, options, params, target, "sp0");
+  if (!source) {
+    params.length = checkpoint;
+    return null;
+  }
+  return `(SELECT count(*) FROM ${source.sql})`;
+};
+
 export const compileCountOfSetSQL = (
   set: Set,
   params: ScalarValue[],
@@ -267,6 +318,14 @@ export const compileCountOfSetSQL = (
     if (tuple.elements.length === 0) {
       return "0";
     }
+    // WIP demonstration of Relation-for-compilation: a shared object-prefix
+    // tuple is ZIPPED over its prefix (count = prefix rows), not crossed. See
+    // tryCompileSharedPrefixTupleCount's CAVEAT — needs the scope-tree factoring
+    // decision before this is sound (regresses scope_computables_07b as-is).
+    const sharedPrefix = tryCompileSharedPrefixTupleCount(tuple, params, target, options, deps);
+    if (sharedPrefix) return sharedPrefix;
+    // Independent elements (`count((A.x, B.y))`): the tuple set IS the cartesian
+    // product, so its count is the product of the per-element counts.
     const checkpoint = params.length;
     const factors: string[] = [];
     for (const element of tuple.elements) {
