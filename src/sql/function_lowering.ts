@@ -18,6 +18,7 @@ import type { ScalarValue } from "../types.js";
 import type { GelIRCompileOptions, ScalarPointerPath } from "./compiler_types.js";
 import { lowerStdlibFunctionSql } from "./stdlib_lowering.js";
 import { bindOperandsOnce } from "./sql_fragment.js";
+import { countArgIsFactored } from "../ir/scope_tree.js";
 
 // Functions returning `optional T` where a SQL NULL means "no value" — at a
 // top-level scalar select that's the EMPTY SET (zero rows), not a NULL row.
@@ -333,7 +334,13 @@ export const compileCountOfSetSQL = (
     // its argument carries `isWithBinding` (stamped by the IR builder) so it
     // skips this branch and falls through to the full-set scan below. The two
     // are otherwise IR-identical after WITH-binding inlining. (ADR 0059)
-    if (!(set as { isWithBinding?: boolean }).isWithBinding) {
+    //
+    // The factoring-fence decision now lives in the scope-tree planning
+    // authority (src/ir/scope_tree.ts): `countArgIsFactored` is its single home
+    // for "is this count factored (whole-set) or inline (per-row)?". Routing the
+    // gate through it is behaviour-neutral (the predicate is the narrow
+    // `isWithBinding` signal) while moving the knowledge out of this leaf.
+    if (!countArgIsFactored(set)) {
       const correlatedLeaf = deps.correlatedDirectScalarPropertyLeaf(set, options);
       if (correlatedLeaf) {
         return `(CASE WHEN ${correlatedLeaf} IS NULL THEN 0 ELSE 1 END)`;

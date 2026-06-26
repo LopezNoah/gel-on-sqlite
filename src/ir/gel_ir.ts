@@ -113,8 +113,18 @@ export interface ScopeTreeNode extends Base {
   pathId?: PathId;
   children: ScopeTreeNode[];
   namespaces: string[];
+  // A SET OF boundary (a fenced scope). Mirrors edb/ir/scopetree.py `fenced`.
   fenced: boolean;
   optional: boolean;
+  // Prevent *prefix factoring* across this node — references inside cannot be
+  // lifted out and correlated with an enclosing iteration (mirrors scopetree.py
+  // `factoring_fence`). The allowlist lists path keys that are exempt (e.g. a
+  // FOR iterator that must stay visible inside a DML-bearing fence).
+  factoringFence?: boolean;
+  factoringAllowlist?: string[];
+  // A GROUP binding node (scopetree.py `is_group`). Such a node is "multi" and
+  // is not a normal visible path for factoring purposes.
+  isGroup?: boolean;
 }
 
 export interface MaterializedSet extends Base {
