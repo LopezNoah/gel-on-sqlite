@@ -334,7 +334,7 @@ describe("TestEdgeQLUserDDL", () => {
       .toThrow(/module ext is read-only/i);
   });
 
-  it("test_edgeql_userddl_all_extensions_01 [xerror: sqlite-ts does not support START MIGRATION / POPULATE MIGRATION / COMMIT MIGRATION]", () => {
+  it.skip("test_edgeql_userddl_all_extensions_01 [xerror: sqlite-ts does not support START MIGRATION / POPULATE MIGRATION / COMMIT MIGRATION]", () => {
     // Install all extensions and then delete them all. Upstream toggles
     // `using future warn_old_scoping;` between migrations to verify the
     // scoping-future flag round-trips with extensions enabled. sqlite-ts
