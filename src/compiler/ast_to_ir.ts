@@ -73,6 +73,7 @@ import type {
   Volatility,
 } from "../ir/gel_ir.js";
 import { buildScopeTreeFromAst, tupleSharedPrefixCorrelated } from "../ir/scope_builder.js";
+import { AliasGenerator, derivedExprName } from "../ir/derived_names.js";
 import type { FieldDef, FunctionDef, LinkDef, LinkPropertyDef, ScalarType, ScalarValue, TypeDef } from "../types.js";
 import { qualifiedTypeName, type SchemaSnapshot } from "../schema/schema.js";
 import type { GeneratedSchema, GeneratedSchemaType } from "../codegen/schema.js";
@@ -144,6 +145,12 @@ export interface IRCompileContext {
   // keys). Prevents infinite recursion when a computed body references the
   // same computed transitively.
   computedExprResolutionStack?: globalThis.Set<string>;
+  // Per-compile name minter for synthetic PathIds (`expr~N`, `view~N`), shared
+  // across the whole compile so the serial counters are stable. `childScope`
+  // spreads `ctx`, so every nested scope shares this one instance by reference
+  // (a fresh compile gets a fresh generator). Mirrors Gel's `ctx.aliases`
+  // (edb/edgeql/compiler) feeding `PathId` name hints.
+  aliases: AliasGenerator;
 }
 
 const defaultCardinality: Cardinality = "unknown";
@@ -795,6 +802,75 @@ const defaultPathId = (name: string): PathId => ({
     },
   ],
 });
+
+// A synthetic-expression PathId rooted at a fresh `__derived__::expr~N` name,
+// the identity Gel gives to anonymous sets (constants, operator results) that
+// have no real schema path. The serial comes from the per-compile alias minter,
+// so repeated calls within one compile yield expr~1, expr~2, … in allocation
+// order. Mirrors `PathId.from_typeref(typename=__derived__::expr~N)`.
+const derivedExprPathId = (ctx: IRCompileContext): PathId => ({
+  kind: "path_id",
+  namespace: [],
+  isPointerPath: false,
+  steps: [
+    {
+      type: unknownTypeRef(derivedExprName(ctx.aliases.get("expr"))),
+    },
+  ],
+});
+
+// Expr kinds whose Set is a synthetic/anonymous value (no real schema path) and
+// so earns a `__derived__::expr~N` identity, replacing the ad-hoc placeholder
+// labels (`std::anyscalar`, `is_type`, …). Object/pointer paths (`type_root`,
+// `pointer`) are NOT here — they keep their real path id. Grown one wave at a
+// time, each wave regression-checked, because changing a set's path id can
+// shift identity-sensitive lowering (e.g. optional_comparison's LCP logic).
+const DERIVED_EXPR_SET_KINDS = new globalThis.Set<string>([
+  // Wave 1 (regression-clean). Constants and type-checks are leaf/near-leaf
+  // synthetic sets whose path id is not used as a correlation key, so giving
+  // them a unique `expr~N` identity is safe.
+  "integer_constant",
+  "string_constant",
+  "boolean_constant",
+  "float_constant",
+  "type_check_op",
+  // Wave 2 (operator_call / function_call / type_cast) is DEFERRED: minting a
+  // unique id for these breaks the `pathIdKey` (JSON.stringify(pathId)) equality
+  // that optional_comparison's LCP detection and the source-routing/correlation
+  // core rely on to recognize structurally-identical subexpressions (they assume
+  // synthetic sets share a degenerate placeholder key). Enabling it needs those
+  // comparisons made pathId-agnostic first — the correlation reconciliation work.
+]);
+
+const pathIdIsDerivedExpr = (pathId: PathId | undefined): boolean =>
+  pathId?.steps?.[0]?.type?.nameHint?.startsWith("__derived__::expr~") ?? false;
+
+// Post-order walk of the finished IR that stamps every qualifying synthetic Set
+// with a fresh `expr~N` path id. Post-order so operands are numbered before the
+// results that consume them (matching Gel's bottom-up allocation, e.g.
+// constant=expr~1 before its enclosing type-check=expr~2). Mutates in place —
+// the IR is freshly built per compile, the same way the value-facts annotation
+// pass (ADR 0057) decorates it. Idempotent per set via the already-derived
+// guard, so a shared/re-referenced set is not re-minted.
+const stampDerivedExprPathIds = (root: unknown, ctx: IRCompileContext): void => {
+  const visit = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (!value || typeof value !== "object") return;
+    for (const child of Object.values(value)) visit(child);
+    const node = value as { kind?: string; expr?: { kind?: string }; pathId?: PathId };
+    if (
+      node.kind === "set"
+      && DERIVED_EXPR_SET_KINDS.has(node.expr?.kind ?? "")
+      && !pathIdIsDerivedExpr(node.pathId)
+    ) {
+      (node as { pathId: PathId }).pathId = derivedExprPathId(ctx);
+    }
+  };
+  visit(root);
+};
 
 const setFromTypeRoot = (typeref: TypeRef): Set => ({
   kind: "set",
@@ -8677,6 +8753,7 @@ export const expandSchemaAliasesInStatement = (
     params: new Map(),
     globals: new Map(),
     bindingScopes: [new Map()],
+    aliases: new AliasGenerator(),
   };
   if (statement.kind === "select") {
     return expandAliasInSelectStatement(statement, ctx, new globalThis.Set<string>());
@@ -10609,6 +10686,7 @@ export const compileASTToGelIR = (statement: EdgeQLStatement, options: IRCompile
     params: new Map(),
     globals: new Map(),
     bindingScopes: [new Map()],
+    aliases: new AliasGenerator(),
   };
 
   validateParametersInStatement(statement);
@@ -10644,6 +10722,12 @@ export const compileASTToGelIR = (statement: EdgeQLStatement, options: IRCompile
   };
 
   const result = buildResult();
+
+  // Give synthetic sets (constants, type-checks, …) their Gel `__derived__::
+  // expr~N` identity, replacing the placeholder labels the builders seed. Runs
+  // before the AST-driven scope/inference passes below (which read the AST, not
+  // these set path ids) and before SQL lowering consumes the IR.
+  stampDerivedExprPathIds(result, ctx);
 
   // Populate the scope tree (Phase 1, layer 1). `statementBase` seeds it with an
   // empty `createRootScope()` stub; replace it with a real tree of fences + path
@@ -10766,6 +10850,7 @@ export const validateParsedStatement = (
     params: new Map(),
     globals: new Map(),
     bindingScopes: [new Map()],
+    aliases: new AliasGenerator(),
   };
   collectStatementShapesForValidation(statement, ctx);
 };

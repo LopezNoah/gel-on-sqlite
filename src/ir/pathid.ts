@@ -319,6 +319,34 @@ export class PathId {
     );
   }
 
+  /**
+   * Build a PathId rooted at a synthetic, schema-free type — the equivalent of
+   * Gel's `PathId.new_dummy` / `from_typeref` with an explicit `name_hint`. The
+   * caller supplies the already-qualified name (e.g. `__derived__::expr~3` from
+   * `derivedExprName`, or a derived view type from `deriveViewTypeName`), which
+   * becomes the root's display name. Unlike `fromType` no schema lookup runs,
+   * so this works for derived expression sets and view types that do not exist
+   * in the schema.
+   */
+  static fromDerived(
+    derivedName: string,
+    options: { kind?: "object" | "scalar"; namespace?: PathNamespace } = {},
+  ): PathId {
+    const root: TypeRef = {
+      kind: options.kind ?? "object",
+      name: derivedName,
+      displayName: derivedName,
+    };
+    return new PathId(
+      root,
+      [],
+      namespaceFrom(options.namespace),
+      undefined,
+      false,
+      false,
+    );
+  }
+
   get namespace(): Set<string> {
     return new Set(this.ns);
   }

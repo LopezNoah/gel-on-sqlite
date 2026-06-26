@@ -511,13 +511,20 @@ export const tryCompileSetLevelOptionalCompareSQL = (
     // For a synthetic-key side, fall back to structural containment: the
     // other side must literally embed a structurally identical copy
     // (`((I.te,).0,).0 ?= (I.te,).0`).
+    // Compare expr structure ignoring `pathId`: a pathId is set *identity*, not
+    // structure, and a synthetic set (constant, …) carries a unique
+    // `__derived__::expr~N` id, so two structurally-identical occurrences (the
+    // two `{I.te} = 0` copies in dependent_20) have different ids. Strip them so
+    // the structural match still holds.
+    const exprStructure = (expr: unknown): string =>
+      JSON.stringify(expr, (key, value) => (key === "pathId" ? undefined : value));
     const containsStructuralCopy = (haystack: Set, needle: Set): boolean => {
-      const needleJson = JSON.stringify(needle.expr);
+      const needleJson = exprStructure(needle.expr);
       let found = false;
       const walk = (o: unknown, depth: number): void => {
         if (found || !o || typeof o !== "object" || depth > 24) return;
         const obj = o as { kind?: string; expr?: unknown };
-        if (obj.kind === "set" && obj.expr && JSON.stringify(obj.expr) === needleJson) {
+        if (obj.kind === "set" && obj.expr && exprStructure(obj.expr) === needleJson) {
           found = true;
           return;
         }
