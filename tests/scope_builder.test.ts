@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parseEdgeQL } from "../src/edgeql/parser.js";
 import { buildScopeTreeFromAst } from "../src/ir/scope_builder.js";
+import { analyzeTreeFactoring } from "../src/ir/scope_tree.js";
 import type { ScopeTreeNode } from "../src/ir/gel_ir.js";
 
 // Phase 1: the scope tree is POPULATED (not the old empty stub) with fences +
@@ -103,5 +104,47 @@ describe("scope_builder (Phase 1)", () => {
 
   it("does not throw on non-select statements", () => {
     expect(() => treeOf("INSERT Card { name := 'x', element := 'Fire', cost := 1 }")).not.toThrow();
+  });
+});
+
+// Phase 1 layer 3: the factoring-query authority (find_factorable_nodes port).
+describe("scope_tree factoring authority", () => {
+  // Verdict for a tuple-count-style query: do all scalar path leaves share an
+  // immediate object prefix (CORRELATED -> zip) or not (FACTORED -> product)?
+  const verdict = (q: string): "correlated" | "factored" | "n/a" => {
+    const root = treeOf(q);
+    const f = analyzeTreeFactoring(root);
+    const leaves = f.pathLeaves().filter((n) => (n.pathId?.steps?.length ?? 0) >= 2);
+    if (leaves.length < 2) return "n/a";
+    return leaves.every((l) => f.shouldFactorTogether(leaves[0]!, l)) ? "correlated" : "factored";
+  };
+
+  it("CORRELATED: direct extent tuple count zips", () => {
+    expect(verdict("SELECT count((Card.name, Card.cost))")).toBe("correlated");
+  });
+
+  it("CORRELATED: schema-computed link prefix zips", () => {
+    expect(verdict("SELECT count((Card.owners.name, Card.owners.cost))")).toBe("correlated");
+  });
+
+  it("FACTORED: alias-view computable tuple count crosses (07b)", () => {
+    expect(
+      verdict("WITH U := User { cards := Card }, SELECT count((U.cards.name, U.cards.cost))"),
+    ).toBe("factored");
+  });
+
+  it("FACTORED: alias-view computable via .deck crosses (07a)", () => {
+    expect(
+      verdict("WITH U := User { cards := .deck }, SELECT count((U.cards.name, U.cards.cost))"),
+    ).toBe("factored");
+  });
+
+  it("FACTORED: nested alias-view computable crosses (11a)", () => {
+    expect(
+      verdict(
+        "WITH U := (SELECT User { deck: {name, a := Award} }), " +
+          "SELECT count((U.deck.a.name, U.deck.a.id, U.deck.name))",
+      ),
+    ).toBe("factored");
   });
 });

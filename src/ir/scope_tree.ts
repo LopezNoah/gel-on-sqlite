@@ -382,3 +382,105 @@ export function buildScopeAnalysis(rootSet: IRSet): ScopeAnalysis {
     },
   };
 }
+
+// ---------------------------------------------------------------------------
+// Factoring-query authority (Phase 1 layer 3) — a port of Gel's
+// `find_factorable_nodes` (edb/ir/scopetree.py:936) over a POPULATED scope tree
+// (the one `scope_builder.buildScopeTreeFromAst` attaches to a Statement). Gel:
+// two path references factor (zip / correlate) at the deepest common ancestor
+// that holds both as descendants with AT MOST ONE fence between them; otherwise
+// they are independent (cross product). The populated tree already encodes the
+// view-computable split via per-occurrence namespaces (layer 2), so two factored
+// references land in sibling nodes and never share their object prefix.
+//
+// `Set`-shaped consumers (Gel's `shouldFactorTogether(leftSet, rightSet)`) work
+// off these tree-node queries once each Set is mapped to its scope-tree leaf.
+
+const buildParentMap = (root: ScopeTreeNode): Map<ScopeTreeNode, ScopeTreeNode> => {
+  const parent = new Map<ScopeTreeNode, ScopeTreeNode>();
+  const rec = (n: ScopeTreeNode): void => {
+    for (const c of n.children) {
+      parent.set(c, n);
+      rec(c);
+    }
+  };
+  rec(root);
+  return parent;
+};
+
+export interface TreeFactoring {
+  /** Deepest path-leaf nodes (path nodes with no path-node children). */
+  pathLeaves(): ScopeTreeNode[];
+  /** The deepest common ancestor of `a` and `b` that is a PATH node — the prefix
+   *  at which they would factor — or null if they only meet at a fence/branch. */
+  sharedFactorPrefix(a: ScopeTreeNode, b: ScopeTreeNode): ScopeTreeNode | null;
+  /** Whether `a` and `b` factor together at their IMMEDIATE object prefix: they
+   *  share their direct path parent (so e.g. a tuple of them ZIPS rather than
+   *  crosses). False when a view-computable split (layer 2) put them in sibling
+   *  prefixes, or when a fence separates them. */
+  shouldFactorTogether(a: ScopeTreeNode, b: ScopeTreeNode): boolean;
+  /** Whether a fence lies between `a`/`b` and their shared factor prefix. */
+  isAcrossFactoringFence(a: ScopeTreeNode, b: ScopeTreeNode): boolean;
+}
+
+export const analyzeTreeFactoring = (root: ScopeTreeNode): TreeFactoring => {
+  const parent = buildParentMap(root);
+
+  const ancestors = (n: ScopeTreeNode): ScopeTreeNode[] => {
+    const chain: ScopeTreeNode[] = [];
+    let cur: ScopeTreeNode | undefined = n;
+    while (cur) {
+      chain.push(cur);
+      cur = parent.get(cur);
+    }
+    return chain; // self .. root
+  };
+
+  const lca = (a: ScopeTreeNode, b: ScopeTreeNode): ScopeTreeNode | null => {
+    const bs = new Set(ancestors(b));
+    for (const n of ancestors(a)) if (bs.has(n)) return n;
+    return null;
+  };
+
+  // Number of fence nodes strictly between `node` and `stop` (exclusive of both).
+  const fencesBetween = (node: ScopeTreeNode, stop: ScopeTreeNode): number => {
+    let count = 0;
+    let cur = parent.get(node);
+    while (cur && cur !== stop) {
+      if (cur.fenced) count += 1;
+      cur = parent.get(cur);
+    }
+    return count;
+  };
+
+  return {
+    pathLeaves() {
+      const leaves: ScopeTreeNode[] = [];
+      const visit = (n: ScopeTreeNode): void => {
+        const hasPathChild = n.children.some((c) => c.pathId !== undefined);
+        if (n.pathId !== undefined && !hasPathChild) leaves.push(n);
+        n.children.forEach(visit);
+      };
+      visit(root);
+      return leaves;
+    },
+
+    sharedFactorPrefix(a, b) {
+      let cur: ScopeTreeNode | undefined = lca(a, b) ?? undefined;
+      while (cur && cur.pathId === undefined) cur = parent.get(cur);
+      return cur && cur.pathId !== undefined ? cur : null;
+    },
+
+    shouldFactorTogether(a, b) {
+      const pa = parent.get(a);
+      const pb = parent.get(b);
+      return pa !== undefined && pa === pb && pa.pathId !== undefined;
+    },
+
+    isAcrossFactoringFence(a, b) {
+      const anc = lca(a, b);
+      if (!anc) return true;
+      return fencesBetween(a, anc) + fencesBetween(b, anc) > 1;
+    },
+  };
+};
