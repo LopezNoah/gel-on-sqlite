@@ -3579,7 +3579,10 @@ const compileEmbeddedGroup = (
   };
 };
 
-const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompileContext): Set => {
+// Exported so the qlast path-parity harness (`tests/qlast_path_parity.test.ts`)
+// can use the live path compiler as the differential oracle for
+// `compilePathQlast`. Behaviour-neutral.
+export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompileContext): Set => {
   const resolveHeadSet = (name: string): Set => {
     const bound = resolveBinding(ctx, name);
     if (bound) return bound;
