@@ -464,7 +464,10 @@ const scalarTypeRef = (scalar: ScalarType): TypeRef => {
   };
 };
 
-const resolveTypeRef = (ctx: IRCompileContext, name: string): TypeRef => {
+// Exported for the qlast-based path-compilation tracer bullet
+// (`src/compiler/qlast_setgen.ts`), which reuses the live schema-resolution
+// helpers so its port produces real IR rather than a toy. Behaviour-neutral.
+export const resolveTypeRef = (ctx: IRCompileContext, name: string): TypeRef => {
   const typeDef = getSchemaType(ctx, name);
   if (typeDef) {
     return typeRefFromTypeDef(ctx, typeDef);
@@ -871,7 +874,7 @@ const stampDerivedExprPathIds = (root: unknown, ctx: IRCompileContext): void => 
   visit(root);
 };
 
-const setFromTypeRoot = (typeref: TypeRef): Set => ({
+export const setFromTypeRoot = (typeref: TypeRef): Set => ({
   kind: "set",
   expr: {
     kind: "type_root",
@@ -927,7 +930,7 @@ const rerootSetSubject = (body: Set, newRoot: Set, subjectTypeId: string): Set |
 const effectivePointerCardinality = (ptrref: PointerRef): Cardinality =>
   ptrref.computedLinkAliasIsBackward ? ptrref.inCardinality : ptrref.outCardinality;
 
-const extendPathSetDirectional = (source: Set, ptrref: PointerRef, direction: "outbound" | "inbound"): Set => {
+export const extendPathSetDirectional = (source: Set, ptrref: PointerRef, direction: "outbound" | "inbound"): Set => {
   const resultType = direction === "outbound" ? ptrref.outTarget : ptrref.outSource;
   return {
     kind: "set",
@@ -1080,7 +1083,7 @@ const validateShapeProjectionLinkPropContext = (expr: Extract<FreeObjectExpr, { 
   }
 };
 
-const resolvePointerRef = (ctx: IRCompileContext, source: TypeRef, field: string): PointerRef | undefined => {
+export const resolvePointerRef = (ctx: IRCompileContext, source: TypeRef, field: string): PointerRef | undefined => {
   // Every object type carries an implicit `id` pointer that isn't part of its
   // declared fields/links, so it never appears in `resolvedFields`. Surface it
   // explicitly so `FILTER .id = …` / `.id IN {…}` resolve to a real scalar
@@ -1929,7 +1932,7 @@ const bindValue = (ctx: IRCompileContext, name: string, value: Set): void => {
   current.set(name, value);
 };
 
-const resolveBinding = (ctx: IRCompileContext, name: string): Set | undefined => {
+export const resolveBinding = (ctx: IRCompileContext, name: string): Set | undefined => {
   for (let index = ctx.bindingScopes.length - 1; index >= 0; index -= 1) {
     const scope = ctx.bindingScopes[index];
     const value = scope?.get(name);
