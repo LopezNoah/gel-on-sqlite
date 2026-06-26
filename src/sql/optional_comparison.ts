@@ -535,16 +535,25 @@ export const tryCompileSetLevelOptionalCompareSQL = (
       walk(haystack, 0);
       return found;
     };
+    // Does one side's path appear within the other? A CONCRETE path (object /
+    // pointer — a real schema path id) is matched by path-id identity. A
+    // SYNTHETIC side (constant, operator/cast result) has a unique
+    // `__derived__::expr~N` id per occurrence, so identity would never match two
+    // structurally-equal copies — match those structurally (pathId-agnostic)
+    // instead. Previously both arms also required a path-id-key hit, which only
+    // held because synthetic sets used to share a degenerate placeholder id.
     const lhsKey = pathIdKey(lhs);
     const rhsKey = pathIdKey(rhs);
     const rhsKeys = new globalThis.Set<string>();
     collectPathIdKeys(rhs, rhsKeys);
-    const lhsAppearsInRhs = rhsKeys.has(lhsKey)
-      && (isConcretePath(lhs) || containsStructuralCopy(rhs, lhs));
     const lhsKeys = new globalThis.Set<string>();
     collectPathIdKeys(lhs, lhsKeys);
-    const rhsAppearsInLhs = lhsKeys.has(rhsKey)
-      && (isConcretePath(rhs) || containsStructuralCopy(lhs, rhs));
+    const lhsAppearsInRhs = isConcretePath(lhs)
+      ? rhsKeys.has(lhsKey)
+      : containsStructuralCopy(rhs, lhs);
+    const rhsAppearsInLhs = isConcretePath(rhs)
+      ? lhsKeys.has(rhsKey)
+      : containsStructuralCopy(lhs, rhs);
     if (!lhsAppearsInRhs && !rhsAppearsInLhs) return null;
 
     // `X ?= X` / `X ?!= X` on an OBJECT set: identity compare of each

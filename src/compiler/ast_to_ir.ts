@@ -834,12 +834,11 @@ const DERIVED_EXPR_SET_KINDS = new globalThis.Set<string>([
   "boolean_constant",
   "float_constant",
   "type_check_op",
-  // Wave 2 (operator_call / function_call / type_cast) is DEFERRED: minting a
-  // unique id for these breaks the `pathIdKey` (JSON.stringify(pathId)) equality
-  // that optional_comparison's LCP detection and the source-routing/correlation
-  // core rely on to recognize structurally-identical subexpressions (they assume
-  // synthetic sets share a degenerate placeholder key). Enabling it needs those
-  // comparisons made pathId-agnostic first — the correlation reconciliation work.
+  // operator_call / function_call / type_cast DEFERRED: minting unique ids for
+  // these breaks the source-routing/correlation core, which keys off
+  // `pathIdKey` (JSON.stringify(pathId)) as a set-identity proxy (DISTINCT/UNION
+  // routing in advtypes_overlapping_link_union, count-in-shape, …). Needs those
+  // sites made pathId-agnostic first.
 ]);
 
 const pathIdIsDerivedExpr = (pathId: PathId | undefined): boolean =>
