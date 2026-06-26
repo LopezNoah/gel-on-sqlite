@@ -119,11 +119,16 @@ export const schemaIntrospectionTypeDefs = (): TypeDef[] => [
     module: "schema",
     fields: [
       { name: "name", type: "str", required: true },
+      { name: "source_id", type: "uuid" },
       { name: "target_id", type: "uuid" },
+      { name: "cardinality", type: "str" },
+      { name: "required", type: "bool" },
+      { name: "readonly", type: "bool" },
     ],
     links: [
       annotationLink(),
       { name: "properties", targetType: "schema::Property", multi: true },
+      { name: "source", targetType: "schema::Type" },
       { name: "target", targetType: "schema::Type" },
     ],
   },
@@ -134,6 +139,9 @@ export const schemaIntrospectionTypeDefs = (): TypeDef[] => [
       { name: "name", type: "str", required: true },
       { name: "source_id", type: "uuid" },
       { name: "target_id", type: "uuid" },
+      { name: "cardinality", type: "str" },
+      { name: "required", type: "bool" },
+      { name: "readonly", type: "bool" },
     ],
     links: [
       annotationLink(),
@@ -228,7 +236,8 @@ export const schemaIntrospectionTypeDefs = (): TypeDef[] => [
   {
     name: "Array",
     module: "schema",
-    fields: typeFields(),
+    fields: [...typeFields(), { name: "element_type_id", type: "uuid" }],
+    links: [{ name: "element_type", targetType: "schema::Type" }],
   },
   {
     name: "Tuple",
@@ -257,7 +266,6 @@ export const schemaIntrospectionTypeDefs = (): TypeDef[] => [
     ],
   },
   {
-    // schema::Cast — link-free (from_type/to_type are schema::Type links).
     name: "Cast",
     module: "schema",
     fields: [
@@ -265,6 +273,12 @@ export const schemaIntrospectionTypeDefs = (): TypeDef[] => [
       { name: "volatility", type: "str" },
       { name: "allow_implicit", type: "bool" },
       { name: "allow_assignment", type: "bool" },
+      { name: "from_type_id", type: "uuid" },
+      { name: "to_type_id", type: "uuid" },
+    ],
+    links: [
+      { name: "from_type", targetType: "schema::Type" },
+      { name: "to_type", targetType: "schema::Type" },
     ],
   },
 ];
@@ -443,7 +457,7 @@ export const populateSchemaIntrospection = (
   populateStdlibFunctions(db, insertRow);
   populateAbstractConstraints(insertRow);
   populateOperators(insertRow);
-  populateCasts(insertRow);
+  populateCasts(insertRow, ensureTypeRow);
 };
 
 // The standard infix/prefix/postfix/ternary operators (edb/lib/std). Immutable.
@@ -494,7 +508,7 @@ const STD_CASTS: ReadonlyArray<{ from: string; to: string; implicit: boolean }> 
   { from: "std::uuid", to: "std::str", implicit: false },
 ];
 
-const populateCasts = (insertRow: InsertRow): void => {
+const populateCasts = (insertRow: InsertRow, ensureTypeRow: EnsureTypeRow): void => {
   for (const cast of STD_CASTS) {
     const name = `${cast.from}->${cast.to}`;
     insertRow("schema__cast", {
@@ -503,6 +517,8 @@ const populateCasts = (insertRow: InsertRow): void => {
       volatility: "Immutable",
       allow_implicit: cast.implicit ? 1 : 0,
       allow_assignment: cast.implicit ? 1 : 0,
+      from_type_id: ensureTypeRow(cast.from),
+      to_type_id: ensureTypeRow(cast.to),
     });
   }
 };
@@ -551,12 +567,14 @@ const populateCollectionTypes = (
     }
   }
   for (const name of [...arrayNames].sort()) {
+    const elementName = name.slice("array<".length, -1);
     insertRow("schema__array", {
       id: scopedIdFor("schema::Array", name),
       name,
       from_alias: 0,
       abstract: 0,
       is_abstract: 0,
+      element_type_id: ensureTypeRow(elementName),
     });
     ensureTypeRow(name);
     writeCollection(name, false);
@@ -738,6 +756,9 @@ const populateObjectType = (
       sourceTypeName: name,
       targetTypeName: fieldTargetTypeName(field),
       annotations: field.annotations,
+      multi: field.multi,
+      required: field.required,
+      readonly: (field as { readonly?: boolean }).readonly,
     });
     insertLink("schema::ObjectType", "pointers", id, pointerId);
   }
@@ -748,7 +769,11 @@ const populateObjectType = (
     insertRow("schema__link", {
       id: linkId,
       name: link.name,
+      source_id: ensureTypeRow(name),
       target_id: ensureTypeRow(targetTypeName),
+      cardinality: link.multi ? "Many" : "One",
+      required: (link as { required?: boolean }).required ? 1 : 0,
+      readonly: (link as { readonly?: boolean }).readonly ? 1 : 0,
     });
     linkAnnotations("schema::Link", linkId, link.annotations);
     for (const [propertyIndex, property] of (link.properties ?? []).entries()) {
@@ -769,6 +794,9 @@ const populateObjectType = (
       sourceTypeName: name,
       targetTypeName,
       annotations: link.annotations,
+      multi: link.multi,
+      required: (link as { required?: boolean }).required,
+      readonly: (link as { readonly?: boolean }).readonly,
     });
     insertLink("schema::ObjectType", "pointers", id, pointerId);
   }
@@ -836,6 +864,9 @@ const populatePointer = (
     sourceTypeName: string;
     targetTypeName?: string;
     annotations?: readonly AnnotationDef[];
+    multi?: boolean;
+    required?: boolean;
+    readonly?: boolean;
   },
 ): string => {
   const pointerId = scopedIdFor("schema::Pointer", `${pointer.scope}:${pointer.name}`);
@@ -844,6 +875,9 @@ const populatePointer = (
     name: pointer.name,
     source_id: ensureTypeRow(pointer.sourceTypeName),
     target_id: pointer.targetTypeName ? ensureTypeRow(pointer.targetTypeName) : null,
+    cardinality: pointer.multi ? "Many" : "One",
+    required: pointer.required ? 1 : 0,
+    readonly: pointer.readonly ? 1 : 0,
   });
   linkAnnotations("schema::Pointer", pointerId, pointer.annotations);
   return pointerId;
