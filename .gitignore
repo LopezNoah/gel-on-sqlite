@@ -7,7 +7,8 @@ ui/
 .artifacts/
 .DS_Store
 .claude/worktrees/
-
+# I dont really want to hide the goldens but its fine for now
+goldens/ 
 # Local debug runners (developer scratch files at repo root)
 /qast.ts
 /qir.ts

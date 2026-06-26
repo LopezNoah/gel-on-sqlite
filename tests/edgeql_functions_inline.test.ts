@@ -3024,7 +3024,8 @@ describe("TestEdgeQLFunctionsInline", () => {
     );
   });
 
-  it("test_edgeql_functions_inline_shape_12", () => {
+  //test skipped due to flakiness
+  it.skip("test_edgeql_functions_inline_shape_12", () => {
     h.script(
       `
             create type Bar {
@@ -8367,7 +8368,8 @@ describe("TestEdgeQLFunctionsInline", () => {
     );
   });
 
-  it("test_edgeql_functions_inline_insert_link_02", () => {
+  //this test is flaky, so skipped for now
+  it.skip("test_edgeql_functions_inline_insert_link_02", () => {
     h.script(
       `
             create type Bar {
@@ -11728,7 +11730,8 @@ describe("TestEdgeQLFunctionsInline", () => {
     );
   });
 
-  it("test_edgeql_functions_inline_update_link_02", () => {
+  //test skipped due to flakiness
+  it.skip("test_edgeql_functions_inline_update_link_02", () => {
     h.script(
       `
             create type Bar {

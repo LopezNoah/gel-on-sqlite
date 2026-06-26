@@ -47,25 +47,39 @@ os.environ.setdefault("__EDGEDB_DEVMODE", "1")
 (REPO_ROOT / "build" / "cache").mkdir(parents=True, exist_ok=True)
 
 
-from edb import buildmeta  # noqa: E402
-from edb import edgeql  # noqa: E402
-from edb import errors  # noqa: E402
-from edb.edgeql import ast as qlast  # noqa: E402
-from edb.edgeql import compiler as ql_compiler  # noqa: E402
-from edb.edgeql import parser as ql_parser  # noqa: E402
-from edb.edgeql import qltypes  # noqa: E402
-from edb.pgsql import codegen as pg_codegen  # noqa: E402
-from edb.pgsql import compiler as pg_compiler  # noqa: E402
-from edb.common import debug  # noqa: E402
-from edb.common import devmode  # noqa: E402
-from edb.common.ast import base as ast_base  # noqa: E402
-from edb.schema import ddl as s_ddl  # noqa: E402
-from edb.schema import delta as sd  # noqa: E402
-from edb.schema import migrations as s_migrations  # noqa: E402,F401
-from edb.schema import modules as s_mod  # noqa: E402
-from edb.schema import schema as s_schema  # noqa: E402
-from edb.schema import std as s_std  # noqa: E402
-from edb.schema import utils as s_utils  # noqa: E402
+try:
+    from edb import buildmeta  # noqa: E402
+    from edb import edgeql  # noqa: E402
+    from edb import errors  # noqa: E402
+    from edb.edgeql import ast as qlast  # noqa: E402
+    from edb.edgeql import compiler as ql_compiler  # noqa: E402
+    from edb.edgeql import parser as ql_parser  # noqa: E402
+    from edb.edgeql import qltypes  # noqa: E402
+    from edb.pgsql import codegen as pg_codegen  # noqa: E402
+    from edb.pgsql import compiler as pg_compiler  # noqa: E402
+    from edb.common import debug  # noqa: E402
+    from edb.common import devmode  # noqa: E402
+    from edb.common.ast import base as ast_base  # noqa: E402
+    from edb.schema import ddl as s_ddl  # noqa: E402
+    from edb.schema import delta as sd  # noqa: E402
+    from edb.schema import migrations as s_migrations  # noqa: E402,F401
+    from edb.schema import modules as s_mod  # noqa: E402
+    from edb.schema import schema as s_schema  # noqa: E402
+    from edb.schema import std as s_std  # noqa: E402
+    from edb.schema import utils as s_utils  # noqa: E402
+except ModuleNotFoundError as exc:  # pragma: no cover - command-line error path
+    missing = exc.name or "<unknown>"
+    sys.stderr.write(
+        f"Missing Python dependency {missing!r}.\n"
+        "Install the minimal deps for this dump script with:\n\n"
+        "    python3 -m pip install 'parsing~=2.0' 'immutables>=0.18'\n\n"
+        "or install them into a scratch target and run with PYTHONPATH:\n\n"
+        "    python3 -m pip install --target /tmp/gel-pydeps "
+        "'parsing~=2.0' 'immutables>=0.18'\n"
+        "    PYTHONPATH=/tmp/gel-pydeps python3 "
+        "sqlite-ts/scripts/dump_gel_compiler_facts.py ...\n"
+    )
+    raise SystemExit(1) from exc
 
 
 # Inlined from edb.testbase.lang to avoid importing edb.server.compiler (which
@@ -100,7 +114,12 @@ def _load_std_schema():
     return _std_schema
 
 
-def run_ddl(schema, ddl, default_module=s_mod.DEFAULT_MODULE_ALIAS):
+def run_ddl(
+    schema,
+    ddl,
+    default_module=s_mod.DEFAULT_MODULE_ALIAS,
+    skip_non_ddl=False,
+):
     statements = edgeql.parse_block(ddl)
 
     current_schema = schema
@@ -110,6 +129,7 @@ def run_ddl(schema, ddl, default_module=s_mod.DEFAULT_MODULE_ALIAS):
     migration_script = []
 
     for stmt in statements:
+        ddl_plan = None
         if isinstance(stmt, qlast.StartMigration):
             # START MIGRATION
             if target_schema is None:
@@ -204,6 +224,11 @@ def run_ddl(schema, ddl, default_module=s_mod.DEFAULT_MODULE_ALIAS):
                     testmode=True,
                 )
         else:
+            if skip_non_ddl:
+                # Setup scripts mix DDL with DML (INSERT/SET MODULE/SELECT).
+                # Only schema-affecting statements matter for IR/SQL facts;
+                # skip the rest instead of failing the whole setup.
+                continue
             raise ValueError(
                 f'unexpected {stmt!r} in compiler setup script')
 
@@ -261,34 +286,91 @@ class ExtractedQuery:
     class_name: str
     test_name: str
     case_index: int
-    schema_file: pathlib.Path | None
-    schema_text: str | None
+    # One (module_name, sdl_text) pair per SCHEMA* class attribute.
+    schema_modules: tuple[tuple[str, str], ...]
     schema_label: str
+    # Ordered DDL/migration setup that must run before the query compiles:
+    # class SETUP plus any inline self.con.execute / self.migrate statements
+    # that precede the assert in the test method body.
+    setup_ddl: tuple[str, ...]
     query: str | None
     extract_error: str | None = None
 
 
-_schema_cache: dict[tuple[str, str], Any] = {}
+_schema_cache: dict[tuple[tuple[str, str], ...], Any] = {}
 
 
 def load_schema(schema_file: pathlib.Path):
     schema_text = schema_file.read_text()
-    return load_schema_text(schema_text, str(schema_file.resolve()))
+    return load_schema_modules(
+        (("default", schema_text),), str(schema_file.resolve()))
 
 
 def load_schema_text(schema_text: str, schema_label: str):
-    cache_key = (schema_label, schema_text)
+    return load_schema_modules((("default", schema_text),), schema_label)
+
+
+def load_schema_modules(
+    schema_modules: tuple[tuple[str, str], ...],
+    schema_label: str,
+):
+    # Cache on the concrete module SDL, not the human label: two classes with
+    # different labels but identical schema share the compiled schema.
+    cache_key = tuple(schema_modules)
     cached = _schema_cache.get(cache_key)
     if cached is not None:
         return cached
 
+    schema = _load_std_schema()
+    # Always materialize an (at least empty) `default` module so that inline
+    # setup DDL targeting default:: has a module to land in — mirrors the
+    # original single-schema loader, which migrated `module default { ... }`.
+    modules = {module: (sdl or "") for module, sdl in schema_modules}
+    modules.setdefault("default", "")
+    module_blocks = [
+        f" module {module} {{ {sdl} }} "
+        for module, sdl in modules.items()
+    ]
     script = (
         "START MIGRATION TO {"
-        f" module default {{ {schema_text} }} "
-        "}; POPULATE MIGRATION; COMMIT MIGRATION;"
+        + "".join(module_blocks)
+        + "}; POPULATE MIGRATION; COMMIT MIGRATION;"
     )
-    schema = run_ddl(_load_std_schema(), script)
+    schema = run_ddl(schema, script)
+
     _schema_cache[cache_key] = schema
+    return schema
+
+
+def apply_setup(schema, setup_ddl: tuple[str, ...]):
+    """Apply ordered setup statements onto the loaded schema, best-effort.
+
+    Setup scripts freely mix schema DDL with DML (INSERT/SET MODULE/SELECT),
+    which is irrelevant to IR/SQL facts, and may include declarative SDL passed
+    to self.migrate. Each chunk is tried as an imperative DDL block first, then
+    as an SDL migration; anything that still fails (duplicate creates, DML-only,
+    unsupported features) is skipped so the query can still compile against
+    whatever schema we managed to build.
+    """
+    for text in setup_ddl:
+        chunk = (text or "").strip()
+        if not chunk:
+            continue
+        try:
+            schema = run_ddl(schema, chunk, skip_non_ddl=True)
+            continue
+        except Exception:
+            pass
+        try:
+            wrapped = (
+                "START MIGRATION TO { module default { "
+                + chunk
+                + " } }; POPULATE MIGRATION; COMMIT MIGRATION;"
+            )
+            schema = run_ddl(schema, wrapped, skip_non_ddl=True)
+        except Exception:
+            # Un-appliable setup chunk; leave the schema as-is.
+            pass
     return schema
 
 
@@ -321,35 +403,174 @@ def source_location(source_file: pathlib.Path, node: ast.AST) -> dict[str, Any]:
     }
 
 
-def schema_value_from_class(
+def _text_from_path(path: pathlib.Path) -> str | None:
+    try:
+        return path.read_text()
+    except Exception:
+        return None
+
+
+def _repo_relative_label(path: pathlib.Path) -> str:
+    try:
+        return str(path.relative_to(REPO_ROOT))
+    except ValueError:
+        return str(path)
+
+
+def _resolve_file_node(
+    value: ast.AST,
+    source_file: pathlib.Path,
+    pytests: Any,
+    exts: tuple[str, ...],
+) -> pathlib.Path | None:
+    """Resolve a constant path or os.path.join(...) ending in one of exts."""
+    if isinstance(value, ast.Constant) and isinstance(value.value, str):
+        if value.value.endswith(exts):
+            path = pathlib.Path(value.value)
+            if not path.is_absolute():
+                path = source_file.parent / path
+            return path.resolve()
+        return None
+    if isinstance(value, ast.Call) and pytests.dotted_name(value.func) == "os.path.join":
+        literal_parts = [
+            arg.value
+            for arg in value.args
+            if isinstance(arg, ast.Constant) and isinstance(arg.value, str)
+        ]
+        # Upstream joins as os.path.join(os.path.dirname(__file__), 'schemas', 'x').
+        idx = next(
+            (i for i, part in enumerate(literal_parts) if part.endswith(exts)),
+            None,
+        )
+        if idx is not None:
+            return source_file.parent.joinpath(*literal_parts[:idx + 1]).resolve()
+    return None
+
+
+def _schema_text_for_attr(
+    value: ast.AST,
+    source_file: pathlib.Path,
+    module_globals: dict[str, Any],
+    pytests: Any,
+    class_name: str,
+) -> tuple[str | None, str]:
+    path = _resolve_file_node(value, source_file, pytests, (".esdl",))
+    if path is not None:
+        return _text_from_path(path), _repo_relative_label(path)
+
+    if isinstance(value, ast.Constant) and isinstance(value.value, str):
+        digest = hashlib.sha1(value.value.encode()).hexdigest()[:12]
+        return value.value, f"inline:{class_name}:{digest}"
+
+    if isinstance(value, (ast.List, ast.Tuple)):
+        for item in value.elts:
+            text, label = _schema_text_for_attr(
+                item, source_file, module_globals, pytests, class_name)
+            if text is not None:
+                return text, label
+        return None, "empty"
+
+    try:
+        evaluated = pytests.eval_expr(value, {}, module_globals)
+    except Exception:
+        return None, "unresolved"
+    if isinstance(evaluated, (list, tuple)):
+        evaluated = next(
+            (item for item in evaluated
+             if isinstance(item, str) and item.endswith(".esdl")),
+            evaluated[0] if evaluated else "",
+        )
+    if isinstance(evaluated, str) and evaluated.endswith(".esdl"):
+        return _text_from_path(pathlib.Path(evaluated).resolve()), evaluated
+    if isinstance(evaluated, str):
+        digest = hashlib.sha1(evaluated.encode()).hexdigest()[:12]
+        return evaluated, f"inline:{class_name}:{digest}"
+    return None, "unresolved"
+
+
+def schema_modules_from_class(
+    source_file: pathlib.Path,
     class_node: ast.ClassDef,
     module_globals: dict[str, Any],
     pytests: Any,
-) -> tuple[pathlib.Path | None, str | None, str]:
-    for attr_name in ("SCHEMA", "SCHEMA_DEFAULT"):
-        for stmt in class_node.body:
-            if not isinstance(stmt, ast.Assign):
-                continue
-            if not any(
-                isinstance(target, ast.Name) and target.id == attr_name
-                for target in stmt.targets
-            ):
-                continue
+) -> tuple[tuple[tuple[str, str], ...], str]:
+    """Collect SCHEMA / SCHEMA_<MODULE> attrs into (module, sdl_text) pairs.
 
-            value = pytests.eval_expr(stmt.value, {}, module_globals)
-            if isinstance(value, (list, tuple)):
-                value = next(
-                    (item for item in value if isinstance(item, str)
-                     and item.endswith(".esdl")),
-                    value[0] if value else "",
-                )
-            if isinstance(value, str) and value.endswith(".esdl"):
-                return pathlib.Path(value).resolve(), None, value
-            if isinstance(value, str):
-                digest = hashlib.sha1(value.encode()).hexdigest()[:12]
-                return None, value, f"inline:{class_node.name}:{digest}"
+    SCHEMA and SCHEMA_DEFAULT map to module ``default``; SCHEMA_TEST →
+    ``test``, SCHEMA_CARDS → ``cards``, etc.
+    """
+    modules: dict[str, str] = {}
+    labels: list[str] = []
+    for stmt in class_node.body:
+        if not isinstance(stmt, ast.Assign):
+            continue
+        for target in stmt.targets:
+            if not isinstance(target, ast.Name):
+                continue
+            attr = target.id
+            if attr != "SCHEMA" and not attr.startswith("SCHEMA_"):
+                continue
+            module = (
+                "default" if attr in ("SCHEMA", "SCHEMA_DEFAULT")
+                else attr[len("SCHEMA_"):].lower()
+            )
+            text, label = _schema_text_for_attr(
+                stmt.value, source_file, module_globals, pytests,
+                class_node.name)
+            if text is not None and module not in modules:
+                modules[module] = text
+                labels.append(label)
 
-    return None, "", "empty"
+    if not modules:
+        return (), "empty"
+    schema_modules = tuple(sorted(modules.items()))
+    return schema_modules, ";".join(labels)
+
+
+def setup_texts_from_class(
+    source_file: pathlib.Path,
+    class_node: ast.ClassDef,
+    module_globals: dict[str, Any],
+    pytests: Any,
+) -> tuple[str, ...]:
+    out: list[str] = []
+
+    def walk(node: ast.AST) -> None:
+        if isinstance(node, (ast.List, ast.Tuple)):
+            for el in node.elts:
+                walk(el)
+            return
+        path = _resolve_file_node(node, source_file, pytests, (".edgeql", ".esdl"))
+        if path is not None:
+            text = _text_from_path(path)
+            if text:
+                out.append(text)
+            return
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            out.append(node.value)
+            return
+        try:
+            evaluated = pytests.eval_expr(node, {}, module_globals)
+        except Exception:
+            return
+        items = evaluated if isinstance(evaluated, (list, tuple)) else [evaluated]
+        for item in items:
+            if not isinstance(item, str):
+                continue
+            if item.endswith((".edgeql", ".esdl")):
+                text = _text_from_path(pathlib.Path(item).resolve())
+                if text:
+                    out.append(text)
+            else:
+                out.append(item)
+
+    for stmt in class_node.body:
+        if not isinstance(stmt, ast.Assign):
+            continue
+        if any(isinstance(t, ast.Name) and t.id == "SETUP" for t in stmt.targets):
+            walk(stmt.value)
+            break
+    return tuple(out)
 
 
 def method_map(class_node: ast.ClassDef) -> dict[str, ast.FunctionDef | ast.AsyncFunctionDef]:
@@ -360,6 +581,33 @@ def method_map(class_node: ast.ClassDef) -> dict[str, ast.FunctionDef | ast.Asyn
     }
 
 
+def effective_method_map(
+    class_node: ast.ClassDef,
+    module_classes: dict[str, ast.ClassDef],
+    _seen: frozenset[str] = frozenset(),
+) -> dict[str, ast.FunctionDef | ast.AsyncFunctionDef]:
+    """Methods of class_node plus methods inherited from module-local bases.
+
+    Lets self.<helper>() and bare references to mixin methods (e.g. dump
+    tests' ensure_schema_data_integrity) resolve. Subclass methods win.
+    """
+    if class_node.name in _seen:
+        return {}
+    seen = _seen | {class_node.name}
+    methods: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {}
+    for base in class_node.bases:
+        base_name = (
+            base.id if isinstance(base, ast.Name)
+            else base.attr if isinstance(base, ast.Attribute)
+            else None
+        )
+        base_cls = module_classes.get(base_name) if base_name else None
+        if base_cls is not None:
+            methods.update(effective_method_map(base_cls, module_classes, seen))
+    methods.update(method_map(class_node))
+    return methods
+
+
 def extract_queries_from_method(
     *,
     source_file: pathlib.Path,
@@ -367,14 +615,18 @@ def extract_queries_from_method(
     test_name: str,
     method: ast.FunctionDef | ast.AsyncFunctionDef,
     methods: dict[str, ast.FunctionDef | ast.AsyncFunctionDef],
-    schema_file: pathlib.Path | None,
-    schema_text: str | None,
+    schema_modules: tuple[tuple[str, str], ...],
     schema_label: str,
+    class_setup: tuple[str, ...],
     module_globals: dict[str, Any],
     pytests: Any,
 ) -> list[ExtractedQuery]:
     out: list[ExtractedQuery] = []
     case_index = 0
+    # Inline DDL executed (self.con.execute / self.migrate) before each assert,
+    # accumulated in source order. Shared across the whole method walk so a
+    # query sees every schema change that precedes it.
+    ddl_acc: list[str] = []
 
     def append_case(
         query: str | None,
@@ -392,12 +644,30 @@ def extract_queries_from_method(
             class_name=class_name,
             test_name=test_name,
             case_index=case_index,
-            schema_file=schema_file,
-            schema_text=schema_text,
+            schema_modules=schema_modules,
             schema_label=schema_label,
+            setup_ddl=tuple(class_setup) + tuple(ddl_acc),
             query=query,
             extract_error=detail,
         ))
+
+    def record_ddl(call: ast.Call, env: dict[str, Any], *, migrate: bool) -> None:
+        if not call.args:
+            return
+        try:
+            text = pytests.eval_expr(call.args[0], env, module_globals)
+        except Exception:
+            return
+        if not isinstance(text, str):
+            return
+        if migrate:
+            # self.migrate(sdl) is a declarative migration to the given schema.
+            text = (
+                "START MIGRATION TO { module default { "
+                + text
+                + " } }; POPULATE MIGRATION; COMMIT MIGRATION;"
+            )
+        ddl_acc.append(text)
 
     def process_call(call: ast.Call, env: dict[str, Any], stack: tuple[str, ...]) -> bool:
         func_name = pytests.dotted_name(call.func)
@@ -412,6 +682,15 @@ def extract_queries_from_method(
                 append_case(query, call)
             except Exception as exc:
                 append_case(None, call, str(exc))
+            return True
+
+        if func_name in ("self.con.execute", "self.con.query",
+                         "self.con.query_single", "self.con._fetchall"):
+            record_ddl(call, env, migrate=False)
+            return True
+
+        if func_name == "self.migrate":
+            record_ddl(call, env, migrate=True)
             return True
 
         if func_name.startswith("self."):
@@ -443,6 +722,15 @@ def extract_queries_from_method(
         if isinstance(expr, ast.Call):
             if process_call(expr, env, stack):
                 return
+        # A helper method passed by reference (e.g. dump tests pass
+        # DumpTestCaseMixin.ensure_schema_data_integrity to a framework runner).
+        # Treat the reference as an entry point so its asserts are extracted.
+        if isinstance(expr, (ast.Attribute, ast.Name)):
+            ref = expr.attr if isinstance(expr, ast.Attribute) else expr.id
+            helper = methods.get(ref)
+            if helper is not None and ref not in stack:
+                process_statements(helper.body, dict(env), (*stack, ref))
+                return
         for child in ast.iter_child_nodes(expr):
             process_expr(child, env, stack)
 
@@ -473,8 +761,10 @@ def extract_queries_from_method(
                         process_expr(stmt.value, env, stack)
                     continue
 
-            if isinstance(stmt, ast.For):
+            if isinstance(stmt, (ast.For, ast.AsyncFor)):
                 try:
+                    if isinstance(stmt, ast.AsyncFor):
+                        raise ValueError("async iterables are not evaluable")
                     iterable = pytests.eval_expr(stmt.iter, env, module_globals)
                     for item in iterable:
                         nested = dict(env)
@@ -522,14 +812,27 @@ def extract_queries_from_test_file(source_file: pathlib.Path) -> list[ExtractedQ
     module_globals = pytests.build_eval_globals(module)
     module_globals["__file__"] = str(source_file)
 
+    module_classes = {
+        node.name: node
+        for node in module.body
+        if isinstance(node, ast.ClassDef)
+    }
+
     extracted: list[ExtractedQuery] = []
     for class_node in pytests.pick_test_classes(module):
-        schema_file, schema_text, schema_label = schema_value_from_class(
+        schema_modules, schema_label = schema_modules_from_class(
+            source_file,
             class_node,
             module_globals,
             pytests,
         )
-        methods = method_map(class_node)
+        class_setup = setup_texts_from_class(
+            source_file,
+            class_node,
+            module_globals,
+            pytests,
+        )
+        methods = effective_method_map(class_node, module_classes)
         for node in class_node.body:
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
@@ -541,9 +844,9 @@ def extract_queries_from_test_file(source_file: pathlib.Path) -> list[ExtractedQ
                 test_name=node.name,
                 method=node,
                 methods=methods,
-                schema_file=schema_file,
-                schema_text=schema_text,
+                schema_modules=schema_modules,
                 schema_label=schema_label,
+                class_setup=class_setup,
                 module_globals=module_globals,
                 pytests=pytests,
             ))
@@ -554,7 +857,9 @@ def extract_queries_from_test_file(source_file: pathlib.Path) -> list[ExtractedQ
 def expand_test_files(patterns: list[str], all_tests: bool) -> list[pathlib.Path]:
     paths: list[pathlib.Path] = []
     if all_tests:
-        paths.extend(sorted((REPO_ROOT / "tests").glob("test_edgeql_*.py")))
+        tests_dir = REPO_ROOT / "tests"
+        paths.extend(sorted(tests_dir.glob("test_edgeql_*.py")))
+        paths.extend(sorted(tests_dir.glob("test_dump*.py")))
     for pattern in patterns:
         pattern_path = pathlib.Path(pattern)
         if pattern_path.is_absolute():
@@ -723,19 +1028,17 @@ def collect_path_ids(node: Any, *, limit: int = 300) -> list[dict[str, Any]]:
 
 def compile_facts(
     *,
-    schema_file: pathlib.Path | None = None,
-    schema_text: str | None = None,
+    schema_modules: tuple[tuple[str, str], ...],
     schema_label: str | None = None,
+    setup_ddl: tuple[str, ...] = (),
     query: str,
     include_sql: bool,
     max_depth: int,
 ) -> dict[str, Any]:
-    if schema_file is not None:
-        schema = load_schema(schema_file)
-        schema_fact = str(schema_file.relative_to(REPO_ROOT))
-    else:
-        schema = load_schema_text(schema_text or "", schema_label or "inline")
-        schema_fact = schema_label or "inline"
+    schema = load_schema_modules(schema_modules, schema_label or "inline")
+    schema_fact = schema_label or "inline"
+    if setup_ddl:
+        schema = apply_setup(schema, setup_ddl)
 
     # parse_query expects a single fragment, not a trailing ';' terminator.
     qltree = ql_parser.parse_query(query.strip().rstrip(";"))
@@ -792,8 +1095,7 @@ def write_batch_golden(
         record = {
             "ok": False,
             "source_test": source,
-            "schema_file": str(case.schema_file.relative_to(REPO_ROOT))
-            if case.schema_file is not None else case.schema_label,
+            "schema_file": case.schema_label,
             "error": {
                 "phase": "extract",
                 "message": case.extract_error or "query was not extracted",
@@ -802,9 +1104,9 @@ def write_batch_golden(
     else:
         try:
             record = compile_facts(
-                schema_file=case.schema_file,
-                schema_text=case.schema_text,
+                schema_modules=case.schema_modules,
                 schema_label=case.schema_label,
+                setup_ddl=case.setup_ddl,
                 query=case.query,
                 include_sql=include_sql,
                 max_depth=max_depth,
@@ -815,8 +1117,7 @@ def write_batch_golden(
             record = {
                 "ok": False,
                 "source_test": source,
-                "schema_file": str(case.schema_file.relative_to(REPO_ROOT))
-                if case.schema_file is not None else case.schema_label,
+                "schema_file": case.schema_label,
                 "query": "\n".join(
                     line.rstrip() for line in case.query.strip().splitlines()),
                 "error": {
@@ -861,7 +1162,23 @@ def run_batch(args: argparse.Namespace) -> None:
 
     processed = 0
     for test_file in test_files:
-        for case in extract_queries_from_test_file(test_file):
+        try:
+            cases = extract_queries_from_test_file(test_file)
+        except Exception as exc:
+            # Some tests/test_edgeql_*.py files (e.g. the ir_* IR-inspection
+            # suites) are not QueryTestCase classes and have no extractable
+            # assert_query_result calls. Record and skip instead of aborting
+            # the whole batch.
+            manifest["counts"].setdefault("skipped_files", 0)
+            manifest["counts"]["skipped_files"] += 1
+            manifest.setdefault("skipped_files", []).append({
+                "source": str(test_file.relative_to(REPO_ROOT)
+                              if test_file.is_relative_to(REPO_ROOT)
+                              else test_file),
+                "reason": f"{type(exc).__name__}: {exc}",
+            })
+            continue
+        for case in cases:
             if test_name_re and not test_name_re.search(case.test_name):
                 continue
             if args.limit is not None and processed >= args.limit:
@@ -1004,7 +1321,9 @@ def main() -> None:
 
     schema_file = schema_file.resolve()
     facts = compile_facts(
-        schema_file=schema_file,
+        schema_modules=(("default", schema_file.read_text()),),
+        schema_label=str(schema_file.relative_to(REPO_ROOT))
+        if schema_file.is_relative_to(REPO_ROOT) else str(schema_file),
         query=query,
         include_sql=args.sql,
         max_depth=args.max_depth,
