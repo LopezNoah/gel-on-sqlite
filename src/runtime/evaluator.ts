@@ -504,6 +504,7 @@ export const runSelectExprEvaluation = (
             return sourceType === qualified || schema.concreteTypeNamesUnder(qualified).includes(sourceType);
           };
           if (typeExpr.kind === "type_name") return matchName(typeExpr.name);
+          if (typeExpr.kind === "type_of") return false;
           if (typeExpr.kind === "type_union") return matchesType(row, typeExpr.left) || matchesType(row, typeExpr.right);
           return matchesType(row, typeExpr.left) && matchesType(row, typeExpr.right);
         };

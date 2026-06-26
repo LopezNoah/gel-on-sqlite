@@ -1714,6 +1714,7 @@ const compilePathSteps = (steps: EdgeQLPathStep[], ctx: IRCompileContext): Set =
       if (step.kind === "type_intersection") {
         const baseTypeId = out.typeref.id;
         const intersected = resolveTypeRef(ctx, step.typeName);
+        validateTypeIntersectionOperand(ctx, out.typeref, intersected);
         const next = steps[i + 1];
         if (next && next.kind === "ptr") {
           validateTypeIntersectionPointer(ctx, baseTypeId, intersected.id, next.name);
@@ -1814,6 +1815,7 @@ const compilePathSteps = (steps: EdgeQLPathStep[], ctx: IRCompileContext): Set =
     if (step.kind === "type_intersection") {
       const baseTypeId = out.typeref.id;
       const intersected = resolveTypeRef(ctx, step.typeName);
+      validateTypeIntersectionOperand(ctx, out.typeref, intersected);
       const next = rest[i + 1];
       if (next && next.kind === "ptr") {
         validateTypeIntersectionPointer(ctx, baseTypeId, intersected.id, next.name);
@@ -3951,6 +3953,7 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
           // here would also rewrite correlated link paths like
           // `FILTER Text[IS Owned].owner`, dropping the link-column projection.)
           const intersected = resolveTypeRef(ctx, step.typeName);
+          validateTypeIntersectionOperand(ctx, out.typeref, intersected);
           if (!isSubtypeOf(ctx, out.typeref.id, intersected.id)) {
             out = { ...out, typeref: intersected };
           }
@@ -4695,6 +4698,40 @@ const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompi
         );
       }
       const left = compileFreeObjectExpr(expr.expr, ctx);
+      const fullTypeExpr = expr.typeExpr;
+      // The `[IS T]` type-intersection operator requires an object-typed
+      // source; applying it to a scalar (`10[IS Object]`) is a compile error.
+      if (expr.intersection) {
+        const scalarName = scalarTypeNameOfSet(ctx, left);
+        if (scalarName) {
+          throw new AppError(
+            "E_SEMANTIC",
+            `cannot apply type intersection operator to scalar type '${scalarName}': it is not an object type`,
+            1,
+            1,
+          );
+        }
+      }
+      // A type operator (`|` / `&`) requires every operand to be an object
+      // type. Reject `1 IS (int64 | float64)`, `[1] IS (array<…> | array<…>)`,
+      // `… IS (typeof [2] | typeof [2.2])`, etc.
+      if (fullTypeExpr) {
+        const opSym = typeExprOperatorSymbol(fullTypeExpr);
+        if (opSym && typeExprHasNonObjectLeaf(ctx, fullTypeExpr)) {
+          throw new AppError(
+            "E_SEMANTIC",
+            `cannot use type operator '${opSym}' with non-object type`,
+            1,
+            1,
+          );
+        }
+      }
+      // A free object answers `IS` only for the FreeObject pseudo-type — not
+      // for Object / BaseObject, even though FreeObject extends BaseObject.
+      if (left.expr.kind === "tuple" && (left.expr as { isFreeObject?: boolean }).isFreeObject) {
+        const checked = fullTypeExpr ?? { kind: "type_name" as const, name: expr.typeName };
+        return literalToSet(typeExprNamesFreeObject(checked));
+      }
       // Collection type checks (`[5] IS (array<int64>)`) resolve statically
       // on the collection kind — the IR carries the left side's collection
       // typeref, and a value's collection kind can't vary at runtime.
@@ -6768,6 +6805,97 @@ const findInheritedFieldOwner = (
 // set of qualified CONCRETE type names it admits: a `type_name` contributes its
 // own concrete subtypes, `&` intersects the operand sets, `|` unions them.
 // Returns undefined when the schema is unavailable.
+// Collection type heads, which are never object types.
+const COLLECTION_TYPE_HEADS = new globalThis.Set(["array", "tuple", "range", "multirange"]);
+
+const typeNameLastSegment = (name: string): string =>
+  name.includes("::") ? (name.split("::").at(-1) ?? name) : name;
+
+// A type *name* that is definitely NOT an object type — a builtin scalar or a
+// collection constructor. Conservative: returns false for anything not
+// positively classified as non-object, so valid object-type unions/intersections
+// are never wrongly rejected.
+const typeNameIsDefinitelyNonObject = (ctx: IRCompileContext, name: string): boolean => {
+  const last = typeNameLastSegment(name);
+  if (COLLECTION_TYPE_HEADS.has(last)) return true;
+  // Universal object roots and the free-object pseudo-type are objects.
+  if (last === "Object" || last === "BaseObject" || last === "FreeObject") return false;
+  if (BUILTIN_SCALAR_NAMES[last] !== undefined) return true;
+  // The schema type registry holds object types only; a hit means object.
+  if (getSchemaType(ctx, name)) return false;
+  return false;
+};
+
+const typeRefDisplayName = (ref: TypeRef): string =>
+  ref.nameHint ?? (ref.id.startsWith("unknown:") ? ref.id.slice("unknown:".length) : ref.id);
+
+// True when a resolved TypeRef is definitely a scalar type (not an object).
+const typeRefIsScalarType = (ctx: IRCompileContext, ref: TypeRef): boolean => {
+  if (ref.collection) return false;
+  if (ref.isScalar) return true;
+  return BUILTIN_SCALAR_NAMES[typeNameLastSegment(typeRefDisplayName(ref))] !== undefined;
+};
+
+// True when a resolved TypeRef is definitely NOT an object type
+// (scalar or collection).
+const typeRefIsNonObject = (ctx: IRCompileContext, ref: TypeRef): boolean =>
+  !!ref.collection || ref.isScalar || typeNameIsDefinitelyNonObject(ctx, typeRefDisplayName(ref));
+
+// Literal constant IR kinds carry their scalar type implicitly (the set's
+// typeref stays `std::anyscalar`), so map the kind back to the concrete name.
+const CONSTANT_KIND_SCALAR_NAME: Record<string, string> = {
+  integer_constant: "std::int64",
+  float_constant: "std::float64",
+  decimal_constant: "std::decimal",
+  bigint_constant: "std::bigint",
+  string_constant: "std::str",
+  boolean_constant: "std::bool",
+};
+
+// The scalar type name of a set, if it is definitely a scalar — else undefined.
+const scalarTypeNameOfSet = (ctx: IRCompileContext, set: Set): string | undefined => {
+  const byKind = CONSTANT_KIND_SCALAR_NAME[set.expr.kind];
+  if (byKind) return byKind;
+  if (typeRefIsScalarType(ctx, set.typeref)) return typeRefDisplayName(set.typeref);
+  return undefined;
+};
+
+// The type-operator (`|`/`&`) used anywhere in a type expression, if any.
+// Prefers `|` when both appear; used only to phrase the diagnostic.
+const typeExprOperatorSymbol = (typeExpr: TypeExpr): "|" | "&" | undefined => {
+  if (typeExpr.kind === "type_union") return "|";
+  if (typeExpr.kind === "type_intersection") {
+    return typeExprOperatorSymbol(typeExpr.left) === "|"
+      || typeExprOperatorSymbol(typeExpr.right) === "|"
+      ? "|"
+      : "&";
+  }
+  return undefined;
+};
+
+// True when a leaf operand of a type expression is definitely a non-object
+// type. A `type_of` leaf is classified by compiling its operand's static type.
+const typeExprHasNonObjectLeaf = (ctx: IRCompileContext, typeExpr: TypeExpr): boolean => {
+  if (typeExpr.kind === "type_name") return typeNameIsDefinitelyNonObject(ctx, typeExpr.name);
+  if (typeExpr.kind === "type_of") {
+    try {
+      return typeRefIsNonObject(ctx, compileFreeObjectExpr(typeExpr.expr, ctx).typeref);
+    } catch {
+      return false;
+    }
+  }
+  return typeExprHasNonObjectLeaf(ctx, typeExpr.left) || typeExprHasNonObjectLeaf(ctx, typeExpr.right);
+};
+
+// True when a type expression names `FreeObject` as one of its leaves. Free
+// objects answer `IS` only for the FreeObject pseudo-type (not for Object /
+// BaseObject), so this drives the constant-fold of `<free object> IS <types>`.
+const typeExprNamesFreeObject = (typeExpr: TypeExpr): boolean => {
+  if (typeExpr.kind === "type_name") return typeNameLastSegment(typeExpr.name) === "FreeObject";
+  if (typeExpr.kind === "type_of") return false;
+  return typeExprNamesFreeObject(typeExpr.left) || typeExprNamesFreeObject(typeExpr.right);
+};
+
 const evalTypeExprConcreteNames = (
   ctx: IRCompileContext,
   typeExpr: TypeExpr,
@@ -6777,6 +6905,10 @@ const evalTypeExprConcreteNames = (
     const qualified = qualifyTypeName(typeExpr.name, ctx.module);
     return new globalThis.Set(ctx.schema.concreteTypeNamesUnder(qualified));
   }
+  // `typeof <expr>` resolves dynamically; its concrete-name set isn't modelled
+  // here. Callers treat undefined as "unknown" and fall back to permissive
+  // behaviour, which is correct for narrowing.
+  if (typeExpr.kind === "type_of") return undefined;
   const left = evalTypeExprConcreteNames(ctx, typeExpr.left);
   const right = evalTypeExprConcreteNames(ctx, typeExpr.right);
   if (!left || !right) return undefined;
@@ -6960,6 +7092,32 @@ const validateTypeIntersectionPointer = (
     throw new AppError(
       "E_SEMANTIC",
       `it is illegal to create a type intersection that causes a ${label} to mix with other versions of ${label} which have a different cardinality`,
+      1,
+      1,
+    );
+  }
+};
+
+// The `[IS T]` type-intersection operator requires both the source it narrows
+// and the target type T to be object types. Reject a scalar source
+// (`Object.id[IS uuid]`) and a non-object target (`Object[IS str]`).
+const validateTypeIntersectionOperand = (
+  ctx: IRCompileContext,
+  baseRef: TypeRef,
+  targetRef: TypeRef,
+): void => {
+  if (typeRefIsScalarType(ctx, baseRef)) {
+    throw new AppError(
+      "E_SEMANTIC",
+      `cannot apply type intersection operator to scalar type '${typeRefDisplayName(baseRef)}': it is not an object type`,
+      1,
+      1,
+    );
+  }
+  if (typeRefIsNonObject(ctx, targetRef)) {
+    throw new AppError(
+      "E_SEMANTIC",
+      `cannot create an intersection of ${typeRefDisplayName(baseRef)}, ${typeRefDisplayName(targetRef)}`,
       1,
       1,
     );

@@ -4532,6 +4532,7 @@ const concreteTypeNamesForTypeExprAtRuntime = (
       }
       return schema.concreteTypeNamesUnder(qualified);
     }
+    if (node.kind === "type_of") return [];
     const left = new Set(visit(node.left));
     const right = new Set(visit(node.right));
     if (node.kind === "type_union") {
@@ -7128,6 +7129,7 @@ const evaluateSelectExprShapeEntry = (
       if (qualified === "default::Object" || qualified === "std::Object") return true;
       return schema.concreteTypeNamesUnder(qualified).includes(typeName);
     }
+    if (t.kind === "type_of") return false;
     if (t.kind === "type_union") {
       return concreteMatches(typeName, t.left) || concreteMatches(typeName, t.right);
     }

@@ -4135,6 +4135,15 @@ class Parser {
         break;
       }
       const castType = this.parseCastTypeName("Expected type name in cast");
+      // A composite cast target (`<Named & Owned>`, `<A | B>`): consume the
+      // type-operator operands through the structured type-expression grammar
+      // (not by splicing name strings). The leading object type is the cast
+      // target used for lowering — casting the empty set to a type intersection
+      // yields an empty set of that type (`<Named & Owned>{}` → []).
+      while (this.peek().kind === "ampersand" || this.peek().kind === "pipe") {
+        this.consume();
+        this.parseTypeAtom("type expression in cast");
+      }
       this.expect("gt", "Expected '>' after cast type");
       const expr = this.parseFreeObjectPostfixExpr();
       return { kind: "cast", castType, expr, optional: castOptional || undefined };
@@ -4583,6 +4592,7 @@ class Parser {
               expr,
               typeName,
               typeExpr,
+              intersection: true,
             };
           }
           continue;
@@ -5035,6 +5045,7 @@ class Parser {
     let depth = 0;
     let parens = 0;
     let brackets = 0;
+    let sawAssign = false;
     for (let i = this.index; i < this.tokens.length; i += 1) {
       const token = this.tokens[i];
       if (token.kind === "lbrace") {
@@ -5044,7 +5055,13 @@ class Parser {
       if (token.kind === "rbrace") {
         depth -= 1;
         if (depth === 0) {
-          break;
+          // A postfix type-check (`{ a := 1 } IS T`) makes the brace a
+          // free-object *expression* operand, not a standalone free-object
+          // select — let the expression parser consume the `IS` postfix.
+          if (this.tokens[i + 1]?.kind === "kw_is") {
+            return false;
+          }
+          return sawAssign;
         }
         continue;
       }
@@ -5070,7 +5087,8 @@ class Parser {
       // index expression), which is the only place a free-object field
       // assignment can occur.
       if (depth === 1 && parens === 0 && brackets === 0 && token.kind === "assign") {
-        return true;
+        sawAssign = true;
+        continue;
       }
     }
 
@@ -8602,6 +8620,15 @@ class Parser {
       const expr = this.parseTypeExpr(context);
       this.expect("rparen", `Expected ')' in ${context}`);
       return expr;
+    }
+    // `typeof <expr>` in type position (e.g. `x IS (typeof y | Object)`). The
+    // operand's static type stands in for a named type; resolution happens at
+    // compile time. Parse the operand as a postfix expression so paths
+    // (`typeof Issue.references`) and collection literals (`typeof [2]`) work.
+    if (this.peek().kind === "kw_typeof") {
+      this.consume();
+      const inner = this.parseFreeObjectPostfixExpr();
+      return { kind: "type_of", expr: inner };
     }
     // Future-reserved keywords (CASE, WHEN, WHERE, ON, etc.) are tokenized
     // as name-like keywords for forward-compat but are *not* valid type

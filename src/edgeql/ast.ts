@@ -9,7 +9,11 @@ export interface SourcePos {
 export type TypeExpr =
   | { kind: "type_name"; name: string }
   | { kind: "type_union"; left: TypeExpr; right: TypeExpr }
-  | { kind: "type_intersection"; left: TypeExpr; right: TypeExpr };
+  | { kind: "type_intersection"; left: TypeExpr; right: TypeExpr }
+  // `typeof <expr>` used in type position (e.g. `x IS (typeof y | Object)`).
+  // The operand's static type is resolved at compile time; whether it is an
+  // object type governs type-operator validity.
+  | { kind: "type_of"; expr: FreeObjectExpr };
 
 export const simpleTypeName = (expr: TypeExpr | undefined): string | undefined =>
   expr && expr.kind === "type_name" ? expr.name : undefined;
@@ -650,6 +654,10 @@ export type FreeObjectExpr =
       expr: FreeObjectExpr;
       typeName: string;
       typeExpr?: TypeExpr;
+      // True when produced by the `[IS T]` type-intersection operator (bracket
+      // form) rather than the bare `IS` type-check. The intersection operator
+      // requires an object-typed source, so a scalar source is a compile error.
+      intersection?: boolean;
     }
   | {
       kind: "coalesce";

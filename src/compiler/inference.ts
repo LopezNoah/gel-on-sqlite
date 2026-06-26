@@ -498,6 +498,7 @@ const makeInferenceEngine = (
       if (!typeDef) return undefined;
       return lookupCard(typeDef, fieldName);
     }
+    if (typeExpr.kind === "type_of") return undefined;
     const lc = fieldCardOnTypeExpr(typeExpr.left, fieldName);
     const rc = fieldCardOnTypeExpr(typeExpr.right, fieldName);
     if (lc === undefined || rc === undefined) return undefined;
