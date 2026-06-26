@@ -94,6 +94,11 @@ const NAME_TOKEN_KINDS: ReadonlySet<TokenKind> = new Set<TokenKind>([
   // keyword peeks), so allowing it as a name lets `.abstract` paths and
   // `FILTER .abstract` introspection queries parse.
   "kw_abstract",
+  // `required` is likewise a schema::Pointer/Link property name. In shape/path
+  // expression position it is a field name; DDL/SDL `required` modifiers are
+  // consumed via dedicated kind checks before name resolution, so this lets
+  // `Link { name, required }` / `.required` introspection queries parse.
+  "kw_required",
 ]);
 
 // Top-level admin / migration / introspection statement keywords that the
@@ -8773,22 +8778,31 @@ class Parser {
 
     while (true) {
       const token = this.peek();
-      if (token.kind === "kw_required") {
+      // `required`/`optional`/`multi`/`single` are pointer modifiers ONLY when
+      // something follows them on the pointer. When the keyword is immediately
+      // followed by a shape-element terminator (`,` `}` `:` `:=`) it is itself
+      // the pointer NAME — e.g. `schema::Link { name, required, readonly }` /
+      // `schema::Pointer { cardinality, required }` introspection shapes — so
+      // leave it for the field-name read.
+      const nextKind = this.peekNext().kind;
+      const isFieldNameNotModifier = nextKind === "comma" || nextKind === "rbrace"
+        || nextKind === "colon" || nextKind === "assign";
+      if (!isFieldNameNotModifier && token.kind === "kw_required") {
         this.consume();
         required = true;
         continue;
       }
-      if (token.kind === "kw_optional") {
+      if (!isFieldNameNotModifier && token.kind === "kw_optional") {
         this.consume();
         required = false;
         continue;
       }
-      if (token.kind === "kw_multi") {
+      if (!isFieldNameNotModifier && token.kind === "kw_multi") {
         this.consume();
         cardinality = "many";
         continue;
       }
-      if (token.kind === "kw_single") {
+      if (!isFieldNameNotModifier && token.kind === "kw_single") {
         this.consume();
         cardinality = "one";
         continue;
