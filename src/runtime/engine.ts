@@ -20,6 +20,7 @@ import { cloneTypeDef, fieldSequenceName, normalizeLinkTargetNames, qualifiedTyp
 import { resolveLinkStorageOwner } from "../schema/physical_layout.js";
 import { materializeGelSQLRows, normalizeGelSQLValue } from "./row_codec.js";
 import { dbAll, dbRun, runDbEffectSync, syncDbExec, type DbEffect } from "./db_effect.js";
+import { AsyncUnsupportedError } from "./async_query.js";
 import {
   applyCreateGlobalDDL,
   applySessionGlobal,
@@ -9144,6 +9145,66 @@ export function* updateWriteEffect(
   const updatedRows = sourceIds.length > 0 ? yield* readRowsByIdsEffect(ir.table, sourceIds) : [];
   enforceWritePolicies(updatedRows);
   return { changes: writeResult.changes };
+}
+
+// ── Decolored INSERT (scalar subset) for the async write path ────────────────
+// The full sync insert branch (query-defaults, sequences, inline links, UNLESS
+// CONFLICT, nested inserts, policies) is too interleaved / mutually-recursive to
+// route the engine through, so it stays as-is. This narrow effect reuses the
+// engine's OWN pure helpers — applyPendingInsertDefaults (literal defaults only;
+// query/function defaults throw) and buildInsertRowSql — to run a plain scalar
+// INSERT on an async backend. executeInsertAsync guards everything else out, so
+// for the accepted subset this matches the sync branch exactly.
+export function* insertScalarWriteEffect(
+  schema: SchemaSnapshot,
+  ir: InsertIR,
+  sqlArtifact: SQLArtifact,
+  subjectType: TypeDef,
+  ast: Statement,
+): DbEffect<{ changes: number; rows?: Record<string, unknown>[] }> {
+  const insertValues: Record<string, ScalarValue> = { ...ir.values };
+  applyPendingInsertDefaults(insertValues, {
+    subjectType,
+    evalSelect: () => {
+      throw new AsyncUnsupportedError("INSERT default requires a subquery — not supported on the async write path");
+    },
+    evalFunctionCall: () => {
+      throw new AsyncUnsupportedError("INSERT default requires a function call — not supported on the async write path");
+    },
+    isResolvedSourceValue: (v) =>
+      v !== undefined && v !== PENDING_INSERT_REWRITE_VALUE && v !== PENDING_INLINE_LINK_VALUE && v !== PENDING_INSERT_SQL_EXPR_VALUE,
+    isPendingRewriteValue: (v) => v === PENDING_INSERT_REWRITE_VALUE,
+  });
+
+  for (const field of subjectType.fields) {
+    if (insertValues[field.name] === PENDING_INSERT_SEQUENCE_VALUE) {
+      throw new AsyncUnsupportedError("sequence-backed INSERT is not supported on the async write path");
+    }
+  }
+
+  const normalizedEntries = Object.entries(insertValues).filter(([column, value]) => {
+    if (column === "id") {
+      return typeof value === "string" && value.length > 0;
+    }
+    if (value === PENDING_INLINE_LINK_VALUE || value === PENDING_INSERT_REWRITE_VALUE) {
+      return false;
+    }
+    return true;
+  });
+
+  const builtInsert = buildInsertRowSql(ir.table, normalizedEntries, sqlArtifact.insertColumns ?? [], ast.pos);
+  const writeResult = yield* dbRun(builtInsert.sql, ...builtInsert.params);
+  const idRows = yield* dbAll(
+    `SELECT ${quoteIdent("id")} AS ${quoteIdent("id")} FROM ${quoteIdent(ir.table)} ORDER BY rowid DESC LIMIT 1`,
+  );
+  const insertedId = typeof idRows[0]?.id === "string" ? (idRows[0].id as string) : undefined;
+  const insertMeta = ast.kind === "insert"
+    ? { __tid__: insertedId, __tname__: qualifiedTypeName(subjectType), __source_type: qualifiedTypeName(subjectType) }
+    : {};
+  return {
+    changes: writeResult.changes,
+    rows: insertedId !== undefined ? [{ id: insertedId, ...insertMeta }] : undefined,
+  };
 }
 
 const runWriteWithAccessPolicies = (

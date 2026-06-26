@@ -143,11 +143,21 @@ describe("connectD1 — D1 executor (reads + deletes)", () => {
     expect(bob).toEqual({ name: "Bob", age: 99 });
   });
 
-  it("still rejects INSERT (not yet decolored)", async () => {
+  it("executes a scalar INSERT via the decolored async write path", async () => {
+    const { db } = makeDb();
+    const client = await connectD1(makeFakeD1(db));
+
+    await client.query("insert default::Person { name := 'Zoe', age := 99 };");
+
+    const all = await client.query<{ name: string }>("select default::Person { name } order by .name;");
+    expect(all.map((r) => r.name)).toEqual(["Alice", "Bob", "Zoe"]);
+  });
+
+  it("still rejects unsupported statement kinds (FOR) on the async path", async () => {
     const { db } = makeDb();
     const client = await connectD1(makeFakeD1(db));
     await expect(
-      client.query("insert default::Person { name := 'Nope', age := 1 };"),
+      client.query("for x in {1, 2, 3} union (select x);"),
     ).rejects.toBeInstanceOf(AsyncUnsupportedError);
   });
 
