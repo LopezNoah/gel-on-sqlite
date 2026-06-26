@@ -88,6 +88,12 @@ const NAME_TOKEN_KINDS: ReadonlySet<TokenKind> = new Set<TokenKind>([
   "kw_index",
   "kw_annotation",
   "kw_global",
+  // `abstract` is an unreserved keyword that is also a schema::* property name
+  // (`schema::ObjectType.abstract`, `schema::Constraint.abstract`). It has no
+  // modifier role in expression/path position (DDL consumes it via explicit
+  // keyword peeks), so allowing it as a name lets `.abstract` paths and
+  // `FILTER .abstract` introspection queries parse.
+  "kw_abstract",
 ]);
 
 // Top-level admin / migration / introspection statement keywords that the
