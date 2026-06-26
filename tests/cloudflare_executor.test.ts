@@ -105,7 +105,7 @@ describe("connectDO — Durable Object executor (reads + writes)", () => {
   });
 });
 
-describe("connectD1 — D1 executor (read-only)", () => {
+describe("connectD1 — D1 executor (reads + deletes)", () => {
   it("runs reads and parameterized queries", async () => {
     const { db } = makeDb();
     const client = await connectD1(makeFakeD1(db));
@@ -120,11 +120,44 @@ describe("connectD1 — D1 executor (read-only)", () => {
     expect(byName).toEqual({ name: "Bob", age: 25 });
   });
 
-  it("rejects writes (Tier-1 async path is read-only)", async () => {
+  it("executes a DELETE via the decolored async write path", async () => {
+    const { db } = makeDb();
+    const client = await connectD1(makeFakeD1(db));
+
+    await client.query("delete default::Person filter .name = <str>$name;", { name: "Alice" });
+
+    const remaining = await client.query<{ name: string }>("select default::Person { name } order by .name;");
+    expect(remaining.map((r) => r.name)).toEqual(["Bob"]);
+  });
+
+  it("executes a scalar UPDATE via the decolored async write path", async () => {
+    const { db } = makeDb();
+    const client = await connectD1(makeFakeD1(db));
+
+    await client.query("update default::Person filter .name = 'Bob' set { age := 99 };");
+
+    const bob = await client.querySingle<{ name: string; age: number }>(
+      "select default::Person { name, age } filter .name = <str>$name;",
+      { name: "Bob" },
+    );
+    expect(bob).toEqual({ name: "Bob", age: 99 });
+  });
+
+  it("executes a scalar INSERT via the decolored async write path", async () => {
+    const { db } = makeDb();
+    const client = await connectD1(makeFakeD1(db));
+
+    await client.query("insert default::Person { name := 'Zoe', age := 99 };");
+
+    const all = await client.query<{ name: string }>("select default::Person { name } order by .name;");
+    expect(all.map((r) => r.name)).toEqual(["Alice", "Bob", "Zoe"]);
+  });
+
+  it("still rejects unsupported statement kinds (FOR) on the async path", async () => {
     const { db } = makeDb();
     const client = await connectD1(makeFakeD1(db));
     await expect(
-      client.query("insert default::Person { name := 'Nope', age := 1 };"),
+      client.query("for x in {1, 2, 3} union (select x);"),
     ).rejects.toBeInstanceOf(AsyncUnsupportedError);
   });
 

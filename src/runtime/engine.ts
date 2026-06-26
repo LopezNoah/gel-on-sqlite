@@ -14,11 +14,13 @@ import { classifyExecutionStrategy, selectExprNeedsRuntime } from "../compiler/e
 import { resolveStdlibFunction, type RuntimeFunctionArg } from "../stdlib/functions.js";
 import { assertTargetSqlCompatibility, type RuntimeTarget } from "./target.js";
 import type { ShapeElement as GelIRShapeElement, Set as GelIRSet, Statement as GelIRStatement, TypeRef as GelIRTypeRef } from "../ir/gel_ir.js";
-import type { InsertIR, InsertLinkDefaultIR, InsertLinkPropertyIR, IRStatement, OverlayIR, UpdateIR, UpdateLinkAssignmentIR } from "../ir/model.js";
+import type { DeleteIR, InsertIR, InsertLinkDefaultIR, InsertLinkPropertyIR, IRStatement, OverlayIR, UpdateIR, UpdateLinkAssignmentIR } from "../ir/model.js";
 import type { AccessPolicyCondition, AccessPolicyDef, ComputedLinkPropertyExpr, ConstraintDef, FieldDef, FieldDefaultExpr, FunctionDef, FunctionVolatility, LinkPropertyDef, ScalarType, ScalarValue, TypeDef } from "../types.js";
 import { cloneTypeDef, fieldSequenceName, normalizeLinkTargetNames, qualifiedTypeName, usesLinkTable } from "../schema/schema.js";
 import { resolveLinkStorageOwner } from "../schema/physical_layout.js";
 import { materializeGelSQLRows, normalizeGelSQLValue } from "./row_codec.js";
+import { dbAll, dbRun, runDbEffectSync, syncDbExec, type DbEffect } from "./db_effect.js";
+import { AsyncUnsupportedError } from "./async_query.js";
 import {
   applyCreateGlobalDDL,
   applySessionGlobal,
@@ -8063,7 +8065,7 @@ const fieldsFromShape = (shape: SelectStatement["shape"]): string[] => {
   return [...fields];
 };
 
-const typeDefForTable = (schema: SchemaSnapshot, table: string): TypeDef | undefined =>
+export const typeDefForTable = (schema: SchemaSnapshot, table: string): TypeDef | undefined =>
   schema.listTypes().find((candidate) => tableNameForType(qualifiedTypeName(candidate)) === table);
 
 const typeDefForInsertIR = (schema: SchemaSnapshot, table: string): TypeDef | undefined =>
@@ -8952,6 +8954,261 @@ const policyExprEvaluator = (
   return evaluatePolicyUsingExpr(db, schema, context, subjectType, id, policy.usingExprText);
 };
 
+// ── Decolored DELETE write core (ADR 0060 / db_effect) ──────────────────────
+// The delete path as a DbEffect: it yields its DB ops, so the SAME logic runs
+// under the synchronous driver (the engine, via runDbEffectSync below) and the
+// async D1 driver. Access-policy enforcement recursively runs the query engine
+// and can't be decolored, so it is injected as a callback — real on the sync
+// path, a no-op (guarded) on the async path.
+
+function* readTargetRowsForFilterEffect(
+  table: string,
+  filter: { column: string; value: ScalarValue } | undefined,
+): DbEffect<Record<string, unknown>[]> {
+  let sql = `SELECT * FROM ${quoteIdent(table)}`;
+  const params: ScalarValue[] = [];
+  if (filter) {
+    sql += ` WHERE ${quoteIdent(filter.column)} = ?`;
+    params.push(filter.value);
+  }
+  return yield* dbAll(sql, ...params);
+}
+
+function* applyOnTargetDeletePoliciesEffect(
+  schema: SchemaSnapshot,
+  targetType: TypeDef,
+  targetIds: string[],
+  astPos: { line: number; column: number },
+): DbEffect<void> {
+  if (targetIds.length === 0) {
+    return;
+  }
+  const targetQualifiedName = qualifiedTypeName(targetType);
+  const linkTargetsType = (link: NonNullable<TypeDef["links"]>[number], sourceModule: string): boolean => {
+    const targets = normalizeLinkTargetNames(link.targetType, sourceModule);
+    return targets.some((target) => {
+      if (target === targetQualifiedName) {
+        return true;
+      }
+      return schema.concreteTypeNamesUnder(target).includes(targetQualifiedName);
+    });
+  };
+
+  for (const sourceType of schema.listTypes()) {
+    const sourceQualifiedName = qualifiedTypeName(sourceType);
+    const sourceTable = tableNameForType(sourceQualifiedName);
+    const sourceModule = sourceType.module ?? "default";
+
+    for (const link of sourceType.links ?? []) {
+      if (!link.onTargetDelete || !linkTargetsType(link, sourceModule)) {
+        continue;
+      }
+
+      const sourceIds = new Set<string>();
+
+      if (usesLinkTable(link)) {
+        const linkTable = linkTableName(qualifiedTypeName(resolveLinkStorageOwner(schema, sourceType, link)), link);
+        const placeholders = targetIds.map(() => "?").join(", ");
+        const rows = (yield* dbAll(
+          `SELECT ${quoteIdent("source")} AS ${quoteIdent("source")} FROM ${quoteIdent(linkTable)} WHERE ${quoteIdent("target")} IN (${placeholders})`,
+          ...targetIds,
+        )) as Array<{ source?: unknown }>;
+        for (const row of rows) {
+          if (typeof row.source === "string") {
+            sourceIds.add(row.source);
+          }
+        }
+      } else {
+        const inlineColumn = `${link.name}_id`;
+        const placeholders = targetIds.map(() => "?").join(", ");
+        const rows = (yield* dbAll(
+          `SELECT ${quoteIdent("id")} AS ${quoteIdent("id")} FROM ${quoteIdent(sourceTable)} WHERE ${quoteIdent(inlineColumn)} IN (${placeholders})`,
+          ...targetIds,
+        )) as Array<{ id?: unknown }>;
+        for (const row of rows) {
+          if (typeof row.id === "string") {
+            sourceIds.add(row.id);
+          }
+        }
+      }
+
+      if (sourceIds.size === 0) {
+        continue;
+      }
+
+      if (link.onTargetDelete === "restrict" || link.onTargetDelete === "deferred_restrict") {
+        throw new AppError(
+          "E_SEMANTIC",
+          `deletion of '${targetQualifiedName}' is restricted by link '${sourceQualifiedName}.${link.name}'`,
+          astPos.line,
+          astPos.column,
+        );
+      }
+
+      if (link.onTargetDelete === "delete_source") {
+        const sourceIdList = [...sourceIds];
+        const placeholders = sourceIdList.map(() => "?").join(", ");
+        yield* dbRun(
+          `DELETE FROM ${quoteIdent(sourceTable)} WHERE ${quoteIdent("id")} IN (${placeholders})`,
+          ...sourceIdList,
+        );
+      }
+    }
+  }
+}
+
+export function* deleteWriteEffect(
+  schema: SchemaSnapshot,
+  ir: DeleteIR,
+  sqlArtifact: SQLArtifact,
+  subjectType: TypeDef,
+  astPos: { line: number; column: number },
+  enforcePolicies: (preRows: Record<string, unknown>[]) => void,
+): DbEffect<{ changes: number; rows?: Record<string, unknown>[] }> {
+  const preRows = yield* readTargetRowsForFilterEffect(ir.table, ir.filter);
+  enforcePolicies(preRows);
+  yield* applyOnTargetDeletePoliciesEffect(schema, subjectType, preRows.map((row) => String(row.id)), astPos);
+  if (/\bRETURNING\b/i.test(sqlArtifact.sql)) {
+    const rows = yield* dbAll(sqlArtifact.sql, ...sqlArtifact.params);
+    return { changes: rows.length, rows };
+  }
+  const writeResult = yield* dbRun(sqlArtifact.sql, ...sqlArtifact.params);
+  return { changes: writeResult.changes };
+}
+
+// ── Decolored UPDATE write core ─────────────────────────────────────────────
+// Same shape as the delete core: the decolorable DB ops (pre-read, the UPDATE
+// statement, the post-write read) yield; the interleaved sync-only work
+// (policies, multi-scalar props, link assignments — the last can nest INSERTs)
+// is injected as callbacks, real on the sync path and guarded out on async.
+
+function* readTargetRowsForAssignableTypesEffect(
+  schema: SchemaSnapshot,
+  typeDef: TypeDef,
+  filter: { column: string; value: ScalarValue } | undefined,
+): DbEffect<Record<string, unknown>[]> {
+  const rows: Record<string, unknown>[] = [];
+  const baseTypeName = qualifiedTypeName(typeDef);
+  for (const concreteType of schema.listConcreteTypesAssignableTo(baseTypeName)) {
+    const concreteName = qualifiedTypeName(concreteType);
+    const tableRows = yield* readTargetRowsForFilterEffect(tableNameForType(concreteName), filter);
+    for (const row of tableRows) {
+      rows.push({ ...row, __source_type: concreteName });
+    }
+  }
+  return rows;
+}
+
+function* readRowsByIdsEffect(table: string, ids: string[]): DbEffect<Record<string, unknown>[]> {
+  if (ids.length === 0) {
+    return [];
+  }
+  const placeholders = ids.map(() => "?").join(", ");
+  return yield* dbAll(
+    `SELECT * FROM ${quoteIdent(table)} WHERE ${quoteIdent("id")} IN (${placeholders})`,
+    ...ids,
+  );
+}
+
+export function* updateWriteEffect(
+  schema: SchemaSnapshot,
+  ir: UpdateIR,
+  sqlArtifact: SQLArtifact,
+  subjectType: TypeDef,
+  astPos: { line: number; column: number },
+  isUpdateAst: boolean,
+  enforceReadPolicies: (preRows: Record<string, unknown>[]) => void,
+  applyLinksAndMulti: (sourceIds: string[]) => void,
+  enforceWritePolicies: (updatedRows: Record<string, unknown>[]) => void,
+): DbEffect<{ changes: number }> {
+  const preRows = isUpdateAst
+    ? yield* readTargetRowsForAssignableTypesEffect(schema, subjectType, ir.filter)
+    : yield* readTargetRowsForFilterEffect(ir.table, ir.filter);
+  enforceReadPolicies(preRows);
+
+  // An UPDATE assigning only links degrades to a no-op self-assignment; its
+  // matched-row count is the pre-read count and the real work is in the links.
+  const baseIsNoop = /SET "id" = g0_w\."id" (?:FROM|WHERE)/.test(sqlArtifact.sql);
+  let writeResult: { changes: number };
+  if (baseIsNoop) {
+    writeResult = { changes: preRows.length };
+  } else {
+    try {
+      writeResult = yield* dbRun(sqlArtifact.sql, ...sqlArtifact.params);
+    } catch (writeErr) {
+      throw translateExclusivityWriteError(writeErr, astPos.line, astPos.column);
+    }
+  }
+
+  const sourceIds = preRows.map((row) => String(row.id));
+  if (isUpdateAst) {
+    applyLinksAndMulti(sourceIds);
+  }
+  const updatedRows = sourceIds.length > 0 ? yield* readRowsByIdsEffect(ir.table, sourceIds) : [];
+  enforceWritePolicies(updatedRows);
+  return { changes: writeResult.changes };
+}
+
+// ── Decolored INSERT (scalar subset) for the async write path ────────────────
+// The full sync insert branch (query-defaults, sequences, inline links, UNLESS
+// CONFLICT, nested inserts, policies) is too interleaved / mutually-recursive to
+// route the engine through, so it stays as-is. This narrow effect reuses the
+// engine's OWN pure helpers — applyPendingInsertDefaults (literal defaults only;
+// query/function defaults throw) and buildInsertRowSql — to run a plain scalar
+// INSERT on an async backend. executeInsertAsync guards everything else out, so
+// for the accepted subset this matches the sync branch exactly.
+export function* insertScalarWriteEffect(
+  schema: SchemaSnapshot,
+  ir: InsertIR,
+  sqlArtifact: SQLArtifact,
+  subjectType: TypeDef,
+  ast: Statement,
+): DbEffect<{ changes: number; rows?: Record<string, unknown>[] }> {
+  const insertValues: Record<string, ScalarValue> = { ...ir.values };
+  applyPendingInsertDefaults(insertValues, {
+    subjectType,
+    evalSelect: () => {
+      throw new AsyncUnsupportedError("INSERT default requires a subquery — not supported on the async write path");
+    },
+    evalFunctionCall: () => {
+      throw new AsyncUnsupportedError("INSERT default requires a function call — not supported on the async write path");
+    },
+    isResolvedSourceValue: (v) =>
+      v !== undefined && v !== PENDING_INSERT_REWRITE_VALUE && v !== PENDING_INLINE_LINK_VALUE && v !== PENDING_INSERT_SQL_EXPR_VALUE,
+    isPendingRewriteValue: (v) => v === PENDING_INSERT_REWRITE_VALUE,
+  });
+
+  for (const field of subjectType.fields) {
+    if (insertValues[field.name] === PENDING_INSERT_SEQUENCE_VALUE) {
+      throw new AsyncUnsupportedError("sequence-backed INSERT is not supported on the async write path");
+    }
+  }
+
+  const normalizedEntries = Object.entries(insertValues).filter(([column, value]) => {
+    if (column === "id") {
+      return typeof value === "string" && value.length > 0;
+    }
+    if (value === PENDING_INLINE_LINK_VALUE || value === PENDING_INSERT_REWRITE_VALUE) {
+      return false;
+    }
+    return true;
+  });
+
+  const builtInsert = buildInsertRowSql(ir.table, normalizedEntries, sqlArtifact.insertColumns ?? [], ast.pos);
+  const writeResult = yield* dbRun(builtInsert.sql, ...builtInsert.params);
+  const idRows = yield* dbAll(
+    `SELECT ${quoteIdent("id")} AS ${quoteIdent("id")} FROM ${quoteIdent(ir.table)} ORDER BY rowid DESC LIMIT 1`,
+  );
+  const insertedId = typeof idRows[0]?.id === "string" ? (idRows[0].id as string) : undefined;
+  const insertMeta = ast.kind === "insert"
+    ? { __tid__: insertedId, __tname__: qualifiedTypeName(subjectType), __source_type: qualifiedTypeName(subjectType) }
+    : {};
+  return {
+    changes: writeResult.changes,
+    rows: insertedId !== undefined ? [{ id: insertedId, ...insertMeta }] : undefined,
+  };
+}
+
 const runWriteWithAccessPolicies = (
   db: SQLiteDatabase,
   schema: SchemaSnapshot,
@@ -8988,81 +9245,6 @@ const runWriteWithAccessPolicies = (
       }
     }
   }
-
-  const applyOnTargetDeletePolicies = (targetType: TypeDef, targetIds: string[], astPos: { line: number; column: number }): void => {
-    if (targetIds.length === 0) {
-      return;
-    }
-
-    const targetQualifiedName = qualifiedTypeName(targetType);
-
-    const linkTargetsType = (link: NonNullable<TypeDef["links"]>[number], sourceModule: string): boolean => {
-      const targets = normalizeLinkTargetNames(link.targetType, sourceModule);
-      return targets.some((target) => {
-        if (target === targetQualifiedName) {
-          return true;
-        }
-        return schema.concreteTypeNamesUnder(target).includes(targetQualifiedName);
-      });
-    };
-
-    for (const sourceType of schema.listTypes()) {
-      const sourceQualifiedName = qualifiedTypeName(sourceType);
-      const sourceTable = tableNameForType(sourceQualifiedName);
-      const sourceModule = sourceType.module ?? "default";
-
-      for (const link of sourceType.links ?? []) {
-        if (!link.onTargetDelete || !linkTargetsType(link, sourceModule)) {
-          continue;
-        }
-
-        const sourceIds = new Set<string>();
-
-        if (usesLinkTable(link)) {
-          const linkTable = linkTableName(qualifiedTypeName(resolveLinkStorageOwner(schema, sourceType, link)), link);
-          const placeholders = targetIds.map(() => "?").join(", ");
-          const rows = db
-            .prepare(`SELECT ${quoteIdent("source")} AS ${quoteIdent("source")} FROM ${quoteIdent(linkTable)} WHERE ${quoteIdent("target")} IN (${placeholders})`)
-            .all(...targetIds) as Array<{ source?: unknown }>;
-          for (const row of rows) {
-            if (typeof row.source === "string") {
-              sourceIds.add(row.source);
-            }
-          }
-        } else {
-          const inlineColumn = `${link.name}_id`;
-          const placeholders = targetIds.map(() => "?").join(", ");
-          const rows = db
-            .prepare(`SELECT ${quoteIdent("id")} AS ${quoteIdent("id")} FROM ${quoteIdent(sourceTable)} WHERE ${quoteIdent(inlineColumn)} IN (${placeholders})`)
-            .all(...targetIds) as Array<{ id?: unknown }>;
-          for (const row of rows) {
-            if (typeof row.id === "string") {
-              sourceIds.add(row.id);
-            }
-          }
-        }
-
-        if (sourceIds.size === 0) {
-          continue;
-        }
-
-        if (link.onTargetDelete === "restrict" || link.onTargetDelete === "deferred_restrict") {
-          throw new AppError(
-            "E_SEMANTIC",
-            `deletion of '${targetQualifiedName}' is restricted by link '${sourceQualifiedName}.${link.name}'`,
-            astPos.line,
-            astPos.column,
-          );
-        }
-
-        if (link.onTargetDelete === "delete_source") {
-          const sourceIdList = [...sourceIds];
-          const placeholders = sourceIdList.map(() => "?").join(", ");
-          db.prepare(`DELETE FROM ${quoteIdent(sourceTable)} WHERE ${quoteIdent("id")} IN (${placeholders})`).run(...sourceIdList);
-        }
-      }
-    }
-  };
 
   // Nest safely inside a client-managed transaction (Client.transaction):
   // SQLite forbids BEGIN-in-BEGIN, so fall back to a savepoint when a
@@ -9448,65 +9630,50 @@ const runWriteWithAccessPolicies = (
     }
 
     if (ir.kind === "update") {
-      const preRows = ast.kind === "update"
-        ? readTargetRowsForAssignableTypes(db, schema, subjectType, ir.filter)
-        : readTargetRowsForFilter(db, ir.table, ir.filter);
-      enforceUpdateReadPolicies(subjectType, preRows, context, ast.pos.line, ast.pos.column, policyExprEvaluator(db, schema, context, subjectType));
-      // When an UPDATE assigns only links (or `SET {}`), the column-level base
-      // statement degrades to a no-op self-assignment (`SET "id" = g0_w."id"`).
-      // Skip running it — the real work happens in applyUpdateLinkAssignments,
-      // and the matched-row count is just the pre-read row count.
-      const baseIsNoop = /SET "id" = g0_w\."id" (?:FROM|WHERE)/.test(sqlArtifact.sql);
-      let writeResult: { changes: number };
-      if (baseIsNoop) {
-        writeResult = { changes: preRows.length };
-      } else {
-        try {
-          writeResult = db.prepare(sqlArtifact.sql).run(...sqlArtifact.params);
-        } catch (writeErr) {
-          // An UPDATE that drives a value into an existing exclusive value trips
-          // a UNIQUE failure (same-table index or shared cross-type table).
-          // Translate it to EdgeQL's exclusivity wording before it propagates.
-          throw translateExclusivityWriteError(writeErr, ast.pos.line, ast.pos.column);
-        }
-      }
-      if (ast.kind === "update") {
-        applyUpdateMultiScalarProps(
-          db,
+      // One update core (updateWriteEffect), driven synchronously here and
+      // asynchronously on D1. Multi-scalar / link assignments and policy
+      // enforcement run db-direct as injected callbacks (sync only).
+      const result = runDbEffectSync(
+        updateWriteEffect(
           schema,
+          ir,
+          sqlArtifact,
           subjectType,
-          ir,
-          ast,
-          preRows.map((row) => String(row.id)),
           ast.pos,
-        );
-        applyUpdateLinkAssignments(
-          db,
-          schema,
-          ir,
-          ast,
-          preRows.map((row) => String(row.id)),
-          context,
-        );
-      }
-      const updatedRows = preRows.length > 0 ? readRowsByIds(db, ir.table, preRows.map((row) => String(row.id))) : [];
-      enforceUpdateWritePolicies(subjectType, updatedRows, context, ast.pos.line, ast.pos.column, policyExprEvaluator(db, schema, context, subjectType));
+          ast.kind === "update",
+          (preRows) =>
+            enforceUpdateReadPolicies(subjectType, preRows, context, ast.pos.line, ast.pos.column, policyExprEvaluator(db, schema, context, subjectType)),
+          (sourceIds) => {
+            applyUpdateMultiScalarProps(db, schema, subjectType, ir, ast as UpdateStatement, sourceIds, ast.pos);
+            applyUpdateLinkAssignments(db, schema, ir, ast as UpdateStatement, sourceIds, context);
+          },
+          (updatedRows) =>
+            enforceUpdateWritePolicies(subjectType, updatedRows, context, ast.pos.line, ast.pos.column, policyExprEvaluator(db, schema, context, subjectType)),
+        ),
+        syncDbExec(db),
+      );
       db.prepare(dmlUsesSavepoint ? "RELEASE gel_dml" : "COMMIT").run();
-      return { changes: writeResult.changes };
+      return result;
     }
 
     if (ir.kind === "delete") {
-      const preRows = readTargetRowsForFilter(db, ir.table, ir.filter);
-      enforceDeletePolicies(subjectType, preRows, context, ast.pos.line, ast.pos.column, policyExprEvaluator(db, schema, context, subjectType));
-      applyOnTargetDeletePolicies(subjectType, preRows.map((row) => String(row.id)), ast.pos);
-      if (/\bRETURNING\b/i.test(sqlArtifact.sql)) {
-        const rows = db.prepare(sqlArtifact.sql).all(...sqlArtifact.params) as Record<string, unknown>[];
-        db.prepare(dmlUsesSavepoint ? "RELEASE gel_dml" : "COMMIT").run();
-        return { changes: rows.length, rows };
-      }
-      const writeResult = db.prepare(sqlArtifact.sql).run(...sqlArtifact.params);
+      // One delete core (deleteWriteEffect), driven synchronously here and
+      // asynchronously on D1. The transaction stays the engine's concern.
+      const result = runDbEffectSync(
+        deleteWriteEffect(schema, ir, sqlArtifact, subjectType, ast.pos, (preRows) =>
+          enforceDeletePolicies(
+            subjectType,
+            preRows,
+            context,
+            ast.pos.line,
+            ast.pos.column,
+            policyExprEvaluator(db, schema, context, subjectType),
+          ),
+        ),
+        syncDbExec(db),
+      );
       db.prepare(dmlUsesSavepoint ? "RELEASE gel_dml" : "COMMIT").run();
-      return { changes: writeResult.changes };
+      return result;
     }
 
     const writeResult = db.prepare(sqlArtifact.sql).run(...sqlArtifact.params);
