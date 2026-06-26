@@ -19,10 +19,15 @@ import type { ScalarTypeDeclaration } from "./scalar.js";
 import type { SchemaSnapshot } from "./schema.js";
 import { qualifiedTypeName } from "./schema.js";
 import { tableNameForType } from "../codegen/sql.js";
+import { STDLIB_FUNCTIONS } from "../stdlib/registry.js";
 
 const typeFields = (): FieldDef[] => [
   { name: "name", type: "str", required: true },
   { name: "from_alias", type: "bool" },
+  // Gel's canonical field is `abstract` (schema::SubclassableObject); `is_abstract`
+  // is its backwards-compat alias. We expose both so introspection queries that
+  // use either name resolve. See edb/lib/schema.edgeql.
+  { name: "abstract", type: "bool" },
   { name: "is_abstract", type: "bool" },
 ];
 
@@ -52,6 +57,11 @@ export const schemaIntrospectionTypeDefs = (): TypeDef[] => [
     fields: typeFields(),
   },
   {
+    name: "Module",
+    module: "schema",
+    fields: [{ name: "name", type: "str", required: true }],
+  },
+  {
     name: "Annotation",
     module: "schema",
     fields: [{ name: "name", type: "str", required: true }],
@@ -67,6 +77,14 @@ export const schemaIntrospectionTypeDefs = (): TypeDef[] => [
     fields: [
       { name: "name", type: "str", required: true },
       { name: "delegated", type: "bool" },
+      // From schema::SubclassableObject / schema::Constraint in schema.edgeql.
+      // `abstract` distinguishes a constraint *definition* (std::exclusive) from
+      // a concrete *application* on a property.
+      { name: "abstract", type: "bool" },
+      { name: "is_abstract", type: "bool" },
+      { name: "expr", type: "str" },
+      { name: "subjectexpr", type: "str" },
+      { name: "errmessage", type: "str" },
     ],
     links: [
       annotationLink(),
@@ -126,7 +144,12 @@ export const schemaIntrospectionTypeDefs = (): TypeDef[] => [
   {
     name: "ObjectType",
     module: "schema",
-    fields: typeFields(),
+    fields: [
+      ...typeFields(),
+      // EXISTS .union_of OR EXISTS .intersection_of — false for ordinary
+      // user/std types; true only for synthesized union/intersection types.
+      { name: "compound_type", type: "bool" },
+    ],
     links: [
       annotationLink(),
       { name: "properties", targetType: "schema::Property", multi: true },
@@ -287,6 +310,7 @@ export const populateSchemaIntrospection = (
       id,
       name,
       from_alias: fromAlias ? 1 : 0,
+      abstract: isAbstract ? 1 : 0,
       is_abstract: isAbstract ? 1 : 0,
     });
     return id;
@@ -362,6 +386,132 @@ export const populateSchemaIntrospection = (
   }
 
   populateTupleAliases(insertRow, insertLink, ensureTypeRow, runtimeExprAliases);
+
+  populateModules(insertRow, schema);
+  populateStdScalarTypes(db, insertRow, ensureTypeRow);
+  populateStdlibFunctions(db, insertRow);
+  populateAbstractConstraints(insertRow);
+};
+
+// Names already written to a `schema__*` table this round — used so the std-lib
+// populators below don't double-insert a row a user definition already covers.
+const existingNames = (db: IntrospectionDB, table: string): Set<string> => {
+  const rows = db.prepare(`SELECT name FROM ${quoteIdent(table)}`).all() as Array<{ name: string }>;
+  return new Set(rows.map((row) => row.name));
+};
+
+// The standard scalar types every Gel branch defines (edb/lib/std + cal).
+// Concrete first, then the abstract "any*" scalars (schema::ScalarType rows
+// with abstract := true). Pseudo-types (anytype/anytuple/anyobject) are NOT
+// here — they are schema::PseudoType, populated separately.
+const STD_CONCRETE_SCALARS: readonly string[] = [
+  "std::bool", "std::bytes", "std::str", "std::int16", "std::int32", "std::int64",
+  "std::float32", "std::float64", "std::bigint", "std::decimal", "std::uuid", "std::json",
+  "std::datetime", "std::duration",
+  "cal::local_date", "cal::local_time", "cal::local_datetime",
+  "cal::relative_duration", "cal::date_duration",
+];
+const STD_ABSTRACT_SCALARS: readonly string[] = [
+  "std::anyscalar", "std::anyenum", "std::anyint", "std::anyfloat", "std::anyreal",
+  "std::anynumeric", "std::anydiscrete", "std::anycontiguous", "std::anypoint",
+];
+
+const populateStdScalarTypes = (db: IntrospectionDB, insertRow: InsertRow, ensureTypeRow: EnsureTypeRow): void => {
+  const present = existingNames(db, "schema__scalartype");
+  const write = (name: string, isAbstract: boolean): void => {
+    if (present.has(name)) return;
+    present.add(name);
+    insertRow("schema__scalartype", {
+      id: scopedIdFor("schema::ScalarType", name),
+      name,
+      from_alias: 0,
+      abstract: isAbstract ? 1 : 0,
+      is_abstract: isAbstract ? 1 : 0,
+      default: null,
+    });
+    // Mirror into schema::Type so `count(ScalarType) < count(Type)` and
+    // ancestor/target lookups resolve the same row.
+    ensureTypeRow(name, false, isAbstract);
+  };
+  for (const name of STD_CONCRETE_SCALARS) write(name, false);
+  for (const name of STD_ABSTRACT_SCALARS) write(name, true);
+};
+
+const VOLATILITY_LABEL: Record<string, string> = {
+  immutable: "Immutable",
+  stable: "Stable",
+  volatile: "Volatile",
+};
+
+// One schema::Function row per stdlib function the engine actually implements
+// (the single source of truth is the STDLIB_FUNCTIONS registry). Overloads
+// collapse to one row by name — enough for `SELECT Function FILTER .name = …`
+// and the `count(Function) > 0` introspection goldens.
+const populateStdlibFunctions = (db: IntrospectionDB, insertRow: InsertRow): void => {
+  const present = existingNames(db, "schema__function");
+  for (const entry of STDLIB_FUNCTIONS) {
+    if (present.has(entry.name)) continue;
+    present.add(entry.name);
+    insertRow("schema__function", {
+      id: scopedIdFor("schema::Function", entry.name),
+      name: entry.name,
+      volatility: VOLATILITY_LABEL[entry.meta?.volatility ?? "immutable"] ?? "Immutable",
+      return_typemod: entry.meta?.returnOptional ? "OptionalType" : "SingletonType",
+      return_type_id: null,
+    });
+  }
+};
+
+// The abstract constraint *definitions* from edb/lib/std/50-constraints.edgeql.
+// These coexist with concrete applications of the same name (abstract := false)
+// that populateConstraint writes; `FILTER .abstract` separates them.
+const STD_ABSTRACT_CONSTRAINTS: ReadonlyArray<{ name: string; errmessage: string }> = [
+  { name: "std::constraint", errmessage: "invalid {__subject__}" },
+  { name: "std::expression", errmessage: "invalid {__subject__}" },
+  { name: "std::exclusive", errmessage: "{__subject__} violates exclusivity constraint" },
+  { name: "std::one_of", errmessage: "{__subject__} must be one of: {vals}." },
+  { name: "std::max_value", errmessage: "Maximum allowed value for {__subject__} is {max}." },
+  { name: "std::min_value", errmessage: "Minimum allowed value for {__subject__} is {min}." },
+  { name: "std::max_ex_value", errmessage: "{__subject__} must be less than {max}." },
+  { name: "std::min_ex_value", errmessage: "{__subject__} must be greater than {min}." },
+  { name: "std::len_value", errmessage: "invalid {__subject__}" },
+  { name: "std::min_len_value", errmessage: "{__subject__} must be at least {min} characters." },
+  { name: "std::max_len_value", errmessage: "{__subject__} must be no longer than {max} characters." },
+  { name: "std::regexp", errmessage: "invalid {__subject__}" },
+];
+
+const populateAbstractConstraints = (insertRow: InsertRow): void => {
+  for (const constraint of STD_ABSTRACT_CONSTRAINTS) {
+    insertRow("schema__constraint", {
+      id: scopedIdFor("schema::Constraint", `abstract:${constraint.name}`),
+      name: constraint.name,
+      delegated: 0,
+      abstract: 1,
+      is_abstract: 1,
+      expr: null,
+      subjectexpr: null,
+      errmessage: constraint.errmessage,
+    });
+  }
+};
+
+// The standard-library modules a freshly-initialized Gel branch always carries.
+// User modules are merged in from the live schema. Mirrors the modules defined
+// across edb/lib/*.edgeql so `SELECT schema::Module` and `'std' IN
+// schema::Module.name` behave like real Gel.
+const STD_MODULES: readonly string[] = [
+  "std", "schema", "sys", "cfg", "math", "cal", "fts", "enc", "net", "pg", "default",
+];
+
+const populateModules = (insertRow: InsertRow, schema: SchemaSnapshot): void => {
+  const modules = new Set<string>(STD_MODULES);
+  for (const typeDef of schema.listTypes()) modules.add(typeDef.module ?? "default");
+  for (const scalarType of schema.listScalarTypes()) modules.add(scalarType.module);
+  for (const fn of schema.listFunctions()) modules.add(fn.module);
+  for (const alias of schema.listAliases()) modules.add(alias.module);
+  for (const name of [...modules].sort()) {
+    insertRow("schema__module", { id: scopedIdFor("schema::Module", name), name });
+  }
 };
 
 type InsertRow = (table: string, row: Record<string, SQLParam>) => void;
@@ -384,7 +534,9 @@ const populateObjectType = (
     id,
     name,
     from_alias: 0,
+    abstract: typeDef.abstract ? 1 : 0,
     is_abstract: typeDef.abstract ? 1 : 0,
+    compound_type: 0,
   });
   linkAnnotations("schema::ObjectType", id, typeDef.annotations);
 
@@ -556,6 +708,13 @@ const populateConstraint = (
     id,
     name: data.constraint.name,
     delegated: data.abstractOwner && data.constraint.delegated ? 1 : 0,
+    // A constraint *application* on a property — never abstract; the abstract
+    // definitions (std::exclusive, …) are written by populateAbstractConstraints.
+    abstract: 0,
+    is_abstract: 0,
+    expr: null,
+    subjectexpr: null,
+    errmessage: null,
   });
   linkAnnotations("schema::Constraint", id, data.constraint.annotations);
   for (const [index, param] of (data.constraint.params ?? []).entries()) {
@@ -582,6 +741,7 @@ const populateScalarType = (
     id,
     name,
     from_alias: 0,
+    abstract: 0,
     is_abstract: 0,
     default: null,
   });
@@ -650,6 +810,7 @@ const populateTupleAliases = (
       id,
       name,
       from_alias: 1,
+      abstract: 0,
       is_abstract: 0,
     });
     const elementExprs = tupleMatch[1]
