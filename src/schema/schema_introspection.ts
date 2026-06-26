@@ -243,6 +243,30 @@ export const schemaIntrospectionTypeDefs = (): TypeDef[] => [
       },
     ],
   },
+  {
+    // schema::Operator — link-free (params/return_type links to schema::Type
+    // would trip the abstract-link union collision, like Array.element_type).
+    name: "Operator",
+    module: "schema",
+    fields: [
+      { name: "name", type: "str", required: true },
+      { name: "volatility", type: "str" },
+      { name: "operator_kind", type: "str" },
+      { name: "abstract", type: "bool" },
+      { name: "is_abstract", type: "bool" },
+    ],
+  },
+  {
+    // schema::Cast — link-free (from_type/to_type are schema::Type links).
+    name: "Cast",
+    module: "schema",
+    fields: [
+      { name: "name", type: "str" },
+      { name: "volatility", type: "str" },
+      { name: "allow_implicit", type: "bool" },
+      { name: "allow_assignment", type: "bool" },
+    ],
+  },
 ];
 
 // SQLite database surface needed for populating introspection rows. Kept
@@ -418,6 +442,69 @@ export const populateSchemaIntrospection = (
   populateStdScalarTypes(db, insertRow, ensureTypeRow);
   populateStdlibFunctions(db, insertRow);
   populateAbstractConstraints(insertRow);
+  populateOperators(insertRow);
+  populateCasts(insertRow);
+};
+
+// The standard infix/prefix/postfix/ternary operators (edb/lib/std). Immutable.
+// One row per operator name (overloads collapse) — enough for count(Operator)>0
+// and `SELECT Operator FILTER .name = 'std::+'`.
+const STD_OPERATORS: readonly string[] = [
+  "std::!=", "std::%", "std::*", "std::+", "std::++", "std::-", "std::/", "std:://",
+  "std::<", "std::<=", "std::=", "std::>", "std::>=", "std::?!=", "std::?=", "std::??",
+  "std::AND", "std::DISTINCT", "std::EXCEPT", "std::EXISTS", "std::IF", "std::ILIKE",
+  "std::IN", "std::INTERSECT", "std::LIKE", "std::NOT", "std::NOT ILIKE", "std::NOT IN",
+  "std::NOT LIKE", "std::OR", "std::UNION", "std::[]", "std::^",
+];
+const PREFIX_OPERATORS = new Set(["std::NOT", "std::EXISTS", "std::DISTINCT"]);
+const TERNARY_OPERATORS = new Set(["std::IF"]);
+
+const populateOperators = (insertRow: InsertRow): void => {
+  for (const name of STD_OPERATORS) {
+    insertRow("schema__operator", {
+      id: scopedIdFor("schema::Operator", name),
+      name,
+      volatility: "Immutable",
+      operator_kind: PREFIX_OPERATORS.has(name) ? "Prefix" : TERNARY_OPERATORS.has(name) ? "Ternary" : "Infix",
+      abstract: 0,
+      is_abstract: 0,
+    });
+  }
+};
+
+// A representative set of the standard casts (edb/lib/std). from_type/to_type
+// are deferred (schema::Type links collide), so these carry the cast's
+// from->to in `name` plus its implicit/assignment flags — enough for
+// count(Cast)>0 and the volatility/allow_implicit field goldens.
+const STD_CASTS: ReadonlyArray<{ from: string; to: string; implicit: boolean }> = [
+  { from: "std::int16", to: "std::int32", implicit: true },
+  { from: "std::int32", to: "std::int64", implicit: true },
+  { from: "std::int16", to: "std::int64", implicit: true },
+  { from: "std::int64", to: "std::float64", implicit: true },
+  { from: "std::int32", to: "std::float64", implicit: true },
+  { from: "std::float32", to: "std::float64", implicit: true },
+  { from: "std::int64", to: "std::bigint", implicit: true },
+  { from: "std::int64", to: "std::decimal", implicit: true },
+  { from: "std::bigint", to: "std::decimal", implicit: true },
+  { from: "std::str", to: "std::bool", implicit: false },
+  { from: "std::bool", to: "std::str", implicit: false },
+  { from: "std::str", to: "std::int64", implicit: false },
+  { from: "std::int64", to: "std::str", implicit: false },
+  { from: "std::datetime", to: "std::str", implicit: false },
+  { from: "std::uuid", to: "std::str", implicit: false },
+];
+
+const populateCasts = (insertRow: InsertRow): void => {
+  for (const cast of STD_CASTS) {
+    const name = `${cast.from}->${cast.to}`;
+    insertRow("schema__cast", {
+      id: scopedIdFor("schema::Cast", name),
+      name,
+      volatility: "Immutable",
+      allow_implicit: cast.implicit ? 1 : 0,
+      allow_assignment: cast.implicit ? 1 : 0,
+    });
+  }
 };
 
 // schema::PseudoType — anytype/anytuple/anyobject. Always present in Gel.
