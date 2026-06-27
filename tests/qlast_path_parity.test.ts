@@ -57,6 +57,7 @@ const PATH_KINDS = new Set([
   "path_steps",
   "binding_ref",
   "backlink_path",
+  "for_expr",
   "select",
 ]);
 
@@ -93,6 +94,20 @@ const pathSig = (set: IRSet): string => {
   return chain.join(" / ");
 };
 
+// Run `fn` with GEL_QLAST_PATHS forced to `val` ("0" = legacy, "1" = routed),
+// restoring the prior value. Routing is now ON by default, so obtaining the
+// legacy result requires explicitly forcing "0".
+const withRouting = <T>(val: string, fn: () => T): T => {
+  const prev = process.env.GEL_QLAST_PATHS;
+  process.env.GEL_QLAST_PATHS = val;
+  try {
+    return fn();
+  } finally {
+    if (prev === undefined) delete process.env.GEL_QLAST_PATHS;
+    else process.env.GEL_QLAST_PATHS = prev;
+  }
+};
+
 type Status = "match" | "diverge" | "adapter-null" | "no-path-expr" | `ported-threw:${string}` | "baseline-threw";
 
 const parityStatus = (query: string): Status => {
@@ -113,7 +128,7 @@ const parityStatus = (query: string): Status => {
 
   let baseline: IRSet;
   try {
-    baseline = compileFreeObjectExpr(pathExpr, makeCtx());
+    baseline = withRouting("0", () => compileFreeObjectExpr(pathExpr, makeCtx()));
   } catch {
     return "baseline-threw";
   }
@@ -138,11 +153,11 @@ const CORPUS: { query: string; expect: Status }[] = [
   { query: "SELECT Film.title", expect: "match" },
   { query: "SELECT Movie[IS Film]", expect: "match" },
   { query: "SELECT Movie[IS Film].title", expect: "match" },
-  { query: "SELECT Review.<reviews[IS Movie]", expect: "match" },
+  { query: "SELECT Review.<reviews[IS Movie]", expect: "match" }, // backlink (for_expr) — now ported
+  { query: "SELECT Review.<reviews[IS Movie].title", expect: "match" }, // backlink + further access
   { query: "SELECT Movie.reviews@rating", expect: "match" }, // link property — now ported
   // ── deferred frontier (bridge returns null; live compiler still handles) ──
   { query: "SELECT Movie { title }", expect: "adapter-null" }, // shaped select, not a pure path
-  { query: "SELECT Review.<reviews[IS Movie].title", expect: "adapter-null" }, // backlink+access (parsed as for_expr)
 ];
 
 describe("qlast path parity: bridge + compilePathQlast vs live compiler", () => {
@@ -162,6 +177,7 @@ describe("gate GEL_QLAST_PATHS=1 routes paths and preserves behaviour", () => {
     "SELECT Movie.reviews.body",
     "SELECT Movie[IS Film].title",
     "SELECT Movie.reviews@rating",
+    "SELECT Review.<reviews[IS Movie].title",
   ];
   for (const query of ROUTED) {
     it(`routed == legacy: ${query}`, () => {
@@ -170,16 +186,9 @@ describe("gate GEL_QLAST_PATHS=1 routes paths and preserves behaviour", () => {
       const pathExpr = findPathExpr(stmt);
       expect(pathExpr).toBeTruthy();
 
-      const legacy = compileFreeObjectExpr(pathExpr!, makeCtx());
-      const prev = process.env.GEL_QLAST_PATHS;
-      process.env.GEL_QLAST_PATHS = "1";
-      try {
-        const routed = compileFreeObjectExpr(pathExpr!, makeCtx());
-        expect(pathSig(routed)).toBe(pathSig(legacy));
-      } finally {
-        if (prev === undefined) delete process.env.GEL_QLAST_PATHS;
-        else process.env.GEL_QLAST_PATHS = prev;
-      }
+      const legacy = withRouting("0", () => compileFreeObjectExpr(pathExpr!, makeCtx()));
+      const routed = withRouting("1", () => compileFreeObjectExpr(pathExpr!, makeCtx()));
+      expect(pathSig(routed)).toBe(pathSig(legacy));
     });
   }
 });

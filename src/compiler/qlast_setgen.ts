@@ -34,6 +34,12 @@ export interface QlastPathDeps {
   setFromTypeRoot: (typeref: TypeRef) => IRSet;
   resolveTypeRef: (ctx: IRCompileContext, name: string) => TypeRef;
   resolvePointerRef: (ctx: IRCompileContext, source: TypeRef, field: string) => PointerRef | undefined;
+  resolveBacklinkPointerRef: (
+    ctx: IRCompileContext,
+    target: TypeRef,
+    linkName: string,
+    sourceTypeName?: string,
+  ) => PointerRef | undefined;
   extendPathSetDirectional: (source: IRSet, ptrref: PointerRef, direction: "outbound" | "inbound") => IRSet;
   extendPathSet: (source: IRSet, ptrref: PointerRef) => IRSet;
   synthesizeTypePointerSet: (source: IRSet) => IRSet;
@@ -137,7 +143,12 @@ export const compilePathQlast = (expr: QlPath, ctx: IRCompileContext, deps: Qlas
     const ref = first as QlObjectRef;
     if (!deps.resolveBinding(ctx, ref.name)) {
       const enumInfo = deps.lookupEnumScalar(ctx, ref.name);
-      if (enumInfo) {
+      // Only OUTBOUND member access (`Enum.MEMBER`) is an enum literal. A
+      // backlink (`Enum.<x`, an inbound Ptr) is not a member — defer it so the
+      // legacy compiler raises "enum types do not support backlink".
+      const firstPtr = steps.slice(1).find((step) => kindOf(step) === "Ptr") as QlPtr | undefined;
+      const isBacklink = firstPtr?.direction === "<" || firstPtr?.direction === "inbound";
+      if (enumInfo && !isBacklink) {
         const ptrSteps = steps.slice(1).filter((step) => kindOf(step) === "Ptr") as QlPtr[];
         if (ptrSteps.length === 0) {
           deps.failSemantic(`enum path expression lacks an enum member name, as in '${ref.name}.${enumInfo.members[0]}'`);
@@ -174,8 +185,19 @@ export const compilePathQlast = (expr: QlPath, ctx: IRCompileContext, deps: Qlas
       if (i > 0) throw new Error("unexpected ObjectRef as a non-first path item");
       const ref = step as QlObjectRef;
       const bound = !ref.module ? deps.resolveBinding(ctx, ref.name) : undefined;
-      // DEFERRED (setgen.py:405-447): schema/inline views + maybe_materialize.
-      pathTip = bound ?? deps.setFromTypeRoot(deps.resolveTypeRef(ctx, qualifyObjectRef(ref)));
+      if (bound) {
+        // A binding whose value carries a query shape (`WITH U := SELECT X {…}`)
+        // may expose shape-computed pointers (`U.deck.a` where `a := …`) that
+        // are not in the schema; the legacy compiler resolves those specially.
+        // Defer such binding-rooted paths rather than mis-resolve them.
+        if (bound.expr.kind === "select_expr" || (bound.shape?.length ?? 0) > 0) {
+          throw deferred(`binding '${ref.name}' carries a query shape — legacy handles shape-computed access`);
+        }
+        pathTip = bound;
+      } else {
+        // DEFERRED (setgen.py:405-447): schema/inline views + maybe_materialize.
+        pathTip = deps.setFromTypeRoot(deps.resolveTypeRef(ctx, qualifyObjectRef(ref)));
+      }
       continue;
     }
 
@@ -205,6 +227,29 @@ export const compilePathQlast = (expr: QlPath, ctx: IRCompileContext, deps: Qlas
         continue;
       }
 
+      // Backlink (`.<link[IS T]`): an inbound traversal. The source type filter
+      // comes from the FOLLOWING `[IS T]` step (the bridge emits Ptr + a
+      // TypeIntersection); resolve via the backlink resolver and traverse
+      // inbound — matching the live backlink_path / for_expr compilation.
+      const direction = ptr.direction === "<" || ptr.direction === "inbound" ? "inbound" : "outbound";
+      if (direction === "inbound") {
+        const next = steps[i + 1];
+        const sourceType = next && kindOf(next) === "TypeIntersection"
+          ? typeExprName((next as QlTypeIntersection).type)
+          : undefined;
+        // Only the TYPED backlink off an OBJECT source matches the live simple
+        // backlink branch (for_expr handler). Untyped backlinks carry BaseObject
+        // semantics, and scalar/enum sources raise a dedicated error — both have
+        // special legacy handling, so defer them to the legacy compiler.
+        if (!sourceType || pathTip.typeref.isScalar) {
+          throw deferred(`backlink '<${ptr.name}' (untyped or scalar source) — legacy handles`);
+        }
+        const backlinkRef = deps.resolveBacklinkPointerRef(ctx, pathTip.typeref, ptr.name, sourceType);
+        if (!backlinkRef) throw deferred(`unresolved backlink '<${ptr.name}'`);
+        pathTip = deps.extendPathSetDirectional(pathTip, backlinkRef, "inbound");
+        continue;
+      }
+
       // A real property/link reference on a primitive is invalid.
       if (pathTip.typeref.isScalar && ptr.name !== "id" && ptr.name !== "__type__") {
         deps.failSemantic(`invalid property reference on an expression of primitive type`);
@@ -221,7 +266,6 @@ export const compilePathQlast = (expr: QlPath, ctx: IRCompileContext, deps: Qlas
         // (ast_to_ir compilePathSteps). Legacy handles these via fallback.
         throw deferred(`unresolved pointer '${ptr.name}' on '${pathTip.typeref.nameHint}'`);
       }
-      const direction = ptr.direction === "<" || ptr.direction === "inbound" ? "inbound" : "outbound";
       pathTip = deps.extendPathSetDirectional(
         pathTip,
         ptrref,

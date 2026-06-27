@@ -145,6 +145,29 @@ export const astPathExprToQlast = (expr: FreeObjectExpr): Path | null => {
     case "binding_ref":
       return mkPath([mkObjectRef(expr.name)], false);
 
+    case "for_expr": {
+      // Backlink desugaring: the parser models `X.<link[IS T]` as a FOR over a
+      // `backlink_path`. Convert to a Path with an inbound Ptr (+ `[IS T]`).
+      // Only the plain backlink form (no FILTER/ORDER BY/LIMIT/OFFSET); a real
+      // FOR is not a path and returns null (caller uses the legacy compiler).
+      if (
+        expr.variable === "__gel_backlink_item__"
+        && expr.body.kind === "backlink_path"
+        && !expr.filter
+        && !expr.orderBy
+        && expr.limit === undefined
+        && expr.offset === undefined
+      ) {
+        const base = astPathExprToQlast(expr.iterator);
+        if (!base) return null;
+        const backlink = expr.body;
+        const steps: QlPathStep[] = [...base.steps, mkPtr(backlink.link, "inbound")];
+        if (backlink.sourceType) steps.push(mkTypeIntersection(qlTypeName(backlink.sourceType)));
+        return mkPath(steps, base.partial);
+      }
+      return null;
+    }
+
     default:
       return null;
   }

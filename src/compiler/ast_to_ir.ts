@@ -3586,10 +3586,10 @@ const compileEmbeddedGroup = (
 // `compilePathQlast`. Behaviour-neutral.
 export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompileContext): Set => {
   // Gate: route path-shaped expressions through the qlast-consuming path
-  // compiler (`compilePathQlast`). OFF by default so this is behaviour-neutral;
-  // enable with GEL_QLAST_PATHS=1. On a not-yet-ported case compilePathQlast
-  // throws QLAST_DEFERRED and we fall through to the legacy compiler below; the
-  // differential parity harness verifies routed == legacy. See ADR-pending.
+  // compiler (`compilePathQlast`). ON by default (opt out: GEL_QLAST_PATHS=0);
+  // proven behaviour-neutral across the full suite. On a not-yet-ported case
+  // compilePathQlast throws QLAST_DEFERRED and we fall through to the legacy
+  // compiler below; the differential parity harness verifies routed == legacy.
   if (qlastPathRoutingEnabled() && QLAST_GATED_PATH_KINDS.has((expr as { kind?: string }).kind ?? "")) {
     const qlPath = astPathExprToQlast(expr as FreeObjectExpr);
     if (qlPath) {
@@ -10882,10 +10882,14 @@ export const validateParsedStatement = (
 // ─── qlast path-routing gate (consumed by compileFreeObjectExpr) ────────────
 // The path-shaped expression kinds eligible for routing through the
 // qlast-consuming path compiler.
-const QLAST_GATED_PATH_KINDS = new globalThis.Set<string>(["path", "path_chain", "path_steps", "field_access"]);
+const QLAST_GATED_PATH_KINDS = new globalThis.Set<string>(["path", "path_chain", "path_steps", "field_access", "for_expr"]);
 
+// Routing is ON by default — path-shaped expressions compile through the
+// qlast-consuming `compilePathQlast` (with QLAST_DEFERRED falling back to the
+// legacy compiler). Proven behaviour-neutral across the full suite (identical
+// failure set vs forced-legacy). Opt out with GEL_QLAST_PATHS=0.
 const qlastPathRoutingEnabled = (): boolean =>
-  typeof process !== "undefined" && process.env?.GEL_QLAST_PATHS === "1";
+  typeof process === "undefined" || process.env?.GEL_QLAST_PATHS !== "0";
 
 // The live schema/IR helper kit `compilePathQlast` runs on — defined here, after
 // every helper, so the qlast path compiler emits IR identical to the legacy
@@ -10895,6 +10899,7 @@ export const qlastPathDeps: QlastPathDeps = {
   setFromTypeRoot,
   resolveTypeRef,
   resolvePointerRef,
+  resolveBacklinkPointerRef,
   extendPathSetDirectional,
   extendPathSet,
   synthesizeTypePointerSet,
