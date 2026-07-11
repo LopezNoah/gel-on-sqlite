@@ -340,6 +340,10 @@ export const compileCountOfSetSQL = (
     return `(SELECT count(*) FROM ${fromSql})`;
   }
 
+  if (expr.kind === "type_cast") {
+    return compileCountOfSetSQL((expr as TypeCast).expr, params, target, options, deps);
+  }
+
   if (expr.kind === "tuple") {
     const tuple = expr as Tuple;
     if (tuple.elements.length === 0) {

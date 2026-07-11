@@ -1046,6 +1046,74 @@ function gatherBindingShape(set: Set, depth = 0): ShapeElement[] {
   return [];
 }
 
+const resolveCarriedShapeElement = (source: Set, field: string): Set | undefined => {
+  if (field.startsWith("@")) return undefined;
+
+  // A shape attached to `source` may define a new computed pointer (for
+  // example `WITH X := User { c := ... } SELECT X.c`). Resolve those carried
+  // entries before fabricating an unknown pointer path.
+  const matchShapeEntry = (entries: ShapeElement[] | undefined): ShapeElement | undefined =>
+    entries?.find(
+      (entry) =>
+        entry.name !== undefined
+        && entry.name === field
+        && entry.shapeOrigin === "explicit"
+        && entry.targetPtr === undefined,
+    );
+
+  let shapedElement = matchShapeEntry(source.shape);
+  if (!shapedElement) {
+    let inner: Set = source;
+    for (let i = 0; i < 8 && inner.expr.kind === "select_expr"; i += 1) {
+      inner = (inner.expr as SelectExpr).result;
+      shapedElement = matchShapeEntry(inner.shape);
+      if (shapedElement) break;
+    }
+  }
+  if (!shapedElement) return undefined;
+
+  const sourceHasClauses = ((): boolean => {
+    let cur: Set = source;
+    while (cur.expr.kind === "select_expr") {
+      const se = cur.expr as SelectExpr;
+      if (se.where || se.limit || se.offset || (se.orderBy && se.orderBy.length > 0)) return true;
+      cur = se.result;
+    }
+    return false;
+  })();
+  const computedIsObjectPath = ((): boolean => {
+    let cur: Set = shapedElement.expr;
+    while (cur.expr.kind === "select_expr") cur = (cur.expr as SelectExpr).result;
+    return (cur.expr.kind === "type_root" || cur.expr.kind === "pointer") && !cur.typeref.isScalar;
+  })();
+  const computedIsGroupRowChain = ((): boolean => {
+    let cur: Set = shapedElement.expr;
+    while (cur.expr.kind === "select_expr") cur = (cur.expr as SelectExpr).result;
+    return cur.expr.kind === "group_row_field";
+  })();
+  if ((sourceHasClauses || computedIsGroupRowChain) && !computedIsObjectPath) {
+    const rerooted = rerootSetSubject(shapedElement.expr, source, source.typeref.id);
+    if (rerooted) return rerooted;
+    return {
+      kind: "set",
+      expr: {
+        kind: "for_expr",
+        iterator: source,
+        body: shapedElement.expr,
+        bindingKind: "with",
+        optional: false,
+      } as ForExpr,
+      pathId: shapedElement.expr.pathId,
+      typeref: shapedElement.expr.typeref,
+      shape: shapedElement.expr.shape ?? [],
+      isBinding: false,
+      isMaterializedRef: false,
+      isSchemaAlias: false,
+    };
+  }
+  return shapedElement.expr;
+};
+
 const shapeRequestsLinkProperty = (shape: EdgeQLShapeElement[]): boolean => {
   for (const el of shape) {
     if (el.kind === "field" && el.name.startsWith("@")) return true;
@@ -1791,6 +1859,11 @@ const compilePathSteps = (steps: EdgeQLPathStep[], ctx: IRCompileContext): Set =
         }
         const ptrref = resolvePointerRef(ctx, out.typeref, step.name);
         if (!ptrref) {
+          const carried = resolveCarriedShapeElement(out, step.name);
+          if (carried) {
+            out = carried;
+            continue;
+          }
           return { ...out, pathId: defaultPathId("path_steps") };
         }
         out = extendPathSetDirectional(out, ptrref, ptrref.computedLinkAliasIsBackward ? "inbound" : (step.direction ?? "outbound"));
@@ -1873,6 +1946,11 @@ const compilePathSteps = (steps: EdgeQLPathStep[], ctx: IRCompileContext): Set =
         ptrref = resolvePointerRef(ctx, (out.expr as TypeRoot).typeref, step.name);
       }
       if (!ptrref) {
+        const carried = resolveCarriedShapeElement(out, step.name);
+        if (carried) {
+          out = carried;
+          continue;
+        }
         // No backing column / link / backlink — but the source type may
         // expose `step.name` as a computed property (`property p := <expr>`).
         // Lower the computed body in place so the SQL pipeline sees the
@@ -3969,7 +4047,9 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
       }
       const headSet = resolveHeadSet(expr.head);
       const ptrref = resolvePointerRef(ctx, headSet.typeref, expr.tail);
-      return ptrref ? extendPathSet(headSet, ptrref) : {
+      if (ptrref) return extendPathSet(headSet, ptrref);
+      const carried = resolveCarriedShapeElement(headSet, expr.tail);
+      return carried ?? {
         ...headSet,
         pathId: defaultPathId(`${expr.head}.${expr.tail}`),
       };
@@ -4002,6 +4082,11 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
       for (const field of tail) {
         const ptrref = resolvePointerRef(ctx, out.typeref, field);
         if (!ptrref) {
+          const carried = resolveCarriedShapeElement(out, field);
+          if (carried) {
+            out = carried;
+            continue;
+          }
           return {
             ...out,
             pathId: defaultPathId(expr.parts.join(".")),
@@ -4050,6 +4135,11 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
             ptrref = resolvePointerRef(ctx, (out.expr as TypeRoot).typeref, step.name);
           }
           if (!ptrref) {
+            const carried = resolveCarriedShapeElement(out, step.name);
+            if (carried) {
+              out = carried;
+              continue;
+            }
             return {
               ...out,
               pathId: defaultPathId(expr.steps.map((item) => (item.kind === "ptr" ? item.name : "*")).join(".")),
