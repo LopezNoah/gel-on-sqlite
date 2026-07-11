@@ -8730,7 +8730,12 @@ const compileShapeLeafThroughForeignLink = (
   // and is already joined). compileProjectedSourceColumnRef would wrongly read
   // the leaf column off the outer source (yielding `NULL AS …`), so lower it as
   // a correlated subquery over the link's target rows.
-  const leafThroughForeignLink = ((): { leaf: Pointer; linkPtr: Pointer; linkSet: Set } | null => {
+  const leafThroughForeignLink = ((): {
+    leaf: Pointer;
+    linkPtr: Pointer;
+    linkSet: Set;
+    linkModifiers?: SelectExpr;
+  } | null => {
     if (shapeExpr.result.expr.kind !== "pointer") return null;
     const leaf = shapeExpr.result.expr as Pointer;
     if (!leaf.ptrref.outTarget.isScalar || leaf.ptrref.isLinkProperty) return null;
@@ -8740,9 +8745,20 @@ const compileShapeLeafThroughForeignLink = (
     // The cardinality guard below rejects multi links, where those clauses
     // would matter (they keep their existing multi-scalar lowering).
     let src: Set = leaf.source;
-    while (src.expr.kind === "select_expr") src = (src.expr as SelectExpr).result;
+    let linkModifiers: SelectExpr | undefined;
+    while (src.expr.kind === "select_expr") {
+      const se = src.expr as SelectExpr;
+      if (se.where || se.limit !== undefined || se.offset !== undefined
+          || (se.orderBy && se.orderBy.length > 0)) {
+        linkModifiers = se;
+      }
+      src = se.result;
+    }
     if (src.expr.kind !== "pointer") return null;
     const linkPtr = src.expr as Pointer;
+    if (linkPtr.ptrref.outCardinality !== "many" && linkPtr.ptrref.outCardinality !== "at_least_one") {
+      linkModifiers = undefined;
+    }
     // A forward object link rooted directly at the shape subject (`.bar.a`,
     // `.deck.name`). Single links read one correlated leaf; MULTI links
     // aggregate the per-target leaves into a JSON array (see the return below).
@@ -8753,10 +8769,10 @@ const compileShapeLeafThroughForeignLink = (
     // already joined into `g0` — keep the direct-column read. Detect that by
     // comparing path identity with the shape source.
     if (shape.source && pathIdKey(src) === pathIdKey(shape.source)) return null;
-    return { leaf, linkPtr, linkSet: src };
+    return { leaf, linkPtr, linkSet: src, linkModifiers };
   })();
   if (leafThroughForeignLink) {
-    const { leaf, linkPtr, linkSet } = leafThroughForeignLink;
+    const { leaf, linkPtr, linkSet, linkModifiers } = leafThroughForeignLink;
     const alias = shapeAliasForElement(shape, shapeExpr.result, depth);
     const leafCol = columnForPointer(leaf);
     // `.deck[IS SpecialCard].name` narrows the link's TARGET — scan only the
@@ -8768,7 +8784,12 @@ const compileShapeLeafThroughForeignLink = (
     // lives on the subject (`<subject>.bar_id = <Bar>.id`); a single link that
     // carries link properties routes through its link table.
     const targetAlias = `sfl${depth}`;
-    const targetSql = compilePolymorphicSource(scanTarget, false, targetAlias, ["id", leafCol], options);
+    const projectedCols = [...new globalThis.Set([
+      "id",
+      leafCol,
+      ...collectProjectedColumns([], linkModifiers?.where, linkModifiers?.orderBy),
+    ])];
+    const targetSql = compilePolymorphicSource(scanTarget, false, targetAlias, projectedCols, options);
     // `[is BaseOriginB].dest.name` — the link's source was intersection-narrowed
     // to a SIBLING type reachable only through a common subtype (`narrowed` !=
     // the underlying type_root). A subject row contributes only when its
@@ -8786,26 +8807,40 @@ const compileShapeLeafThroughForeignLink = (
       return `${sourceAlias}.${quoteIdent("__source_type")} IN (${concrete.join(", ")})`;
     })();
     let fromSql: string;
+    let linkPropertyAlias: string | undefined;
     if (shouldUseLinkTable(linkPtr)) {
       const linkTable = linkTableNameForPointer(linkPtr, options);
       const linkAlias = `sflj${depth}`;
-      fromSql = `${targetSql} JOIN ${quoteIdent(linkTable)} ${linkAlias}`
+      linkPropertyAlias = linkAlias;
+      fromSql = `FROM ${targetSql} JOIN ${quoteIdent(linkTable)} ${linkAlias}`
         + ` ON ${linkAlias}.${quoteIdent("target")} = ${targetAlias}.${quoteIdent("id")}`
-        + ` AND ${linkAlias}.${quoteIdent("source")} = ${sourceAlias}.${quoteIdent("id")}`
+        + ` WHERE ${linkAlias}.${quoteIdent("source")} = ${sourceAlias}.${quoteIdent("id")}`
         + (narrowGuard ? ` AND ${narrowGuard}` : "");
     } else {
       // Inline single link: correlate the target scan on the subject's FK.
       const inlineColumn = `${linkPtr.ptrref.shortName}_id`;
-      fromSql = `${targetSql} WHERE ${targetAlias}.${quoteIdent("id")} = ${sourceAlias}.${quoteIdent(inlineColumn)}`
+      fromSql = `FROM ${targetSql} WHERE ${targetAlias}.${quoteIdent("id")} = ${sourceAlias}.${quoteIdent(inlineColumn)}`
         + (narrowGuard ? ` AND ${narrowGuard}` : "");
     }
     const value = shapeScalarColumnValue(`${targetAlias}.${quoteIdent(leafCol)}`, leaf.ptrref.outTarget);
-    // A multi link yields one leaf per linked object — aggregate them into a
-    // JSON array (correlated to the subject via the FROM above); a single link
-    // reads the one correlated value.
-    const linkIsMany = linkPtr.ptrref.outCardinality === "many"
-      || linkPtr.ptrref.outCardinality === "at_least_one";
-    return wrapCorrelatedShapeSubquery(value, fromSql, linkIsMany, alias);
+    if (!linkModifiers) {
+      const legacyFromSql = fromSql.startsWith("FROM ") ? fromSql.slice("FROM ".length) : fromSql;
+      const linkIsMany = linkPtr.ptrref.outCardinality === "many"
+        || linkPtr.ptrref.outCardinality === "at_least_one";
+      return wrapCorrelatedShapeSubquery(value, legacyFromSql, linkIsMany, alias);
+    }
+    let inner = compileLinkedInnerSelect(value, fromSql, linkModifiers, targetAlias, params, target, options, linkPropertyAlias, linkPtr);
+    if (linkPropertyAlias) {
+      inner = appendDefaultLinkOrder(inner, linkModifiers, linkPropertyAlias);
+    }
+    // Use the computed shape element's inferred cardinality. A multi link may
+    // be narrowed to one by a source-local LIMIT, as in `asdf := .todo LIMIT 1`.
+    const shapeIsMany = shape.cardinality === "many" || shape.cardinality === "at_least_one";
+    const linkIsMany = shape.cardinality === undefined && (
+      linkPtr.ptrref.outCardinality === "many"
+      || linkPtr.ptrref.outCardinality === "at_least_one"
+    );
+    return wrapCorrelatedShapeSubquery(quoteIdent("item"), `(${inner})`, shapeIsMany || linkIsMany, alias);
   }
   return null;
 };
