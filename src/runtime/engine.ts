@@ -52,6 +52,7 @@ import { schemaSnapshotFromDeclarative } from "../schema/uiSchema.js";
 import { linkTableName, tableNameForType } from "../codegen/sql.js";
 import { populateSchemaIntrospection } from "../schema/schema_introspection.js";
 import type { SQLiteDatabase } from "../runtime/database.js";
+import { conflictIsAgainstSameStatementRow, constraintIsExclusiveLike, exclusiveChecksFor, insertValueIsVolatile, parseExclusivityViolation, planExclusiveConflictProbe, runExclusiveConflictProbe, typeAncestorsOf } from "./conflict_detection.js";
 import { materializeSchema } from "../runtime/schema_materialize.js";
 import { validateScriptUserDDL, validateUserDDLStatement } from "./ddl.js";
 import { installSqlTrace, runWithSqlSink } from "./sql_trace_sink.js";
@@ -8076,27 +8077,6 @@ const typeDefForInsertIR = (schema: SchemaSnapshot, table: string): TypeDef | un
 // constraints are enforced through shared bookkeeping tables named
 // `__gel_excl__<owner>__col__<prop>` (see materializeExclusivity in
 // database.ts); same-type constraints trip a normal `<table>.<col>` index.
-const parseExclusivityViolation = (
-  message: string,
-): { property: string; crossType: boolean } | undefined => {
-  if (!message.includes("UNIQUE constraint failed")) return undefined;
-  // Shared cross-type tables are named `__gel_excl__<owner>__col__<prop>`,
-  // and their unique index appends `__excl__<prop>`. SQLite reports either the
-  // `<table>.v` column (plain index) or the index name (expression index), so
-  // recover the property as the segment after the last `__col__`, stopping at
-  // `__excl__`, `.`, or end-of-string.
-  const shared = /__col__([A-Za-z0-9_]+?)(?:__excl__|\.|$)/.exec(message);
-  if (shared) {
-    return { property: shared[1], crossType: true };
-  }
-  const direct = /UNIQUE constraint failed: [^.]+\.([A-Za-z0-9_]+)/.exec(message);
-  if (direct) {
-    const col = direct[1];
-    const property = col.endsWith("_id") ? col.slice(0, -3) : col;
-    return { property, crossType: false };
-  }
-  return undefined;
-};
 
 // Map a write error to EdgeQL's exclusivity-constraint diagnostic. A UNIQUE
 // failure (same-table index or shared cross-type bookkeeping table, including
@@ -8364,160 +8344,7 @@ const findConflictRowId = (
   return typeof row?.id === "string" ? row.id : undefined;
 };
 
-// A single exclusive constraint reachable from an INSERT's type, normalized so
-// the conflict checker can both decide whether the inserted values clash with
-// an existing row and recover that row's id.
-interface ExclusiveCheck {
-  // The own-type fields the constraint covers (`["name"]`, `["first","bff"]`).
-  fields: string[];
-  // Storage columns to compare in each participating table (link → `<l>_id`).
-  columns: string[];
-  // Case-insensitive (`exclusive on (str_lower(__subject__))`).
-  lower: boolean;
-  // For a multi property the values live in a `<table>__<prop>` link table.
-  multiProp?: string;
-  // Concrete tables the constraint spans (this type + any type sharing it via
-  // inheritance), so a parent/child clash is detected (test _18a/_18b).
-  tables: string[];
-  // True when the constraint is owned by a *parent* type rather than declared
-  // on the inserted type itself — UNLESS CONFLICT … ELSE is rejected then
-  // (test _20a), and a bare/derived conflict is still suppressed (_18b).
-  fromParent: boolean;
-  // `exclusive … except (.flag)` — rows whose `<flag>` column is truthy are
-  // exempt from the constraint (test except_constraint_02).
-  exceptColumn?: string;
-}
 
-// Parse `except (.flag)` → the bare flag column name.
-const exceptColumnFrom = (exceptExpr?: string): string | undefined => {
-  if (!exceptExpr) return undefined;
-  const m = /\(?\s*\.([A-Za-z_][A-Za-z0-9_]*)\s*\)?/.exec(exceptExpr);
-  return m ? m[1] : undefined;
-};
-
-const typeAncestorsOf = (schema: SchemaSnapshot, typeDef: TypeDef): TypeDef[] => {
-  const seen = new Set<string>();
-  const out: TypeDef[] = [];
-  const visit = (name: string): void => {
-    const t = schema.getType(name);
-    if (!t || seen.has(qualifiedTypeName(t))) return;
-    seen.add(qualifiedTypeName(t));
-    out.push(t);
-    for (const base of t.extends ?? []) visit(base);
-  };
-  for (const base of typeDef.extends ?? []) visit(base);
-  return out;
-};
-
-const constraintIsExclusiveLike = (c: { name: string }): boolean =>
-  c.name === "std::exclusive" || c.name === "exclusive";
-
-// All concrete tables that share `field`'s exclusive constraint with `typeDef`
-// — the declaring type's whole subtree (so a Person/DerivedPerson name clash is
-// caught), mirroring materializeExclusivity's shared bookkeeping table.
-const tablesSharingFieldConstraint = (
-  schema: SchemaSnapshot,
-  typeDef: TypeDef,
-  ownerName: string,
-): string[] => {
-  const tables = new Set<string>();
-  for (const concrete of schema.listConcreteTypesAssignableTo(ownerName)) {
-    tables.add(tableNameForType(qualifiedTypeName(concrete)));
-  }
-  tables.add(tableNameForType(qualifiedTypeName(typeDef)));
-  return [...tables];
-};
-
-// Enumerate the exclusive constraints to test for an INSERT under UNLESS
-// CONFLICT. `targetFields` restricts the set to those that exactly cover the
-// `ON (...)` target; a bare UNLESS CONFLICT (undefined) tests every exclusive
-// constraint reachable from the type.
-const exclusiveChecksFor = (
-  schema: SchemaSnapshot,
-  typeDef: TypeDef,
-  targetFields: string[] | undefined,
-): ExclusiveCheck[] => {
-  const checks: ExclusiveCheck[] = [];
-  const ancestors = typeAncestorsOf(schema, typeDef);
-
-  const linkColumn = (name: string): { column: string; isLink: boolean } => {
-    const link = (typeDef.links ?? []).find((l) => l.name === name);
-    return link ? { column: `${name}_id`, isLink: true } : { column: name, isLink: false };
-  };
-
-  // ── Field-level single-property exclusive constraints ──
-  for (const field of typeDef.fields) {
-    if (field.name === "id") continue;
-    const constraints = (field as { constraints?: Array<{ name: string; delegated?: boolean; onExpr?: string; exceptExpr?: string }> }).constraints ?? [];
-    const excl = constraints.find(constraintIsExclusiveLike);
-    if (!excl) continue;
-    // Locate the topmost ancestor declaring the same field constraint to find
-    // the shared-table owner + whether it's inherited.
-    let owner = typeDef;
-    for (const anc of ancestors) {
-      const ancField = anc.fields.find((f) => f.name === field.name) as { constraints?: Array<{ name: string }> } | undefined;
-      if (ancField?.constraints?.some(constraintIsExclusiveLike)) owner = anc;
-    }
-    const lower = excl.onExpr !== undefined && /str_lower\s*\(\s*__subject__\s*\)/.test(excl.onExpr);
-    checks.push({
-      fields: [field.name],
-      columns: [field.name],
-      lower,
-      multiProp: (field as { multi?: boolean }).multi ? field.name : undefined,
-      tables: tablesSharingFieldConstraint(schema, typeDef, qualifiedTypeName(owner)),
-      fromParent: qualifiedTypeName(owner) !== qualifiedTypeName(typeDef),
-      exceptColumn: exceptColumnFrom(excl.exceptExpr),
-    });
-  }
-
-  // ── Type-level exclusive constraints (single- or multi-field tuples) ──
-  // Recover the field references a type-level constraint covers. Most carry an
-  // explicit `fieldRefs`, but the `(__subject__.first, __subject__.last)` form
-  // leaves it empty — derive the names from the expression text instead.
-  const fieldRefsOf = (tc: { fieldRefs: string[]; exprText?: string }): string[] => {
-    if (tc.fieldRefs.length > 0) return tc.fieldRefs;
-    const text = tc.exprText ?? "";
-    const refs: string[] = [];
-    const re = /(?:__subject__|)\s*\.([A-Za-z_][A-Za-z0-9_]*)/g;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(text)) !== null) refs.push(m[1]);
-    return refs;
-  };
-
-  const collectTypeConstraints = (t: TypeDef, parent: boolean): void => {
-    for (const tc of t.typeConstraints ?? []) {
-      if (!constraintIsExclusiveLike(tc)) continue;
-      const fields = fieldRefsOf(tc);
-      if (fields.length === 0) continue;
-      const columns = fields.map((f) => linkColumn(f).column);
-      const lower = /str_lower\s*\(\s*__subject__\s*\)/.test(tc.exprText ?? "");
-      const tables = new Set<string>();
-      for (const concrete of schema.listConcreteTypesAssignableTo(qualifiedTypeName(t))) {
-        tables.add(tableNameForType(qualifiedTypeName(concrete)));
-      }
-      tables.add(tableNameForType(qualifiedTypeName(typeDef)));
-      checks.push({ fields, columns, lower, tables: [...tables], fromParent: parent, exceptColumn: exceptColumnFrom((tc as { exceptExpr?: string }).exceptExpr) });
-    }
-  };
-  collectTypeConstraints(typeDef, false);
-  for (const anc of ancestors) collectTypeConstraints(anc, true);
-
-  // The implicit `id` PRIMARY KEY is exclusive on every type. It only matters
-  // under `allow_user_specified_id` (otherwise ids are server-generated and
-  // never clash) — included so `UNLESS CONFLICT ON (.id)` / bare UNLESS
-  // CONFLICT can suppress an explicit-id duplicate (test explicit_id_05).
-  checks.push({
-    fields: ["id"],
-    columns: ["id"],
-    lower: false,
-    tables: [tableNameForType(qualifiedTypeName(typeDef))],
-    fromParent: false,
-  });
-
-  if (targetFields === undefined) return checks;
-  const want = JSON.stringify([...targetFields].sort());
-  return checks.filter((c) => JSON.stringify([...c.fields].sort()) === want);
-};
 
 // One exclusive constraint visible on a type, with its origin (the type in the
 // hierarchy that actually declares it). `property` is set for a single-property
@@ -8653,56 +8480,6 @@ const checkIsolationConflicts = (
   );
 };
 
-// Given an exclusive check and the resolved storage-column values the INSERT is
-// about to write, find an existing row that already holds those values. Returns
-// its id, or undefined when there is no clash. Multi-property checks scan the
-// link table for any overlapping value.
-const findExclusiveConflictId = (
-  db: SQLiteDatabase,
-  check: ExclusiveCheck,
-  values: Record<string, ScalarValue | undefined>,
-): string | undefined => {
-  // A null value for any covered column means "no value" — exclusive
-  // constraints ignore empty sets, so there can be no conflict.
-  if (check.multiProp) {
-    const raw = values[check.multiProp];
-    const items: ScalarValue[] = Array.isArray(raw) ? raw as ScalarValue[] : raw === undefined || raw === null ? [] : [raw];
-    if (items.length === 0) return undefined;
-    for (const tbl of check.tables) {
-      const linkTbl = `${tbl}__${check.multiProp.toLowerCase()}`;
-      const exists = (db.prepare(`PRAGMA table_info(${quoteIdent(linkTbl)})`).all() as Array<{ name: string }>);
-      if (exists.length === 0) continue;
-      const valueCol = exists.some((c) => c.name === "value") ? "value" : exists.some((c) => c.name === "target") ? "target" : undefined;
-      const srcCol = exists.some((c) => c.name === "source") ? "source" : "src";
-      if (!valueCol) continue;
-      const placeholders = items.map(() => "?").join(", ");
-      const row = db
-        .prepare(`SELECT ${quoteIdent(srcCol)} AS ${quoteIdent("id")} FROM ${quoteIdent(linkTbl)} WHERE ${quoteIdent(valueCol)} IN (${placeholders}) LIMIT 1`)
-        .all(...items)[0] as { id?: unknown } | undefined;
-      if (typeof row?.id === "string") return row.id;
-    }
-    return undefined;
-  }
-
-  const colValues = check.columns.map((col) => values[col]);
-  if (colValues.some((v) => v === undefined || v === null)) return undefined;
-  for (const tbl of check.tables) {
-    const cols = (db.prepare(`PRAGMA table_info(${quoteIdent(tbl)})`).all() as Array<{ name: string }>).map((c) => c.name);
-    if (!check.columns.every((c) => cols.includes(c))) continue;
-    const wheres = check.columns
-      .map((col) => (check.lower ? `lower(${quoteIdent(col)}) = lower(?)` : `${quoteIdent(col)} = ?`))
-      .join(" AND ");
-    const row = db
-      .prepare(`SELECT ${quoteIdent("id")} AS ${quoteIdent("id")} FROM ${quoteIdent(tbl)} WHERE ${wheres} LIMIT 1`)
-      .all(...colValues as ScalarValue[])[0] as { id?: unknown } | undefined;
-    if (typeof row?.id === "string") return row.id;
-  }
-  return undefined;
-};
-
-// Recursively scan an INSERT value expression for volatile function calls
-// (`random`, `datetime_current`, …) so UNLESS CONFLICT ON can reject a volatile
-// conflict target (test _16b).
 // Resolve a (possibly multi) INSERT value to the flat list of scalar values it
 // produces — used for multi-property conflict targets (`name := {'a','b'}`).
 const insertValueToScalarSet = (
@@ -8727,52 +8504,6 @@ const insertValueToScalarSet = (
   }
   // A single scalar wrapped in an expr node.
   return [scalarFromInsertValue(value, makeBindingResolver(ast, context, line, column), line, column)];
-};
-
-// After a UNIQUE write failure under UNLESS CONFLICT, decide whether the clash
-// is against a row inserted earlier in the *same* statement (which must surface
-// as an error, not be suppressed). Scans every exclusive check covering the
-// violated property and reports true when the only conflicting existing row was
-// inserted this statement.
-const conflictIsAgainstSameStatementRow = (
-  db: SQLiteDatabase,
-  schema: SchemaSnapshot,
-  subjectType: TypeDef,
-  violatedProperty: string,
-  context: SecurityContext,
-): boolean => {
-  const stmtIds = context.statementInsertedIds;
-  if (!stmtIds || stmtIds.size === 0) return false;
-  const checks = exclusiveChecksFor(schema, subjectType, undefined)
-    .filter((c) => c.fields.includes(violatedProperty));
-  for (const check of checks) {
-    for (const tbl of check.tables) {
-      const cols = (db.prepare(`PRAGMA table_info(${quoteIdent(tbl)})`).all() as Array<{ name: string }>).map((c) => c.name);
-      if (check.multiProp) continue;
-      if (!check.columns.every((c) => cols.includes(c))) continue;
-      const rows = db.prepare(`SELECT ${quoteIdent("id")} AS ${quoteIdent("id")} FROM ${quoteIdent(tbl)}`).all() as Array<{ id?: unknown }>;
-      for (const row of rows) {
-        if (typeof row.id === "string" && stmtIds.has(row.id)) return true;
-      }
-    }
-  }
-  return false;
-};
-
-const VOLATILE_FUNCTION_NAMES = new Set(["random", "datetime_current", "datetime_of_transaction", "uuid_generate_v1mc", "uuid_generate_v4", "sequence_next"]);
-const insertValueIsVolatile = (node: unknown): boolean => {
-  if (Array.isArray(node)) return node.some(insertValueIsVolatile);
-  if (node === null || typeof node !== "object") return false;
-  const n = node as Record<string, unknown> & { kind?: string; name?: unknown; call?: { name?: unknown } };
-  const fnName = typeof n.name === "string" ? n.name : typeof n.call?.name === "string" ? n.call.name : undefined;
-  if ((n.kind === "function_call" || n.kind === "func_call" || n.kind === "call") && fnName) {
-    const short = fnName.includes("::") ? fnName.split("::").pop()! : fnName;
-    if (VOLATILE_FUNCTION_NAMES.has(short)) return true;
-  }
-  for (const value of Object.values(n)) {
-    if (insertValueIsVolatile(value)) return true;
-  }
-  return false;
 };
 
 const makeBindingResolver = (
@@ -9451,7 +9182,8 @@ const runWriteWithAccessPolicies = (
 
           let existingId: string | undefined;
           for (const check of checks) {
-            const found = findExclusiveConflictId(db, check, resolvedColumnValues);
+            const probePlan = planExclusiveConflictProbe(check, resolvedColumnValues);
+            const found = probePlan ? runExclusiveConflictProbe(db, probePlan) : undefined;
             // Ignore a clash against a row inserted earlier in this same
             // statement — that must surface as a hard error, not be suppressed
             // (tests cross_type_conflict_08/09, self_01/02/03).
@@ -9523,7 +9255,7 @@ const runWriteWithAccessPolicies = (
           // cross_type_conflict_08/09). The conflicting value lives in the
           // shared/own exclusivity table keyed by the violated property; if the
           // only matching row was inserted this statement, refuse suppression.
-          const sameStatement = conflictIsAgainstSameStatementRow(db, schema, subjectType, exclusivity.property, context);
+          const sameStatement = conflictIsAgainstSameStatementRow(db, schema, subjectType, exclusivity.property, context.statementInsertedIds);
           const suppress = !sameStatement && (onTargetFields !== undefined
             ? onTargetFields.includes(exclusivity.property)
             : (!exclusivity.crossType || ddlTracked));
