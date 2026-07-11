@@ -51,8 +51,12 @@ The pure, value-returning inferers used by the runtime's AST **pre-validation** 
 _Avoid_: the validator, type checker.
 
 **Scope tree**:
-The path-scope structure (`ScopeTreeNode`) describing which paths are correlated vs independently iterated within a statement.
+The path-scope structure (`ScopeTreeNode`) describing which paths are correlated vs independently iterated within a statement. POPULATED from the AST by `src/ir/scope_builder.ts::buildScopeTreeFromAst` (the factoring fences survive in the AST; WITH-inlining erases them from the Live IR — `docs/adr/0061`) and attached to `Statement.scopeTree`. Serialized to Gel's `edb/ir/scopetree.py` debug pformat (the `FENCE`/`uid`/`ns~N` tree) by `src/ir/scope_tree_format.ts::formatScopeTree` — the scope-tree sibling of `pathid_format.ts`, pinned by `tests/scope_tree_format.test.ts`. The tree's path ids are currently STRUCTURAL `sig:` signatures (segment chains), so the FENCE *shape* matches Gel but the derived *names* do not yet (real names + a 1:1 match against Gel's scope-tree goldens are the `docs/adr/0061` layer-3 milestone; the serializer already routes real paths through `serializePathId`, so names land with no change there).
 _Avoid_: scope graph, binding tree.
+
+**Scope-tree factoring authority** (`src/ir/scope_tree.ts`):
+The one home for the factoring verdict — "do two path references factor (zip / correlate) or stay independent (cross product)?". Two entry points by argument shape: `tupleSharedPrefixCorrelated` (the AST tuple verdict — lives in `scope_builder.ts` with the binding-aware segment logic, stamped onto the count argument Set as `sharedPrefixCorrelated` by `ast_to_ir` and read by the SQL count lowering) and `countArgIsFactored` (the narrow single-scalar-property `isWithBinding` count signal, ADR 0059). `analyzeTreeFactoring` ports Gel's `find_factorable_nodes` over the populated tree (`shouldFactorTogether` / `sharedFactorPrefix` / `isAcrossFactoringFence`) and REPRODUCES the verdict (pinned in `scope_builder.test.ts`) — the convergence target ADR 0061 layer 3 would route the two direct signals through, leaving one mechanism. The IR-derived `buildScopeAnalysis` was PRUNED (`docs/adr/0062`, 487→154 lines): a tree rebuilt from the finished Live IR is structurally unable to separate factored from correlated (the fence is already erased by inlining), so the authority is built from the AST, not the IR. A re-export to give the verdict one literal module was rejected — `scope_builder.ts` imports `pathIdKey` from `scope_tree.ts`, so the reverse re-export would cycle; the consolidation is documentation + co-location.
+_Avoid_: correlation checker, factoring pass.
 
 ## Schema
 

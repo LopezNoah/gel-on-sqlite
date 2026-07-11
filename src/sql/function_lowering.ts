@@ -263,10 +263,10 @@ export const setLooksLikeRange = (set: Set): boolean => {
 // These must differ, BUT after `ast_to_ir` WITH-inlining they compile to
 // BYTE-IDENTICAL IR — same pathId keys, same source keys, no surviving
 // namespace / `isWithBinding` / `view` residue (verified empirically). The
-// factoring fence is destroyed at inlining, so NO post-IR analysis — Relation
-// or `buildScopeAnalysis` — can separate them. `scope_tree.ts` exposes the
-// intended gate (`sharedFactorPrefix` + `factoringFence`), but the IR never
-// populates a fence for these, so consulting it cannot help yet.
+// factoring fence is destroyed at inlining, so NO post-IR analysis — Relation,
+// or a scope tree rebuilt from the finished IR — can separate them. The scope
+// tree's factoring gate (`analyzeTreeFactoring`) is therefore built from the
+// AST (scope_builder.ts), where the fences still survive, NOT from the IR.
 //
 // The factoring decision is owned by the scope tree (the AST-built authority,
 // `scope_builder.tupleSharedPrefixCorrelated`), since the Live IR has erased the
