@@ -293,6 +293,9 @@ class ExtractedQuery:
     # class SETUP plus any inline self.con.execute / self.migrate statements
     # that precede the assert in the test method body.
     setup_ddl: tuple[str, ...]
+    # The class's DEFAULT_MODULE (default "default"); used both as the compile
+    # modalias and as the module that self.migrate(...) declarations land in.
+    default_module: str
     query: str | None
     extract_error: str | None = None
 
@@ -342,7 +345,7 @@ def load_schema_modules(
     return schema
 
 
-def apply_setup(schema, setup_ddl: tuple[str, ...]):
+def apply_setup(schema, setup_ddl: tuple[str, ...], default_module: str = "default"):
     """Apply ordered setup statements onto the loaded schema, best-effort.
 
     Setup scripts freely mix schema DDL with DML (INSERT/SET MODULE/SELECT),
@@ -350,24 +353,27 @@ def apply_setup(schema, setup_ddl: tuple[str, ...]):
     to self.migrate. Each chunk is tried as an imperative DDL block first, then
     as an SDL migration; anything that still fails (duplicate creates, DML-only,
     unsupported features) is skipped so the query can still compile against
-    whatever schema we managed to build.
+    whatever schema we managed to build. Bare (unqualified) DDL lands in the
+    class default module so it agrees with how the query is later compiled.
     """
     for text in setup_ddl:
         chunk = (text or "").strip()
         if not chunk:
             continue
         try:
-            schema = run_ddl(schema, chunk, skip_non_ddl=True)
+            schema = run_ddl(
+                schema, chunk, default_module=default_module, skip_non_ddl=True)
             continue
         except Exception:
             pass
         try:
             wrapped = (
-                "START MIGRATION TO { module default { "
+                f"START MIGRATION TO {{ module {default_module} {{ "
                 + chunk
                 + " } }; POPULATE MIGRATION; COMMIT MIGRATION;"
             )
-            schema = run_ddl(schema, wrapped, skip_non_ddl=True)
+            schema = run_ddl(
+                schema, wrapped, default_module=default_module, skip_non_ddl=True)
         except Exception:
             # Un-appliable setup chunk; leave the schema as-is.
             pass
@@ -573,6 +579,39 @@ def setup_texts_from_class(
     return tuple(out)
 
 
+def default_module_from_class(
+    class_node: ast.ClassDef,
+    module_classes: dict[str, ast.ClassDef],
+    _seen: frozenset[str] = frozenset(),
+) -> str:
+    """Resolve DEFAULT_MODULE from the class or its module-local bases."""
+    if class_node.name in _seen:
+        return "default"
+    seen = _seen | {class_node.name}
+    for stmt in class_node.body:
+        if not isinstance(stmt, ast.Assign):
+            continue
+        if not any(
+            isinstance(t, ast.Name) and t.id == "DEFAULT_MODULE"
+            for t in stmt.targets
+        ):
+            continue
+        if isinstance(stmt.value, ast.Constant) and isinstance(stmt.value.value, str):
+            return stmt.value.value
+    for base in class_node.bases:
+        base_name = (
+            base.id if isinstance(base, ast.Name)
+            else base.attr if isinstance(base, ast.Attribute)
+            else None
+        )
+        base_cls = module_classes.get(base_name) if base_name else None
+        if base_cls is not None:
+            module = default_module_from_class(base_cls, module_classes, seen)
+            if module != "default":
+                return module
+    return "default"
+
+
 def method_map(class_node: ast.ClassDef) -> dict[str, ast.FunctionDef | ast.AsyncFunctionDef]:
     return {
         node.name: node
@@ -618,6 +657,7 @@ def extract_queries_from_method(
     schema_modules: tuple[tuple[str, str], ...],
     schema_label: str,
     class_setup: tuple[str, ...],
+    default_module: str,
     module_globals: dict[str, Any],
     pytests: Any,
 ) -> list[ExtractedQuery]:
@@ -647,6 +687,7 @@ def extract_queries_from_method(
             schema_modules=schema_modules,
             schema_label=schema_label,
             setup_ddl=tuple(class_setup) + tuple(ddl_acc),
+            default_module=default_module,
             query=query,
             extract_error=detail,
         ))
@@ -661,9 +702,10 @@ def extract_queries_from_method(
         if not isinstance(text, str):
             return
         if migrate:
-            # self.migrate(sdl) is a declarative migration to the given schema.
+            # self.migrate(sdl) is a declarative migration to the given schema,
+            # landing in the test class's default module.
             text = (
-                "START MIGRATION TO { module default { "
+                f"START MIGRATION TO {{ module {default_module} {{ "
                 + text
                 + " } }; POPULATE MIGRATION; COMMIT MIGRATION;"
             )
@@ -833,6 +875,7 @@ def extract_queries_from_test_file(source_file: pathlib.Path) -> list[ExtractedQ
             pytests,
         )
         methods = effective_method_map(class_node, module_classes)
+        default_module = default_module_from_class(class_node, module_classes)
         for node in class_node.body:
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
@@ -847,6 +890,7 @@ def extract_queries_from_test_file(source_file: pathlib.Path) -> list[ExtractedQ
                 schema_modules=schema_modules,
                 schema_label=schema_label,
                 class_setup=class_setup,
+                default_module=default_module,
                 module_globals=module_globals,
                 pytests=pytests,
             ))
@@ -1031,21 +1075,27 @@ def compile_facts(
     schema_modules: tuple[tuple[str, str], ...],
     schema_label: str | None = None,
     setup_ddl: tuple[str, ...] = (),
+    default_module: str = "default",
     query: str,
     include_sql: bool,
     max_depth: int,
 ) -> dict[str, Any]:
-    schema = load_schema_modules(schema_modules, schema_label or "inline")
+    # Materialize the class default module too, so inline DDL / queries that
+    # resolve against it (e.g. DEFAULT_MODULE = 'test') have a module to use.
+    modules = dict(schema_modules)
+    modules.setdefault(default_module, "")
+    schema = load_schema_modules(tuple(sorted(modules.items())),
+                                 schema_label or "inline")
     schema_fact = schema_label or "inline"
     if setup_ddl:
-        schema = apply_setup(schema, setup_ddl)
+        schema = apply_setup(schema, setup_ddl, default_module=default_module)
 
     # parse_query expects a single fragment, not a trailing ';' terminator.
     qltree = ql_parser.parse_query(query.strip().rstrip(";"))
     ir = ql_compiler.compile_ast_to_ir(
         qltree,
         schema,
-        options=ql_compiler.CompilerOptions(modaliases={None: "default"}),
+        options=ql_compiler.CompilerOptions(modaliases={None: default_module}),
     )
 
     facts: dict[str, Any] = {
@@ -1107,6 +1157,7 @@ def write_batch_golden(
                 schema_modules=case.schema_modules,
                 schema_label=case.schema_label,
                 setup_ddl=case.setup_ddl,
+                default_module=case.default_module,
                 query=case.query,
                 include_sql=include_sql,
                 max_depth=max_depth,
