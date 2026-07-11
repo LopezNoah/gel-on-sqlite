@@ -6,12 +6,60 @@ import {
   inspect,
   inspectorFor,
   schemaFromSdl,
+  type GelFactsOk,
   type Inspector,
 } from "../src/compiler/inspect.js";
 import type { SchemaSnapshot } from "../src/schema/schema.js";
 
 const fixture = (name: string): SchemaSnapshot =>
   schemaFromSdl(fs.readFileSync(new URL(`./schemas/${name}.esdl`, import.meta.url), "utf8"));
+
+interface SelectGolden {
+  query: string;
+  schema_file: string;
+  source_test: {
+    file: string;
+    class: string;
+    test: string;
+    case_index: number;
+  };
+  inference: {
+    cardinality: string;
+    multiplicity: string;
+    volatility: string;
+  };
+}
+
+const selectGolden = (name: string): SelectGolden =>
+  JSON.parse(
+    fs.readFileSync(
+      new URL(
+        `../goldens/gel-compiler-facts/edgeql_select/TestEdgeQLSelect/${name}.json`,
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  );
+
+const inspectGolden = (name: string): GelFactsOk => {
+  const golden = selectGolden(name);
+  const gelFacts = gelFactsOf(inspect(fixture("issues"), golden.query), {
+    schemaFile: golden.schema_file,
+    sourceTest: golden.source_test,
+  });
+
+  expect(gelFacts.ok).toBe(true);
+  if (!gelFacts.ok) throw new Error(`expected ${name} to compile`);
+  expect(gelFacts.query).toBe(golden.query);
+  expect(gelFacts.schema_file).toBe(golden.schema_file);
+  expect(gelFacts.source_test).toEqual(golden.source_test);
+  expect(gelFacts.inference).toMatchObject({
+    cardinality: golden.inference.cardinality,
+    multiplicity: golden.inference.multiplicity,
+    volatility: golden.inference.volatility,
+  });
+  return gelFacts;
+};
 
 describe("canonicalizeSql", () => {
   it("renames generated aliases to stable positional tokens by first appearance", () => {
@@ -148,5 +196,140 @@ describe("Gel-shaped compile facts projection", () => {
     expect(gelFacts.scope_tree).toContain('"FENCE uid:');
     expect(gelFacts.scope_tree).toContain("(Issue.owner.name)");
     expect(gelFacts.sqlite_sql).toContain('ORDER BY a0."name" ASC');
+  });
+
+  it("covers a real order-by golden with a multi-step sort path", () => {
+    const gelFacts = inspectGolden("test_edgeql_select_order_01__001");
+
+    expect(gelFacts.ir_kind_tree.kind).toBe("SelectStmt");
+    expect(gelFacts.path_ids).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          expr: "Pointer",
+          owner: "path",
+          path_id:
+            "(default::Issue).>(default::__|priority@default|Issue)[IS default::Priority]" +
+            ".>(default::__|name@default|Priority)[IS std::str]@",
+          type: "std::str",
+        }),
+        expect.objectContaining({
+          expr: "Pointer",
+          owner: "shape",
+          path_id: "(default::Issue).>(default::__|name@default|Issue)[IS std::str]@",
+          type: "std::str",
+        }),
+      ]),
+    );
+    expect(gelFacts.sqlite_sql).toContain('ORDER BY (SELECT cp1."name"');
+    expect(gelFacts.sqlite_sql).toContain('a0."name" ASC');
+  });
+
+  it("covers a real backlink-and-type-intersection golden", () => {
+    const gelFacts = inspectGolden("test_edgeql_select_unique_01__001");
+
+    expect(gelFacts.path_ids).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          expr: "Pointer",
+          owner: "result",
+          path_id:
+            "(default::Issue).>(default::__|watchers@default|Issue)[IS default::User]" +
+            ".>(default::__|owner@default|Issue)[IS default::Issue]@",
+          type: "default::Issue",
+        }),
+        expect.objectContaining({
+          expr: "Pointer",
+          owner: "shape",
+          path_id:
+            "(default::Issue).>(default::__|watchers@default|Issue)[IS default::User]" +
+            ".>(default::__|owner@default|Issue)[IS default::Issue]" +
+            ".>(default::__|name@default|Issue)[IS std::str]@",
+          type: "std::str",
+        }),
+      ]),
+    );
+    expect(gelFacts.scope_tree).toContain("BRANCH uid:");
+    expect(gelFacts.sqlite_sql).toContain('JOIN "default__issue__watchers"');
+    expect(gelFacts.sqlite_sql).toContain('JOIN "default__issue__owner"');
+  });
+
+  it("covers a real computed-shape golden that projects a nested path", () => {
+    const gelFacts = inspectGolden("test_edgeql_select_computable_33__001");
+
+    expect(gelFacts.inference.cardinality).toBe("AT_MOST_ONE");
+    expect(gelFacts.path_ids).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          expr: "Pointer",
+          owner: "shape",
+          path_id:
+            "(default::User).>(default::__|todo@default|User)[IS default::Issue]" +
+            ".>(default::__|id@default|Issue)[IS std::uuid]@",
+          type: "std::uuid",
+        }),
+        expect.objectContaining({
+          expr: "OperatorCall",
+          owner: "where",
+          path_id: "(filter:=)",
+          type: "std::bool",
+        }),
+      ]),
+    );
+    expect(gelFacts.sqlite_sql).toContain("json_group_array");
+    expect(gelFacts.sqlite_sql).toContain('WHERE (EXISTS (SELECT 1 FROM (SELECT ? AS "value")');
+  });
+
+  it("covers a real nested link-property shape golden", () => {
+    const gelFacts = inspectGolden("test_edgeql_select_linkproperty_03__001");
+
+    expect(gelFacts.path_ids).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          expr: "SelectExpr",
+          owner: "shape",
+          path_id: "(default::User).>(default::__|todo@default|User)[IS default::Issue]@",
+          type: "default::Issue",
+        }),
+        expect.objectContaining({
+          expr: "Pointer",
+          owner: "shape",
+          path_id:
+            "(default::User).>(default::__|todo@default|User)[IS default::Issue]" +
+            "@(default::__|&rank@default|Issue)[IS std::int64]@",
+          type: "std::int64",
+        }),
+      ]),
+    );
+    expect(gelFacts.sqlite_sql).toContain("'@rank'");
+    expect(gelFacts.sqlite_sql).toContain('ORDER BY a1."number" ASC NULLS LAST');
+  });
+
+  it("covers a real coalesce golden with both optional branches", () => {
+    const gelFacts = inspectGolden("test_edgeql_select_coalesce_01__001");
+
+    expect(gelFacts.path_ids).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          expr: "CoalesceExpr",
+          owner: "shape",
+          path_id: "(std::coalesce)",
+          type: "std::str",
+        }),
+        expect.objectContaining({
+          owner: "left",
+          path_id:
+            "(default::Issue).>(default::__|priority@default|Issue)[IS default::Priority]" +
+            ".>(default::__|name@default|Priority)[IS std::str]@",
+        }),
+        expect.objectContaining({
+          owner: "right",
+          path_id:
+            "(default::Issue).>(default::__|status@default|Issue)[IS default::Status]" +
+            ".>(default::__|name@default|Status)[IS std::str]@",
+        }),
+      ]),
+    );
+    expect(gelFacts.sqlite_sql).toContain("COALESCE((SELECT");
+    expect(gelFacts.sqlite_sql).toContain('ORDER BY a0."number" ASC');
   });
 });
