@@ -14,6 +14,14 @@
 
 import type { Statement } from "../edgeql/ast.js";
 import { parseEdgeQLScript } from "../edgeql/parser.js";
+import type {
+  PathId,
+  Set as GelIRSet,
+  Statement as GelIRStatement,
+  TypeRef,
+} from "../ir/gel_ir.js";
+import { serializePathId } from "../ir/pathid_format.js";
+import { formatScopeTree } from "../ir/scope_tree_format.js";
 import { lowersToSingleSql, type GelIRSQLArtifact } from "../sql/compiler_types.js";
 import { valueFactsOf, type ValueFacts } from "../ir/value_facts.js";
 import { classifyExecutionStrategy, type ExecutionStrategy } from "./execution_strategy.js";
@@ -62,6 +70,53 @@ export interface InspectError {
   code: string;
   message: string;
 }
+
+export interface GelSourceTestMetadata {
+  file?: string;
+  class?: string;
+  test?: string;
+  case_index?: number;
+}
+
+export interface GelFactsOptions {
+  schemaFile?: string;
+  sourceTest?: GelSourceTestMetadata;
+}
+
+export interface GelInferenceFacts {
+  cardinality: string;
+  multiplicity: string;
+  stype: string | null;
+  volatility: string;
+}
+
+export interface GelPathIdFact {
+  expr: string;
+  node: string;
+  owner: string;
+  path_id: string;
+  type: string;
+}
+
+export interface GelFactsOk {
+  ok: true;
+  query: string;
+  schema_file?: string;
+  source_test?: GelSourceTestMetadata;
+  inference: GelInferenceFacts;
+  ir_kind_tree: IRNodeKind;
+  path_ids: GelPathIdFact[];
+  scope_tree: string;
+  sqlite_sql: string;
+}
+
+export interface GelFactsError {
+  ok: false;
+  query: string;
+  error: InspectError;
+}
+
+export type GelFacts = GelFactsOk | GelFactsError;
 
 /** The whole inspection result. NEVER throws on a query problem — parse and
  *  compile failures are captured into `error` with `ok:false`, so a golden test
@@ -153,6 +208,39 @@ export function inspect(
   };
 }
 
+/**
+ * Gel-golden-shaped projection over the existing inspection artifact. This does
+ * not alter compile behavior; it only exposes facts already present in Live IR
+ * using the spelling and layout that make comparisons with Gel goldens easier.
+ */
+export function gelFactsOf(result: Inspection, options: GelFactsOptions = {}): GelFacts {
+  if (!result.ok || !result.facts || !result.artifact) {
+    return {
+      ok: false,
+      query: result.query,
+      error: result.error ?? { phase: "compile", code: "E_ERROR", message: "inspection failed" },
+    };
+  }
+
+  const out: GelFactsOk = {
+    ok: true,
+    query: result.query,
+    inference: {
+      cardinality: gelEnum(result.artifact.gelIr.cardinality),
+      multiplicity: gelEnum(result.artifact.gelIr.multiplicity),
+      stype: result.artifact.gelIr.stype ?? null,
+      volatility: titleEnum(result.artifact.gelIr.volatility),
+    },
+    ir_kind_tree: normalizeIrKindTree(result.facts.irKindTree),
+    path_ids: collectPathIdFacts(result.artifact.gelIr),
+    scope_tree: formatScopeTree(result.artifact.gelIr.scopeTree),
+    sqlite_sql: result.sql(),
+  };
+  if (options.schemaFile) out.schema_file = options.schemaFile;
+  if (options.sourceTest) out.source_test = options.sourceTest;
+  return out;
+}
+
 /** Bind an inspector to a schema. */
 export function inspectorFor(schema: SchemaSnapshot, context: CompileContext = {}): Inspector {
   return {
@@ -237,4 +325,78 @@ function gather(value: unknown, into: IRNodeKind[]): void {
   }
   const node = collectNode(value);
   if (node) into.push(node);
+}
+
+const gelEnum = (value: string): string => value.toUpperCase();
+
+const titleEnum = (value: string): string =>
+  value.length === 0 ? value : `${value[0].toUpperCase()}${value.slice(1)}`;
+
+const gelKind = (kind: string): string =>
+  kind
+    .split("_")
+    .map(titleEnum)
+    .join("");
+
+const normalizeIrKindTree = (node: IRNodeKind): IRNodeKind => ({
+  kind: gelKind(node.kind),
+  children: node.children.map(normalizeIrKindTree),
+});
+
+const typeName = (type: TypeRef | undefined): string => type?.nameHint ?? type?.id ?? "";
+
+const isPathId = (value: unknown): value is PathId =>
+  !!value && typeof value === "object" && (value as { kind?: unknown }).kind === "path_id";
+
+const isGelIRSet = (value: Record<string, unknown>): boolean =>
+  value.kind === "set" && isPathId(value.pathId);
+
+const ownerName = (parent: Record<string, unknown> | undefined, key: string): string => {
+  if (parent?.kind === "shape_element" && key === "expr") return "shape";
+  if (parent?.kind === "select_stmt" && key === "expr") return "result";
+  return key;
+};
+
+function collectPathIdFacts(statement: GelIRStatement): GelPathIdFact[] {
+  const facts: GelPathIdFact[] = [];
+  const seenObjects = new WeakSet<object>();
+  const seenPathIds = new Set<string>();
+
+  const visit = (
+    value: unknown,
+    parent: Record<string, unknown> | undefined,
+    key: string,
+  ): void => {
+    if (Array.isArray(value)) {
+      value.forEach((item) => visit(item, parent, key));
+      return;
+    }
+    if (!value || typeof value !== "object") return;
+    if (seenObjects.has(value)) return;
+    seenObjects.add(value);
+
+    const obj = value as Record<string, unknown>;
+    if (isGelIRSet(obj)) {
+      const set = obj as unknown as GelIRSet;
+      const pathId = serializePathId(set.pathId, { debug: true });
+      if (!seenPathIds.has(pathId)) {
+        seenPathIds.add(pathId);
+        facts.push({
+          expr: gelKind(typeof set.expr === "object" && set.expr ? String(set.expr.kind ?? "") : ""),
+          node: "Set",
+          owner: ownerName(parent, key),
+          path_id: pathId,
+          type: typeName(set.typeref),
+        });
+      }
+    }
+
+    for (const [childKey, childValue] of Object.entries(obj)) {
+      if (childKey === "schema") continue;
+      visit(childValue, obj, childKey);
+    }
+  };
+
+  visit(statement, undefined, "expr");
+  return facts;
 }

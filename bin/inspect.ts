@@ -8,10 +8,11 @@
 //   npx tsx bin/inspect.ts sql   "SELECT Issue { name }" --schema issues
 //   npx tsx bin/inspect.ts ir    "SELECT Issue"
 //   npx tsx bin/inspect.ts raw   "SELECT Issue"            # full gelIr JSON
+//   npx tsx bin/inspect.ts gel-facts "SELECT Issue"        # Gel-shaped facts
 //   npx tsx bin/inspect.ts ast   "SELECT Issue"
 
 import fs from "node:fs";
-import { inspect, schemaFromSdl } from "../src/compiler/inspect.js";
+import { gelFactsOf, inspect, schemaFromSdl } from "../src/compiler/inspect.js";
 
 const argv = process.argv.slice(2);
 const flag = (name: string): string | undefined => {
@@ -23,9 +24,10 @@ const positional = argv.filter((a, i) => !a.startsWith("--") && argv[i - 1] !== 
 const cmd = positional[0] ?? "facts";
 const query = positional[1] ?? "SELECT 1";
 const schemaName = flag("--schema") ?? "issues";
+const schemaFile = `tests/schemas/${schemaName}.esdl`;
 
 const src = fs.readFileSync(
-  new URL(`../tests/schemas/${schemaName}.esdl`, import.meta.url),
+  new URL(`../${schemaFile}`, import.meta.url),
   "utf8",
 );
 const schema = schemaFromSdl(src);
@@ -51,10 +53,13 @@ switch (cmd) {
   case "raw":
     console.log(JSON.stringify(result.artifact?.gelIr, skipSchema, 1));
     break;
+  case "gel-facts":
+    console.log(JSON.stringify(gelFactsOf(result, { schemaFile }), null, 2));
+    break;
   case "ast":
     console.log(JSON.stringify(result.ast, skipSchema, 1));
     break;
   default:
-    console.error(`unknown command "${cmd}" (use: facts | sql | ir | raw | ast)`);
+    console.error(`unknown command "${cmd}" (use: facts | sql | ir | raw | gel-facts | ast)`);
     process.exit(2);
 }

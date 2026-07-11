@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
   canonicalizeSql,
+  gelFactsOf,
   inspect,
   inspectorFor,
   schemaFromSdl,
@@ -99,5 +100,53 @@ describe("canonical SQL crosses the same seam as the CLI", () => {
     const sql = r.sql();
     expect(sql).toContain("a0");
     expect(sql).not.toMatch(/\bg0\b/);
+  });
+});
+
+describe("Gel-shaped compile facts projection", () => {
+  it("exposes inference, path ids, scope tree, and sqlite SQL for the tracer-bullet query", () => {
+    const r = inspect(fixture("issues"), `SELECT Issue.owner{name} ORDER BY Issue.owner.name;`);
+    const gelFacts = gelFactsOf(r, { schemaFile: "tests/schemas/issues.esdl" });
+
+    expect(gelFacts.ok).toBe(true);
+    if (!gelFacts.ok) throw new Error("expected query to compile");
+    expect(gelFacts.schema_file).toBe("tests/schemas/issues.esdl");
+    expect(gelFacts.inference).toEqual({
+      cardinality: "MANY",
+      multiplicity: "UNIQUE",
+      stype: "default::User",
+      volatility: "Stable",
+    });
+    expect(gelFacts.ir_kind_tree.kind).toBe("SelectStmt");
+    expect(gelFacts.path_ids).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          expr: "Pointer",
+          node: "Set",
+          owner: "result",
+          path_id: "(default::Issue).>(default::__|owner@default|Issue)[IS default::User]@",
+          type: "default::User",
+        }),
+        expect.objectContaining({
+          expr: "TypeRoot",
+          node: "Set",
+          owner: "source",
+          path_id: "(default::Issue)",
+          type: "default::Issue",
+        }),
+        expect.objectContaining({
+          expr: "Pointer",
+          node: "Set",
+          owner: "shape",
+          path_id:
+            "(default::Issue).>(default::__|owner@default|Issue)[IS default::User]" +
+            ".>(default::__|name@default|User)[IS std::str]@",
+          type: "std::str",
+        }),
+      ]),
+    );
+    expect(gelFacts.scope_tree).toContain('"FENCE uid:');
+    expect(gelFacts.scope_tree).toContain("(Issue.owner.name)");
+    expect(gelFacts.sqlite_sql).toContain('ORDER BY a0."name" ASC');
   });
 });
