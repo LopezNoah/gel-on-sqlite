@@ -36,6 +36,8 @@ export const normalizeGelSQLValue = (value: unknown): unknown => {
 // any other shape is an object set (internal id/type columns dropped unless
 // `keepInternalId`). `scalarResultIsStr` keeps JSON-looking plain text verbatim
 // for statically-`std::str` results (only quoted JSON strings are unwrapped).
+// `scalarResultIsBool` decodes top-level native SQLite booleans (0/1) as JS
+// booleans without requiring the SQL layer to JSON-wrap them.
 // An all-null object row materializes to `null` (the empty object link case).
 // Sentinel marking a scalar row whose value is SQL NULL — EdgeQL has no scalar
 // `null`, so such a row represents the empty set and is dropped from the result
@@ -45,7 +47,7 @@ const DROP_SCALAR_NULL = Symbol("drop-scalar-null");
 
 export const materializeGelSQLRows = (
   rows: Record<string, unknown>[],
-  options: { keepInternalId: boolean; scalarResultIsStr?: boolean },
+  options: { keepInternalId: boolean; scalarResultIsStr?: boolean; scalarResultIsBool?: boolean },
 ): unknown[] => rows.map((row) => {
   const keys = Object.keys(row);
   // Scalar select: Gel SQL projects a single `value` column. Parse JSON-shaped
@@ -53,6 +55,11 @@ export const materializeGelSQLRows = (
   if (keys.length === 1 && Object.prototype.hasOwnProperty.call(row, "value")) {
     if (row.value === null || row.value === undefined) {
       return DROP_SCALAR_NULL;
+    }
+    if (options.scalarResultIsBool) {
+      if (typeof row.value === "number") return row.value !== 0;
+      if (typeof row.value === "bigint") return row.value !== 0n;
+      if (typeof row.value === "boolean") return row.value;
     }
     if (options.scalarResultIsStr && typeof row.value === "string") {
       if (row.value.startsWith("\"")) {

@@ -42,6 +42,11 @@ describe("materializeGelSQLRows", () => {
       .toEqual(["hi"]);
   });
 
+  it("decodes native SQLite booleans for std::bool scalar results", () => {
+    expect(materializeGelSQLRows([{ value: 1 }, { value: 0 }], { keepInternalId: false, scalarResultIsBool: true }))
+      .toEqual([true, false]);
+  });
+
   it("decodes an object set, dropping internal columns unless keepInternalId", () => {
     const row = { id: "u1", name: "Bob", tags: '["a","b"]', __source_type: "default::User", __tid__: "x" };
     expect(materializeGelSQLRows([row], { keepInternalId: false })).toEqual([{ name: "Bob", tags: ["a", "b"] }]);

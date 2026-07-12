@@ -133,6 +133,10 @@ export interface GelIRCompileOptions {
   // must therefore materialize its own iterator source rather than dangling on
   // the unbound subject alias `g0`.
   siblingScopeLimitOffset?: boolean;
+  // Internal top-level scalar-result mode: emit native SQL booleans (0/1/NULL)
+  // instead of JSON text booleans. Keep this off for nested value contexts,
+  // where json_array/json_object embedding requires JSON boolean text.
+  nativeBoolResults?: boolean;
 }
 
 // See GelIRCompileOptions.strictShape.

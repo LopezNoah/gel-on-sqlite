@@ -149,6 +149,12 @@ describe("canonical SQL crosses the same seam as the CLI", () => {
     expect(sql).toContain("a0");
     expect(sql).not.toMatch(/\bg0\b/);
   });
+
+  it("emits native SQL booleans for top-level strict comparisons", () => {
+    const r = inspect(fixture("issues"), `SELECT count({1}) = 1;`);
+    expect(r.ok).toBe(true);
+    expect(r.sql()).toBe('SELECT (SELECT l = r FROM (SELECT (count(1)) AS l, (1) AS r)) AS "value"');
+  });
 });
 
 describe("Gel-shaped compile facts projection", () => {

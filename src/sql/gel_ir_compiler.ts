@@ -308,8 +308,9 @@ export const compileGelIRToSQL = (
         forSource.bindingAliases.set(root.key, alias);
       }
     }
+    const bodyOptions = setValueIsBool(sourceSet) ? { ...options, nativeBoolResults: true } : options;
     const bodySql = forSource
-      ? compileValueSetSQLWithAliases(bodySet, forSource.bindingAliases, forSource.baseAlias, params, target, options, forSource.linkPropertyAliases, forSource.scalarBindingAliases, forSource.tupleIterAliases)
+      ? compileValueSetSQLWithAliases(bodySet, forSource.bindingAliases, forSource.baseAlias, params, target, bodyOptions, forSource.linkPropertyAliases, forSource.scalarBindingAliases, forSource.tupleIterAliases)
       : null;
 
     if (forSource && bodySql) {
@@ -367,7 +368,8 @@ export const compileGelIRToSQL = (
     }
     if (sourceSet) {
       const outerWheres = selectWhere ? [selectWhere] : [];
-      const scalarSql = compileScalarSelectSQL(sourceSet, params, target, options, outerWheres);
+      const scalarOptions = setValueIsBool(sourceSet) ? { ...options, nativeBoolResults: true } : options;
+      const scalarSql = compileScalarSelectSQL(sourceSet, params, target, scalarOptions, outerWheres);
       if (scalarSql) {
         let sql = scalarSql;
         if (selectOrderBy && selectOrderBy.length > 0) {
@@ -3003,7 +3005,9 @@ const compileScalarSelectSQLInner = (
       const op = opCall.operator;
       const cmp = normalizeOperator(op);
       if (cmp && pieces.length === 2) {
-        lowered = `CASE WHEN ${pieces[0]} IS NULL OR ${pieces[1]} IS NULL THEN NULL WHEN ${pieces[0]} ${cmp} ${pieces[1]} THEN json('true') ELSE json('false') END`;
+        lowered = options.nativeBoolResults
+          ? `(${pieces[0]} ${cmp} ${pieces[1]})`
+          : `CASE WHEN ${pieces[0]} IS NULL OR ${pieces[1]} IS NULL THEN NULL WHEN ${pieces[0]} ${cmp} ${pieces[1]} THEN json('true') ELSE json('false') END`;
       } else if (op === "^" && pieces.length === 2) {
         lowered = `pow(${pieces[0]}, ${pieces[1]})`;
       } else if ((op === "neg" || op === "pos") && pieces.length === 1) {
@@ -7379,6 +7383,7 @@ const compileValueSetSQLWithAliases = (
     if (typeof literal === "boolean") {
       // Emit bool literals as their JSON-encoded form so the value column
       // surfaces as `true`/`false` in the runtime decoder instead of `0`/`1`.
+      if (options.nativeBoolResults) return literal ? "1" : "0";
       return literal ? "json('true')" : "json('false')";
     }
     params.push(literal);
@@ -7537,6 +7542,7 @@ const compileValueSetSQLWithAliases = (
         const l = compileValueSetSQLWithAliases(cmpArgs[0].expr, bindingAliases, fallbackAlias, params, target, options, linkPropertyAliases, scalarBindingAliases, tupleIterAliases);
         const r = compileValueSetSQLWithAliases(cmpArgs[1].expr, bindingAliases, fallbackAlias, params, target, options, linkPropertyAliases, scalarBindingAliases, tupleIterAliases);
         if (l && r) {
+          if (options.nativeBoolResults) return `(${l} ${call.operator === "?=" ? "IS" : "IS NOT"} ${r})`;
           return `(CASE WHEN ${l} ${call.operator === "?=" ? "IS" : "IS NOT"} ${r} THEN json('true') ELSE json('false') END)`;
         }
         params.length = checkpoint;
@@ -7561,6 +7567,12 @@ const compileValueSetSQLWithAliases = (
       // layer (predicate consumers re-normalize truthiness). The one-row
       // subquery binds each side once so `?` params aren't consumed twice.
       if (cmpOp) {
+        if (options.nativeBoolResults) {
+          return bindOperandsOnce(
+            [{ alias: "l", sql: left }, { alias: "r", sql: right }],
+            `l ${cmpOp} r`,
+          );
+        }
         return bindOperandsOnce(
           [{ alias: "l", sql: left }, { alias: "r", sql: right }],
           `CASE WHEN l IS NULL OR r IS NULL THEN NULL WHEN l ${cmpOp} r THEN json('true') ELSE json('false') END`,
@@ -10961,6 +10973,7 @@ const compileValueSetSQL = (
     const inlineSql = inlineIntegerConstantSql(unwrapped.result.expr, literal);
     if (inlineSql !== undefined) return inlineSql;
     if (typeof literal === "boolean") {
+      if (options.nativeBoolResults) return literal ? "1" : "0";
       return literal ? "json('true')" : "json('false')";
     }
     params.push(literal);
@@ -11579,6 +11592,12 @@ const compileOperatorValueSQL = (
     if (call.operator === "not") {
       if (operandSqls.length < 1) return null;
       const p = operandSqls[0];
+      if (options.nativeBoolResults) {
+        return bindOperandsOnce(
+          [{ alias: "p", sql: p }],
+          `CASE WHEN p IS NULL THEN NULL ELSE NOT ${truthy("p")} END`,
+        );
+      }
       return bindOperandsOnce(
         [{ alias: "p", sql: p }],
         `CASE WHEN p IS NULL THEN NULL WHEN p = json('true') THEN json('false') WHEN p = json('false') THEN json('true') WHEN p THEN json('false') ELSE json('true') END`,
@@ -11587,6 +11606,12 @@ const compileOperatorValueSQL = (
     if (operandSqls.length < 2) return null;
     const [a, b] = operandSqls;
     const op = call.operator === "and" ? "AND" : "OR";
+    if (options.nativeBoolResults) {
+      return bindOperandsOnce(
+        [{ alias: "a", sql: a }, { alias: "b", sql: b }],
+        `CASE WHEN a IS NULL OR b IS NULL THEN NULL ELSE ${truthy("a")} ${op} ${truthy("b")} END`,
+      );
+    }
     return bindOperandsOnce(
       [{ alias: "a", sql: a }, { alias: "b", sql: b }],
       `CASE WHEN a IS NULL OR b IS NULL THEN NULL WHEN ${truthy("a")} ${op} ${truthy("b")} THEN json('true') ELSE json('false') END`,
@@ -11623,7 +11648,9 @@ const compileOperatorValueSQL = (
     // placeholders are not consumed twice.
     return bindOperandsOnce(
       [{ alias: "l", sql: left }, { alias: "r", sql: right }],
-      `CASE WHEN l IS NULL OR r IS NULL THEN NULL WHEN l ${op} r THEN json('true') ELSE json('false') END`,
+      options.nativeBoolResults
+        ? `l ${op} r`
+        : `CASE WHEN l IS NULL OR r IS NULL THEN NULL WHEN l ${op} r THEN json('true') ELSE json('false') END`,
     );
   }
   if (call.operator === "??") {
@@ -11652,6 +11679,7 @@ const compileOperatorValueSQL = (
         && (args[0].expr.expr as TypeRoot).typeref.id === (args[1].expr.expr as TypeRoot).typeref.id) {
       const idRef = `${sourceAlias}.${quoteIdent("id")}`;
       const selfOp = call.operator === "?=" ? "IS" : "IS NOT";
+      if (options.nativeBoolResults) return `(${idRef} ${selfOp} ${idRef})`;
       return `(CASE WHEN ${idRef} ${selfOp} ${idRef} THEN json('true') ELSE json('false') END)`;
     }
     // Fenced-pointer args keep their fence WHERE in a correlated subselect
@@ -11672,6 +11700,7 @@ const compileOperatorValueSQL = (
     // both sides are scalar (or empty represented as NULL) at this row.
     // Emit json('true'/'false') so JSON.parse downstream produces real booleans.
     const op = call.operator === "?=" ? "IS" : "IS NOT";
+    if (options.nativeBoolResults) return `(${left} ${op} ${right})`;
     return `(CASE WHEN ${left} ${op} ${right} THEN json('true') ELSE json('false') END)`;
   }
 

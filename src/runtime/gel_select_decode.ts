@@ -1,8 +1,8 @@
 // Bundle-safe decode-option derivation for the lowered SELECT path.
 //
-// `materializeGelSQLRows` needs two facts about the compiled statement:
-// whether the top-level shape projects `id` (keepInternalId) and whether the
-// scalar result type is `std::str` (scalarResultIsStr). The canonical copies
+// `materializeGelSQLRows` needs facts about the compiled statement: whether the
+// top-level shape projects `id` (keepInternalId) and whether scalar results need
+// type-specific decoding. The canonical copies
 // of these tiny pure helpers live in `engine.ts`, but that module pulls in
 // `database.ts` → `better-sqlite3` and so can't be imported by the async/D1
 // path (it must bundle for workerd). These mirror the engine versions exactly,
@@ -51,6 +51,12 @@ const gelStatementScalarResultIsStr = (statement: GelIRStatement): boolean => {
   return qualifiedGelTypeName(typeref) === "std::str";
 };
 
+const gelStatementScalarResultIsBool = (statement: GelIRStatement): boolean => {
+  const typeref = unwrapGelSelectResultSet(statement.expr).typeref;
+  if (!typeref) return false;
+  return qualifiedGelTypeName(typeref) === "std::bool";
+};
+
 // The qualified name of the object type a SELECT reads from, or undefined for
 // scalar/free selects. Used to gate access-policy enforcement off the async
 // path (policy evaluation re-queries per row — a Tier-2 concern).
@@ -63,9 +69,11 @@ export const gelStatementSourceType = (statement: GelIRStatement): string | unde
 export interface GelSelectDecodeOptions {
   keepInternalId: boolean;
   scalarResultIsStr: boolean;
+  scalarResultIsBool: boolean;
 }
 
 export const gelSelectDecodeOptions = (statement: GelIRStatement): GelSelectDecodeOptions => ({
   keepInternalId: gelStatementProjectsId(statement),
   scalarResultIsStr: gelStatementScalarResultIsStr(statement),
+  scalarResultIsBool: gelStatementScalarResultIsBool(statement),
 });

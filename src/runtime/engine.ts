@@ -7766,6 +7766,7 @@ const runGelSelectSQL = (
   return materializeGelSQLRows(visibleRows, {
     keepInternalId: options.keepInternalId ?? gelStatementProjectsId(statement),
     scalarResultIsStr: gelStatementScalarResultIsStr(statement),
+    scalarResultIsBool: gelStatementScalarResultIsBool(statement),
   });
 };
 
@@ -7781,6 +7782,12 @@ const gelStatementScalarResultIsStr = (statement: GelIRStatement): boolean => {
   // Inference-derived typerefs (`unknown:std::str`) don't set isScalar —
   // match on the qualified name alone; nothing non-scalar is named std::str.
   return qualifiedGelTypeName(typeref) === "std::str";
+};
+
+const gelStatementScalarResultIsBool = (statement: GelIRStatement): boolean => {
+  const typeref = unwrapGelSelectResultSet(statement.expr).typeref;
+  if (!typeref) return false;
+  return qualifiedGelTypeName(typeref) === "std::bool";
 };
 
 const evaluateGelSelectPolicies = (
