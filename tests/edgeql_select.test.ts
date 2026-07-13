@@ -11058,7 +11058,8 @@ describe("TestEdgeQLSelect", () => {
               [1, 2],
               [3, 4],
             ],
-          ]
+          ],
+      { variables: [[[1, 2], [3, 4]]] }
     );
     assertQueryResult(
       h,
@@ -11070,7 +11071,8 @@ describe("TestEdgeQLSelect", () => {
               [1, 2],
               [3, 4],
             ],
-          ]
+          ],
+      { variables: { foo: [[1, 2], [3, 4]] } }
     );
     assertQueryResult(
       h,
@@ -11088,7 +11090,8 @@ describe("TestEdgeQLSelect", () => {
                 ["C", "D"],
               ],
             ],
-          ]
+          ],
+      { variables: { foo: [[[1, 2], [3, 4]], [["A", "B"], ["C", "D"]]] } }
     );
     assertQueryResult(
       h,
@@ -11106,7 +11109,8 @@ describe("TestEdgeQLSelect", () => {
                 [2, "B"],
               ],
             ],
-          ]
+          ],
+      { variables: { foo: [[[1, "A"], [1, "B"]], [[2, "A"], [2, "B"]]] } }
     );
   });
 

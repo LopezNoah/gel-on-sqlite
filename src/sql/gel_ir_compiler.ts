@@ -151,6 +151,17 @@ export const compileGelIRToSQL = (
   const selectWhere = statement.where ?? topSelect.selectExpr?.where;
   const selectOrderBy = statement.orderBy ?? topSelect.selectExpr?.orderBy;
   let sourceSet = topSelect.selectExpr ? topSelect.result : unwrapSelectResultSet(statement.expr);
+  if (
+    sourceSet
+    && sourceSet !== statement.expr
+    && (statement.expr as { typeIntersectionNarrowed?: boolean }).typeIntersectionNarrowed
+  ) {
+    sourceSet = {
+      ...sourceSet,
+      typeref: statement.expr.typeref,
+      typeIntersectionNarrowed: true,
+    } as Set;
+  }
   // A shape applied to a select_expr wrapper (`SELECT (SELECT Text LIMIT 2)
   // {body}` or `SELECT sub {body}` for a WITH binding) lives on the OUTER
   // set; unwrapping to the select's result would silently drop it. Merge the
@@ -291,7 +302,10 @@ export const compileGelIRToSQL = (
     const forParamsCheckpoint = params.length;
     const projectedColumns = collectForExprProjectedColumns(sourceSet, selectWhere, selectOrderBy);
     const forSource = compileForExprSource(sourceSet, projectedColumns, options, params, target);
-    const bodySet = innermostForExprBody(sourceSet);
+    let bodySet = innermostForExprBody(sourceSet);
+    if ((sourceSet.shape?.length ?? 0) > 0) {
+      bodySet = { ...bodySet, shape: [...sourceSet.shape, ...(bodySet.shape ?? [])] };
+    }
     // Fresh references to a type root inside the FOR body (e.g. `Card.name`
     // when the iterator is `C IN Card`) are independent of the iterator —
     // EdgeQL semantics give them cross-product cardinality. We add a
@@ -326,6 +340,7 @@ export const compileGelIRToSQL = (
         cur = se.result;
       }
       const whereSets = [...forSource.whereSets, ...bodyWheres, ...(selectWhere ? [selectWhere] : [])];
+      let hasWhere = false;
       if (whereSets.length > 0) {
         const whereSql = whereSets
           .map((where) => compilePredicateWithAliases(where, forSource.bindingAliases, params, target, options, forSource.linkPropertyAliases, forSource.scalarBindingAliases, forSource.tupleIterAliases))
@@ -333,7 +348,16 @@ export const compileGelIRToSQL = (
           .join(" AND ");
         if (whereSql) {
           sql += ` WHERE ${whereSql}`;
+          hasWhere = true;
         }
+      }
+      const firstFor = sourceSet.expr as ForExpr;
+      const iteratorTypes = new globalThis.Set(concreteSourceTypeNames(firstFor.iterator.typeref));
+      const bodyTypes = concreteSourceTypeNames(bodySet.typeref).filter((name) => iteratorTypes.has(name));
+      if (!bodySet.typeref.isScalar && bodyTypes.length > 0 && bodyTypes.length < iteratorTypes.size) {
+        const iteratorAlias = forSource.bindingAliases.get(pathIdKey(firstFor.iterator)) ?? forSource.baseAlias;
+        const typeFilter = `${iteratorAlias}.${quoteIdent("__source_type")} IN (${bodyTypes.map(quoteLiteral).join(", ")})`;
+        sql += `${hasWhere ? " AND" : " WHERE"} ${typeFilter}`;
       }
       const orderBy = selectOrderBy ?? forSource.orderBy;
       if (orderBy && orderBy.length > 0) {
@@ -471,6 +495,14 @@ export const compileGelIRToSQL = (
   let sql = needsDistinct
     ? `SELECT DISTINCT ${projections.join(", ")} FROM ${sourceSql}`
     : `SELECT ${projections.join(", ")} FROM ${sourceSql}`;
+  let hasOuterWhere = false;
+  if (sourceSet && (sourceSet as { typeIntersectionNarrowed?: boolean }).typeIntersectionNarrowed) {
+    const admitted = concreteSourceTypeNames(sourceSet.typeref);
+    if (admitted.length > 0) {
+      sql += ` WHERE ${sourceAlias}.${quoteIdent("__source_type")} IN (${admitted.map(quoteLiteral).join(", ")})`;
+      hasOuterWhere = true;
+    }
+  }
 
   const whereToApply = statement.where ?? selectWhere;
   if (whereToApply) {
@@ -511,7 +543,8 @@ export const compileGelIRToSQL = (
       whereSql = tryCompileFreeRootExistsWhere(rewritten, sourceAlias, sourceSet, params, target, whereOptions);
     }
     if (whereSql) {
-      sql += ` WHERE ${whereSql}`;
+      sql += `${hasOuterWhere ? " AND" : " WHERE"} ${whereSql}`;
+      hasOuterWhere = true;
     } else if (process.env.DBG_DROPPED_WHERE) {
       console.error("[dropped-where]");
     }
@@ -2828,6 +2861,15 @@ const compileScalarSelectSQLInner = (
           params.length = cpMulti;
         }
         const correlatedAlias = pickOuterScopeAliasForExpr(inner, options);
+        if (!correlatedAlias) {
+          const cpRows = params.length;
+          const rows = compileScalarSelectSQL(inner, params, target, options);
+          if (rows) {
+            return `SELECT je.${quoteIdent("value")} AS ${quoteIdent("value")}`
+              + ` FROM (${rows}) g_aur CROSS JOIN json_each(COALESCE(g_aur.${quoteIdent("value")}, '[]')) je`;
+          }
+          params.length = cpRows;
+        }
         const arrSql = compileValueSetSQL(inner, correlatedAlias ?? "g_au", params, target, options);
         if (arrSql) {
           return `SELECT "value" FROM json_each(COALESCE(${arrSql}, '[]'))`;
@@ -6060,11 +6102,22 @@ const compileSelectSource = (
   }
   if (sourceSet.expr.kind === "select_expr") {
     const selectExpr = sourceSet.expr as SelectExpr;
+    const narrowedWrapper = (sourceSet as { typeIntersectionNarrowed?: boolean }).typeIntersectionNarrowed;
+    const innerResult = narrowedWrapper
+      ? {
+          ...selectExpr.result,
+          typeref: sourceSet.typeref,
+          typeIntersectionNarrowed: true,
+          expr: selectExpr.result.expr.kind === "type_root"
+            ? { ...selectExpr.result.expr, typeref: sourceSet.typeref }
+            : selectExpr.result.expr,
+        } as Set
+      : selectExpr.result;
     // The wrapper's own shape (merged from an outer `SELECT (…) {…}`) and
     // any outer where/orderBy columns must survive into the inner source's
     // projection, alongside whatever the inner clauses reference.
     const inner = compileSelectSource(
-      selectExpr.result, selectExpr.where, selectExpr.orderBy, options, params, target,
+      innerResult, selectExpr.where, selectExpr.orderBy, options, params, target,
       undefined, projectedColumns,
     );
     if (!inner) return null;
@@ -6073,6 +6126,13 @@ const compileSelectSource = (
       const whereSql = compileWhereClause(selectExpr.where, inner.alias, params, target, options);
       if (!whereSql) return null;
       sql += ` WHERE ${whereSql}`;
+    }
+    if (narrowedWrapper) {
+      const admitted = concreteSourceTypeNames(sourceSet.typeref);
+      if (admitted.length > 0) {
+        sql += `${selectExpr.where ? " AND" : " WHERE"} ${inner.alias}.${quoteIdent("__source_type")}`
+          + ` IN (${admitted.map(quoteLiteral).join(", ")})`;
+      }
     }
     if (selectExpr.orderBy && selectExpr.orderBy.length > 0) {
       const orders = selectExpr.orderBy.map((order) => {
@@ -6197,7 +6257,23 @@ const compileSelectSource = (
       return `SELECT ${columnList} FROM ${source.sql}`;
     });
     if (selects.some((entry) => !entry)) return null;
-    return { sql: `(${(selects as string[]).join(" UNION ALL ")}) ${alias}`, alias };
+    const unionSql = (selects as string[]).join(" UNION ALL ");
+    const originalTypes = new globalThis.Set(
+      args.flatMap((arg) => concreteSourceTypeNames(arg.expr.typeref)),
+    );
+    const narrowedTypes = concreteSourceTypeNames(sourceSet.typeref)
+      .filter((name) => originalTypes.has(name));
+    const explicitlyNarrowed = (sourceSet as { typeIntersectionNarrowed?: boolean }).typeIntersectionNarrowed;
+    if (explicitlyNarrowed && narrowedTypes.length > 0 && narrowedTypes.length < originalTypes.size) {
+      const narrowedAlias = `${alias}_n`;
+      const admitted = narrowedTypes.map(quoteLiteral).join(", ");
+      return {
+        sql: `(SELECT ${narrowedAlias}.* FROM (${unionSql}) ${narrowedAlias}`
+          + ` WHERE ${narrowedAlias}.${quoteIdent("__source_type")} IN (${admitted})) ${alias}`,
+        alias,
+      };
+    }
+    return { sql: `(${unionSql}) ${alias}`, alias };
   }
   if (sourceSet.expr.kind === "operator_call"
       && ((sourceSet.expr as OperatorCall).operator === "intersect"
@@ -7202,6 +7278,9 @@ const compileValueSetSQLWithAliases = (
   tupleIterAliases?: Map<string, string>,
 ): string | null => {
   const checkpoint = params.length;
+  if ((set as { dynamicTypeName?: boolean }).dynamicTypeName) {
+    return `${fallbackAlias}.${quoteIdent("__source_type")}`;
+  }
   const unwrapped = unwrapSelectExprSet(set);
   const expr = unwrapped.result.expr;
 
@@ -7600,9 +7679,54 @@ const compileValueSetSQLWithAliases = (
     // time): recurse into the body with the surrounding FOR aliases so
     // binding references resolve to the iterator's columns.
     if (call.body && scalarBindingAliases && scalarBindingAliases.size > 0) {
-      const inner = compileValueSetSQLWithAliases(call.body, bindingAliases, fallbackAlias, params, target, options, linkPropertyAliases, scalarBindingAliases, tupleIterAliases);
+      // Required-argument guards are select wrappers around the body. A scalar
+      // FOR binding is already a materialized row and therefore non-empty, so
+      // those guards are redundant here and can otherwise de-correlate nested
+      // UDF arguments back to the iterator's complete source set.
+      let correlatedBody = call.body;
+      while (correlatedBody.expr.kind === "select_expr") {
+        correlatedBody = (correlatedBody.expr as SelectExpr).result;
+      }
+      const inner = compileValueSetSQLWithAliases(correlatedBody, bindingAliases, fallbackAlias, params, target, options, linkPropertyAliases, scalarBindingAliases, tupleIterAliases);
       if (inner) return inner;
       params.length = checkpoint;
+    }
+    // Variadic UDFs are represented as an array which their body commonly
+    // consumes with `sum(array_unpack(x))`. Inside a FOR, compile that array
+    // against the current iterator aliases before expanding it; the generic
+    // aggregate path otherwise re-evaluates the original whole set and returns
+    // the same aggregate for every iteration row.
+    const shortFname = fname.split("::").pop() ?? fname;
+    if (shortFname === "sum" && args.length === 1
+        && scalarBindingAliases && scalarBindingAliases.size > 0) {
+      const unpack = unwrapSelectExprSet(args[0].expr).result;
+      if (unpack.expr.kind === "function_call") {
+        const unpackCall = unpack.expr as FunctionCall;
+        const unpackName = unpackCall.functionName.split("::").pop() ?? unpackCall.functionName;
+        const unpackArgs = orderedCallArgs(unpackCall.args);
+        if (unpackName === "array_unpack" && unpackArgs.length === 1) {
+          const arrayArg = unwrapSelectExprSet(unpackArgs[0].expr).result;
+          const arraySql = arrayArg.expr.kind === "array"
+            ? (() => {
+                const parts = (arrayArg.expr as ArrayExpr).elements.map((element) =>
+                  compileValueSetSQLWithAliases(
+                    element, bindingAliases, fallbackAlias, params, target, options,
+                    linkPropertyAliases, scalarBindingAliases, tupleIterAliases,
+                  ));
+                return parts.every((part): part is string => part !== null)
+                  ? `json_array(${parts.join(", ")})`
+                  : null;
+              })()
+            : compileValueSetSQLWithAliases(
+                arrayArg, bindingAliases, fallbackAlias, params, target, options,
+                linkPropertyAliases, scalarBindingAliases, tupleIterAliases,
+              );
+          if (arraySql) {
+            return `(SELECT IFNULL(sum(${quoteIdent("value")}), 0) FROM json_each(${arraySql}))`;
+          }
+          params.length = checkpoint;
+        }
+      }
     }
     // Stdlib call whose arguments reference a tuple/scalar iterator binding
     // (`bit_lshift(val, X.0)` inside `FOR X IN {(2, 2), …}`): compile each
@@ -7611,7 +7735,6 @@ const compileValueSetSQLWithAliases = (
     // fall-through path below would decorrelate `X.0` into a whole-set
     // subquery — gate on an actual binding mention so calls without iterator
     // refs keep their original (bool-normalizing) lowering.
-    const shortFname = fname.split("::").pop() ?? fname;
     if (!SET_CONSUMING_FUNCTIONS.has(shortFname) && args.length > 0
         && ((tupleIterAliases && tupleIterAliases.size > 0) || (scalarBindingAliases && scalarBindingAliases.size > 0))) {
       const argKeys = new globalThis.Set<string>();
@@ -8023,7 +8146,9 @@ const setValueIsJson = (set: Set): boolean => {
   }
   // array_agg produces a JSON array.
   if (result.expr.kind === "function_call") {
-    const fn = ((result.expr as FunctionCall).functionName ?? "").split("::").pop();
+    const call = result.expr as FunctionCall;
+    if (call.body && setValueIsJson(call.body)) return true;
+    const fn = (call.functionName ?? "").split("::").pop();
     if (fn === "array_agg") return true;
     // Cardinality/identity guards (`assert_single`, `assert_exists`,
     // `assert_distinct`, `distinct`) pass their argument's set through
@@ -8032,7 +8157,7 @@ const setValueIsJson = (set: Set): boolean => {
     // json(...) or the nested object renders as a quoted string.
     if (fn === "assert_single" || fn === "assert_exists"
       || fn === "assert_distinct" || fn === "distinct") {
-      const inner = orderedCallArgs((result.expr as FunctionCall).args)[0]?.expr;
+      const inner = orderedCallArgs(call.args)[0]?.expr;
       if (inner) return setValueIsJson(inner);
     }
   }
@@ -9987,7 +10112,14 @@ const compilePredicateSetSQL = (
   // test in the value path. Route them through the value compiler so the
   // outer WHERE can use the resulting boolean directly.
   if (set.expr.kind === "type_check_op") {
-    const value = compileValueSetSQL(set, sourceAlias, params, target, options, linkPropertyAlias);
+    const value = compileValueSetSQL(
+      set,
+      sourceAlias,
+      params,
+      target,
+      { ...options, nativeBoolResults: true },
+      linkPropertyAlias,
+    );
     if (value) return value;
     params.length = checkpoint;
     return null;
@@ -11144,8 +11276,10 @@ const compileValueSetSQL = (
 
   if (expr.kind === "type_check_op") {
     const typeCheck = expr as TypeCheckOpExpr;
+    const trueSql = options.nativeBoolResults ? "1" : "json('true')";
+    const falseSql = options.nativeBoolResults ? "0" : "json('false')";
     if (typeCheck.result !== undefined) {
-      return typeCheck.result ? "1" : "0";
+      return typeCheck.result ? trueSql : falseSql;
     }
     // EdgeQL `<literal> IS <type>` is a static check: the literal's concrete
     // scalar type either is (or descends from) the target type, or it isn't.
@@ -11210,8 +11344,6 @@ const compileValueSetSQL = (
       const literalShort = stripStd(concreteLiteralType);
       const targetShort = stripStd(rightType);
       const ancestors = SCALAR_ANCESTORS[literalShort];
-      const trueSql = "json('true')";
-      const falseSql = "json('false')";
       // A scalar literal is never an Object.
       if (ancestors && targetShort === "Object") {
         return typeCheck.op === "is" ? falseSql : trueSql;
@@ -11243,8 +11375,8 @@ const compileValueSetSQL = (
     const rightChildren = (typeCheck.right.children ?? []).map((child) => qualifyTypeName(child));
     const matches = leftType === rightType || rightChildren.includes(leftType);
     if (matches) {
-      if (typeCheck.op === "is") return "1";
-      if (typeCheck.op === "is not") return "0";
+      if (typeCheck.op === "is") return trueSql;
+      if (typeCheck.op === "is not") return falseSql;
     }
     // Dynamic case: the left source is an abstract/parent type and the right
     // is a concrete subtype — runtime decides per row by comparing the
@@ -11284,11 +11416,10 @@ const compileValueSetSQL = (
     const placeholders = matchTypes.map(() => "?").join(", ");
     params.push(...matchTypes);
     const op = typeCheck.op === "is" ? "IN" : "NOT IN";
-    // NOTE: this value-path result is ALSO consumed as a FILTER predicate (via
-    // compilePredicateSetSQL's fallback to compileValueSetSQL), so it must stay
-    // a SQL boolean — wrapping it as json('true') breaks `FILTER X IS T`. The
-    // shape-value JSON-bool case (`a := Object IS Ba`) needs a separate seam.
-    return `(${tagSql} ${op} (${placeholders}))`;
+    const predicate = `(${tagSql} ${op} (${placeholders}))`;
+    return options.nativeBoolResults
+      ? predicate
+      : `(CASE WHEN ${predicate} THEN ${trueSql} ELSE ${falseSql} END)`;
   }
 
   if (expr.kind === "coalesce_expr") {

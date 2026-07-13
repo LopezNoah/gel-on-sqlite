@@ -275,16 +275,9 @@ export const compilePathQlast = (expr: QlPath, ctx: IRCompileContext, deps: Qlas
     }
 
     if (kind === "TypeIntersection") {
-      const ti = step as QlTypeIntersection;
-      if (!pathTip) throw new Error("type intersection has no source set");
-      const intersected = deps.resolveTypeRef(ctx, typeExprName(ti.type));
-      deps.validateTypeIntersectionOperand(ctx, pathTip.typeref, intersected);
-      const next = steps[i + 1];
-      if (next && kindOf(next) === "Ptr") {
-        deps.validateTypeIntersectionPointer(ctx, pathTip.typeref.id, intersected.id, (next as QlPtr).name);
-      }
-      pathTip = { ...pathTip, typeref: intersected };
-      continue;
+      // Concrete intersection closures need the schema-aware narrowing in the
+      // legacy path walker. A plain RHS typeref loses the LHS extent (Ba & Bb).
+      throw deferred("schema-aware type intersection narrowing");
     }
 
     if (kind === "Splat") continue;

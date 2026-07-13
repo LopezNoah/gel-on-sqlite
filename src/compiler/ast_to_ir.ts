@@ -1849,6 +1849,7 @@ const compilePathSteps = (steps: EdgeQLPathStep[], ctx: IRCompileContext): Set =
       return literalToSet(null);
     }
     let out = current;
+    let intersectionConcrete: globalThis.Set<string> | undefined;
     for (let i = 0; i < steps.length; i += 1) {
       const step = steps[i];
       if (step.kind === "ptr") {
@@ -1880,7 +1881,15 @@ const compilePathSteps = (steps: EdgeQLPathStep[], ctx: IRCompileContext): Set =
         if (next && next.kind === "ptr") {
           validateTypeIntersectionPointer(ctx, baseTypeId, intersected.id, next.name);
         }
-        out = { ...out, typeref: intersected };
+        const narrowed = narrowTypeIntersectionStep(ctx, out.typeref, intersectionConcrete, step);
+        if (narrowed) {
+          intersectionConcrete = narrowed.concrete;
+          out = { ...out, typeref: narrowed.typeref };
+        } else if (narrowed === null) {
+          out = { ...out, typeref: intersected };
+        } else if (narrowed === undefined) {
+          out = { ...out, typeref: intersected };
+        }
         continue;
       }
       if (step.kind === "splat") continue;
@@ -1903,6 +1912,7 @@ const compilePathSteps = (steps: EdgeQLPathStep[], ctx: IRCompileContext): Set =
     }
   }
   let out = resolveBinding(ctx, first.name) ?? setFromTypeRoot(resolveTypeRef(ctx, first.name));
+  let intersectionConcrete: globalThis.Set<string> | undefined;
   const rest = steps.slice(1);
   for (let i = 0; i < rest.length; i += 1) {
     const step = rest[i];
@@ -1986,10 +1996,13 @@ const compilePathSteps = (steps: EdgeQLPathStep[], ctx: IRCompileContext): Set =
       if (next && next.kind === "ptr") {
         validateTypeIntersectionPointer(ctx, baseTypeId, intersected.id, next.name);
       }
-      out = {
-        ...out,
-        typeref: intersected,
-      };
+      const narrowed = narrowTypeIntersectionStep(ctx, out.typeref, intersectionConcrete, step);
+      if (narrowed) {
+        intersectionConcrete = narrowed.concrete;
+        out = withNarrowedSource(out, narrowed.typeref);
+      } else if (narrowed === undefined) {
+        out = withNarrowedSource(out, intersected);
+      }
       continue;
     }
     if (step.kind === "splat") {
@@ -3529,6 +3542,40 @@ const astExprDefinitelyEmpty = (expr: FreeObjectExpr): boolean => {
   }
 };
 
+// A FOR iterator needs a type even when it produces no rows. A bare empty set
+// has no type, and wrapping an alias to one in another set constructor does not
+// add one (`WITH s := {} FOR x IN {s}`). A cast is deliberately a boundary:
+// `<int64>{}` is empty but fully typed and therefore a valid iterator.
+const astForIteratorIsIndeterminate = (
+  expr: FreeObjectExpr,
+  ctx: IRCompileContext,
+  seen = new globalThis.Set<string>(),
+): boolean => {
+  if (expr.kind === "set_literal" || expr.kind === "set_expr") {
+    const values = (expr as { values: FreeObjectExpr[] }).values;
+    return values.length === 0 || values.every((value) => astForIteratorIsIndeterminate(value, ctx, seen));
+  }
+  if (expr.kind === "binding_ref") {
+    const name = expr.name;
+    if (seen.has(name)) return false;
+    const value = ctx.bindingAst?.get(name);
+    if (!value || typeof value !== "object") return false;
+    seen.add(name);
+    const bindingValue = value as { kind?: string; expr?: FreeObjectExpr };
+    return astForIteratorIsIndeterminate(
+      bindingValue.kind === "subquery_expr" && bindingValue.expr
+        ? bindingValue.expr
+        : value as FreeObjectExpr,
+      ctx,
+      seen,
+    );
+  }
+  if (expr.kind === "select_expr_subquery") {
+    return astForIteratorIsIndeterminate(expr.expr, ctx, seen);
+  }
+  return false;
+};
+
 // Conservative "this argument expression definitely contains MORE THAN ONE
 // element" check used to reject multi-element args passed to any parameter of
 // a Modifying function. Fires only for statically multi set constructors
@@ -4124,8 +4171,17 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
         }
       }
       let out = resolveHeadSet(first.name);
+      let intersectionConcrete: globalThis.Set<string> | undefined;
       for (const step of rest) {
         if (step.kind === "ptr") {
+          if (step.name === "__type__") {
+            out = synthesizeTypePointerSet(out);
+            continue;
+          }
+          if (step.name === "name" && out.expr.kind === "pointer" && (out.expr as Pointer).ptrref.shortName === "__type__") {
+            out = synthesizeTypeNamePointerSet(out);
+            continue;
+          }
           let ptrref = resolvePointerRef(ctx, out.typeref, step.name);
           // A type intersection can narrow to a SUPERTYPE (`Issue[IS Named]`):
           // the rows are still the original type's, so a pointer the narrowed
@@ -4149,17 +4205,14 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
           continue;
         }
         if (step.kind === "type_intersection") {
-          // `Issue[IS Named]` — intersecting with a SUPERTYPE is a no-op: the
-          // set stays the (narrower) current type. Only narrow when the
-          // intersection type is NOT an ancestor of the current type. (Source
-          // narrowing for the statement subject `SELECT Ba[IS Bb & Bc] {…}` is
-          // handled via typeFilterExprs in compileSelectStatement; doing it
-          // here would also rewrite correlated link paths like
-          // `FILTER Text[IS Owned].owner`, dropping the link-column projection.)
           const intersected = resolveTypeRef(ctx, step.typeName);
           validateTypeIntersectionOperand(ctx, out.typeref, intersected);
-          if (!isSubtypeOf(ctx, out.typeref.id, intersected.id)) {
-            out = { ...out, typeref: intersected };
+          const narrowed = narrowTypeIntersectionStep(ctx, out.typeref, intersectionConcrete, step);
+          if (narrowed) {
+            intersectionConcrete = narrowed.concrete;
+            out = withNarrowedSource(out, narrowed.typeref);
+          } else if (narrowed === undefined && !isSubtypeOf(ctx, out.typeref.id, intersected.id)) {
+            out = withNarrowedSource(out, intersected);
           }
           continue;
         }
@@ -4324,7 +4377,7 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
                 // subtypes have it, because the union must agree on schema.
                 throw new AppError(
                   "E_SEMANTIC",
-                  `link '${linkPointer.ptrref.shortName}' has no property '${propName}'`,
+                  `property '${propName}' does not exist (link '${linkPointer.ptrref.shortName}' has no property '${propName}')`,
                   1,
                   1,
                 );
@@ -4610,7 +4663,23 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
       if (!ptrref) {
         return setFromTypeRoot(resolveTypeRef(ctx, expr.sourceType ?? "default::Object"));
       }
-      const out = extendPathSetDirectional(subject, ptrref, "inbound");
+      let out = extendPathSetDirectional(subject, ptrref, "inbound");
+      if (expr.sourceTypeExpr) {
+        const narrowed = narrowTypeIntersectionStep(ctx, universalObjectTypeRef(ctx, "Object"), undefined, {
+          typeName: expr.sourceType ?? "",
+          typeExpr: expr.sourceTypeExpr,
+        });
+        if (narrowed) {
+          out = withNarrowedSource(out, narrowed.typeref);
+          out = {
+            ...out,
+            expr: {
+              ...(out.expr as Pointer),
+              ptrref: { ...(out.expr as Pointer).ptrref, outSource: narrowed.typeref },
+            },
+          };
+        }
+      }
       if (expr.optional) {
         return {
           ...out,
@@ -4928,6 +4997,11 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
             1,
           );
         }
+        const narrowed = narrowTypeIntersectionStep(ctx, left.typeref, undefined, {
+          typeName: expr.typeName,
+          typeExpr: fullTypeExpr,
+        });
+        if (narrowed) return withNarrowedSource(left, narrowed.typeref);
       }
       // A type operator (`|` / `&`) requires every operand to be an object
       // type. Reject `1 IS (int64 | float64)`, `[1] IS (array<…> | array<…>)`,
@@ -4959,7 +5033,15 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
           ?? (left.typeref && (left.typeref.id === "unknown:std::tuple" || left.expr.kind === "tuple") ? "tuple" : undefined);
         return literalToSet(leftKind === expr.typeName);
       }
-      const right = resolveTypeRef(ctx, expr.typeName);
+      const compoundRight = fullTypeExpr
+        ? narrowTypeIntersectionStep(
+            ctx,
+            universalObjectTypeRef(ctx, "Object"),
+            undefined,
+            { typeName: "", typeExpr: fullTypeExpr },
+          )
+        : undefined;
+      const right = compoundRight?.typeref ?? resolveTypeRef(ctx, expr.typeName);
       return {
         kind: "set",
         expr: {
@@ -5003,9 +5085,12 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
       const base = (() => {
         if (expr.expr.kind === "is_type") {
           const narrowedBase = compileFreeObjectExpr(expr.expr.expr, ctx);
-          const narrowedType = resolveTypeRef(ctx, expr.expr.typeName);
-          if (!narrowedBase.typeref.isScalar && !narrowedType.isScalar) {
-            return { ...narrowedBase, typeref: narrowedType };
+          const narrowed = narrowTypeIntersectionStep(ctx, narrowedBase.typeref, undefined, {
+            typeName: expr.expr.typeName,
+            typeExpr: expr.expr.typeExpr,
+          });
+          if (!narrowedBase.typeref.isScalar && narrowed) {
+            return withNarrowedSource(narrowedBase, narrowed.typeref);
           }
         }
         return compileFreeObjectExpr(expr.expr, ctx);
@@ -5327,11 +5412,6 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
       // body-less function_call IR when the function isn't a known UDF or
       // the body shape isn't supported — the runtime path picks that up.
       const inlinedBody = tryBuildInlinedUDFBody(expr.call.name, expr.call.args, ctx);
-      // Object-returning UDFs: substitute the inlined body Set directly so
-      // every downstream consumer (pointer chains `foo(1).a`, shapes,
-      // EXISTS, DML wrappers) sees an ordinary object set — the
-      // function_call envelope is only understood by the scalar value
-      // lowering.
       if (inlinedBody && !inlinedBody.typeref.isScalar && inlinedBody.typeref.inSchema) {
         return inlinedBody;
       }
@@ -5349,13 +5429,13 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
         && !inferredReturnTypeName.startsWith("tuple<")
         ? getSchemaType(ctx, inferredReturnTypeName)
         : undefined;
-      const callTyperef = inferredObjectType
+      const callTyperef = inlinedBody?.typeref ?? (inferredObjectType
         ? typeRefFromTypeDef(ctx, inferredObjectType)
         : inferredReturnTypeName && isUniversalObjectRefName(inferredReturnTypeName)
         ? universalObjectTypeRef(ctx, inferredReturnTypeName)
         : inferredReturnTypeName
         ? unknownTypeRef(inferredReturnTypeName)
-        : unknownTypeRef("std::anytype");
+        : unknownTypeRef("std::anytype"));
       return {
         kind: "set",
         expr: {
@@ -5640,6 +5720,9 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
     }
 
     case "for_expr": {
+      if (astForIteratorIsIndeterminate(expr.iterator, ctx)) {
+        failSemantic("FOR statement has iterator of indeterminate type");
+      }
       if (
         expr.variable === "__gel_backlink_item__"
         && expr.body.kind === "backlink_path"
@@ -5727,7 +5810,23 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
         }
         const ptrref = resolveBacklinkPointerRef(ctx, iterator.typeref, expr.body.link, expr.body.sourceType);
         if (ptrref) {
-          const out = extendPathSetDirectional(iterator, ptrref, "inbound");
+          let out = extendPathSetDirectional(iterator, ptrref, "inbound");
+          if (expr.body.sourceTypeExpr) {
+            const narrowed = narrowTypeIntersectionStep(ctx, universalObjectTypeRef(ctx, "Object"), undefined, {
+              typeName: expr.body.sourceType ?? "",
+              typeExpr: expr.body.sourceTypeExpr,
+            });
+            if (narrowed) {
+              out = withNarrowedSource(out, narrowed.typeref);
+              out = {
+                ...out,
+                expr: {
+                  ...(out.expr as Pointer),
+                  ptrref: { ...(out.expr as Pointer).ptrref, outSource: narrowed.typeref },
+                },
+              };
+            }
+          }
           return expr.body.optional
             ? {
                 ...out,
@@ -5897,10 +5996,13 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
 
     case "type_intersection": {
       const inner = compileFreeObjectExpr(expr.expr, ctx);
-      return {
-        ...inner,
-        typeref: resolveTypeRef(ctx, expr.sourceType),
-      };
+      const narrowed = narrowTypeIntersectionStep(ctx, inner.typeref, undefined, {
+        typeName: expr.sourceType,
+        typeExpr: (expr as { typeExpr?: TypeExpr }).typeExpr,
+      });
+      return narrowed
+        ? withNarrowedSource(inner, narrowed.typeref)
+        : withNarrowedSource(inner, resolveTypeRef(ctx, expr.sourceType));
     }
 
     case "field_suffix_math": {
@@ -7179,7 +7281,23 @@ const narrowTypeIntersectionStep = (
       children: leaves.length > 0 ? leaves : undefined,
     };
   };
-  const baseNames = running ?? new globalThis.Set(ctx.schema.concreteTypeNamesUnder(baseTyperef.id));
+  const baseNames = running ?? (() => {
+    const fromSchema = new globalThis.Set(ctx.schema.concreteTypeNamesUnder(baseTyperef.id));
+    if (fromSchema.size > 0) return fromSchema;
+    const fromUnion = new globalThis.Set<string>();
+    for (const rawBranch of baseTyperef.id.split("|")) {
+      const branch = rawBranch.trim().replace(/^unknown:/, "");
+      for (const name of ctx.schema.concreteTypeNamesUnder(branch)) fromUnion.add(name);
+    }
+    if (fromUnion.size > 0) return fromUnion;
+    const concrete = new globalThis.Set<string>();
+    const visit = (ref: TypeRef): void => {
+      if (!ref.isAbstract && !ref.id.includes(" | ")) concrete.add(ref.id);
+      for (const child of ref.children ?? []) visit(child);
+    };
+    visit(baseTyperef);
+    return concrete;
+  })();
   // A base closure we cannot resolve (e.g. an already-`|`-union binding
   // typeref) means we cannot intersect safely — narrow to the branch set alone
   // rather than wrongly emptying the result.
@@ -7215,8 +7333,8 @@ const narrowTypeIntersectionStep = (
 // pointer chains) keep the set-level typeref only.
 const withNarrowedSource = (set: Set, typeref: TypeRef): Set =>
   set.expr.kind === "type_root"
-    ? { ...set, typeref, expr: { ...set.expr, typeref } }
-    : { ...set, typeref };
+    ? { ...set, typeref, expr: { ...set.expr, typeref }, typeIntersectionNarrowed: true } as Set
+    : { ...set, typeref, typeIntersectionNarrowed: true } as Set;
 
 // The fullest TypeDef available, including `computeds` — `getSchemaTypeByQualifiedName`
 // prefers the generated schema model, which omits computed pointers, so the

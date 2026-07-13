@@ -2067,14 +2067,17 @@ const resolveObjectSet = (
     case "set_expr":
     case "set": {
       const values = (n.values as unknown[]) ?? [];
-      let typeName = current?.typeName ?? "";
+      const typeNames: string[] = [];
       const acc: string[] = [];
       for (const el of values) {
         const r = resolveObjectSet(db, schema, el, env, current, context, defaultModule);
-        if (r.typeName) typeName = r.typeName;
+        if (r.typeName) typeNames.push(r.typeName);
         acc.push(...r.ids);
       }
-      return { typeName, ids: [...new Set(acc)] };
+      return {
+        typeName: commonAncestorType(schema, typeNames) || current?.typeName || "",
+        ids: [...new Set(acc)],
+      };
     }
     case "expr":
     case "subquery_expr":
@@ -2175,6 +2178,25 @@ const resolveObjectSet = (
         return { typeName: qn, ids: rows.map((r) => String(r.id)) };
       }
       return { typeName: "", ids: [] };
+    }
+    case "path_steps":
+    case "is_type": {
+      const typeExpr = extractTargetTypeExpr(n as unknown as FreeObjectExpr);
+      if (!typeExpr) return { typeName: current?.typeName ?? "", ids: [] };
+      const concreteNames = concreteTypeNamesForTypeExprAtRuntime(schema, typeExpr, defaultModule);
+      const ids: string[] = [];
+      for (const typeName of concreteNames) {
+        const rows = db.prepare(
+          `SELECT ${quoteIdent("id")} AS ${quoteIdent("id")} FROM ${quoteIdent(tableNameForType(typeName))}`,
+        ).all() as { id?: unknown }[];
+        ids.push(...rows.map((row) => String(row.id)));
+      }
+      let rootExpr = typeExpr;
+      while (rootExpr.kind === "type_intersection") rootExpr = rootExpr.left;
+      const rootName = rootExpr.kind === "type_name"
+        ? qualifyChainType(rootExpr.name, defaultModule)
+        : commonAncestorType(schema, concreteNames);
+      return { typeName: rootName || concreteNames[0] || current?.typeName || "", ids };
     }
     case "current_item":
       return current ?? { typeName: "", ids: [] };
