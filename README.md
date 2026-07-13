@@ -35,6 +35,18 @@ npm run dev         # start the HTTP server + playground on http://localhost:400
 npm run build       # type-check / compile with tsc
 ```
 
+## Browser / WASM example
+
+[`examples/wasm-vite`](examples/wasm-vite) is a small Vite app that runs the
+full Gel query engine against `sql.js` in the browser. It demonstrates schema
+provisioning, parameterized reads and writes, and persistence with `db.export()`.
+
+```bash
+cd examples/wasm-vite
+npm install
+npm run dev
+```
+
 ## Inspect what a query compiles to
 
 `bin/inspect.ts` dumps any stage of the pipeline for a query — your definitive

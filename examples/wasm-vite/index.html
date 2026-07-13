@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#181612" />
+    <title>Gel in WASM</title>
+  </head>
+  <body>
+    <main>
+      <header>
+        <p class="eyebrow">SQLITE / WASM / EDGEQL</p>
+        <h1>Gel,<br /><em>without a server.</em></h1>
+        <p class="lede">The parser, compiler, and SQLite database are all running in this browser tab.</p>
+      </header>
+
+      <section class="workspace">
+        <div class="panel roster-panel">
+          <div class="panel-heading">
+            <h2>People</h2>
+            <span id="count">0 rows</span>
+          </div>
+          <ol id="people" aria-live="polite"></ol>
+        </div>
+
+        <div class="panel query-panel">
+          <div class="panel-heading">
+            <h2>Insert with EdgeQL</h2>
+            <span id="status">Starting WASM...</span>
+          </div>
+          <form id="person-form">
+            <label>
+              Name
+              <input name="name" value="Grace" autocomplete="off" required />
+            </label>
+            <label>
+              Age
+              <input name="age" type="number" value="37" min="0" max="150" required />
+            </label>
+            <button type="submit">Run insert</button>
+          </form>
+          <pre><code>insert default::Person {
+  name := &lt;str&gt;$name,
+  age := &lt;int64&gt;$age
+};</code></pre>
+          <button id="reset" class="text-button" type="button">Reset local database</button>
+        </div>
+      </section>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

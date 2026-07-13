@@ -8,12 +8,11 @@
 // `push`/`migrate` work over any adapter, including this one:
 //
 //   import initSqlJs from "sql.js";
-//   import { createSqlJsAdapter, connectWasm } from "sqlite-ts/client/wasm";
-//   import { push } from "sqlite-ts/migrate/migrator";   // dev/provisioning only
+//   import { connectWasm, provisionWasm } from "sqlite-ts/client/wasm";
 //
 //   const SQL = await initSqlJs({ locateFile: (f) => `/sql-wasm.wasm` });
 //   const db = new SQL.Database(savedBytes /* or empty */);
-//   push(createSqlJsAdapter(db), SDL);        // or load a DB exported elsewhere
+//   if (!savedBytes) provisionWasm(db, SDL);  // or load a DB exported elsewhere
 //   const client = connectWasm(db);
 //   const people = await allPeople(client);
 //   await createPerson(client, { name: "Ada" });
@@ -23,11 +22,30 @@
 // from "client/wasm.js" directly, NOT "client/index.js".
 
 import { createSqlJsAdapter, type SqlJsDatabaseLike } from "../runtime/wasm_adapter.js";
+import { materializeSchema } from "../runtime/schema_materialize.js";
+import { loadSchema } from "../schema/load.js";
+import {
+  ensureGelSchemaTables,
+  serializeSchemaToGelTables,
+  serializeSchemaToInstdata,
+} from "../schema/gel_persistence.js";
 import { connectSyncEngine } from "./sync_engine_executor.js";
 import type { ExecutorOptions, QueryExecutor } from "./executor.js";
 
 export { createSqlJsAdapter };
 export type { SqlJsDatabaseLike };
+
+/** Provision a new sql.js database from Gel SDL without importing Node-only migration tooling. */
+export const provisionWasm = (db: SqlJsDatabaseLike, source: string): void => {
+  const adapter = createSqlJsAdapter(db);
+  const schema = loadSchema(source, { legacySyntaxCompat: true });
+  const persistenceDb = adapter as unknown as Parameters<typeof materializeSchema>[0];
+
+  materializeSchema(persistenceDb, schema);
+  ensureGelSchemaTables(persistenceDb);
+  serializeSchemaToGelTables(persistenceDb, schema);
+  serializeSchemaToInstdata(persistenceDb, schema);
+};
 
 /**
  * Connect a typed-query executor to a sql.js database (reads + writes). The

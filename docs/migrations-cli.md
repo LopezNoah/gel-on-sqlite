@@ -84,12 +84,11 @@ const people = await allPeople(client);
 ```ts
 // Browser / WASM (sql.js): synchronous, so full engine — reads + writes.
 import initSqlJs from "sql.js";
-import { createSqlJsAdapter, connectWasm } from "sqlite-ts/client/wasm";
-import { push } from "sqlite-ts/migrate/migrator"; // provisioning (dev) only
+import { connectWasm, provisionWasm } from "sqlite-ts/client/wasm";
 
 const SQL = await initSqlJs({ locateFile: (f) => `/sql-wasm.wasm` });
 const db = new SQL.Database(savedBytes /* from IndexedDB */ ?? undefined);
-if (!savedBytes) push(createSqlJsAdapter(db), SDL); // or load a DB exported elsewhere
+if (!savedBytes) provisionWasm(db, SDL); // or load a DB exported elsewhere
 const client = connectWasm(db);
 await createPerson(client, { name: "Ada" });        // writes work in the browser
 const people = await allPeople(client);
@@ -100,7 +99,7 @@ Import from `client/d1` / `client/do` / `client/wasm` directly (not
 `client/index`, which pulls the native driver). All wrappers apply the same row
 codec as `Client`, so the generated result types are accurate on every backend.
 Provision the schema first (`gel migrate`/`push` against a local file, then ship
-the SQLite to D1; run migrations against DO storage; or `push` in-browser /
+the SQLite to D1; run migrations against DO storage; or `provisionWasm` in-browser /
 load an exported DB for WASM).
 
 ### Backend support matrix

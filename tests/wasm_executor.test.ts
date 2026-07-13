@@ -6,7 +6,7 @@ import { executeQuery } from "../src/runtime/engine.js";
 import { deserializeSchemaFromInstdata } from "../src/schema/gel_persistence.js";
 import { Client } from "../src/client/index.js";
 import { push } from "../src/migrate/migrator.js";
-import { connectWasm, createSqlJsAdapter } from "../src/client/wasm.js";
+import { connectWasm, provisionWasm } from "../src/client/wasm.js";
 
 const SCHEMA = `module default {
   type Person {
@@ -22,7 +22,7 @@ beforeAll(async () => {
 
 // Provision a fresh WASM db with the schema (push runs over any adapter).
 const provision = (db: Database): void => {
-  push(createSqlJsAdapter(db) as unknown as Parameters<typeof push>[0], SCHEMA);
+  provisionWasm(db, SCHEMA);
 };
 
 describe("WASM (sql.js) — full engine in the browser, reads + writes", () => {

@@ -32,3 +32,8 @@ goldens/
 /debug_*.txt
 /debug-*.txt
 /estimated_tree_sql.txt
+
+.claude/
+.opencode/
+.codex/
+test-comparison/
