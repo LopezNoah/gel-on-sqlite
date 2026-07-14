@@ -4292,6 +4292,10 @@ class Parser {
       };
     }
 
+    if (this.atFunctionCall()) {
+      return this.functionCallExpr(this.parseFunctionCallExpr(true));
+    }
+
     if (this.peek().kind.startsWith("kw_current_reserved_")) {
       const token = this.peek();
       // `__type__` is always a path step — bare references at top level are
@@ -4311,10 +4315,6 @@ class Parser {
         kind: "global_ref",
         name: token.lexeme,
       };
-    }
-
-    if (this.atFunctionCall()) {
-      return this.functionCallExpr(this.parseFunctionCallExpr(true));
     }
 
     if (this.atQualifiedIdentifier()) {
@@ -4424,7 +4424,7 @@ class Parser {
 
     while (true) {
       const expr = this.parseFreeObjectExpr();
-      parts.push(expr);
+      parts.push({ kind: "cast", castType: "str", expr });
 
       if (this.peek().kind === "str_interp_cont") {
         const cont = this.consume();
@@ -6284,7 +6284,14 @@ class Parser {
   // single argument are handled by parseFunctionCallArgExpr — see
   // test_edgeql_syntax_function_03.
   private parseFunctionCallExpr(allowExpressionArgs = false): FunctionCallExpr {
-    const name = this.parseQualifiedName("Expected function name");
+    let name: string;
+    if (this.peek().lexeme === "__std__") {
+      this.consume();
+      this.expect("coloncolon", "Expected '::' after '__std__'");
+      name = `std::${this.expectName("Expected function name after '__std__::'").lexeme}`;
+    } else {
+      name = this.parseQualifiedName("Expected function name");
+    }
     const lparenToken = this.expect("lparen", "Expected '(' after function name");
     const args = this.parseDelimited(
       "rparen",

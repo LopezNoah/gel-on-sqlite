@@ -2,6 +2,7 @@ import BetterSQLite3 from "better-sqlite3";
 import { createRequire } from "node:module";
 
 import { AppError } from "../errors.js";
+import { parseFixedOffsetHours, parseFormattedTemporal as parseTemporalFormat, parseLocalTemporal } from "../temporal/parser.js";
 
 import type { AsyncRuntimeInstance, RuntimeDatabaseAdapter, RuntimeInstance } from "./adapter.js";
 import { toAsyncAdapter } from "./adapter.js";
@@ -236,6 +237,17 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
       const v = arr[normalized];
       return (typeof v === "object" ? JSON.stringify(v) : v) as number | string | null;
     });
+    db.function("_gel_array_fill", (value: unknown, sizeRaw: number | null) => {
+      const size = Number(sizeRaw);
+      if (!Number.isSafeInteger(size) || size < 0 || size > 1_000_000) {
+        throw new AppError("E_VALIDATION", "array size exceeds the maximum allowed");
+      }
+      let element = value;
+      if (typeof value === "string" && (value.startsWith("[") || value.startsWith("{"))) {
+        try { element = JSON.parse(value); } catch { /* scalar string */ }
+      }
+      return JSON.stringify(Array.from({ length: size }, () => element));
+    });
     // `std::array_set(arr, idx, val)` — raise on out-of-bounds, otherwise
     // return the mutated array as JSON.
     db.function("_gel_array_set", (a: string | null, idxRaw: number | null, val: unknown) => {
@@ -405,6 +417,18 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
     };
     db.function("_gel_str_pad_start", { varargs: true }, (...a: unknown[]) => padImpl(a[0], a[1], a[2], true));
     db.function("_gel_str_pad_end", { varargs: true }, (...a: unknown[]) => padImpl(a[0], a[1], a[2], false));
+    db.function("_gel_str_lower", (s: string | null) => s === null ? null : String(s).toLowerCase());
+    db.function("_gel_str_upper", (s: string | null) => s === null ? null : String(s).toUpperCase());
+    db.function("_gel_str_title", (s: string | null) => {
+      if (s === null) return null;
+      let result = "";
+      let atWordStart = true;
+      for (const character of String(s).toLowerCase()) {
+        result += atWordStart ? character.toUpperCase() : character;
+        atWordStart = character.trim() === "";
+      }
+      return result;
+    });
     db.function("_gel_str_repeat", (s: string | null, n: number | null) => {
       if (s === null || n === null) return null;
       return String(s).repeat(Math.max(0, Number(n)));
@@ -984,6 +1008,203 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
         hasDate: m[1] !== undefined, hasTime: m[4] !== undefined, hasZone: m[8] !== undefined,
       };
     };
+    const padTemporal = (value: number, width = 2): string => String(value).padStart(width, "0");
+    const fractionText = (seconds: number): { whole: number; fraction: string } => {
+      const whole = Math.trunc(seconds);
+      const micros = Math.round((seconds - whole) * 1e6);
+      if (micros === 0) return { whole, fraction: "" };
+      let fraction = String(micros).padStart(6, "0");
+      while (fraction.endsWith("0")) fraction = fraction.slice(0, -1);
+      return { whole, fraction: `.${fraction}` };
+    };
+    const validateTemporalParts = (
+      year: number,
+      month: number,
+      day: number,
+      hour: number,
+      minute: number,
+      second: number,
+    ): void => {
+      if (!Number.isInteger(year) || year < 1 || year > 9999) {
+        throw new AppError("E_VALIDATION", "value out of range for std::datetime");
+      }
+      const wholeSecond = Math.trunc(second);
+      const date = new Date(Date.UTC(year, month - 1, day, hour, minute, wholeSecond));
+      if (
+        month < 1 || month > 12 || day < 1 || hour < 0 || hour > 23
+        || minute < 0 || minute > 59 || second < 0 || second >= 60
+        || date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day
+      ) {
+        throw new AppError("E_VALIDATION", "value out of range for temporal value");
+      }
+    };
+    const localDateTimeText = (
+      year: number,
+      month: number,
+      day: number,
+      hour: number,
+      minute: number,
+      second: number,
+    ): string => {
+      validateTemporalParts(year, month, day, hour, minute, second);
+      const { whole, fraction } = fractionText(second);
+      return `${padTemporal(year, 4)}-${padTemporal(month)}-${padTemporal(day)}T${padTemporal(hour)}:${padTemporal(minute)}:${padTemporal(whole)}${fraction}`;
+    };
+    const offsetHours = (zone: string): number | null => {
+      const normalized = zone.trim().toUpperCase();
+      if (normalized === "UTC" || normalized === "GMT" || normalized === "Z") return 0;
+      if (normalized === "EST") return -5;
+      return parseFixedOffsetHours(normalized) ?? null;
+    };
+    const localInZoneToUtc = (local: string, zone: string): string => {
+      const parsed = parseDt(local);
+      if (!parsed?.hasDate || !parsed.hasTime) {
+        throw new AppError("E_VALIDATION", "invalid input syntax for type std::datetime");
+      }
+      const fixedOffset = offsetHours(zone);
+      let utcMillis = Date.UTC(parsed.year, parsed.month - 1, parsed.day, parsed.hour, parsed.minute, parsed.second, Math.floor(parsed.fracUs / 1000));
+      if (fixedOffset !== null) {
+        utcMillis -= fixedOffset * 3_600_000;
+      } else {
+        try {
+          const formatter = new Intl.DateTimeFormat("en-US", {
+            timeZone: zone,
+            year: "numeric", month: "2-digit", day: "2-digit",
+            hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
+          });
+          const parts = Object.fromEntries(formatter.formatToParts(new Date(utcMillis)).map((part) => [part.type, part.value]));
+          const represented = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day), Number(parts.hour), Number(parts.minute), Number(parts.second));
+          utcMillis -= represented - Math.floor(utcMillis / 1000) * 1000 - Date.UTC(parsed.year, parsed.month - 1, parsed.day, parsed.hour, parsed.minute, parsed.second);
+        } catch {
+          throw new AppError("E_VALIDATION", `unknown time zone '${zone}'`);
+        }
+      }
+      const date = new Date(utcMillis);
+      let fractionDigits = String(parsed.fracUs).padStart(6, "0");
+      while (fractionDigits.endsWith("0")) fractionDigits = fractionDigits.slice(0, -1);
+      const fraction = parsed.fracUs ? `.${fractionDigits}` : "";
+      return `${padTemporal(date.getUTCFullYear(), 4)}-${padTemporal(date.getUTCMonth() + 1)}-${padTemporal(date.getUTCDate())}T${padTemporal(date.getUTCHours())}:${padTemporal(date.getUTCMinutes())}:${padTemporal(date.getUTCSeconds())}${fraction}+00:00`;
+    };
+    const utcToLocal = (value: string, zone: string, part: "datetime" | "date" | "time"): string => {
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) throw new AppError("E_VALIDATION", "invalid input syntax for type std::datetime");
+      let fields: Record<string, string>;
+      try {
+        const formatter = new Intl.DateTimeFormat("en-US", {
+          timeZone: zone,
+          year: "numeric", month: "2-digit", day: "2-digit",
+          hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
+        });
+        fields = Object.fromEntries(formatter.formatToParts(date).map((entry) => [entry.type, entry.value]));
+      } catch {
+        throw new AppError("E_VALIDATION", `unknown time zone '${zone}'`);
+      }
+      const source = parseDt(value);
+      let fractionDigits = String(source?.fracUs ?? 0).padStart(6, "0");
+      while (fractionDigits.endsWith("0")) fractionDigits = fractionDigits.slice(0, -1);
+      const fraction = source?.fracUs ? `.${fractionDigits}` : "";
+      const dateText = `${fields.year}-${fields.month}-${fields.day}`;
+      const timeText = `${fields.hour}:${fields.minute}:${fields.second}${fraction}`;
+      return part === "date" ? dateText : part === "time" ? timeText : `${dateText}T${timeText}`;
+    };
+    const parseFormattedTemporal = (input: string, format: string, requireZone: boolean): { local: string; zone: string | null } => {
+      if (!format) throw new AppError("E_VALIDATION", '"fmt" argument must be a non-empty string');
+      const parsed = parseTemporalFormat(input, format, requireZone);
+      if (!parsed.ok) {
+        if (parsed.reason === "missingZoneFormat") throw new AppError("E_VALIDATION", "missing required time zone in format");
+        if (parsed.reason === "unexpectedZoneFormat") throw new AppError("E_VALIDATION", "unexpected time zone in format");
+        throw new AppError("E_VALIDATION", requireZone ? "missing required time zone in input" : "invalid input syntax for temporal value");
+      }
+      const { year, month, day, hour, minute, second } = parsed.parts;
+      return { local: localDateTimeText(year, month, day, hour, minute, second), zone: parsed.zone };
+    };
+    db.function("_gel_to_datetime", { varargs: true }, (...args: unknown[]) => {
+      if (args.length === 1) {
+        if (typeof args[0] !== "number") throw new AppError("E_VALIDATION", "invalid input syntax for type std::datetime");
+        const milliseconds = args[0] * 1000;
+        const date = new Date(milliseconds);
+        if (!Number.isFinite(milliseconds) || Number.isNaN(date.getTime()) || date.getUTCFullYear() < 1 || date.getUTCFullYear() > 9999) {
+          throw new AppError("E_VALIDATION", "'std::datetime' value out of range");
+        }
+        let iso = date.toISOString();
+        if (iso.endsWith(".000Z")) return `${iso.slice(0, -5)}+00:00`;
+        while (iso[iso.length - 2] === "0") iso = `${iso.slice(0, -2)}Z`;
+        return `${iso.slice(0, -1)}+00:00`;
+      }
+      if (args.length === 2) {
+        const first = String(args[0] ?? "");
+        const second = String(args[1] ?? "");
+        const local = parseLocalTemporal(first, "datetime");
+        if (local) {
+          return localInZoneToUtc(first, second);
+        }
+        const parsed = parseFormattedTemporal(first, second, true);
+        return localInZoneToUtc(parsed.local, parsed.zone!);
+      }
+      if (args.length === 7) {
+        const local = localDateTimeText(...args.slice(0, 6).map(Number) as [number, number, number, number, number, number]);
+        return localInZoneToUtc(local, String(args[6]));
+      }
+      throw new AppError("E_VALIDATION", "invalid input syntax for type std::datetime");
+    });
+    db.function("_gel_to_local_datetime", { varargs: true }, (...args: unknown[]) => {
+      if (args.length === 2) {
+        const first = String(args[0] ?? "");
+        const second = String(args[1] ?? "");
+        if (parseDt(first)?.hasZone) return utcToLocal(first, second, "datetime");
+        return parseFormattedTemporal(first, second, false).local;
+      }
+      if (args.length === 6) return localDateTimeText(...args.map(Number) as [number, number, number, number, number, number]);
+      throw new AppError("E_VALIDATION", "invalid input syntax for type std::cal::local_datetime");
+    });
+    db.function("_gel_to_local_date", { varargs: true }, (...args: unknown[]) => {
+      if (args.length === 2) {
+        const first = String(args[0] ?? "");
+        const second = String(args[1] ?? "");
+        if (parseDt(first)?.hasZone) return utcToLocal(first, second, "date");
+        return parseFormattedTemporal(first, second, false).local.slice(0, 10);
+      }
+      if (args.length === 3) return localDateTimeText(Number(args[0]), Number(args[1]), Number(args[2]), 0, 0, 0).slice(0, 10);
+      throw new AppError("E_VALIDATION", "invalid input syntax for type std::cal::local_date");
+    });
+    db.function("_gel_to_local_time", { varargs: true }, (...args: unknown[]) => {
+      if (args.length === 1) {
+        const value = String(args[0] ?? "");
+        const parsed = parseLocalTemporal(value, "time");
+        if (!parsed) throw new AppError("E_VALIDATION", "invalid input syntax for type std::cal::local_time");
+        try {
+          validateTemporalParts(2000, 1, 1, parsed.hour, parsed.minute, parsed.second);
+        } catch {
+          throw new AppError("E_VALIDATION", "std::cal::local_time field value out of range");
+        }
+        return value;
+      }
+      if (args.length === 2) {
+        const first = String(args[0] ?? "");
+        const second = String(args[1] ?? "");
+        if (!second) throw new AppError("E_VALIDATION", '"fmt" argument must be a non-empty string');
+        if (parseDt(first)?.hasZone) return utcToLocal(first, second, "time");
+        const parsed = parseTemporalFormat(first, second, false);
+        if (!parsed.ok) {
+          if (parsed.reason === "unexpectedZoneFormat") throw new AppError("E_VALIDATION", "unexpected time zone in format");
+          throw new AppError("E_VALIDATION", "invalid input syntax for type std::cal::local_time");
+        }
+        const { hour, minute, second: secondValue } = parsed.parts;
+        validateTemporalParts(2000, 1, 1, hour, minute, secondValue);
+        const fraction = fractionText(secondValue);
+        return `${padTemporal(hour)}:${padTemporal(minute)}:${padTemporal(fraction.whole)}${fraction.fraction}`;
+      }
+      if (args.length === 3) {
+        const hour = Number(args[0]); const minute = Number(args[1]); const second = Number(args[2]);
+        try {
+          validateTemporalParts(2000, 1, 1, hour, minute, second);
+        } catch {
+          throw new AppError("E_VALIDATION", "std::cal::local_time field value out of range");
+        }
+        return localDateTimeText(2000, 1, 1, hour, minute, second).slice(11);
+      }
+      throw new AppError("E_VALIDATION", "invalid input syntax for type std::cal::local_time");
+    });
     const invalidUnit = (fname: string, unit: string): never => {
       throw new AppError("E_VALIDATION", `invalid unit for ${fname}: '${unit}'`);
     };
@@ -1027,10 +1248,10 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
       if (!p) throw new AppError("E_VALIDATION", `invalid time value: '${v}'`);
       const u = String(unit).toLowerCase();
       if (!["hour", "minutes", "seconds", "milliseconds", "microseconds", "midnightseconds"].includes(u)) {
-        invalidUnit("cal::time_get", u);
+        invalidUnit("std::time_get", u);
       }
       if (u === "midnightseconds") return p.hour * 3600 + p.minute * 60 + p.second + p.fracUs / 1e6;
-      return dtUnitValue(p, u, "cal::time_get", false);
+      return dtUnitValue(p, u, "std::time_get", false);
     });
     db.function("_gel_date_get", (v: string | null, unit: string | null) => {
       if (v === null || unit === null) return null;
@@ -1038,9 +1259,9 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
       if (!p) throw new AppError("E_VALIDATION", `invalid date value: '${v}'`);
       const u = String(unit).toLowerCase();
       if (["hour", "minutes", "seconds", "milliseconds", "microseconds", "epochseconds", "midnightseconds"].includes(u)) {
-        invalidUnit("cal::date_get", u);
+        invalidUnit("std::date_get", u);
       }
-      return dtUnitValue(p, u, "cal::date_get", false);
+      return dtUnitValue(p, u, "std::date_get", false);
     });
     // `std::duration_get(dur, unit)` — exact durations expose time units;
     // relative durations add year/month/day; date_durations ONLY date units.
@@ -1076,11 +1297,14 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
       }
     });
     // `std::duration_truncate(dur, unit)` — plural unit names.
-    db.function("_gel_duration_truncate", (dur: string | null, unit: string | null) => {
+    db.function("_gel_duration_truncate", { varargs: true }, (dur: string | null, unit: string | null, typeName?: string | null) => {
       if (dur === null || unit === null) return null;
       const p = parseIsoDuration(String(dur));
       if (!p) throw new AppError("E_VALIDATION", `invalid duration value: '${dur}'`);
       const u = String(unit).toLowerCase();
+      if (typeName?.includes("date_duration") && ["hours", "minutes", "seconds", "milliseconds", "microseconds"].includes(u)) {
+        invalidUnit("std::duration_truncate", u);
+      }
       switch (u) {
         case "millenniums": case "millennia": p.months = Math.trunc(p.months / 12000) * 12000; p.days = 0; p.us = 0; break;
         case "centuries": p.months = Math.trunc(p.months / 1200) * 1200; p.days = 0; p.us = 0; break;
@@ -1098,6 +1322,22 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
         case "microseconds": break;
         default: return invalidUnit("std::duration_truncate", u);
       }
+      return formatDur(p);
+    });
+    db.function("_gel_duration_normalize_hours", (dur: string | null) => {
+      if (dur === null) return null;
+      const p = parseIsoDuration(String(dur));
+      if (!p) throw new AppError("E_VALIDATION", `invalid duration value: '${dur}'`);
+      p.days += Math.trunc(p.us / 86_400_000_000);
+      p.us %= 86_400_000_000;
+      return formatDur(p);
+    });
+    db.function("_gel_duration_normalize_days", (dur: string | null) => {
+      if (dur === null) return null;
+      const p = parseIsoDuration(String(dur));
+      if (!p) throw new AppError("E_VALIDATION", `invalid duration value: '${dur}'`);
+      p.months += Math.trunc(p.days / 30);
+      p.days %= 30;
       return formatDur(p);
     });
     // `std::to_duration(hours := …, minutes := …, seconds := …, microseconds := …)`

@@ -549,13 +549,16 @@ const tokenizeImpl = (input: string): TokenizeResult => {
           i += 1;
         }
         lineStarts.push(i);
-        while (i < len && (input.charCodeAt(i) === CC_SPACE || input.charCodeAt(i) === CC_TAB)) {
+        while (i < len) {
+          const whitespace = input.charCodeAt(i);
+          if (whitespace !== CC_SPACE && whitespace !== CC_TAB && whitespace !== CC_CR && whitespace !== CC_LF) break;
           i += 1;
+          if (whitespace === CC_LF) lineStarts.push(i);
         }
         return "";
       }
       default:
-        return syntaxError(`Unsupported escape sequence '\\${input[i - 1]}'`, tokenOffset);
+        return syntaxError(`invalid string literal: invalid escape sequence '\\${input[i - 1]}'`, tokenOffset);
     }
   };
 

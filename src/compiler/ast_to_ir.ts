@@ -1,5 +1,6 @@
 import { AppError, tryResult } from "../errors.js";
 import { parseEdgeQL } from "../edgeql/parser.js";
+import { parseLocalTemporal } from "../temporal/parser.js";
 import { inferStatementCardinality, inferStatementMultiplicity, inferStatementType, inferStatementVolatility } from "./inference.js";
 import { checkScopeTreeViolations } from "./scope_tree_check.js";
 import type {
@@ -208,6 +209,27 @@ const normalizeDateTimeLiteral = (literal: string): string | undefined => {
   let frac = fracDigits.slice(0, 6);
   while (frac.endsWith("0")) frac = frac.slice(0, -1);
   return `${yyyy}-${mm}-${dd}T${hh}:${min}:${ss}${frac ? `.${frac}` : ""}+00:00`;
+};
+
+const normalizeLocalTemporalLiteral = (
+  literal: string,
+  type: "local_datetime" | "local_date" | "local_time",
+): string | undefined => {
+  const value = literal.trim();
+  const parsed = parseLocalTemporal(value, type.slice("local_".length) as "datetime" | "date" | "time");
+  if (!parsed) return undefined;
+  const { year, month, day, hour, minute, second } = parsed;
+  const date = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
+  if (
+    year < 1 || year > 9999 || hour > 23 || minute > 59 || second > 59
+    || date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day
+  ) return undefined;
+  if (type === "local_date") return value;
+  let fractionDigits = parsed.fraction;
+  while (fractionDigits.endsWith("0")) fractionDigits = fractionDigits.slice(0, -1);
+  const fraction = fractionDigits ? `.${fractionDigits}` : "";
+  const time = `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:${String(second).padStart(2, "0")}${fraction}`;
+  return type === "local_time" ? time : `${value.slice(0, 10)}T${time}`;
 };
 
 // Parse a Postgres-interval-style duration literal ('15:01:22.306916',
@@ -2843,7 +2865,7 @@ const inferAstExprTypeName = (expr: FreeObjectExpr, ctx: IRCompileContext): stri
         }
         return undefined;
       }
-      if (shortName === "array_agg") return first ? `array<${first}>` : undefined;
+      if (shortName === "array_agg" || shortName === "array_fill") return first ? `array<${first}>` : undefined;
       // `re_match(pattern, str)` / `re_match_all(pattern, str)` return an
       // array of capture-group strings per match. Mark them as `array<str>`
       // so downstream code knows the projection produces a JSON-shaped
@@ -5398,6 +5420,18 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
         return literalToSet(null);
       };
       const args = expr.call.args.map(compileCallArg);
+      const shortName = expr.call.name.includes("::")
+        ? expr.call.name.slice(expr.call.name.lastIndexOf("::") + 2)
+        : expr.call.name;
+      if (shortName === "array_agg" && args[0]?.expr.kind === "string_constant"
+          && (args[0].expr as { value: unknown }).value === null
+          && args[0].typeref.nameHint === "std::anyscalar") {
+        failSemantic("expression returns value of indeterminate type");
+      }
+      if (shortName === "array_get" && args[1]?.expr.kind === "operator_call"
+          && (args[1].expr as OperatorCall).operator === "^") {
+        failSemantic('function "array_get(array: array<anytype>, index: std::float64)" does not exist');
+      }
       // Preserve named-arg names: `to_duration(hours := 20)` must reach the
       // SQL lowering keyed as "hours", not by its positional index — the
       // stdlib templates dispatch on parameter names. Positional args keep
@@ -5943,6 +5977,25 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
           if (normalized !== undefined) {
             return { ...enumLiteralSet(normalized), typeref: unknownTypeRef("std::datetime") };
           }
+        }
+      }
+
+      if (["cal::local_datetime", "cal::local_date", "cal::local_time"].includes(expr.castType)) {
+        const innerSet = compileFreeObjectExpr(innerExpr, ctx);
+        let literal = tryExtractStringConstant(innerSet);
+        if (innerIsJsonCast && literal !== undefined) {
+          try {
+            const decoded = JSON.parse(literal);
+            literal = typeof decoded === "string" ? decoded : undefined;
+          } catch {
+            literal = undefined;
+          }
+        }
+        if (literal !== undefined) {
+          const shortType = expr.castType.slice("cal::".length) as "local_datetime" | "local_date" | "local_time";
+          const normalized = normalizeLocalTemporalLiteral(literal, shortType);
+          if (normalized === undefined) failSemantic(`std::${expr.castType} field value out of range`);
+          return { ...enumLiteralSet(normalized!), typeref: unknownTypeRef(expr.castType) };
         }
       }
 
@@ -11063,9 +11116,68 @@ const collectStatementShapesForValidation = (
   ctx: IRCompileContext,
 ): void => {
   if (statement.kind === "select" && statement.typeName) {
+    if (statement.shape.some((element) => element.kind === "computed" && element.name === "id")) {
+      throw new AppError("E_SEMANTIC", "cannot assign to property 'id'", 1, 1);
+    }
     const typeref = resolveTypeRef(ctx, statement.typeName);
     const subject = setFromTypeRoot(typeref);
     walkAndValidateShapes(statement.shape, subject, ctx);
+  }
+};
+
+const failSingletonClause = (): never => {
+  throw new AppError(
+    "E_SEMANTIC",
+    "possibly more than one element returned by an expression where only singletons are allowed",
+    1,
+    1,
+  );
+};
+
+const validateSingletonClauses = (statement: EdgeQLStatement, ctx: IRCompileContext): void => {
+  const clauseStatement = statement as EdgeQLStatement & {
+    limitExpr?: FreeObjectExpr;
+    offsetExpr?: FreeObjectExpr;
+    orderBy?: OrderExpr;
+  };
+  const fallbackSubject = scalarTypeRef("str");
+  for (const expr of [clauseStatement.limitExpr, clauseStatement.offsetExpr]) {
+    if (expr && inferFreeExprCard(expr, ctx, fallbackSubject).upper === "many") failSingletonClause();
+  }
+
+  const singletonOrderBarriers = new globalThis.Set(["exists", "in_expr", "set_expr", "distinct"]);
+  if (
+    statement.kind === "select_expr"
+    && statement.orderBy
+    && singletonOrderBarriers.has(statement.expr.kind)
+  ) {
+    failSingletonClause();
+  }
+
+  if (statement.kind !== "select" || !statement.orderBy?.field) return;
+  let type = getSchemaType(ctx, statement.typeName);
+  for (const segment of statement.orderBy.field.split(".")) {
+    const field = type?.fields.find((candidate) => candidate.name === segment);
+    const link = type?.links?.find((candidate) => candidate.name === segment);
+    if (field?.multi || link?.multi) failSingletonClause();
+    type = link ? getSchemaType(ctx, link.targetType) : undefined;
+  }
+};
+
+const validateDeterminateTopLevelType = (statement: EdgeQLStatement): void => {
+  if (
+    statement.kind === "select_expr"
+    && statement.expr.kind === "array_literal_expr"
+    && statement.expr.values.length === 0
+  ) {
+    throw new AppError("E_SEMANTIC", "expression returns value of indeterminate type", 1, 1);
+  }
+  if (
+    statement.kind === "select_expr"
+    && statement.expr.kind === "index_access"
+    && statement.expr.expr.kind === "current_item"
+  ) {
+    throw new AppError("E_SEMANTIC", "could not resolve partial path", 1, 1);
   }
 };
 
@@ -11085,6 +11197,8 @@ export const validateParsedStatement = (
     aliases: new AliasGenerator(),
   };
   collectStatementShapesForValidation(statement, ctx);
+  validateSingletonClauses(statement, ctx);
+  validateDeterminateTopLevelType(statement);
 };
 
 // ─── qlast path-routing gate (consumed by compileFreeObjectExpr) ────────────
@@ -11114,6 +11228,15 @@ export const qlastPathDeps: QlastPathDeps = {
   synthesizeTypeNamePointerSet,
   validateTypeIntersectionOperand,
   validateTypeIntersectionPointer,
+  narrowTypeIntersectionSet: (ctx, source, typeName) => {
+    const target = resolveTypeRef(ctx, typeName);
+    validateTypeIntersectionOperand(ctx, source.typeref, target);
+    const base = source.expr.kind === "pointer" && source.expr.direction === "inbound"
+      ? universalObjectTypeRef(ctx, "Object")
+      : source.typeref;
+    const narrowed = narrowTypeIntersectionStep(ctx, base, undefined, { typeName });
+    return narrowed ? withNarrowedSource(source, narrowed.typeref) : withNarrowedSource(source, target);
+  },
   lookupEnumScalar,
   resolvePathToEnumLiteral,
   literalToSet,

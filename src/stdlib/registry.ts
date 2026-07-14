@@ -495,7 +495,8 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
   },
   {
     name: "std::to_datetime",
-    meta: { minArgs: 1, maxArgs: 1 },
+    meta: { minArgs: 1, maxArgs: 7 },
+    sql: (argSql) => argSql.length > 0 ? `_gel_to_datetime(${argSql.join(", ")})` : null,
     runtime: (args) => parseDateTime(args[0]),
   },
   {
@@ -786,6 +787,11 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
     },
   },
   {
+    name: "std::array_fill",
+    meta: { minArgs: 2, maxArgs: 2 },
+    sql: (argSql) => argSql[0] && argSql[1] ? `_gel_array_fill(${argSql[0]}, ${argSql[1]})` : null,
+  },
+  {
     name: "std::array_set",
     meta: { minArgs: 3, maxArgs: 3 },
     sql: (argSql) => argSql[0] && argSql[1] && argSql[2]
@@ -848,14 +854,19 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
   {
     name: "std::str_lower",
     meta: { minArgs: 1, maxArgs: 1 },
-    sql: (argSql) => argSql[0] ? `lower(COALESCE(CAST(${argSql[0]} AS TEXT), ''))` : null,
+    sql: (argSql) => argSql[0] ? `_gel_str_lower(${argSql[0]})` : null,
     runtime: (args) => String(extractScalar(args[0]) ?? "").toLowerCase(),
   },
   {
     name: "std::str_upper",
     meta: { minArgs: 1, maxArgs: 1 },
-    sql: (argSql) => argSql[0] ? `upper(COALESCE(CAST(${argSql[0]} AS TEXT), ''))` : null,
+    sql: (argSql) => argSql[0] ? `_gel_str_upper(${argSql[0]})` : null,
     runtime: (args) => String(extractScalar(args[0]) ?? "").toUpperCase(),
+  },
+  {
+    name: "std::str_title",
+    meta: { minArgs: 1, maxArgs: 1 },
+    sql: (argSql) => argSql[0] ? `_gel_str_title(${argSql[0]})` : null,
   },
   {
     // str_split returns a single `array<std::str>` value (see the return-type
@@ -892,17 +903,20 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
   // cal:: temporal constructors
   {
     name: "cal::to_local_datetime",
-    meta: { minArgs: 1, maxArgs: 1 },
+    meta: { minArgs: 1, maxArgs: 6 },
+    sql: (argSql) => argSql.length > 0 ? `_gel_to_local_datetime(${argSql.join(", ")})` : null,
     runtime: (args) => parseLocalDateTime(extractScalar(args[0])),
   },
   {
     name: "cal::to_local_date",
-    meta: { minArgs: 1, maxArgs: 1 },
+    meta: { minArgs: 1, maxArgs: 3 },
+    sql: (argSql) => argSql.length > 0 ? `_gel_to_local_date(${argSql.join(", ")})` : null,
     runtime: (args) => parseLocalDate(extractScalar(args[0])),
   },
   {
     name: "cal::to_local_time",
-    meta: { minArgs: 1, maxArgs: 1 },
+    meta: { minArgs: 1, maxArgs: 3 },
+    sql: (argSql) => argSql.length > 0 ? `_gel_to_local_time(${argSql.join(", ")})` : null,
     runtime: (args) => parseLocalTime(extractScalar(args[0])),
   },
   {
@@ -1041,8 +1055,8 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
   {
     name: "std::duration_truncate",
     meta: { minArgs: 2, maxArgs: 2 },
-    sql: (argSql) => argSql[0] && argSql[1]
-      ? `_gel_duration_truncate(${argSql[0]}, ${argSql[1]})`
+    sql: (argSql, argTypes) => argSql[0] && argSql[1]
+      ? `_gel_duration_truncate(${argSql[0]}, ${argSql[1]}, '${argTypes?.[0] ?? ""}')`
       : null,
     runtime: (args) => {
       const unit = String(extractScalar(args[0]) ?? "").toLowerCase();
@@ -1059,6 +1073,7 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
   {
     name: "cal::duration_normalize_hours",
     meta: { minArgs: 1, maxArgs: 1 },
+    sql: (argSql) => argSql[0] ? `_gel_duration_normalize_hours(${argSql[0]})` : null,
     runtime: (args) => {
       const duration = parseDurationParts(String(extractScalar(args[0]) ?? ""));
       const normalized = duration.hours + Math.floor(duration.minutes / 60);
@@ -1069,6 +1084,7 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
   {
     name: "cal::duration_normalize_days",
     meta: { minArgs: 1, maxArgs: 1 },
+    sql: (argSql) => argSql[0] ? `_gel_duration_normalize_days(${argSql[0]})` : null,
     runtime: (args) => {
       const duration = parseDurationParts(String(extractScalar(args[0]) ?? ""));
       const days = Math.floor(duration.hours / 24);
@@ -1289,6 +1305,16 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
       : null,
   },
   {
+    name: "std::str_ltrim",
+    meta: { minArgs: 1, maxArgs: 2 },
+    sql: (argSql) => argSql[0] ? (argSql[1] ? `ltrim(${argSql[0]}, ${argSql[1]})` : `ltrim(${argSql[0]})`) : null,
+  },
+  {
+    name: "std::str_rtrim",
+    meta: { minArgs: 1, maxArgs: 2 },
+    sql: (argSql) => argSql[0] ? (argSql[1] ? `rtrim(${argSql[0]}, ${argSql[1]})` : `rtrim(${argSql[0]})`) : null,
+  },
+  {
     name: "std::str_pad_start",
     sql: (argSql) => argSql[0] && argSql[1]
       ? `_gel_str_pad_start(${argSql[0]}, ${argSql[1]}${argSql[2] ? `, ${argSql[2]}` : ""})`
@@ -1299,6 +1325,16 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
     sql: (argSql) => argSql[0] && argSql[1]
       ? `_gel_str_pad_end(${argSql[0]}, ${argSql[1]}${argSql[2] ? `, ${argSql[2]}` : ""})`
       : null,
+  },
+  {
+    name: "std::str_lpad",
+    meta: { minArgs: 2, maxArgs: 3 },
+    sql: (argSql) => argSql[0] && argSql[1] ? `_gel_str_pad_start(${argSql[0]}, ${argSql[1]}${argSql[2] ? `, ${argSql[2]}` : ""})` : null,
+  },
+  {
+    name: "std::str_rpad",
+    meta: { minArgs: 2, maxArgs: 3 },
+    sql: (argSql) => argSql[0] && argSql[1] ? `_gel_str_pad_end(${argSql[0]}, ${argSql[1]}${argSql[2] ? `, ${argSql[2]}` : ""})` : null,
   },
   {
     name: "std::str_repeat",

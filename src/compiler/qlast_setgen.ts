@@ -51,6 +51,7 @@ export interface QlastPathDeps {
     intersectTypeId: string,
     ptrName: string,
   ) => void;
+  narrowTypeIntersectionSet: (ctx: IRCompileContext, source: IRSet, typeName: string) => IRSet;
   lookupEnumScalar: (ctx: IRCompileContext, name: string) => { qualifiedName: string; members: string[] } | undefined;
   resolvePathToEnumLiteral: (ctx: IRCompileContext, head: string, tail: string | undefined) => IRSet | undefined;
   literalToSet: (value: string | number | boolean | null) => IRSet;
@@ -275,9 +276,9 @@ export const compilePathQlast = (expr: QlPath, ctx: IRCompileContext, deps: Qlas
     }
 
     if (kind === "TypeIntersection") {
-      // Concrete intersection closures need the schema-aware narrowing in the
-      // legacy path walker. A plain RHS typeref loses the LHS extent (Ba & Bb).
-      throw deferred("schema-aware type intersection narrowing");
+      const typeName = typeExprName((step as QlTypeIntersection).type);
+      pathTip = deps.narrowTypeIntersectionSet(ctx, pathTip!, typeName);
+      continue;
     }
 
     if (kind === "Splat") continue;

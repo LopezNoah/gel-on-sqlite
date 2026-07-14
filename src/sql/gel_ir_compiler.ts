@@ -11772,6 +11772,11 @@ const compileOperatorValueSQL = (
       params.length = checkpoint;
       return null;
     }
+    const isDurationCall = (arg: Set): boolean => arg.expr.kind === "function_call"
+      && (arg.expr as FunctionCall).functionName.endsWith("to_duration");
+    const durationComparison = isDurationCall(args[0].expr) && isDurationCall(args[1].expr);
+    const comparisonLeft = durationComparison ? `_gel_duration_to_seconds(l)` : "l";
+    const comparisonRight = durationComparison ? `_gel_duration_to_seconds(r)` : "r";
     // Value-level emission: produce JSON booleans so downstream JSON.parse
     // yields true/false rather than 1/0. Empty-set semantics: if either
     // operand is NULL the comparison's value is the empty set, surfaced as
@@ -11780,8 +11785,8 @@ const compileOperatorValueSQL = (
     return bindOperandsOnce(
       [{ alias: "l", sql: left }, { alias: "r", sql: right }],
       options.nativeBoolResults
-        ? `l ${op} r`
-        : `CASE WHEN l IS NULL OR r IS NULL THEN NULL WHEN l ${op} r THEN json('true') ELSE json('false') END`,
+        ? `${comparisonLeft} ${op} ${comparisonRight}`
+        : `CASE WHEN l IS NULL OR r IS NULL THEN NULL WHEN ${comparisonLeft} ${op} ${comparisonRight} THEN json('true') ELSE json('false') END`,
     );
   }
   if (call.operator === "??") {

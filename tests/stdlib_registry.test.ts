@@ -58,15 +58,17 @@ describe("stdlib registry — SQL lowerability is the sql slot", () => {
       "math::acos", "math::asin", "math::atan", "math::atan2", "math::cos",
       "math::cot", "math::sin", "math::tan",
       "std::assert", "std::assert_single", "std::assert_exists",
-      "std::array_set", "std::array_insert", "std::duration_get",
+      "std::array_fill", "std::array_set", "std::array_insert", "std::duration_get",
       "std::datetime_current", "std::datetime_of_transaction", "std::datetime_of_statement",
       "std::to_str", "std::to_json", "std::json_get", "std::len", "std::count",
-      "std::max", "std::min", "std::str_lower", "std::str_upper",
-      "std::str_trim", "std::str_trim_start", "std::str_trim_end",
-      "std::str_pad_start", "std::str_pad_end", "std::str_repeat",
+      "std::max", "std::min", "std::str_lower", "std::str_upper", "std::str_title",
+      "std::str_trim", "std::str_trim_start", "std::str_trim_end", "std::str_ltrim", "std::str_rtrim",
+      "std::str_pad_start", "std::str_pad_end", "std::str_lpad", "std::str_rpad", "std::str_repeat",
       "std::str_reverse", "std::str_split", "std::str_replace", "std::array_replace",
       "std::to_int16", "std::to_int32", "std::to_int64", "std::to_float32",
       "std::to_float64", "std::to_bigint", "std::to_decimal",
+      "std::to_datetime", "cal::to_local_datetime", "cal::to_local_date", "cal::to_local_time",
+      "cal::duration_normalize_hours", "cal::duration_normalize_days",
       "std::overlaps", "std::adjacent", "std::strictly_below", "std::strictly_above",
       "std::bounded_above", "std::bounded_below", "std::range_is_empty",
       "std::range_is_inclusive_lower", "std::range_is_inclusive_upper",
@@ -86,7 +88,7 @@ describe("stdlib registry — SQL lowerability is the sql slot", () => {
 
   it("a sql template renders for a representative function", () => {
     const tmpl = getStdlibSqlTemplate("std::str_upper");
-    expect(tmpl?.(["x"])).toBe("upper(COALESCE(CAST(x AS TEXT), ''))");
+    expect(tmpl?.(["x"])).toBe("_gel_str_upper(x)");
     expect(getStdlibSqlTemplate("std::array_unpack")).toBeUndefined(); // runtime-only
   });
 });
