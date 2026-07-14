@@ -5547,9 +5547,13 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
         // `Issue ?= default::Issue` (same type) and `Text != Issue` (related).
         // Allow these explicitly via the schema; ordering ops stay rejected.
         const isEqualityOp = expr.op === "=" || expr.op === "!=" || expr.op === "?=" || expr.op === "?!=";
-        const bothObjects = ctx.schema !== undefined
-          && ctx.schema.getType(qualifyTypeName(leftType, ctx.module)) !== undefined
-          && ctx.schema.getType(qualifyTypeName(rightType, ctx.module)) !== undefined;
+        const isObjectType = (typeName: string): boolean => {
+          const binding = resolveBinding(ctx, typeName);
+          return binding?.typeref.isScalar === false
+            || (ctx.schema !== undefined
+              && ctx.schema.getType(qualifyTypeName(typeName, ctx.module)) !== undefined);
+        };
+        const bothObjects = isObjectType(leftType) && isObjectType(rightType);
         if (!(isEqualityOp && bothObjects)) {
           failSemantic(
             `operator '${expr.op}' cannot be applied to operands of type '${leftType}' and '${rightType}'`,

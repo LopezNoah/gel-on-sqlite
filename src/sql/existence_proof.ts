@@ -409,6 +409,10 @@ const tryCompileCorrelatedExistsChainSelect = (
         namespace: [] as string[],
       })),
     ],
+    sourcePathAliases: [
+      ...(options.sourcePathAliases ?? []),
+      { pathKey: chainKey, alias: built.leafAlias },
+    ],
   };
   const checkpoint = params.length;
   const whereSqls = [...built.whereSqls];
