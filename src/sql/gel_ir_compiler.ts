@@ -3859,7 +3859,22 @@ const compileScalarSelectSQLInner = (
     const call = expr as OperatorCall;
     const op = operatorToInfixSql(call.operator);
     const args = orderedCallArgs(call.args);
-    if (op && args.length === 2 && pathIdKey(args[0].expr) !== pathIdKey(args[1].expr)) {
+    const leftRoots = new globalThis.Set<string>();
+    const rightRoots = new globalThis.Set<string>();
+    if (args.length === 2) {
+      collectTypeRootIds(args[0].expr, leftRoots, true);
+      collectTypeRootIds(args[1].expr, rightRoots, true);
+    }
+    const independentPaths = leftRoots.size > 0
+      && rightRoots.size > 0
+      && ![...leftRoots].some((root) => rightRoots.has(root));
+    const independentBinding = args.length === 2
+      && pathIdKey(args[0].expr) !== pathIdKey(args[1].expr)
+      && ((args[0].expr.expr.kind === "select_expr"
+          && "isWithBinding" in args[0].expr && args[0].expr.isWithBinding === true)
+        || (args[1].expr.expr.kind === "select_expr"
+          && "isWithBinding" in args[1].expr && args[1].expr.isWithBinding === true));
+    if (op && args.length === 2 && (independentPaths || independentBinding)) {
       const paramsCheckpoint = params.length;
       const leftRows = compileScalarSelectSQL(args[0].expr, params, target, options);
       const rightRows = leftRows ? compileScalarSelectSQL(args[1].expr, params, target, options) : null;
@@ -4164,8 +4179,8 @@ const compileScalarSelectSQLInner = (
   const freeRootOuterWheres = (!outerWheresMatchValueSources && !valueIsSetOfWrapped) ? outerWheres : [];
   const innerWheres = collectInnerWhereClauses(sourceSet);
   const preValueCheckpoint = params.length;
-  // For a single-source optional compare, the iteration root is a scoped
-  // path — expose it to SET OF (aggregate) args (see scopedAggRoot).
+  // For a single-source operator, the iteration root is a scoped path — expose
+  // it to SET OF (aggregate) args (see scopedAggRoot).
   const valueOptions = ((): GelIRCompileOptions => {
     // No enclosing row source: free-rooted subquery operands can be compiled
     // self-contained (see allowIndependentSubquery).
@@ -4179,6 +4194,11 @@ const compileScalarSelectSQLInner = (
         const [tr] = sources.values();
         if (tr) return { ...options, scopedAggRoot: { alias: "g0", typerefId: tr.id } };
       }
+    }
+    if (cur.expr.kind === "operator_call"
+        && operatorToInfixSql((cur.expr as OperatorCall).operator)) {
+      const [tr] = sources.values();
+      if (tr) return { ...options, scopedAggRoot: { alias: "g0", typerefId: tr.id } };
     }
     return base;
   })();
@@ -4733,8 +4753,17 @@ const tryCompileScalarPointerPathSelectSQL = (
   const checkpoint = params.length;
   const aliasColumns = pointerPathAliasColumns(path);
   const rootAlias = POINTER_ROOT_ALIAS;
-  let fromSql = compilePolymorphicSource(path.root.typeref, false, rootAlias, aliasColumns[0], options);
-  let previousAlias = rootAlias;
+  const outerRoot = findMatchingOuterScope(
+    {
+      typerefId: path.root.typeref.id,
+      namespace: path.root.pathId?.namespace ?? [],
+    },
+    options,
+  );
+  let fromSql = outerRoot
+    ? "(SELECT 1) __correlated_root"
+    : compilePolymorphicSource(path.root.typeref, false, rootAlias, aliasColumns[0], options);
+  let previousAlias = outerRoot?.alias ?? rootAlias;
 
   path.links.forEach((link, index) => {
     const nextAlias = pointerStepTargetAlias(index);

@@ -434,6 +434,14 @@ export const compileCountOfSetSQL = (
     return null;
   }
 
+  // count() always returns one scalar row, including for an empty argument.
+  // Therefore a count of that result has cardinality one without evaluating
+  // the inner aggregate as a row source.
+  if (expr.kind === "function_call"
+      && ((expr as FunctionCall).functionName.split("::").pop() ?? "") === "count") {
+    return "1";
+  }
+
   if (expr.kind === "pointer") {
     const checkpoint = params.length;
     // `count(Card.name)` written INLINE in a computed shape
@@ -453,6 +461,33 @@ export const compileCountOfSetSQL = (
       const correlatedLeaf = deps.correlatedDirectScalarPropertyLeaf(set, options);
       if (correlatedLeaf) {
         return `(CASE WHEN ${correlatedLeaf} IS NULL THEN 0 ELSE 1 END)`;
+      }
+    }
+    if (options.scopedAggRoot) {
+      let rootSet: Set = set;
+      while (rootSet.expr.kind === "pointer" || rootSet.expr.kind === "select_expr") {
+        rootSet = rootSet.expr.kind === "pointer"
+          ? (rootSet.expr as Pointer).source
+          : (rootSet.expr as SelectExpr).result;
+      }
+      if (rootSet.expr.kind === "type_root"
+          && (rootSet.expr as TypeRoot).typeref.id === options.scopedAggRoot.typerefId) {
+        const correlatedOptions: GelIRCompileOptions = {
+          ...options,
+          outerScopes: [
+            ...(options.outerScopes ?? []),
+            {
+              alias: options.scopedAggRoot.alias,
+              typeref: (rootSet.expr as TypeRoot).typeref,
+              namespace: rootSet.pathId?.namespace ?? [],
+            },
+          ],
+        };
+        const scalarSql = deps.compileScalarSelectSQL(set, params, target, correlatedOptions);
+        if (scalarSql) {
+          return `(SELECT count(*) FROM (${scalarSql}))`;
+        }
+        params.length = checkpoint;
       }
     }
     const scalarSql = deps.compileScalarSelectSQL(set, params, target, options);
