@@ -67,6 +67,66 @@ export const runSelectExprEvaluation = (
     return undefined;
   }
 
+  // These caches live for exactly one interpreter request. They eliminate
+  // repeated path loads without retaining rows across writes or connections.
+  const rowCache = new Map<string, Record<string, unknown> | undefined>();
+  const linkCache = new Map<string, string[]>();
+  const batchSize = 500;
+
+  const loadRowsById = (table: string, ids: string[]): Map<string, Record<string, unknown>> => {
+    const rows = new Map<string, Record<string, unknown>>();
+    const missing = [...new Set(ids)].filter((id) => {
+      const cached = rowCache.get(`${table}:${id}`);
+      if (cached !== undefined) {
+        rows.set(id, cached);
+        return false;
+      }
+      return !rowCache.has(`${table}:${id}`);
+    });
+    for (let offset = 0; offset < missing.length; offset += batchSize) {
+      const batch = missing.slice(offset, offset + batchSize);
+      const placeholders = batch.map(() => "?").join(", ");
+      const loaded = db.prepare(`SELECT * FROM ${quoteIdent(table)} WHERE ${quoteIdent("id")} IN (${placeholders})`).all(...batch) as Record<string, unknown>[];
+      const found = new Map(loaded.filter((row): row is Record<string, unknown> & { id: string } => typeof row.id === "string").map((row) => [row.id, row]));
+      for (const id of batch) {
+        const row = found.get(id);
+        rowCache.set(`${table}:${id}`, row);
+        if (row) rows.set(id, row);
+      }
+    }
+    return rows;
+  };
+
+  const loadLinkTargets = (table: string, sourceIds: string[]): Map<string, string[]> => {
+    const targets = new Map<string, string[]>();
+    const missing = [...new Set(sourceIds)].filter((id) => {
+      const cached = linkCache.get(`${table}:${id}`);
+      if (cached) {
+        targets.set(id, cached);
+        return false;
+      }
+      return !linkCache.has(`${table}:${id}`);
+    });
+    for (let offset = 0; offset < missing.length; offset += batchSize) {
+      const batch = missing.slice(offset, offset + batchSize);
+      const placeholders = batch.map(() => "?").join(", ");
+      const loaded = db.prepare(`SELECT ${quoteIdent("source")}, ${quoteIdent("target")} FROM ${quoteIdent(table)} WHERE ${quoteIdent("source")} IN (${placeholders})`).all(...batch) as Array<{ source?: unknown; target?: unknown }>;
+      const found = new Map<string, string[]>();
+      for (const row of loaded) {
+        if (typeof row.source !== "string" || typeof row.target !== "string") continue;
+        const values = found.get(row.source) ?? [];
+        values.push(row.target);
+        found.set(row.source, values);
+      }
+      for (const id of batch) {
+        const values = found.get(id) ?? [];
+        linkCache.set(`${table}:${id}`, values);
+        targets.set(id, values);
+      }
+    }
+    return targets;
+  };
+
   const evalFilterValue = (value: FilterValue, env: EvalEnv): unknown => {
     if (typeof value === "object" && value !== null && "kind" in value) {
       if (value.kind === "binding_ref") {
@@ -99,43 +159,28 @@ export const runSelectExprEvaluation = (
     for (let i = 0; i < parts.length - 1; i += 1) {
       const linkName = parts[i];
       const nextRows: Record<string, unknown>[] = [];
-      for (const r of currentRows) {
-        const linkDef = findRuntimeLinkDef(schema, currentType, linkName);
-        if (!linkDef) {
-          return undefined;
-        }
-        const sourceType = schema.getType(currentType);
-        if (!sourceType) return undefined;
-        const targetTypeNames = normalizeLinkTargetNames(linkDef.link.targetType, sourceType.module ?? "default");
-        const targetTypes = targetTypeNames.flatMap((name) => schema.listConcreteTypesAssignableTo(name));
-        if (usesLinkTable(linkDef.link)) {
-          const owner = resolveLinkStorageOwner(schema, sourceType, linkDef.link);
-          const linkTable = linkTableName(qualifiedTypeName(owner), linkDef.link);
-          const linkRows = db.prepare(`SELECT ${quoteIdent("target")} FROM ${quoteIdent(linkTable)} WHERE ${quoteIdent("source")} = ?`).all(r.id as string) as Array<{ target?: unknown }>;
-          for (const linkRow of linkRows) {
-            if (typeof linkRow.target !== "string") continue;
-            for (const targetType of targetTypes) {
-              const targetTable = tableNameForType(qualifiedTypeName(targetType));
-              const fetched = db.prepare(`SELECT * FROM ${quoteIdent(targetTable)} WHERE ${quoteIdent("id")} = ?`).all(linkRow.target) as Record<string, unknown>[];
-              for (const t of fetched) {
-                nextRows.push(t);
-              }
-            }
-          }
-          currentType = qualifiedTypeName(targetTypes[0] ?? sourceType);
-        } else {
-          const targetId = r[`${linkDef.link.name}_id`];
-          if (typeof targetId !== "string") continue;
-          for (const targetType of targetTypes) {
-            const targetTable = tableNameForType(qualifiedTypeName(targetType));
-            const fetched = db.prepare(`SELECT * FROM ${quoteIdent(targetTable)} WHERE ${quoteIdent("id")} = ?`).all(targetId) as Record<string, unknown>[];
-            for (const t of fetched) {
-              nextRows.push(t);
-            }
-          }
-          currentType = qualifiedTypeName(targetTypes[0] ?? sourceType);
+      const linkDef = findRuntimeLinkDef(schema, currentType, linkName);
+      if (!linkDef) return undefined;
+      const sourceType = schema.getType(currentType);
+      if (!sourceType) return undefined;
+      const targetTypeNames = normalizeLinkTargetNames(linkDef.link.targetType, sourceType.module ?? "default");
+      const targetTypes = targetTypeNames.flatMap((name) => schema.listConcreteTypesAssignableTo(name));
+      const targetIdsBySource = usesLinkTable(linkDef.link)
+        ? loadLinkTargets(linkTableName(qualifiedTypeName(resolveLinkStorageOwner(schema, sourceType, linkDef.link)), linkDef.link), currentRows.map((r) => r.id).filter((id): id is string => typeof id === "string"))
+        : new Map(currentRows.map((r) => [r.id as string, typeof r[`${linkDef.link.name}_id`] === "string" ? [r[`${linkDef.link.name}_id`] as string] : []]));
+      const targetIds = [...targetIdsBySource.values()].flat();
+      const targets = new Map<string, Record<string, unknown>>();
+      for (const targetType of targetTypes) {
+        for (const [id, target] of loadRowsById(tableNameForType(qualifiedTypeName(targetType)), targetIds)) targets.set(id, target);
+      }
+      for (const source of currentRows) {
+        if (typeof source.id !== "string") continue;
+        for (const targetId of targetIdsBySource.get(source.id) ?? []) {
+          const target = targets.get(targetId);
+          if (target) nextRows.push(target);
         }
       }
+      currentType = qualifiedTypeName(targetTypes[0] ?? sourceType);
       currentRows = nextRows;
       if (currentRows.length === 0) return undefined;
     }
