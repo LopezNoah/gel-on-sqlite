@@ -75,6 +75,9 @@ export const materializeSchema = (db: SQLiteDatabase, schema: SchemaSnapshot): v
       db.prepare(
         `CREATE TABLE IF NOT EXISTS ${quoteIdent(linkTable)} (${quoteIdent("source")} TEXT NOT NULL, ${quoteIdent("target")} TEXT NOT NULL${propertyColumns.length ? `, ${propertyColumns.join(", ")}` : ""}, PRIMARY KEY (${quoteIdent("source")}, ${quoteIdent("target")}))`,
       ).run();
+      db.prepare(
+        `CREATE INDEX IF NOT EXISTS ${quoteIdent(`${linkTable}__target_source`)} ON ${quoteIdent(linkTable)} (${quoteIdent("target")}, ${quoteIdent("source")})`,
+      ).run();
     }
 
     for (const rewrite of typeDef.mutationRewrites ?? []) {

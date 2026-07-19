@@ -146,6 +146,8 @@ const buildCreateTypeSteps = (
     sql: `CREATE TABLE IF NOT EXISTS ${quoteIdent(table)} (${columns.join(", ")})`,
   });
 
+  steps.push(...buildInlineLinkIndexSteps(typeDecl));
+
   steps.push({
     description: `create global id insert trigger for ${qualifiedTypeName(typeDecl)}`,
     sql: `CREATE TRIGGER IF NOT EXISTS ${quoteIdent(triggerName(table, "gid_insert"))} AFTER INSERT ON ${quoteIdent(table)} BEGIN INSERT INTO ${quoteIdent("__gel_global_ids")} (${quoteIdent("id")}, ${quoteIdent("type_name")}) VALUES (NEW.${quoteIdent("id")}, '${table}'); END`,
@@ -184,7 +186,11 @@ const buildCreateTypeSteps = (
 
       steps.push({
         description: `create link table for ${qualifiedTypeName(typeDecl)}.${member.name}`,
-        sql: `CREATE TABLE IF NOT EXISTS ${quoteIdent(lt)} (${linkColumns.join(", ")})`,
+        sql: `CREATE TABLE IF NOT EXISTS ${quoteIdent(lt)} (${linkColumns.join(", ")}, PRIMARY KEY (${quoteIdent("source")}, ${quoteIdent("target")}))`,
+      });
+      steps.push({
+        description: `create reverse link index for ${qualifiedTypeName(typeDecl)}.${member.name}`,
+        sql: `CREATE INDEX IF NOT EXISTS ${quoteIdent(`${lt}__target_source`)} ON ${quoteIdent(lt)} (${quoteIdent("target")}, ${quoteIdent("source")})`,
       });
     }
   }
@@ -238,6 +244,7 @@ const buildAlterTypeSteps = (
         description: `add link column ${qualifiedTypeName(toType)}.${member.name}`,
         sql: `ALTER TABLE ${quoteIdent(tableName(toType))} ADD COLUMN ${quoteIdent(`${member.name}_id`)} TEXT${member.required ? " NOT NULL DEFAULT ''" : ""}`,
       });
+      steps.push(...buildInlineLinkIndexSteps(toType, member.name));
       continue;
     }
 
@@ -264,7 +271,11 @@ const buildAlterTypeSteps = (
 
       steps.push({
         description: `create link table ${qualifiedTypeName(toType)}.${member.name}`,
-        sql: `CREATE TABLE IF NOT EXISTS ${quoteIdent(lt)} (${linkColumns.join(", ")})`,
+        sql: `CREATE TABLE IF NOT EXISTS ${quoteIdent(lt)} (${linkColumns.join(", ")}, PRIMARY KEY (${quoteIdent("source")}, ${quoteIdent("target")}))`,
+      });
+      steps.push({
+        description: `create reverse link index for ${qualifiedTypeName(toType)}.${member.name}`,
+        sql: `CREATE INDEX IF NOT EXISTS ${quoteIdent(`${lt}__target_source`)} ON ${quoteIdent(lt)} (${quoteIdent("target")}, ${quoteIdent("source")})`,
       });
     }
   }
@@ -280,6 +291,11 @@ const buildAlterTypeSteps = (
 
     steps.push(...buildDropMemberStorageSteps(toType, member));
   }
+
+  // Existing databases can contain junction tables emitted before they had a
+  // primary key. Unique forward and reverse indexes make those tables usable
+  // for both traversal directions without a destructive table rebuild.
+  steps.push(...buildExistingLinkIndexSteps(toType));
 
   if (serializeBehavior(fromType) !== serializeBehavior(toType)) {
     steps.push(...buildBehaviorDropSteps(fromType));
@@ -373,6 +389,32 @@ const buildDropMemberStorageSteps = (typeDecl: ObjectTypeDeclaration, member: Ty
     },
   ];
 };
+
+const buildInlineLinkIndexSteps = (typeDecl: ObjectTypeDeclaration, onlyLink?: string): MigrationStep[] =>
+  typeDecl.members.flatMap((member) => {
+    if (member.kind !== "link" || usesLinkTable(member) || (onlyLink && member.name !== onlyLink)) return [];
+    const column = `${member.name}_id`;
+    return [{
+      description: `create link index for ${qualifiedTypeName(typeDecl)}.${member.name}`,
+      sql: `CREATE INDEX IF NOT EXISTS ${quoteIdent(`${tableName(typeDecl)}__idx_${column}`)} ON ${quoteIdent(tableName(typeDecl))} (${quoteIdent(column)})`,
+    }];
+  });
+
+const buildExistingLinkIndexSteps = (typeDecl: ObjectTypeDeclaration): MigrationStep[] =>
+  typeDecl.members.flatMap((member) => {
+    if (member.kind !== "link" || !usesLinkTable(member)) return [];
+    const table = linkTable(typeDecl, member);
+    return [
+      {
+        description: `create forward link index for ${qualifiedTypeName(typeDecl)}.${member.name}`,
+        sql: `CREATE UNIQUE INDEX IF NOT EXISTS ${quoteIdent(`${table}__source_target`)} ON ${quoteIdent(table)} (${quoteIdent("source")}, ${quoteIdent("target")})`,
+      },
+      {
+        description: `create reverse link index for ${qualifiedTypeName(typeDecl)}.${member.name}`,
+        sql: `CREATE INDEX IF NOT EXISTS ${quoteIdent(`${table}__target_source`)} ON ${quoteIdent(table)} (${quoteIdent("target")}, ${quoteIdent("source")})`,
+      },
+    ];
+  });
 
 const isSingleProperty = (member: TypeMember): member is PropertyMember =>
   member.kind === "property" && !member.multi;

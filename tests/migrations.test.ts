@@ -54,6 +54,20 @@ describe("renderSchemaSQL / planSchemaMigration — create", () => {
     expect(sql).toContain('"default__widget"');
     expect(sql).not.toContain("DROP TABLE");
   });
+
+  it("indexes inline links and reverse junction traversal", () => {
+    const schema = parse(`module default {
+      type User;
+      type Post {
+        author: User;
+        multi tags: User;
+      }
+    }`);
+    const sql = renderSchemaSQL(schema);
+    expect(sql).toContain('CREATE INDEX IF NOT EXISTS "default__post__idx_author_id" ON "default__post" ("author_id")');
+    expect(sql).toContain('PRIMARY KEY ("source", "target")');
+    expect(sql).toContain('CREATE INDEX IF NOT EXISTS "default__post__tags__target_source" ON "default__post__tags" ("target", "source")');
+  });
 });
 
 describe("planSchemaMigration — diff", () => {

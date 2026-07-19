@@ -206,6 +206,7 @@ describe("codegen/sql — link storage", () => {
     ]);
     const sql = renderSchemaSQL(schema);
     expect(sql).toContain('REFERENCES "default__user"("id")');
+    expect(sql).toContain('CREATE INDEX IF NOT EXISTS "default__post__idx_author_id" ON "default__post" ("author_id")');
   });
 
   it("generates junction table for multi links", () => {
@@ -226,6 +227,7 @@ describe("codegen/sql — link storage", () => {
     expect(sql).toContain('"default__post__tags"');
     expect(sql).toContain('"source" TEXT NOT NULL');
     expect(sql).toContain('"target" TEXT NOT NULL');
+    expect(sql).toContain('CREATE INDEX IF NOT EXISTS "default__post__tags__target_source" ON "default__post__tags" ("target", "source")');
   });
 
   it("generates junction table with property columns for links with properties", () => {

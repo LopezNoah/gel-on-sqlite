@@ -292,6 +292,16 @@ export const renderSchemaSQL = (schema: SchemaSnapshot): string => {
       }
     }
 
+    // Inline links are traversed in reverse by filtering this column. SQLite
+    // does not create an index for a foreign key, so add it explicitly.
+    for (const link of allLinks) {
+      if (usesLinkTable(link)) continue;
+      const column = inlineColumnName(link);
+      lines.push(
+        `CREATE INDEX IF NOT EXISTS ${quoteIdent(`${table}__idx_${column}`)} ON ${quoteIdent(table)} (${quoteIdent(column)})`,
+      );
+    }
+
     // Global ID insert trigger
     lines.push(
       `CREATE TRIGGER IF NOT EXISTS ${quoteIdent(triggerName(table, "gid_insert"))} AFTER INSERT ON ${quoteIdent(table)} BEGIN INSERT INTO ${quoteIdent("__gel_global_ids")} (${quoteIdent("id")}, ${quoteIdent("type_name")}) VALUES (NEW.${quoteIdent("id")}, ${quoteLiteral(table)}); END`,
@@ -331,6 +341,9 @@ export const renderSchemaSQL = (schema: SchemaSnapshot): string => {
       linkColumns.push(`PRIMARY KEY (${quoteIdent("source")}, ${quoteIdent("target")})`);
       lines.push(
         `CREATE TABLE IF NOT EXISTS ${quoteIdent(lt)} (${linkColumns.join(", ")})`,
+      );
+      lines.push(
+        `CREATE INDEX IF NOT EXISTS ${quoteIdent(`${lt}__target_source`)} ON ${quoteIdent(lt)} (${quoteIdent("target")}, ${quoteIdent("source")})`,
       );
     }
 
