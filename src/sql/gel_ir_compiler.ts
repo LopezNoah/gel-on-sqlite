@@ -8503,21 +8503,22 @@ const collectLinkProjectionsForSource = (
     const expr = set.expr;
     if (expr.kind === "pointer") {
       const ptr = expr as Pointer;
-      // Match pointers whose source unwraps to a type_root whose typeref
-      // matches the outer source's type_root typeref. Both `Text` (the
-      // SELECT subject) and `Text[IS Owned]` (the FILTER expression's
-      // narrowed view) have the SAME inner type_root.typeref.id; the
-      // narrowing only changes the Set wrapper's typeref. By comparing
-      // type_root ids we correctly recognize them as the same physical
-      // source. Only links using link-table storage need the JOIN — inline
-      // FK columns are already available via collectProjectedColumns'
-      // `${shortName}_id` rule.
+      // Match pointers rooted in the outer source. Intersection narrowing can
+      // replace the type_root typeref with a concrete union, but the path id
+      // retains the original physical root (for example Text[IS Owned]).
+      // Only links using link-table storage need the JOIN — inline FK columns
+      // are already available via collectProjectedColumns' `${shortName}_id`
+      // rule.
       let sourceExpr: Expr = ptr.source.expr;
       while (sourceExpr.kind === "select_expr") {
         sourceExpr = (sourceExpr as SelectExpr).result.expr;
       }
       const sourceTypeMatches = sourceExpr.kind === "type_root"
-        && (sourceExpr as TypeRoot).typeref.id === sourceTypeRootId;
+        && (
+          (sourceExpr as TypeRoot).typeref.id === sourceTypeRootId
+          || ((ptr.source as { typeIntersectionNarrowed?: boolean }).typeIntersectionNarrowed === true
+            && ptr.source.pathId?.steps[0]?.type.id === sourceTypeRootId)
+        );
       // Only single-cardinality links can be safely LEFT JOINed into the
       // polymorphic source — multi links produce N rows per source row,
       // which would inflate the UNION ALL's row count and silently break

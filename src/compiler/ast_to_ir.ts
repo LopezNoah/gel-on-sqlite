@@ -2681,7 +2681,9 @@ const inferAstExprTypeName = (expr: FreeObjectExpr, ctx: IRCompileContext): stri
     case "if_else": {
       const thenType = inferAstExprTypeName((expr as { thenExpr: FreeObjectExpr }).thenExpr, ctx);
       const elseType = inferAstExprTypeName((expr as { elseExpr: FreeObjectExpr }).elseExpr, ctx);
-      return thenType ?? elseType;
+      if (!thenType) return elseType;
+      if (!elseType) return thenType;
+      return commonScalarType(thenType, elseType) ?? thenType;
     }
     case "concat": {
       // String concat returns str; array concat returns the array type.
@@ -2717,6 +2719,7 @@ const inferAstExprTypeName = (expr: FreeObjectExpr, ctx: IRCompileContext): stri
       const leftType = inferAstExprTypeName((expr as { left: FreeObjectExpr }).left, ctx);
       const rightType = inferAstExprTypeName((expr as { right: FreeObjectExpr }).right, ctx);
       const op = (expr as { op: string }).op;
+      if (leftType && rightType) return arithmeticResultType(leftType, rightType, op);
       const promote = (a: string | undefined, b: string | undefined): string | undefined => {
         if (!a) return b;
         if (!b) return a;
@@ -2746,23 +2749,7 @@ const inferAstExprTypeName = (expr: FreeObjectExpr, ctx: IRCompileContext): stri
       const rightT = inferAstExprTypeName((expr as { right: FreeObjectExpr }).right, ctx);
       if (!leftT) return rightT;
       if (!rightT) return leftT;
-      const INT_RANK: Record<string, number> = {
-        "std::int16": 1, "std::int32": 2, "std::int64": 3, "std::bigint": 4,
-      };
-      const FLOAT_RANK: Record<string, number> = {
-        "std::float32": 1, "std::float64": 2, "std::decimal": 3,
-      };
-      const aInt = INT_RANK[leftT];
-      const bInt = INT_RANK[rightT];
-      const aFloat = FLOAT_RANK[leftT];
-      const bFloat = FLOAT_RANK[rightT];
-      if (aInt !== undefined && bInt !== undefined) return aInt >= bInt ? leftT : rightT;
-      if (aFloat !== undefined && bFloat !== undefined) return aFloat >= bFloat ? leftT : rightT;
-      if ((aInt !== undefined && bFloat !== undefined) || (aFloat !== undefined && bInt !== undefined)) {
-        const floatType = aFloat !== undefined ? leftT : rightT;
-        return floatType;
-      }
-      return leftT;
+      return commonScalarType(leftT, rightT) ?? leftT;
     }
     case "function_call": {
       // Best-effort inference for aggregates/scalar functions used by
@@ -2907,8 +2894,13 @@ const typeCategory = (typeName: string | undefined): string => {
     || typeName === "std::cal::relative_duration"
     || typeName === "std::cal::date_duration"
   ) return "duration";
-  if (typeName.startsWith("array<") || typeName === "std::array") return "array";
-  if (typeName.startsWith("tuple<") || typeName === "std::tuple") return "tuple";
+  const genericOpen = typeName.indexOf("<");
+  const genericHead = genericOpen >= 0 ? typeName.slice(0, genericOpen) : typeName;
+  const genericName = genericHead.includes("::")
+    ? genericHead.slice(genericHead.lastIndexOf("::") + 2)
+    : genericHead;
+  if (genericName === "array") return "array";
+  if (genericName === "tuple") return "tuple";
   return "other";
 };
 
@@ -3017,6 +3009,115 @@ const areArithCompatible = (a: string, b: string): boolean => {
   if ((ca === "datetime" && cb === "duration") || (ca === "duration" && cb === "datetime")) return true;
   if (ca === "duration" && cb === "duration") return true;
   return false;
+};
+
+const commonScalarType = (a: string, b: string): string | undefined => {
+  if (a === b) return a;
+  const collectionTypes = new Set(["array", "tuple"]);
+  if (!collectionTypes.has(typeCategory(a)) && !collectionTypes.has(typeCategory(b))
+    && !areCompareCompatible(a, b)) return undefined;
+  const intRank: Record<string, number> = {
+    "std::int16": 1, "std::int32": 2, "std::int64": 3, "std::bigint": 4,
+  };
+  const floatRank: Record<string, number> = {
+    "std::float32": 1, "std::float64": 2, "std::decimal": 3,
+  };
+  const aInt = intRank[a];
+  const bInt = intRank[b];
+  const aFloat = floatRank[a];
+  const bFloat = floatRank[b];
+  if (aInt !== undefined && bInt !== undefined) return aInt >= bInt ? a : b;
+  if (aFloat !== undefined && bFloat !== undefined) return aFloat >= bFloat ? a : b;
+  if (aInt !== undefined && bFloat !== undefined) {
+    return b === "std::float32" && a === "std::int16" ? b : "std::float64";
+  }
+  if (aFloat !== undefined && bInt !== undefined) {
+    return a === "std::float32" && b === "std::int16" ? a : "std::float64";
+  }
+  if (typeCategory(a) === "array" && typeCategory(b) === "array") {
+    if (a.includes("anytype")) return b;
+    if (b.includes("anytype")) return a;
+    return a === b ? a : undefined;
+  }
+  if (typeCategory(a) === "tuple" && typeCategory(b) === "tuple") {
+    const unpack = (type: string): string[] | undefined => {
+      const open = type.indexOf("<");
+      if (open < 0 || !type.endsWith(">")) return undefined;
+      const values: string[] = [];
+      let start = open + 1;
+      let depth = 0;
+      for (let i = start; i < type.length - 1; i += 1) {
+        if (type[i] === "<") depth += 1;
+        else if (type[i] === ">") depth -= 1;
+        else if (type[i] === "," && depth === 0) {
+          values.push(type.slice(start, i).trim());
+          start = i + 1;
+        }
+      }
+      values.push(type.slice(start, -1).trim());
+      return values;
+    };
+    const left = unpack(a);
+    const right = unpack(b);
+    if (!left || !right || left.length !== right.length) return undefined;
+    const values = left.map((value, i) => commonScalarType(value, right[i]));
+    return values.every((value): value is string => value !== undefined)
+      ? `tuple<${values.join(", ")}>`
+      : undefined;
+  }
+  if ((a === "std::cal::local_date" && b === "std::cal::local_datetime")
+    || (b === "std::cal::local_date" && a === "std::cal::local_datetime")) {
+    return "std::cal::local_datetime";
+  }
+  if ((a === "std::cal::relative_duration" && b === "std::cal::date_duration")
+    || (b === "std::cal::relative_duration" && a === "std::cal::date_duration")) {
+    return "std::cal::relative_duration";
+  }
+  return undefined;
+};
+
+const arithmeticResultType = (a: string, b: string, op: string): string | undefined => {
+  if (typeCategory(a) === "numeric" && typeCategory(b) === "numeric") {
+    const common = commonScalarType(a, b);
+    if (!common) return undefined;
+    if (op === "/" || op === "^") {
+      return common === "std::decimal" ? common : "std::float64";
+    }
+    return common;
+  }
+  if (op !== "+" && op !== "-") return undefined;
+  const signed = new Set([
+    "std::duration", "std::cal::relative_duration", "std::cal::date_duration",
+  ]);
+  if (op === "+") {
+    if (signed.has(a) && signed.has(b)) {
+      return a === b ? a : "std::cal::relative_duration";
+    }
+    const temporal = signed.has(a) ? b : signed.has(b) ? a : undefined;
+    const duration = signed.has(a) ? a : signed.has(b) ? b : undefined;
+    if (!temporal || !duration) return undefined;
+    if (temporal === "std::cal::local_date") {
+      return duration === "std::cal::date_duration" ? temporal : "std::cal::local_datetime";
+    }
+    return temporal;
+  }
+  if (signed.has(a) && signed.has(b)) {
+    return a === b ? a : "std::cal::relative_duration";
+  }
+  if (signed.has(b)) {
+    if (a === "std::cal::local_date") {
+      return b === "std::cal::date_duration" ? a : "std::cal::local_datetime";
+    }
+    if (typeCategory(a) === "datetime") return a;
+  }
+  if (a === "std::cal::local_date" && b === "std::cal::local_date") return "std::cal::date_duration";
+  if (a === "std::datetime" && b === "std::datetime") return "std::duration";
+  if ((a === "std::cal::local_datetime" || a === "std::cal::local_date")
+    && (b === "std::cal::local_datetime" || b === "std::cal::local_date")) {
+    return "std::cal::relative_duration";
+  }
+  if (a === "std::cal::local_time" && b === "std::cal::local_time") return "std::cal::relative_duration";
+  return undefined;
 };
 
 // EdgeQL schema aliases (e.g. `alias FireCard := SELECT Card FILTER .element = 'Fire'`)
@@ -3770,6 +3871,18 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
     }
 
     case "set_expr": {
+      const scalarTypes = expr.values.map((value) => inferAstExprTypeName(value, ctx));
+      for (let i = 0; i < scalarTypes.length; i += 1) {
+        for (let j = i + 1; j < scalarTypes.length; j += 1) {
+          const leftType = scalarTypes[i];
+          const rightType = scalarTypes[j];
+          if (leftType && rightType
+            && (typeCategory(leftType) !== "other" || typeCategory(rightType) !== "other")
+            && !commonScalarType(leftType, rightType)) {
+            failSemantic(`operator 'UNION' cannot be applied to operands of type '${leftType}' and '${rightType}'`);
+          }
+        }
+      }
       const compiledValues = expr.values.map((value) => compileFreeObjectExpr(value, ctx));
       // A set constructor `{A, B}` over object types (the parse of `A union B`)
       // is a type union — reject incompatible same-named pointers across the
@@ -5495,6 +5608,13 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
     }
 
     case "coalesce": {
+      const leftType = inferAstExprTypeName(expr.left, ctx);
+      const rightType = inferAstExprTypeName(expr.right, ctx);
+      const resultType = leftType && rightType ? commonScalarType(leftType, rightType) : leftType ?? rightType;
+      if (leftType && rightType && !resultType
+        && (typeCategory(leftType) !== "other" || typeCategory(rightType) !== "other")) {
+        failSemantic(`operator '??' cannot be applied to operands of type '${leftType}' and '${rightType}'`);
+      }
       const left = compileFreeObjectExpr(expr.left, ctx);
       const right = compileFreeObjectExpr(expr.right, ctx);
       return {
@@ -5505,7 +5625,7 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
           right,
         } as CoalesceExpr,
         pathId: defaultPathId("std::coalesce"),
-        typeref: left.typeref,
+        typeref: resultType ? unknownTypeRef(resultType) : left.typeref,
         shape: [],
         isBinding: false,
         isMaterializedRef: false,
@@ -5514,6 +5634,17 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
     }
 
     case "if_else": {
+      const conditionType = inferAstExprTypeName(expr.condition, ctx);
+      if (conditionType && conditionType !== "std::bool") {
+        failSemantic(`operator 'IF' cannot be applied to operands of type '${conditionType}'`);
+      }
+      const thenType = inferAstExprTypeName(expr.thenExpr, ctx);
+      const elseType = inferAstExprTypeName(expr.elseExpr, ctx);
+      const resultType = thenType && elseType ? commonScalarType(thenType, elseType) : thenType ?? elseType;
+      if (thenType && elseType && !resultType
+        && (typeCategory(thenType) !== "other" || typeCategory(elseType) !== "other")) {
+        failSemantic(`operator 'IF' cannot be applied to operands of type '${thenType}' and '${elseType}'`);
+      }
       const condition = compileFreeObjectExpr(expr.condition, ctx);
       const ifExpr = compileFreeObjectExpr(expr.thenExpr, ctx);
       const elseExpr = compileFreeObjectExpr(expr.elseExpr, ctx);
@@ -5526,7 +5657,7 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
           elseExpr,
         } as IfElseExpr,
         pathId: defaultPathId("std::if_else"),
-        typeref: ifExpr.typeref,
+        typeref: resultType ? unknownTypeRef(resultType) : ifExpr.typeref,
         shape: [],
         isBinding: false,
         isMaterializedRef: false,
@@ -5651,6 +5782,11 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
     }
 
     case "logical": {
+      const leftType = inferAstExprTypeName(expr.left, ctx);
+      const rightType = inferAstExprTypeName(expr.right, ctx);
+      if (leftType && rightType && (leftType !== "std::bool" || rightType !== "std::bool")) {
+        failSemantic(`operator '${expr.op}' cannot be applied to operands of type '${leftType}' and '${rightType}'`);
+      }
       const left = compileFreeObjectExpr(expr.left, ctx);
       const right = compileFreeObjectExpr(expr.right, ctx);
       return {
@@ -5724,7 +5860,7 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
       // rather than silently coercing in SQLite.
       const mathLeftType = inferAstExprTypeName(expr.left, ctx);
       const mathRightType = inferAstExprTypeName(expr.right, ctx);
-      if (mathLeftType && mathRightType && !areArithCompatible(mathLeftType, mathRightType)) {
+      if (mathLeftType && mathRightType && !arithmeticResultType(mathLeftType, mathRightType, expr.op)) {
         // Math AST nodes already carry the operator symbol (`+`, `-`, …); no
         // producer emits word-form ops ("add"/"sub"/…), so the former
         // word→symbol mapping here was dead and has been removed.
