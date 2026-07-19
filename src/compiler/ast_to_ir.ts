@@ -2476,6 +2476,9 @@ const normalizeScalarCastName = (ctx: IRCompileContext, name: string): string =>
         const tupleRef = parseTupleStructuredTypeRef(ctx, name);
         if (tupleRef) return tupleRef.id;
       }
+      if (bare === "array" || bare === "range" || bare === "multirange") {
+        return `${bare}<${normalizeScalarCastName(ctx, trimmed.slice(open + 1, -1))}>`;
+      }
     }
   }
   if (name.includes("::")) {
@@ -2570,6 +2573,8 @@ const inferAstExprTypeName = (expr: FreeObjectExpr, ctx: IRCompileContext): stri
     case "binding_ref": {
       const enumType = lookupEnumScalar(ctx, expr.name);
       if (enumType) return enumType.qualifiedName;
+      const binding = resolveBinding(ctx, expr.name);
+      if (binding?.typeref.nameHint) return binding.typeref.nameHint;
       // `INTROSPECT std::float64` parses the type name as a binding_ref;
       // recognise the std/cal/schema qualified names so the introspect_typeof
       // case can emit the type itself.
@@ -2852,6 +2857,26 @@ const inferAstExprTypeName = (expr: FreeObjectExpr, ctx: IRCompileContext): stri
         }
         return undefined;
       }
+      const rangeSubtype = (type: string | undefined, collection: "range" | "multirange"): string | undefined => {
+        const prefix = `${collection}<`;
+        return type?.startsWith(prefix) && type.endsWith(">") ? type.slice(prefix.length, -1) : undefined;
+      };
+      if (shortName === "range") {
+        const bounds = [argTypes[0], argTypes[1]].filter((type): type is string => type !== undefined);
+        if (bounds.length === 0) return undefined;
+        const subtype = bounds.slice(1).reduce<string | undefined>((current, bound) =>
+          current === undefined ? undefined : commonScalarType(current, bound), bounds[0]);
+        return subtype ? `range<${subtype}>` : undefined;
+      }
+      if (shortName === "multirange") {
+        if (!first?.startsWith("array<") || !first.endsWith(">")) return undefined;
+        const subtype = rangeSubtype(first.slice("array<".length, -1), "range");
+        return subtype ? `multirange<${subtype}>` : undefined;
+      }
+      if (shortName === "range_get_lower" || shortName === "range_get_upper") {
+        return rangeSubtype(first, "range") ?? rangeSubtype(first, "multirange");
+      }
+      if (["range_is_empty", "range_is_inclusive_lower", "range_is_inclusive_upper"].includes(shortName)) return "std::bool";
       if (shortName === "array_agg" || shortName === "array_fill") return first ? `array<${first}>` : undefined;
       // `re_match(pattern, str)` / `re_match_all(pattern, str)` return an
       // array of capture-group strings per match. Mark them as `array<str>`
@@ -2901,6 +2926,8 @@ const typeCategory = (typeName: string | undefined): string => {
     : genericHead;
   if (genericName === "array") return "array";
   if (genericName === "tuple") return "tuple";
+  if (genericName === "range") return "range";
+  if (genericName === "multirange") return "multirange";
   return "other";
 };
 
@@ -2924,6 +2951,12 @@ const areCompareCompatible = (a: string, b: string): boolean => {
   if (a === b) return true;
   const ca = typeCategory(a);
   const cb = typeCategory(b);
+  if ((ca === "range" || ca === "multirange") && (cb === "range" || cb === "multirange")) {
+    const aOpen = a.indexOf("<");
+    const bOpen = b.indexOf("<");
+    if (aOpen < 0 || bOpen < 0 || !a.endsWith(">") || !b.endsWith(">")) return false;
+    return areCompareCompatible(a.slice(aOpen + 1, -1), b.slice(bOpen + 1, -1));
+  }
   if (ca === "numeric" && cb === "numeric") {
     // EdgeQL incompatibility rules for numeric: `bigint`/`decimal` cannot be
     // compared with float types without an explicit cast. They CAN be
@@ -2951,9 +2984,12 @@ const areCompareCompatible = (a: string, b: string): boolean => {
   // compatibility for differing-but-comparable element types (`array<int64>`
   // vs `array<decimal>`) is handled structurally over the parser's collection
   // AST nodes in `areCompareCompatibleExpr`, not by parsing these names.
-  if (ca === cb && (ca === "array" || ca === "tuple")) {
+  if (ca === cb && (ca === "array" || ca === "tuple" || ca === "range" || ca === "multirange")) {
     if (a.includes("anytype") || b.includes("anytype")) return true;
-    return a === b;
+    const aOpen = a.indexOf("<");
+    const bOpen = b.indexOf("<");
+    if (aOpen < 0 || bOpen < 0 || !a.endsWith(">") || !b.endsWith(">")) return a === b;
+    return areCompareCompatible(a.slice(aOpen + 1, -1), b.slice(bOpen + 1, -1));
   }
   return false;
 };
@@ -2992,6 +3028,12 @@ const areCompareCompatibleExpr = (
 // temporal/duration combinations EdgeQL actually permits. `datetime + datetime`
 // is rejected (no such operator); `datetime + duration` returns datetime.
 const areArithCompatible = (a: string, b: string): boolean => {
+  const aCategory = typeCategory(a);
+  const bCategory = typeCategory(b);
+  if ((aCategory === "range" || aCategory === "multirange")
+    && (bCategory === "range" || bCategory === "multirange")) {
+    return areCompareCompatible(a, b);
+  }
   if (a === b) {
     const cat = typeCategory(a);
     return cat === "numeric" || cat === "duration";
@@ -3077,6 +3119,12 @@ const commonScalarType = (a: string, b: string): string | undefined => {
 };
 
 const arithmeticResultType = (a: string, b: string, op: string): string | undefined => {
+  if ((op === "+" || op === "-" || op === "*")
+    && (typeCategory(a) === "range" || typeCategory(a) === "multirange")
+    && (typeCategory(b) === "range" || typeCategory(b) === "multirange")
+    && areCompareCompatible(a, b)) {
+    return typeCategory(a) === "multirange" ? a : typeCategory(b) === "multirange" ? b : a;
+  }
   if (typeCategory(a) === "numeric" && typeCategory(b) === "numeric") {
     const common = commonScalarType(a, b);
     if (!common) return undefined;
@@ -5536,6 +5584,36 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
       const shortName = expr.call.name.includes("::")
         ? expr.call.name.slice(expr.call.name.lastIndexOf("::") + 2)
         : expr.call.name;
+      if (shortName === "range") {
+        const argumentExpr = (arg: FunctionCallArgExpr): FreeObjectExpr => {
+          if (arg.kind === "named_arg") return argumentExpr(arg.arg);
+          if (arg.kind === "expr") return arg.expr;
+          return arg as FreeObjectExpr;
+        };
+        const isEmptySet = (value: FreeObjectExpr): boolean => {
+          if (value.kind === "cast") return isEmptySet(value.expr);
+          return (value.kind === "set_expr" || value.kind === "set_literal") && value.values.length === 0;
+        };
+        const bounds = expr.call.args
+          .filter((arg, index) => index < 2 && arg.kind !== "named_arg")
+          .map(argumentExpr);
+        const emptyArg = expr.call.args.find((arg) => arg.kind === "named_arg" && arg.name === "empty");
+        const emptyValue = emptyArg ? argumentExpr(emptyArg) : undefined;
+        if (emptyValue?.kind === "literal" && emptyValue.value === true && bounds.some((bound) => !isEmptySet(bound))) {
+          failSemantic("conflicting arguments in range constructor");
+        }
+        const rangeType = inferAstExprTypeName(expr, ctx);
+        const subtype = rangeType?.startsWith("range<") && rangeType.endsWith(">")
+          ? rangeType.slice("range<".length, -1)
+          : undefined;
+        const supportedSubtypes = new Set([
+          "std::int32", "std::int64", "std::float32", "std::float64", "std::decimal",
+          "std::datetime", "std::cal::local_datetime", "std::cal::local_date",
+        ]);
+        if (subtype && !supportedSubtypes.has(subtype)) {
+          failSemantic(`unsupported range subtype '${subtype}'`);
+        }
+      }
       if (shortName === "array_agg" && args[0]?.expr.kind === "string_constant"
           && (args[0].expr as { value: unknown }).value === null
           && args[0].typeref.nameHint === "std::anyscalar") {
@@ -6074,6 +6152,19 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
       const innerExpr = expr.expr;
       const innerIsJsonCast = innerExpr.kind === "cast" && innerExpr.castType === "json";
       const enumTarget = lookupEnumScalar(ctx, expr.castType);
+      const normalizedCastType = normalizeScalarCastName(ctx, expr.castType);
+      const rangePrefix = normalizedCastType.startsWith("range<") ? "range<"
+        : normalizedCastType.startsWith("multirange<") ? "multirange<"
+        : undefined;
+      const rangeSubtype = rangePrefix && normalizedCastType.endsWith(">")
+        ? normalizedCastType.slice(rangePrefix.length, -1)
+        : undefined;
+      if (rangeSubtype && !new Set([
+        "std::int32", "std::int64", "std::float32", "std::float64", "std::decimal",
+        "std::datetime", "std::cal::local_datetime", "std::cal::local_date",
+      ]).has(rangeSubtype)) {
+        failSemantic(`unsupported range subtype '${rangeSubtype}'`);
+      }
 
       if (enumTarget) {
         const sourceExpr = innerIsJsonCast ? (innerExpr as { kind: "cast"; castType: string; expr: FreeObjectExpr }).expr : innerExpr;

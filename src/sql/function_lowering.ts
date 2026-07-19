@@ -757,9 +757,12 @@ export const compileFunctionCallSQL = (
     params.length = checkpoint;
   }
 
-  const args = orderedCallArgs(call.args)
+  const callArgs = orderedCallArgs(call.args);
+  const argKeys = Object.keys(call.args)
+    .sort((left, right) => left.localeCompare(right, undefined, { numeric: true }));
+  const args = callArgs
     .map((arg) => deps.compileValueSetSQL(arg.expr, sourceAlias, params, target, options, linkPropertyAlias));
-  if (args.some((arg) => !arg)) {
+  if (args.some((arg, index) => !arg && !(shortName === "range" && (argKeys[index] === "0" || argKeys[index] === "1")))) {
     params.length = checkpoint;
     return null;
   }
@@ -787,9 +790,7 @@ export const compileFunctionCallSQL = (
     // `args` is parallel to the key-sorted `orderedCallArgs`, so recover the
     // key→SQL mapping by zipping the same sort back together.
     const sqlByKey: Record<string, string> = {};
-    Object.keys(call.args)
-      .sort((left, right) => left.localeCompare(right, undefined, { numeric: true }))
-      .forEach((key, i) => { sqlByKey[key] = args[i] as string; });
+    argKeys.forEach((key, i) => { sqlByKey[key] = args[i] ?? "NULL"; });
     // Discrete range types canonicalize to inclusive-lower / exclusive-upper
     // (like Postgres `int4range`/`daterange`): the integer families and
     // `cal::local_date` (dates step by whole days). `datetime`/`local_datetime`
@@ -812,7 +813,11 @@ export const compileFunctionCallSQL = (
     const upper = sqlByKey["1"] ?? "NULL";
     const incLower = sqlByKey["inc_lower"] ?? "NULL";
     const incUpper = sqlByKey["inc_upper"] ?? "NULL";
-    return `_gel_range(${lower}, ${upper}, ${incLower}, ${incUpper}, ${discrete ? 1 : 0})`;
+    const rangeSql = `_gel_range(${lower}, ${upper}, ${incLower}, ${incUpper}, ${discrete ? 1 : 0})`;
+    const empty = sqlByKey["empty"];
+    return empty
+      ? `(CASE WHEN ${empty} = 1 OR ${empty} = json('true') THEN json_object('empty', json('true')) ELSE ${rangeSql} END)`
+      : rangeSql;
   }
 
   const lowered = lowerStdlibFunctionSql(
