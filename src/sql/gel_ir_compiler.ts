@@ -2529,15 +2529,27 @@ const compileIfElseScalarSource = (
     if (condSources.size > 0) {
       params.length = ifElseCheckpoint;
     }
-    const condSql = condSources.size === 0
+    // A condition that reaches a scalar union is a relation. Keep every row so
+    // each true/false value selects and combines with its branch rows. Preserve
+    // the scalar path for singleton conditions, including volatile expressions.
+    const conditionIsSet = condSources.size === 0 && reachesScalarUnion(ifElse.condition);
+    const condRows = conditionIsSet
+      ? compileScalarSelectSQL(ifElse.condition, params, target, options)
+      : null;
+    const condSql = !conditionIsSet && condSources.size === 0
       ? compileValueSetSQL(ifElse.condition, "g0", params, target, options)
       : null;
-    const ifRows = condSql ? compileScalarSelectSQL(ifElse.ifExpr, params, target, options, outerWheres) : null;
+    const ifRows = (condRows || condSql) ? compileScalarSelectSQL(ifElse.ifExpr, params, target, options, outerWheres) : null;
     const elseRows = ifRows ? compileScalarSelectSQL(ifElse.elseExpr, params, target, options, outerWheres) : null;
-    if (condSql && ifRows && elseRows) {
+    if (condRows && ifRows && elseRows) {
       // Conditions arrive as either native SQL booleans (0/1) or JSON-text
       // booleans ('true'/'false') — normalize once so WHERE doesn't cast
       // the text 'true' to 0.
+      return `WITH cond_q AS (SELECT (CASE WHEN ${quoteIdent("value")} IN (1, 'true') THEN 1 WHEN ${quoteIdent("value")} IN (0, 'false') THEN 0 ELSE NULL END) AS ${quoteIdent("c")} FROM (${condRows}))`
+        + ` SELECT arm.${quoteIdent("value")} AS ${quoteIdent("value")} FROM cond_q CROSS JOIN (${ifRows}) arm WHERE cond_q.${quoteIdent("c")} = 1`
+        + ` UNION ALL SELECT arm.${quoteIdent("value")} AS ${quoteIdent("value")} FROM cond_q CROSS JOIN (${elseRows}) arm WHERE cond_q.${quoteIdent("c")} = 0`;
+    }
+    if (condSql && ifRows && elseRows) {
       return `WITH cond_raw AS (SELECT ${condSql} AS ${quoteIdent("r")}),`
         + ` cond_q AS (SELECT (CASE WHEN ${quoteIdent("r")} IN (1, 'true') THEN 1 WHEN ${quoteIdent("r")} IN (0, 'false') THEN 0 ELSE NULL END) AS ${quoteIdent("c")} FROM cond_raw)`
         + ` SELECT ${quoteIdent("value")} FROM (${ifRows}) WHERE (SELECT ${quoteIdent("c")} FROM cond_q)`
