@@ -114,6 +114,10 @@ _Avoid_: row mapper, schema deserializer.
 
 ## SQL lowering
 
+**Path resolution**:
+The SQL-lowering decision that maps a Live IR path, in its current scope and requested aspect, to the range variable that provides it. Distinct from [[Scope-tree factoring authority]], which decides whether path occurrences correlate or remain independent.
+_Avoid_: path lookup, correlation policy
+
 **Pointer-step join**:
 `src/sql/pointer_join.ts::pointerStepJoinSql(step)` — the single home for the JOIN fragment that lowers one pointer-chain step (`User.posts.author`). Four shapes: junction-table vs inline-`<name>_id`-FK, each × inbound (backlink) / outbound. Takes the parts that vary with context (direction, previous/next alias, the already-compiled `targetSource`, and either the junction `{linkAlias, linkTable}` or the `{inlineColumn}`) and emits SQL byte-identical to the inline form it replaced. Nine lowering functions in `gel_ir_compiler.ts` re-derived this wiring, differing only in alias names; they now route through it. The first-step FROM seeds, single-link correlated-subquery membership checks, and `anchorWhere` constructions are a different idiom (WHERE-correlation, not per-step JOIN append) and stay with their callers (see `docs/adr/0011`). Depends only on `quoteIdent`, so it is a pure, unit-tested string builder — no `SqlLoweringContext` deps needed.
 

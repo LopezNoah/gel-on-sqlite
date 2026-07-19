@@ -177,6 +177,20 @@ describe("PathRegistry — question (2)/(3): correlation to an enclosing scope",
     expect(inner.correlateScope(scopeKeyOf({ id: "uuid-user" }, []))).toBeNull();
   });
 
+  it("aggregate scope lookup ignores ordinary and enclosing source scopes", () => {
+    const outer = new Relation();
+    const cardScope = scopeKeyOf({ id: "uuid-card" }, []);
+    outer.registerScope(cardScope, "g0");
+
+    const inner = new Relation(outer);
+    expect(inner.correlateScope(cardScope)).toBe("g0");
+    expect(inner.correlateAggregateScope(cardScope)).toBeNull();
+
+    inner.registerAggregateScope(cardScope, "g1");
+    expect(inner.correlateAggregateScope(cardScope)).toBe("g1");
+    expect(inner.correlateScope(cardScope)).toBe("g1");
+  });
+
   it("throws PathNotResolvable when no scope can produce the path", () => {
     const r = new Relation();
     r.addRangeVar({ alias: "g0", sourceSql: '"default__card"' });
@@ -196,6 +210,18 @@ describe("PathRegistry — aspects (one path, multiple views)", () => {
     expect(r.getPathVar("Card", "serialized")).toContain("json_object");
     // a missing aspect is not silently the value aspect:
     expect(r.tryGetPathVar("Card", "serialized")).not.toBe(r.getPathVar("Card", "identity"));
+  });
+
+  it("keeps row providers and iterator values as distinct aspects", () => {
+    const outer = new Relation();
+    outer.registerPath("Item.tags", "source", "g0");
+
+    const inner = new Relation(outer);
+    inner.registerPath("Item.tags", "iterator", 'je."value"');
+
+    expect(inner.getPathVar("Item.tags", "source")).toBe("g0");
+    expect(inner.getPathVar("Item.tags", "iterator")).toBe('je."value"');
+    expect(inner.hasAlias("g0")).toBe(true);
   });
 });
 

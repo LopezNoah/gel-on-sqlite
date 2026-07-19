@@ -16,7 +16,7 @@ import type {
 import type { RuntimeTarget } from "../runtime/target.js";
 import type { ScalarValue } from "../types.js";
 import type { GelIRCompileOptions, ScalarPointerPath } from "./compiler_types.js";
-import type { Relation } from "./relation.js";
+import { scopeKeyOf, type Relation } from "./relation.js";
 import { lowerStdlibFunctionSql } from "./stdlib_lowering.js";
 import { bindOperandsOnce } from "./sql_fragment.js";
 import { countArgIsFactored } from "../ir/scope_tree.js";
@@ -76,7 +76,7 @@ export interface SqlLoweringContext {
     extraColumns?: string[],
   ): { sql: string; alias: string } | null;
   // Structured-Relation variant of compileSelectSource: returns a `Relation`
-  // (carrying its own scope) for the simple `type_root` source kind, else null
+  // (carrying its own scope) for type-root and pointer-chain sources, else null
   // (caller falls back to the string `compileSelectSource`). `parent` links the
   // built relation into the enclosing scope tree so its fresh root SHADOWS, and
   // genuinely-outer paths correlate up. See gel_ir_compiler.compileSelectSourceRelation.
@@ -333,8 +333,11 @@ export const compileCountOfSetSQL = (
     const root = expr as TypeRoot;
     // The root is already scoped by the enclosing per-row iteration — the
     // SET OF arg sees the scoped singleton, not the whole table.
-    if (options.scopedAggRoot && root.typeref.id === options.scopedAggRoot.typerefId) {
-      return `(CASE WHEN ${options.scopedAggRoot.alias}.${quoteIdent("id")} IS NULL THEN 0 ELSE 1 END)`;
+    const scopedAlias = options.relation?.correlateAggregateScope(
+      scopeKeyOf(root.typeref, set.pathId?.namespace ?? []),
+    );
+    if (scopedAlias) {
+      return `(CASE WHEN ${scopedAlias}.${quoteIdent("id")} IS NULL THEN 0 ELSE 1 END)`;
     }
     const fromSql = deps.compilePolymorphicSource(root.typeref, root.skipSubtypes, "g_agg", ["id"], options);
     return `(SELECT count(*) FROM ${fromSql})`;
@@ -461,33 +464,6 @@ export const compileCountOfSetSQL = (
       const correlatedLeaf = deps.correlatedDirectScalarPropertyLeaf(set, options);
       if (correlatedLeaf) {
         return `(CASE WHEN ${correlatedLeaf} IS NULL THEN 0 ELSE 1 END)`;
-      }
-    }
-    if (options.scopedAggRoot) {
-      let rootSet: Set = set;
-      while (rootSet.expr.kind === "pointer" || rootSet.expr.kind === "select_expr") {
-        rootSet = rootSet.expr.kind === "pointer"
-          ? (rootSet.expr as Pointer).source
-          : (rootSet.expr as SelectExpr).result;
-      }
-      if (rootSet.expr.kind === "type_root"
-          && (rootSet.expr as TypeRoot).typeref.id === options.scopedAggRoot.typerefId) {
-        const correlatedOptions: GelIRCompileOptions = {
-          ...options,
-          outerScopes: [
-            ...(options.outerScopes ?? []),
-            {
-              alias: options.scopedAggRoot.alias,
-              typeref: (rootSet.expr as TypeRoot).typeref,
-              namespace: rootSet.pathId?.namespace ?? [],
-            },
-          ],
-        };
-        const scalarSql = deps.compileScalarSelectSQL(set, params, target, correlatedOptions);
-        if (scalarSql) {
-          return `(SELECT count(*) FROM (${scalarSql}))`;
-        }
-        params.length = checkpoint;
       }
     }
     const scalarSql = deps.compileScalarSelectSQL(set, params, target, options);

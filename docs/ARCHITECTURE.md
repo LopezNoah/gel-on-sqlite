@@ -238,10 +238,9 @@ the codebase, so it gets its own section.
   with a `const cp = params.length; ... params.length = cp` checkpoint/rollback idiom (~105
   sites) to undo a partial attempt before bailing. Watch for it before assuming a `return null`
   is clean.
-- **Correlation vs. factoring is implicit.** Whether `count(Card.name)` correlates per-row or
-  scans the whole set hinges on marker flags threaded through the options bag
-  (`multiScalarBindings`, `groupRowProjection`, `isWithBinding`) that you won't know to look for.
-  This cluster has historically been the most bug-prone.
+- **Correlation vs. factoring is subtle.** `Relation` owns SQL path/provider resolution, while
+  AST-built scope facts decide whether `count(Card.name)` correlates per-row or scans the whole
+  set. Group projection metadata and `isWithBinding` still carry construct-specific semantics.
 
 **A representative slice** (from `gel_ir_compiler.ts`, the archetypal guard — multiply by ~100):
 
@@ -404,9 +403,8 @@ on which part you're in:
 2. **Add section-banner comments** inside the four big files (the file-region maps already exist
    in your head and in this doc's §4 — write them into the files as `// ===== SHAPE PROJECTION
    =====` dividers).
-3. **Document the option-bag flags** (`multiScalarBindings`, `isWithBinding`,
-   `groupRowProjection`) where the options type is defined — they carry semantics that are
-   currently tribal knowledge.
+3. **Keep option-bag semantics documented** (`isWithBinding`, `groupRowProjection`) where their
+   types are defined, and keep generic path/provider state inside `Relation`.
 
 None of these are urgent. The code works (the test suite is the proof), it's documented, and it's
 navigable with the tools above. The four big files are a known, bounded cost — not a sign the

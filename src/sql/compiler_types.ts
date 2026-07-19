@@ -68,34 +68,11 @@ export interface GelIRCompileOptions {
   target?: RuntimeTarget;
   parameterValues?: Record<string, ScalarValue>;
   globalValues?: Record<string, ScalarValue>;
-  // Stack of enclosing iteration scopes available to inner subqueries.
-  // EdgeQL's path-sharing semantics: a fresh `User` reference inside a
-  // shape projection on `User` refers to the OUTER iterator's current row,
-  // not a cross-product of all Users. The IR doesn't capture this binding
-  // (the inner reference is a fresh type_root with its own path), so the
-  // SQL compiler matches by typeref id and path namespace here when resolving
-  // path references. Most-recent (innermost) scopes take precedence.
-  outerScopes?: ReadonlyArray<{ alias: string; typeref: TypeRef; namespace?: string[] }>;
-  // Current row sources that are not bare type roots (for example a set-union
-  // source) are matched by path id so `.name` in FILTER/ORDER BY reads the
-  // row currently being shaped instead of recompiling the full source set.
-  sourcePathAliases?: ReadonlyArray<{ pathKey: string; alias: string }>;
   // The structured `Relation` (src/sql/relation.ts) that owns the path→alias
-  // bindings for the construct currently being compiled — a `pathctx`-style
-  // scope authority. When present it is consulted FIRST (before the
-  // `outerScopes` / `sourcePathAliases` knobs) so a child relation's own scope
-  // SHADOWS any stale binding inherited from an enclosing scope. Only set where
-  // a lowering has genuinely built a Relation for its source (today: detached
-  // correlated `EXISTS` subqueries); unset everywhere else, so resolution is
-  // behaviour-identical until a construct opts in.
+  // bindings for the construct currently being compiled. Exact row paths use
+  // the `source` aspect; fresh type-root references use registered scope keys.
+  // A child relation's bindings shadow its parent.
   relation?: Relation;
-  // When a multi-scalar pointer is being iterated via `json_each(col) je`,
-  // the helper binds the iteration's pathId(s) to the SQL expression that
-  // evaluates the json_each value column (`je."value"`). compileValueSetSQL
-  // looks this up before falling back to the column-read path so references
-  // to the bound set resolve to the unpacked element instead of the raw
-  // JSON-encoded column text.
-  multiScalarBindings?: ReadonlyMap<string, string>;
   // Shape elements that fail to lower are normally skipped (the runtime
   // decoder fills them in for plain SELECTs). Lowerings that re-aggregate the
   // shape JSON wholesale (GROUP) can't tolerate a lossy projection — with
@@ -112,12 +89,6 @@ export interface GelIRCompileOptions {
   // element through it; set-position reads (aggregate args) keep the
   // whole-group semantics via groupRowProjection.
   groupElementAlias?: string;
-  // The current per-row iteration root, made visible to SET OF (aggregate)
-  // args: EdgeQL paths inside SET OF args still use already-scoped outer
-  // paths, so `Publication.title ?= <str>count(Publication)` counts the
-  // SCOPED singleton (0 when the LEFT-JOINed row is NULL, else 1) rather
-  // than the whole table (set_of_nonempty_01).
-  scopedAggRoot?: { alias: string; typerefId: string };
   // Set only when the enclosing scalar select has NO bound row source (e.g.
   // `(SELECT <json>Issue {…} FILTER …) = to_json(…)` — the comparison's
   // operands contribute no outer iteration). With no enclosing row, a

@@ -3,19 +3,19 @@
 // This module is a prototype of the central path/range-var machinery that Gel's
 // PostgreSQL backend has (edb/pgsql/compiler/{pathctx,relctx,relgen}.py) and that
 // sqlite-ts currently lacks. Today the SQL backend answers "what SQL expression
-// represents this EdgeQL path here?" in THREE structurally-distinct, hand-threaded
-// places (see src/sql/gel_ir_compiler.ts):
+// represents this EdgeQL path here?" through structurally-distinct lowering
+// paths (see src/sql/gel_ir_compiler.ts). Before this module became authoritative,
+// the three generic routes were:
 //
 //   1. "is this pointer a column on the current iteration row?"   -> structural
 //        (compileProjectedSourceColumnRef -- no context lookup)
-//   2. "is this fresh type reference an enclosing iteration?"     -> `outerScopes`
+//   2. "is this fresh type reference an enclosing iteration?"     -> a scope stack
 //        (findMatchingOuterScope, matched by typeref.id + namespace)
-//   3. "is this exact path already bound to an alias?"            -> `sourcePathAliases`
-//        / `multiScalarBindings` (pickSourcePathAlias, matched by pathIdKey)
+//   3. "is this exact path already bound to an alias/expression?"  -> path maps
+//        (pickSourcePathAlias, matched by pathIdKey)
 //
-// Each new correlation bug has historically been fixed by adding another knob to
-// `GelIRCompileOptions` (outerScopes, sourcePathAliases, multiScalarBindings,
-// scopedAggRoot, groupRowProjection, ...). This module folds all three questions
+// Correlation bugs were historically fixed by adding another knob to
+// `GelIRCompileOptions`. Relation now folds all three generic questions
 // into one operation -- `Relation.getPathVar(pathKey, aspect)` -- backed by a
 // mutable relation tree that supports *recursive column injection*: a parent can
 // ask a child subquery to expose a path it did not originally project, then pull
@@ -41,15 +41,17 @@ const quoteIdent = (ident: string): string => `"${ident.replaceAll('"', '""')}"`
  * compiler/enums.py). sqlite-ts already makes these distinctions, but across
  * separate code paths (scalar-value SQL vs JSON materialization vs id reads)
  * rather than as one parameter. We model the three that the backend actually
- * needs today; SOURCE/ITERATOR are deferred until a routed construct needs them.
+ * needs today. `source` identifies the range-variable alias that provides a
+ * row path; unlike value/identity it is intentionally an alias, not a column.
+ * `iterator` identifies the current expression produced by json_each.
  */
-export type Aspect = "value" | "serialized" | "identity";
+export type Aspect = "value" | "serialized" | "identity" | "source" | "iterator";
 
 /**
  * Canonical path key -- byte-identical to the backend's
  * `pathIdKey(set) = JSON.stringify(set.pathId)` (gel_ir_compiler.ts), so a
- * registry built from live IR matches the same keys `sourcePathAliases` /
- * `multiScalarBindings` use today.
+ * registry built from live IR matches the canonical keys used throughout SQL
+ * lowering.
  */
 export const pathKeyOf = (set: IRSet): string => JSON.stringify(set.pathId);
 export const pathIdKeyOf = (pathId: PathId): string => JSON.stringify(pathId);
@@ -127,6 +129,10 @@ export class Relation {
   // Question (2): scopeKey (typeref.id + namespace) -> range-var alias, for a
   // fresh reference to an enclosing type-root iteration.
   private readonly scopes = new Map<string, string>();
+  // Current-row scopes explicitly visible to SET OF aggregate arguments.
+  // Kept separate because a free extent inside an inlined function must not
+  // become correlated merely because its caller has a same-type source scope.
+  private readonly aggregateScopes = new Map<string, string>();
 
   constructor(readonly parent?: Relation) {}
 
@@ -154,6 +160,12 @@ export class Relation {
   /** Register a type-root range var so fresh references correlate (question 2). */
   registerScope(scopeKey: string, alias: string): void {
     this.scopes.set(scopeKey, alias);
+  }
+
+  /** Register a current-row scope that SET OF aggregate arguments may consume. */
+  registerAggregateScope(scopeKey: string, alias: string): void {
+    this.registerScope(scopeKey, alias);
+    this.aggregateScopes.set(scopeKey, alias);
   }
 
   /**
@@ -189,13 +201,26 @@ export class Relation {
    * (question 2). Local first, then outward through the scope tree. Returns null
    * if no enclosing scope ranges over that type+namespace.
    *
-   * Equivalent to the backend's findMatchingOuterScope: its reverse-find over
-   * `options.outerScopes` (innermost wins) corresponds to Map-overwrite here
-   * (the last registration for a key wins), and to parent-before-deeper-parent
-   * traversal across nesting.
+   * Equivalent to the former innermost-scope lookup: the last local registration
+   * wins, followed by parent traversal across nesting.
    */
   correlateScope(scopeKey: string): string | null {
     return this.scopes.get(scopeKey) ?? this.parent?.correlateScope(scopeKey) ?? null;
+  }
+
+  /** Resolve an explicitly aggregate-visible scope introduced here. */
+  correlateAggregateScope(scopeKey: string): string | null {
+    return this.aggregateScopes.get(scopeKey) ?? null;
+  }
+
+  /** Whether an alias is supplied by this relation or an enclosing relation. */
+  hasAlias(alias: string): boolean {
+    if (this.fromSources.some((rv) => rv.alias === alias)) return true;
+    if ([...this.scopes.values()].includes(alias)) return true;
+    for (const aspects of this.outputs.values()) {
+      if (aspects.get("source") === alias) return true;
+    }
+    return this.parent?.hasAlias(alias) ?? false;
   }
 
   /** Like getPathVar but returns null instead of throwing. */

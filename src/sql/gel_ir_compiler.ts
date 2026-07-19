@@ -374,9 +374,25 @@ export const compileGelIRToSQL = (
     // the fallback path doesn't see leaked placeholders.
     params.length = forParamsCheckpoint;
   }
-  const compiledSource = sourceSet
-    ? compileSelectSource(sourceSet, statement.where ?? selectWhere, statement.orderBy ?? selectOrderBy, options, params, target)
+  // Register type-root and pointer sources when their range var is introduced,
+  // so nested filtered select_expr sources inherit the Relation directly.
+  const structuredSource = sourceSet
+    ? compileSelectSourceRelation(
+        sourceSet,
+        statement.where ?? selectWhere,
+        statement.orderBy ?? selectOrderBy,
+        options,
+        params,
+        target,
+        undefined,
+        undefined,
+        options.relation,
+      )
     : null;
+  const compiledSource = structuredSource
+    ?? (sourceSet
+      ? compileSelectSource(sourceSet, statement.where ?? selectWhere, statement.orderBy ?? selectOrderBy, options, params, target)
+      : null);
   if (!compiledSource) {
     // `SELECT (X.<l[IS A], X.<l[IS B])` with disjoint subtypes is provably
     // empty by shared-path semantics — check BEFORE the scalar fallback,
@@ -448,25 +464,11 @@ export const compileGelIRToSQL = (
 
   const sourceAlias = compiledSource.alias;
   const sourceSql = compiledSource.sql;
+  const sourceRelation = sourceSet
+    ? bindSourceRelation(sourceSet, sourceAlias, options.relation, structuredSource?.relation)
+    : options.relation;
   const sourceScopedOptions: GelIRCompileOptions = sourceSet
-    ? {
-        ...options,
-        sourcePathAliases: [
-          ...(options.sourcePathAliases ?? []),
-          { pathKey: pathIdKey(sourceSet), alias: sourceAlias },
-        ],
-        // Register the iteration source's type root as an outer scope so a
-        // computed shape element whose body references the subject row
-        // (`c := foo(.b).a` — `.b` is the subject's property, substituted into
-        // an inlined UDF body) lowers as a CORRELATED subquery anchored on
-        // `sourceAlias` rather than a fresh, unbound table scan.
-        outerScopes: sourceSet.expr.kind === "type_root"
-          ? [
-              ...(options.outerScopes ?? []),
-              { alias: sourceAlias, typeref: (sourceSet.expr as TypeRoot).typeref, namespace: sourceSet.pathId?.namespace ?? [] },
-            ]
-          : options.outerScopes,
-      }
+    ? { ...options, relation: sourceRelation }
     : options;
 
   const projections = [
@@ -515,22 +517,10 @@ export const compileGelIRToSQL = (
     // nested set producers (`array_unpack(.tag_array)`, json_each over a
     // multi scalar pointer) can correlate to the outer row's alias rather
     // than falling back to a fresh table scan with an unbound placeholder.
-    // Bare type_root sources also participate in outer-scope path sharing;
-    // non-root row sources are bound by path id through sourcePathAliases.
+    // Bare type_root sources participate in scope correlation; non-root row
+    // sources are bound by their exact path through the same Relation.
     const whereOptions: GelIRCompileOptions = sourceSet
-      ? {
-          ...options,
-          sourcePathAliases: [
-            ...(options.sourcePathAliases ?? []),
-            { pathKey: pathIdKey(sourceSet), alias: sourceAlias },
-          ],
-          outerScopes: sourceSet.expr.kind === "type_root"
-            ? [
-                ...(options.outerScopes ?? []),
-                { alias: sourceAlias, typeref: (sourceSet.expr as TypeRoot).typeref, namespace: sourceSet.pathId?.namespace ?? [] },
-              ]
-            : options.outerScopes,
-        }
+      ? { ...options, relation: sourceRelation }
       : options;
     let whereSql = compileWhereClause(rewritten, sourceAlias, params, target, whereOptions);
     if (!whereSql) {
@@ -554,19 +544,7 @@ export const compileGelIRToSQL = (
     // ORDER BY references against the iteration source also need the same
     // current-source binding as FILTER so set producers correlate to the row.
     const orderOptions: GelIRCompileOptions = sourceSet
-      ? {
-          ...options,
-          sourcePathAliases: [
-            ...(options.sourcePathAliases ?? []),
-            { pathKey: pathIdKey(sourceSet), alias: sourceAlias },
-          ],
-          outerScopes: sourceSet.expr.kind === "type_root"
-            ? [
-                ...(options.outerScopes ?? []),
-                { alias: sourceAlias, typeref: (sourceSet.expr as TypeRoot).typeref, namespace: sourceSet.pathId?.namespace ?? [] },
-              ]
-            : options.outerScopes,
-        }
+      ? { ...options, relation: sourceRelation }
       : options;
     const orders = orderByToApply.map((order) => {
       // A shape computed SHADOWS the schema pointer for outer references:
@@ -1173,6 +1151,14 @@ const collectReferencedColumnsForSource = (set: Set, sourceTypeId: string): stri
   return [...out];
 };
 
+const scalarSourceKey = (typeref: TypeRef, namespace: readonly string[]): string =>
+  JSON.stringify([qualifyTypeName(typeref), namespace]);
+
+const scalarSourceNamespace = (key: string): string[] => {
+  const parsed = JSON.parse(key) as [string, string[]];
+  return parsed[1];
+};
+
 const collectScalarPointerSources = (set: Set, sources: Map<string, TypeRef>): void => {
   const expr = set.expr;
   if (!expr) return;
@@ -1211,7 +1197,7 @@ const collectScalarPointerSources = (set: Set, sources: Map<string, TypeRef>): v
       // same type — they're the same physical table but different iteration
       // scopes.
       const ns = set.pathId?.namespace ?? [];
-      const id = `${qualifyTypeName(typeref)}|${ns.join(",")}`;
+      const id = scalarSourceKey(typeref, ns);
       if (!sources.has(id)) {
         sources.set(id, typeref);
       }
@@ -1754,7 +1740,7 @@ const referencesUnboundAlias = (
 ): boolean => {
   if (!sql.includes(`${alias}.`)) return false;
   if (sql.includes(`) ${alias}`)) return false;
-  if ((options.outerScopes ?? []).some((scope) => scope.alias === alias)) return false;
+  if (options.relation?.hasAlias(alias)) return false;
   return true;
 };
 
@@ -3415,7 +3401,7 @@ const compileScalarSelectSQLInner = (
         return u;
       };
       const keyOf = (typeref: TypeRef, namespace: readonly string[]): string =>
-        `${qualifyTypeName(typeref)}|${namespace.join(",")}`;
+        scalarSourceKey(typeref, namespace);
       // Collect EVERY type root reachable in an element — including inside
       // aggregates (`count(Status.<status)`) and coalesce/if-else arms —
       // since path sharing applies across all of them.
@@ -3552,17 +3538,14 @@ const compileScalarSelectSQLInner = (
       const sharedKey = sharedKeys[0];
       const sharedTyperef = typerefByKey.get(sharedKey);
       if (!sharedTyperef) break sharedTuple;
-      const sharedNs = sharedKey.includes("|") && sharedKey.slice(sharedKey.indexOf("|") + 1).length > 0
-        ? sharedKey.slice(sharedKey.indexOf("|") + 1).split(",")
-        : [];
+      const sharedNs = scalarSourceNamespace(sharedKey);
       const sharedAlias = "shr0";
       const sharedCheckpoint = params.length;
+      const sharedRelation = new Relation(options.relation);
+      sharedRelation.registerScope(scopeKeyOf(sharedTyperef, sharedNs), sharedAlias);
       const innerOptions: GelIRCompileOptions = {
         ...options,
-        outerScopes: [
-          ...(options.outerScopes ?? []),
-          { alias: sharedAlias, typeref: sharedTyperef, namespace: sharedNs },
-        ],
+        relation: sharedRelation,
       };
       // Project each element exactly once as `__eN` in an inner select (so a
       // `?`-bearing element SQL isn't duplicated), assemble the tuple JSON in
@@ -4191,26 +4174,31 @@ const compileScalarSelectSQLInner = (
   const freeRootOuterWheres = (!outerWheresMatchValueSources && !valueIsSetOfWrapped) ? outerWheres : [];
   const innerWheres = collectInnerWhereClauses(sourceSet);
   const preValueCheckpoint = params.length;
-  // For a single-source operator, the iteration root is a scoped path — expose
-  // it to SET OF (aggregate) args (see scopedAggRoot).
+  // For a single-source operator, the iteration root is a scoped path. Expose
+  // it to SET OF aggregate args through the Relation path authority.
   const valueOptions = ((): GelIRCompileOptions => {
     // No enclosing row source: free-rooted subquery operands can be compiled
     // self-contained (see allowIndependentSubquery).
     const base = sources.size === 0 ? { ...options, allowIndependentSubquery: true } : options;
     if (sources.size !== 1) return base;
+    const [[sourceKey, sourceType]] = [...sources.entries()];
+    const sourceNamespace = scalarSourceNamespace(sourceKey);
+    const withAggregateScope = (): GelIRCompileOptions => {
+      const relation = new Relation(options.relation);
+      relation.registerAggregateScope(scopeKeyOf(sourceType, sourceNamespace), "g0");
+      return { ...options, relation };
+    };
     let cur: Set = sourceSet;
     while (cur.expr.kind === "select_expr") cur = (cur.expr as SelectExpr).result;
     if (cur.expr.kind === "operator_call") {
       const opName = (cur.expr as OperatorCall).operator;
       if (opName === "?=" || opName === "?!=") {
-        const [tr] = sources.values();
-        if (tr) return { ...options, scopedAggRoot: { alias: "g0", typerefId: tr.id } };
+        return withAggregateScope();
       }
     }
     if (cur.expr.kind === "operator_call"
         && operatorToInfixSql((cur.expr as OperatorCall).operator)) {
-      const [tr] = sources.values();
-      if (tr) return { ...options, scopedAggRoot: { alias: "g0", typerefId: tr.id } };
+      return withAggregateScope();
     }
     return base;
   })();
@@ -4241,8 +4229,7 @@ const compileScalarSelectSQLInner = (
         let anchorAlias: string | undefined = whereSources.size === 0 ? "g0" : undefined;
         let allOuter = true;
         for (const [key, typeref] of whereSources.entries()) {
-          const ns = key.includes("|") ? key.slice(key.indexOf("|") + 1) : "";
-          const namespace = ns.length > 0 ? ns.split(",") : [];
+          const namespace = scalarSourceNamespace(key);
           const match = findMatchingOuterScope({ typerefId: typeref.id, namespace }, options);
           if (!match) { allOuter = false; break; }
           anchorAlias = anchorAlias ?? match.alias;
@@ -4308,13 +4295,12 @@ const compileScalarSelectSQLInner = (
       const polySql = compilePolymorphicSource(sourceType, false, a, refCols, options);
       fromParts.push(polySql);
       // The pathId key for these sources mirrors what collectScalarPointerSources
-      // built — `${qualifiedName}|${namespace}` — but pointer compilation
+      // built from the qualified name and namespace, but pointer compilation
       // looks up by the source-set's serialized pathId. Build that key too,
       // carrying the source's REAL namespace so `User.name` (ns []) and a
       // WITH-rebound `U2.name` (ns ['with:U2:…']) resolve to different
       // aliases instead of conflating on the bare type id.
-      const sidNs = sid.includes("|") ? sid.slice(sid.indexOf("|") + 1) : "";
-      const namespace = sidNs.length > 0 ? sidNs.split(",") : [];
+      const namespace = scalarSourceNamespace(sid);
       const syntheticRoot: Set = {
         kind: "set",
         expr: { kind: "type_root", typeref: sourceType, skipSubtypes: false, isCachedGlobal: false },
@@ -4390,25 +4376,25 @@ const compileScalarSelectSQLInner = (
       options,
     );
     const baseAlias = outerMatch ? outerMatch.alias : "g0";
-    const multiBindings = new Map<string, string>(options.multiScalarBindings ?? new Map());
+    const iteratorRelation = new Relation(options.relation);
     const finalJoins: string[] = [];
     {
       let jeIdx = 0;
       for (const leafSet of leafSets) {
         const key = pathIdKey(leafSet);
-        if (multiBindings.has(key)) continue;
+        if (iteratorRelation.tryGetPathVar(key, "iterator")) continue;
         const leafPtr = tryExtractMultiScalarLeafPointer(leafSet);
         if (!leafPtr) continue;
         const jeAlias = `jem${jeIdx++}`;
         finalJoins.push(`json_each(COALESCE(${baseAlias}.${quoteIdent(columnForPointer(leafPtr))}, '[]')) ${jeAlias}`);
         const elementValue = `${jeAlias}.${quoteIdent("value")}`;
-        multiBindings.set(key, elementValue);
-        multiBindings.set(pathIdKey(unwrapSelectExprSet(leafSet).result), elementValue);
+        iteratorRelation.registerPath(key, "iterator", elementValue);
+        iteratorRelation.registerPath(pathIdKey(unwrapSelectExprSet(leafSet).result), "iterator", elementValue);
       }
     }
     if (finalJoins.length === 0) break elementwise;
     params.length = preValueCheckpoint;
-    const innerOptions: GelIRCompileOptions = { ...options, multiScalarBindings: multiBindings };
+    const innerOptions: GelIRCompileOptions = { ...options, relation: iteratorRelation };
     const elementValueSql = compileValueSetSQL(sourceSet, baseAlias, params, target, innerOptions);
     if (!elementValueSql) {
       params.length = preValueCheckpoint;
@@ -4765,17 +4751,14 @@ const tryCompileScalarPointerPathSelectSQL = (
   const checkpoint = params.length;
   const aliasColumns = pointerPathAliasColumns(path);
   const rootAlias = POINTER_ROOT_ALIAS;
-  const outerRoot = findMatchingOuterScope(
-    {
-      typerefId: path.root.typeref.id,
-      namespace: path.root.pathId?.namespace ?? [],
-    },
-    options,
-  );
-  let fromSql = outerRoot
+  const rootNamespace = path.root.pathId?.namespace ?? [];
+  const outerAlias = options.relation?.correlateScope(
+    scopeKeyOf(path.root.typeref, rootNamespace),
+  ) ?? null;
+  let fromSql = outerAlias
     ? "(SELECT 1) __correlated_root"
     : compilePolymorphicSource(path.root.typeref, false, rootAlias, aliasColumns[0], options);
-  let previousAlias = outerRoot?.alias ?? rootAlias;
+  let previousAlias = outerAlias ?? rootAlias;
 
   path.links.forEach((link, index) => {
     const nextAlias = pointerStepTargetAlias(index);
@@ -4795,7 +4778,6 @@ const tryCompileScalarPointerPathSelectSQL = (
 // referenced by `set`. Returns null when no scope matches — the caller can
 // fall back to its own default placeholder.
 const pickOuterScopeAliasForExpr = (set: Set, options: GelIRCompileOptions): string | null => {
-  if (!options.outerScopes || options.outerScopes.length === 0) return null;
   const innerSet = innermostTypeRootSet(set);
   if (!innerSet) return null;
   const innerTyperef = (innerSet.expr as TypeRoot).typeref;
@@ -4825,30 +4807,51 @@ const correlatedDirectScalarPropertyLeaf = (
   const single = ptr.ptrref.outCardinality === "one" || ptr.ptrref.outCardinality === "at_most_one";
   if (!single) return null;
   if (ptr.source.expr.kind !== "type_root") return null;
-  // pathctx beachhead: resolve the outer-scope correlation through the
-  // PathRegistry (src/sql/relation.ts) instead of the bespoke
-  // pickOuterScopeAliasForExpr lookup. Building a registry from
-  // options.outerScopes and asking correlateScope() is provably equivalent to
-  // findMatchingOuterScope -- its reverse-find over outerScopes (innermost
-  // wins) equals Map-overwrite for the matched key -- but expressed as the one
-  // central question the registry exists to answer.
   const innerSet = innermostTypeRootSet(set);
   if (!innerSet) return null;
   const innerTyperef = (innerSet.expr as TypeRoot).typeref;
-  const registry = new Relation();
-  for (const scope of options.outerScopes ?? []) {
-    registry.registerScope(scopeKeyOf(scope.typeref, scope.namespace ?? []), scope.alias);
-  }
-  const alias = registry.correlateScope(scopeKeyOf(innerTyperef, innerSet.pathId?.namespace ?? []));
+  const scopeKey = scopeKeyOf(innerTyperef, innerSet.pathId?.namespace ?? []);
+  const alias = options.relation?.correlateScope(scopeKey) ?? null;
   if (!alias) return null;
   return `${alias}.${quoteIdent(columnForPointer(ptr))}`;
 };
 
 const pickSourcePathAlias = (set: Set, options: GelIRCompileOptions): string | null => {
-  if (!options.sourcePathAliases || options.sourcePathAliases.length === 0) return null;
-  const key = pathIdKey(set);
-  const match = [...options.sourcePathAliases].reverse().find((scope) => scope.pathKey === key);
-  return match?.alias ?? null;
+  return options.relation?.tryGetPathVar(pathIdKey(set), "source") ?? null;
+};
+
+const pickPathIdentity = (set: Set, options: GelIRCompileOptions): string | null => {
+  return options.relation?.tryGetPathVar(pathIdKey(set), "identity") ?? null;
+};
+
+const bindSourceRelation = (
+  set: Set,
+  alias: string,
+  parent?: Relation,
+  existing?: Relation,
+  scopeNamespace?: readonly string[],
+): Relation => {
+  const relation = existing ?? new Relation(parent);
+  relation.registerPath(pathIdKey(set), "source", alias);
+  relation.registerPath(pathIdKey(set), "identity", `${alias}.${quoteIdent("id")}`);
+  let root: Set = set;
+  while (root.expr.kind === "select_expr") root = (root.expr as SelectExpr).result;
+  if (root.expr.kind === "type_root") {
+    relation.registerScope(
+      scopeKeyOf((root.expr as TypeRoot).typeref, scopeNamespace ?? root.pathId?.namespace ?? []),
+      alias,
+    );
+  }
+  return relation;
+};
+
+const bindIteratorRelation = (
+  parent: Relation | undefined,
+  bindings: ReadonlyArray<readonly [string, string]>,
+): Relation => {
+  const relation = new Relation(parent);
+  for (const [pathKey, sql] of bindings) relation.registerPath(pathKey, "iterator", sql);
+  return relation;
 };
 
 const innermostTypeRootSet = (set: Set): Set | null => {
@@ -4862,25 +4865,14 @@ const innermostTypeRootSet = (set: Set): Set | null => {
   }
 };
 
-const namespacesEqual = (a?: readonly string[], b?: readonly string[]): boolean => {
-  const x = a ?? [];
-  const y = b ?? [];
-  if (x.length !== y.length) return false;
-  for (let i = 0; i < x.length; i += 1) {
-    if (x[i] !== y[i]) return false;
-  }
-  return true;
-};
-
 const findMatchingOuterScope = (
   reference: { typerefId: string; namespace: readonly string[] },
   options: GelIRCompileOptions,
-): { alias: string; typeref: TypeRef; namespace?: string[] } | undefined => {
-  if (!options.outerScopes || options.outerScopes.length === 0) return undefined;
-  return [...options.outerScopes].reverse().find(
-    (scope) => scope.typeref.id === reference.typerefId
-      && namespacesEqual(scope.namespace, reference.namespace),
+): { alias: string } | undefined => {
+  const alias = options.relation?.correlateScope(
+    scopeKeyOf({ id: reference.typerefId }, reference.namespace),
   );
+  return alias ? { alias } : undefined;
 };
 
 // A bare single-cardinality outbound object link off a type_root (`X.owner`).
@@ -4942,7 +4934,7 @@ const isSingletonOuterScopeRef = (set: Set, options: GelIRCompileOptions): boole
 // bare multi-scalar pointer hanging off a type root that matches the outer
 // row. Caller wraps in `IN (…)`, `EXISTS (…)`, etc. Also returns null when
 // the pointer's pathId is already bound by an enclosing iteration (via
-// multiScalarBindings) — in that context the reference already resolves to
+// Relation's iterator aspect) — in that context the reference already resolves to
 // the per-iteration `value` and shouldn't trigger a fresh multi-row scan.
 const tryCompileCorrelatedMultiScalarRHS = (
   set: Set,
@@ -4950,10 +4942,8 @@ const tryCompileCorrelatedMultiScalarRHS = (
   options: GelIRCompileOptions,
 ): string | null => {
   const unwrapped = unwrapSelectExprSet(set);
-  if (options.multiScalarBindings) {
-    if (options.multiScalarBindings.has(pathIdKey(set))) return null;
-    if (options.multiScalarBindings.has(pathIdKey(unwrapped.result))) return null;
-  }
+  if (options.relation?.tryGetPathVar(pathIdKey(set), "iterator")) return null;
+  if (options.relation?.tryGetPathVar(pathIdKey(unwrapped.result), "iterator")) return null;
   const expr = unwrapped.result.expr;
   if (expr.kind !== "pointer") return null;
   const pointer = expr as Pointer;
@@ -5106,26 +5096,23 @@ const tryCompileMultiScalarPointerSelectSQL = (
   // bind the leaf pointer's pathId to the json_each `value` column so the
   // WHERE compiler can resolve `_` / `Item.tag_set1` references in the
   // FILTER to `je.value`. The select_expr's where uses bindingRef or
-  // path lookup; we route via outerScopes extension.
+  // path lookup; register the local root in a child Relation when this is not
+  // already correlated to an enclosing source.
   const innerWheres = collectInnerWhereClauses(set);
   const whereSqls: string[] = [];
-  const innerOuterScopes = outerMatch
-    ? options.outerScopes
-    : [
-        ...(options.outerScopes ?? []),
-        { alias: previousAlias, typeref: rootTypeRef, namespace: [...rootNamespace] },
-      ];
+  const innerRelation = outerMatch
+    ? options.relation
+    : new Relation(options.relation);
+  if (!outerMatch) {
+    innerRelation?.registerScope(scopeKeyOf(rootTypeRef, rootNamespace), previousAlias);
+  }
   const compileMultiWhere = (where: Set): string | null => {
     const cp = params.length;
     // For `_ := X.tag_set1 FILTER _ IN {...}`, the binding `_` resolves to
     // the same set as X.tag_set1. The where compiler uses pathIdKey lookups.
-    // Provide an outerScopes binding for the multi-scalar so references to
-    // the leaf pathId resolve to je.value.
     const innerOptions: GelIRCompileOptions = {
       ...options,
-      outerScopes: innerOuterScopes,
-      multiScalarBindings: new Map([
-        ...(options.multiScalarBindings ?? new Map()),
+      relation: bindIteratorRelation(innerRelation, [
         [pathIdKey(set), valueSql],
         [pathIdKey(unwrapped.result), valueSql],
       ]),
@@ -5162,8 +5149,7 @@ const tryCompileMultiScalarPointerSelectSQL = (
   if (unwrapped.selectExpr?.orderBy && unwrapped.selectExpr.orderBy.length > 0) {
     const innerOptionsForOrder: GelIRCompileOptions = {
       ...options,
-      multiScalarBindings: new Map([
-        ...(options.multiScalarBindings ?? new Map()),
+      relation: bindIteratorRelation(options.relation, [
         [pathIdKey(set), valueSql],
         [pathIdKey(unwrapped.result), valueSql],
       ]),
@@ -5310,7 +5296,7 @@ const compileTupleWithMultiScalarsSQL = (
   const jeAliases: string[] = [];
   const elementSqls: string[] = [];
   let jeIndex = 0;
-  const multiBindings = new Map<string, string>(options.multiScalarBindings ?? new Map());
+  const iteratorRelation = new Relation(options.relation);
   for (const item of classified) {
     if (item.kind === "multi") {
       const alias = `je${jeIndex++}`;
@@ -5320,11 +5306,11 @@ const compileTupleWithMultiScalarsSQL = (
       // Bind so any nested reference to the same pathId resolves to je.value
       // (not needed for the tests covered today but keeps the path consistent
       // with the rest of the multi-scalar machinery).
-      multiBindings.set(pathIdKey(item.element.val), valueSql);
+      iteratorRelation.registerPath(pathIdKey(item.element.val), "iterator", valueSql);
       const innerUnwrapped = unwrapSelectExprSet(item.element.val);
-      multiBindings.set(pathIdKey(innerUnwrapped.result), valueSql);
+      iteratorRelation.registerPath(pathIdKey(innerUnwrapped.result), "iterator", valueSql);
     } else {
-      const innerOptions: GelIRCompileOptions = { ...options, multiScalarBindings: multiBindings };
+      const innerOptions: GelIRCompileOptions = { ...options, relation: iteratorRelation };
       const compiled = compileValueSetSQL(item.element.val, sourceAlias, params, target, innerOptions, linkPropertyAlias);
       if (!compiled) {
         params.length = checkpoint;
@@ -6174,14 +6160,40 @@ const compileSelectSource = (
     // The wrapper's own shape (merged from an outer `SELECT (…) {…}`) and
     // any outer where/orderBy columns must survive into the inner source's
     // projection, alongside whatever the inner clauses reference.
-    const inner = compileSelectSource(
+    // Filtered type-root and pointer-chain select_expr sources are the first
+    // complete Relation migration slice. Their predicates resolve exclusively
+    // through that Relation. Other source kinds have not migrated yet and keep
+    // the existing lowering until they can move as a complete slice.
+    const relationEligible = innerResult.expr.kind === "type_root"
+      || innerResult.expr.kind === "pointer";
+    const structuredInner = selectExpr.where && relationEligible
+      ? compileSelectSourceRelation(
+          innerResult,
+          selectExpr.where,
+          selectExpr.orderBy,
+          options,
+          params,
+          target,
+          undefined,
+          projectedColumns,
+          options.relation,
+        )
+      : null;
+    const inner = structuredInner ?? compileSelectSource(
       innerResult, selectExpr.where, selectExpr.orderBy, options, params, target,
       undefined, projectedColumns,
     );
     if (!inner) return null;
     let sql = `SELECT ${inner.alias}.* FROM ${inner.sql}`;
     if (selectExpr.where) {
-      const whereSql = compileWhereClause(selectExpr.where, inner.alias, params, target, options);
+      if (relationEligible && !structuredInner) return null;
+      const whereOptions = structuredInner
+        ? {
+            ...options,
+            relation: structuredInner.relation,
+          }
+        : options;
+      const whereSql = compileWhereClause(selectExpr.where, inner.alias, params, target, whereOptions);
       if (!whereSql) return null;
       sql += ` WHERE ${whereSql}`;
     }
@@ -6518,14 +6530,12 @@ const compileSelectSource = (
 };
 
 // A compiled SELECT source as a STRUCTURED `Relation` (src/sql/relation.ts)
-// rather than an already-serialized string. Today this covers only the simplest
-// source kind — a bare `type_root` — and returns null for everything else so a
-// caller falls back to the string `compileSelectSource` (the pgast-style
-// "keep string fallback for the rest" beachhead step). The Relation it builds
+// rather than an already-serialized string. Today this covers type-root and
+// pointer-chain sources; other source kinds still use compileSelectSource. The Relation it builds
 // owns the source's own scope via `registerScope(type → alias)`, so an enclosing
 // construct can resolve the source's paths through ONE authority — and a child
 // relation's own scope SHADOWS a stale binding inherited from an enclosing scope
-// — instead of hand-threading `outerScopes` / `sourcePathAliases`. `sql` is the
+// — instead of hand-threading alias stacks. `sql` is the
 // byte-identical string source (serialization is unchanged); `relation` is the
 // structured view that opt-in consumers thread through `options.relation`.
 interface SourceResult {
@@ -6561,8 +6571,16 @@ const compileSelectSourceRelation = (
     ])];
     const linkProjections = collectLinkProjectionsForSource(sourceSet.shape ?? [], where, orderBy, root.id);
     const body = compilePolymorphicSourceBody(root, sourceSet.expr.skipSubtypes, projectedColumns, options, linkProjections);
-    relation.addRangeVar({ alias: base.alias, sourceSql: body });
+    const rv = relation.addRangeVar({ alias: base.alias, sourceSql: body });
     relation.registerScope(scopeKeyOf(root, sourceSet.pathId?.namespace ?? []), base.alias);
+    if (sourceSet.pathId) {
+      const key = pathIdKey(sourceSet);
+      relation.registerPath(key, "source", base.alias);
+      relation.registerPath(key, "identity", `${base.alias}.${quoteIdent("id")}`);
+      relation.registerPath(key, "value", `${base.alias}.${quoteIdent("id")}`);
+      relation.registerPathRvar(key, "identity", rv);
+      relation.registerPathRvar(key, "value", rv);
+    }
     return { alias: base.alias, sql: base.sql, relation };
   }
 
@@ -6581,6 +6599,7 @@ const compileSelectSourceRelation = (
   const rv = relation.addRangeVar({ alias: base.alias, sourceSql: body });
   if (sourceSet.pathId) {
     const key = pathIdKey(sourceSet);
+    relation.registerPath(key, "source", base.alias);
     relation.registerPath(key, "identity", `${base.alias}.${quoteIdent("id")}`);
     relation.registerPathRvar(key, "value", rv);
     relation.registerPathRvar(key, "identity", rv);
@@ -6860,12 +6879,10 @@ const compileForExprSource = (
     return null;
   }
 
-  // Nested FOR bodies can reference both their iterator and an enclosing row
-  // (`User.<owner = lol`). Preserve exact outer path bindings here; namespaced
-  // detached roots remain distinct keys and are still compiled independently.
-  const bindingAliases = new Map<string, string>(
-    (options.sourcePathAliases ?? []).map(({ pathKey, alias }) => [pathKey, alias]),
-  );
+  // Nested FOR bodies can reference both their iterator and an enclosing row.
+  // Iterator aliases remain local to this specialized lowering; enclosing row
+  // paths resolve through options.relation.
+  const bindingAliases = new Map<string, string>();
   const scalarBindingAliases = new Map<string, string>();
   const tupleIterAliases = new Map<string, string>();
   const linkPropertyAliases = new Map<string, string>();
@@ -7371,6 +7388,14 @@ const compileValueSetSQLWithAliases = (
   tupleIterAliases?: Map<string, string>,
 ): string | null => {
   const checkpoint = params.length;
+  const relationAlias = (candidate: Set): string | null => {
+    const exact = options.relation?.tryGetPathVar(pathIdKey(candidate), "source");
+    if (exact) return exact;
+    if (candidate.expr.kind !== "type_root") return null;
+    return options.relation?.correlateScope(
+      scopeKeyOf((candidate.expr as TypeRoot).typeref, candidate.pathId?.namespace ?? []),
+    ) ?? null;
+  };
   if ((set as { dynamicTypeName?: boolean }).dynamicTypeName) {
     return `${fallbackAlias}.${quoteIdent("__source_type")}`;
   }
@@ -7425,7 +7450,7 @@ const compileValueSetSQLWithAliases = (
   // instead of decorrelating into a fresh set subquery.
   if ((unwrapped.result.expr.kind === "type_root" || unwrapped.result.expr.kind === "pointer")
     && unwrapped.result.shape && unwrapped.result.shape.length > 0) {
-    let typeAlias = bindingAliases.get(pathIdKey(unwrapped.result));
+    let typeAlias = bindingAliases.get(pathIdKey(unwrapped.result)) ?? relationAlias(unwrapped.result) ?? undefined;
     // A shaped object reference used as a tuple slot (`(L, L.1 {name})` where
     // L := ('x', User)) carries the binding's namespace, so its pathId won't
     // match the outer scope's key exactly. Fall back to the same id+namespace
@@ -7460,7 +7485,7 @@ const compileValueSetSQLWithAliases = (
   if (unwrapped.result.expr.kind === "type_root"
       && (!unwrapped.result.shape || unwrapped.result.shape.length === 0)) {
     const rootKey = pathIdKey(unwrapped.result);
-    let rootAliasResolved = bindingAliases.get(rootKey);
+    let rootAliasResolved = bindingAliases.get(rootKey) ?? relationAlias(unwrapped.result) ?? undefined;
     if (!rootAliasResolved) {
       const tid = (unwrapped.result.expr as TypeRoot).typeref?.id;
       const wantNs = JSON.stringify(unwrapped.result.pathId?.namespace ?? []);
@@ -7479,7 +7504,7 @@ const compileValueSetSQLWithAliases = (
   if (expr.kind === "pointer") {
     const pointer = expr as Pointer;
     const sourceKey = pathIdKey(pointer.source);
-    let alias = bindingAliases.get(sourceKey);
+    let alias = bindingAliases.get(sourceKey) ?? relationAlias(pointer.source) ?? undefined;
     if (!alias && pointer.source.expr.kind === "type_root") {
       // Fallback lookup by typeref id — alternate IR builds for the same
       // type root (e.g. body vs FILTER's reuse of `Card`) can produce
@@ -7517,7 +7542,7 @@ const compileValueSetSQLWithAliases = (
         chainRoot = se.result;
       }
       if (chainRoot.expr.kind === "type_root") {
-        let rootAlias2 = bindingAliases.get(pathIdKey(chainRoot));
+        let rootAlias2 = bindingAliases.get(pathIdKey(chainRoot)) ?? relationAlias(chainRoot) ?? undefined;
         if (!rootAlias2) {
           const tid = (chainRoot.expr as TypeRoot).typeref?.id;
           const wantNs = JSON.stringify(chainRoot.pathId?.namespace ?? []);
@@ -7663,10 +7688,10 @@ const compileValueSetSQLWithAliases = (
       };
       const identitySql = (st: Set): string | null => {
         const u = unwrapSelectExprSet(st).result;
-        const boundAlias = bindingAliases.get(pathIdKey(u));
+        const boundAlias = bindingAliases.get(pathIdKey(u)) ?? relationAlias(u) ?? undefined;
         if (boundAlias) return `${boundAlias}.${quoteIdent("id")}`;
         const lookupAlias = (rootSet: Set): string | undefined => {
-          const aliasFound = bindingAliases.get(pathIdKey(rootSet));
+          const aliasFound = bindingAliases.get(pathIdKey(rootSet)) ?? relationAlias(rootSet) ?? undefined;
           if (!aliasFound && rootSet.expr.kind === "type_root") {
             const tid = (rootSet.expr as TypeRoot).typeref?.id;
             const wantNs = JSON.stringify(rootSet.pathId?.namespace ?? []);
@@ -9655,8 +9680,7 @@ const compileShapeProjection = (
       const leafColumn = projectedColumn;
       const innerOptions: GelIRCompileOptions = {
         ...options,
-        multiScalarBindings: new Map([
-          ...(options.multiScalarBindings ?? new Map()),
+        relation: bindIteratorRelation(options.relation, [
           [pathIdKey(shapeExpr.result), `je.${quoteIdent("value")}`],
           [pathIdKey(shape.expr), `je.${quoteIdent("value")}`],
         ]),
@@ -9744,18 +9768,13 @@ const compileShapeProjection = (
     && peeled.shape.length > 0
   ) {
     const innerAlias = `sg${depth + 1}`;
-    // Build an options that exposes this shape's source as an OUTER scope
+    // Build an options that exposes this shape's source as an enclosing scope
     // for the inner subquery's WHERE/ORDER BY compilation. EdgeQL path
     // sharing: `User.name` referenced inside `SELECT User { x := (SELECT ... FILTER User.name = ...) }`
     // resolves to the outer User's name, not a fresh cross-product. We
-    // signal this to compileValueSetSQL by appending the outer source to
-    // options.outerScopes; it matches by typeref id.
     const innerOptions: GelIRCompileOptions = {
       ...options,
-      outerScopes: [
-        ...(options.outerScopes ?? []),
-        { alias: sourceAlias, typeref: shape.source.typeref, namespace: [] },
-      ],
+      relation: bindSourceRelation(shape.source, sourceAlias, options.relation, undefined, []),
     };
     // Pass the peeled WHERE/ORDER BY into the inner source compilation so
     // collectLinkProjectionsForSource sees them and the polymorphic UNION
@@ -9956,10 +9975,7 @@ const compileShapeProjection = (
     // alias rather than fall through to a fresh placeholder.
     const innerScalarOptions: GelIRCompileOptions = {
       ...options,
-      outerScopes: [
-        ...(options.outerScopes ?? []),
-        { alias: sourceAlias, typeref: shape.source.typeref, namespace: [] },
-      ],
+      relation: bindSourceRelation(shape.source, sourceAlias, options.relation, undefined, []),
     };
     const scalarSql = compileScalarSelectSQL(shapeExpr.result, scratchParams, target, innerScalarOptions);
     if (scalarSql) {
@@ -9999,10 +10015,7 @@ const compileShapeProjection = (
     const scratchParams: ScalarValue[] = [];
     const innerScalarOptions: GelIRCompileOptions = {
       ...options,
-      outerScopes: [
-        ...(options.outerScopes ?? []),
-        { alias: sourceAlias, typeref: shape.source.typeref, namespace: [] },
-      ],
+      relation: bindSourceRelation(shape.source, sourceAlias, options.relation, undefined, []),
     };
     // Pass the FULL expression set (`shape.expr`) — not the unwrapped result —
     // so a wrapping `(select _ := … order by _)`'s clauses survive into the
@@ -10041,10 +10054,7 @@ const compileShapeProjection = (
     const scratchParams: ScalarValue[] = [];
     const innerScalarOptions: GelIRCompileOptions = {
       ...options,
-      outerScopes: [
-        ...(options.outerScopes ?? []),
-        { alias: sourceAlias, typeref: shape.source.typeref, namespace: [] },
-      ],
+      relation: bindSourceRelation(shape.source, sourceAlias, options.relation, undefined, []),
     };
     const setSql = compileScalarSelectSQL(shape.expr, scratchParams, target, innerScalarOptions);
     if (setSql) {
@@ -10508,7 +10518,7 @@ const compilePredicateSetSQL = (
   // would collapse the foreign root onto the outer alias (so every row matches
   // its own name), so unpack the set side into a correlated EXISTS, preserving
   // the operator's operand order (LIKE is not symmetric). The current subject
-  // is registered in `outerScopes`, so its own references stay correlated to
+  // is registered in Relation, so its own references stay correlated to
   // the outer alias and are NOT mistaken for a foreign set. `=`/`!=`/ordering
   // operators have their own set lowering below; this covers the string-match
   // operators `normalizeOperator` doesn't recognise.
@@ -10536,8 +10546,7 @@ const compilePredicateSetSQL = (
         if (argSources.size === 0) continue;
         let hasForeignRoot = false;
         for (const [key, typeref] of argSources.entries()) {
-          const ns = key.includes("|") ? key.slice(key.indexOf("|") + 1) : "";
-          const namespace = ns.length > 0 ? ns.split(",") : [];
+          const namespace = scalarSourceNamespace(key);
           if (!findMatchingOuterScope({ typerefId: typeref.id, namespace }, options)) {
             hasForeignRoot = true;
             break;
@@ -10600,6 +10609,10 @@ const compilePredicateSetSQL = (
   if (op === "=" || op === "!=") {
     const sideIdentity = (s: Set): { sql: string; viaOuter: boolean } | null => {
       const u = unwrapSelectExprSet(s).result;
+      const registeredIdentity = pickPathIdentity(u, options);
+      if (registeredIdentity) {
+        return { sql: registeredIdentity, viaOuter: !registeredIdentity.startsWith(`${sourceAlias}.`) };
+      }
       const boundAlias = pickSourcePathAlias(u, options);
       if (boundAlias) {
         return { sql: `${boundAlias}.${quoteIdent("id")}`, viaOuter: boundAlias !== sourceAlias };
@@ -10711,8 +10724,7 @@ const compilePredicateSetSQL = (
         if (!producesSet && argSources.size > 0) {
           let allOuter = true;
           for (const [key, typeref] of argSources.entries()) {
-            const ns = key.includes("|") ? key.slice(key.indexOf("|") + 1) : "";
-            const namespace = ns.length > 0 ? ns.split(",") : [];
+            const namespace = scalarSourceNamespace(key);
             if (!findMatchingOuterScope({ typerefId: typeref.id, namespace }, options)) {
               allOuter = false;
               break;
@@ -10851,7 +10863,7 @@ const tryResolveOuterScopeIdRef = (
   set: Set,
   options: GelIRCompileOptions,
 ): string | null => {
-  if (!options.outerScopes || options.outerScopes.length === 0) return null;
+  if (!options.relation) return null;
   // Peel select_expr wrappers as long as they carry no semantic clauses —
   // `(SELECT User)` is a no-op around `User`. A real clause (FILTER, ORDER
   // BY, LIMIT) makes the subquery meaningful and we leave it to
@@ -10874,6 +10886,8 @@ const tryResolveOuterScopeIdRef = (
     return true;
   });
   if (meaningfulShape) return null;
+  const registeredIdentity = pickPathIdentity(cursor, options);
+  if (registeredIdentity) return registeredIdentity;
   const typeId = (cursor.expr as TypeRoot).typeref.id;
   const match = findMatchingOuterScope(
     { typerefId: typeId, namespace: cursor.pathId?.namespace ?? [] },
@@ -10899,13 +10913,11 @@ const compileValueSetSQL = (
     return `${sourceAlias}.${quoteIdent("__source_type")}`;
   }
   const unwrapped = unwrapSelectExprSet(set);
-  // Multi-scalar pointer binding: if the caller has registered a SQL
-  // expression for this set's pathId (json_each iteration), use it.
-  if (options.multiScalarBindings) {
-    const bound = options.multiScalarBindings.get(pathIdKey(set))
-      ?? options.multiScalarBindings.get(pathIdKey(unwrapped.result));
-    if (bound) return bound;
-  }
+  // Multi-scalar pointer binding: a json_each iteration registers the current
+  // element expression under the path's iterator aspect.
+  const boundIterator = options.relation?.tryGetPathVar(pathIdKey(set), "iterator")
+    ?? options.relation?.tryGetPathVar(pathIdKey(unwrapped.result), "iterator");
+  if (boundIterator) return boundIterator;
   // Path off a group-rows statement's row (`.count`, `.key.cost` in its
   // FILTER/ORDER BY). Projected names re-emit their projection expression;
   // anything else reads the raw row's JSON path.
@@ -11052,10 +11064,7 @@ const compileValueSetSQL = (
         if (rowSrc) {
           const selectedOptions: GelIRCompileOptions = {
             ...options,
-            sourcePathAliases: [
-              ...(options.sourcePathAliases ?? []),
-              { pathKey: pathIdKey(selected.result), alias: rowSrc.alias },
-            ],
+            relation: bindSourceRelation(selected.result, rowSrc.alias, options.relation),
           };
           const selectedWhere = selected.where
             ? compileWhereClause(selected.where, rowSrc.alias, params, target, selectedOptions)
@@ -11072,7 +11081,7 @@ const compileValueSetSQL = (
     // pathctx: when an enclosing construct built a structured Relation for this
     // source (`options.relation`), that relation owns the path→alias binding for
     // its OWN scope and SHADOWS any stale binding inherited from an enclosing
-    // scope via `sourcePathAliases` / `outerScopes`. Resolve a type-root-rooted
+    // scope through Relation. Resolve a type-root-rooted
     // leaf through `correlateScope` first (local scope wins, then outward) so a
     // detached subquery's fresh root reads its own range var, not the outer
     // alias the inlined path id still points at (select_subqueries_04).
@@ -11206,7 +11215,7 @@ const compileValueSetSQL = (
     // computable on `User` becomes the OUTER User's name rather than a
     // cross-product with every User row. Inner-source bindings still take
     // precedence — the inner alias is `sourceAlias` and would already
-    // handle them; outerScopes only carries PARENT scopes.
+    // handle them; Relation scope bindings only carry enclosing/current rows.
     if (pointer.source.expr.kind === "type_root") {
       const innerTypeId = (pointer.source.expr as TypeRoot).typeref.id;
       const outerMatch = findMatchingOuterScope(
@@ -12539,7 +12548,7 @@ const compileLinkedInnerSelect = (
   // LIMIT / OFFSET may be a correlated expression (`LIMIT len(User.name) - 3`
   // on a per-row link shape) rather than a constant. Prefer the literal fast
   // path; otherwise compile the expression as a scalar value — paths into the
-  // outer shaped row resolve through options.outerScopes.
+  // outer shaped row resolve through options.relation.
   const limitLit = extractNumericLiteral(modifiers.limit);
   let limitSql: string | null = limitLit !== undefined ? String(limitLit) : null;
   let limitCorrelated = false;
@@ -12674,8 +12683,8 @@ const castSourceIsObjectShape = (set: Set): boolean => {
 };
 
 // A subquery operand is "independent" when every type-root it reads from is a
-// free reference — none resolve to an enclosing iteration (outerScopes) or a
-// bound non-root source (sourcePathAliases). Such a subquery (`(SELECT
+// free reference — none resolve to an enclosing iteration or an exact bound
+// source path in Relation. Such a subquery (`(SELECT
 // <json>Issue {…} FILTER Issue.number = '1')` as a `=` operand) needs its own
 // FROM clause; compiling it as a correlated `SELECT value` against the caller's
 // alias would dangle on an alias that doesn't exist. Returns false for a
@@ -12692,7 +12701,7 @@ const subqueryReferencesOnlyFreeRoots = (
     const namespace = src.pathId?.namespace ?? [];
     const typerefId = (src.expr as TypeRoot).typeref.id;
     if (findMatchingOuterScope({ typerefId, namespace }, options)) allFree = false;
-    if ((options.sourcePathAliases ?? []).some((p) => p.pathKey === pathIdKey(src))) allFree = false;
+    if (options.relation?.tryGetPathVar(pathIdKey(src), "source")) allFree = false;
   };
   const visit = (set: Set): void => {
     if (!allFree) return;

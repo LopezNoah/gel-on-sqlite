@@ -399,21 +399,11 @@ const tryCompileCorrelatedExistsChainSelect = (
   const outerIds = new globalThis.Set<string>();
   for (const w of rewrittenWheres) collectTypeRootIds(w, outerIds);
   outerIds.delete(leafType.id);
-  const innerOptions: GelIRCompileOptions = {
-    ...options,
-    outerScopes: [
-      ...(options.outerScopes ?? []),
-      ...[...outerIds].map((id) => ({
-        alias: sourceAlias,
-        typeref: { kind: "type_ref" as const, id, nameHint: id, isScalar: false } as TypeRef,
-        namespace: [] as string[],
-      })),
-    ],
-    sourcePathAliases: [
-      ...(options.sourcePathAliases ?? []),
-      { pathKey: chainKey, alias: built.leafAlias },
-    ],
-  };
+  const relation = new Relation(options.relation);
+  for (const id of outerIds) relation.registerScope(scopeKeyOf({ id }, []), sourceAlias);
+  relation.registerPath(chainKey, "source", built.leafAlias);
+  relation.registerPath(chainKey, "identity", `${built.leafAlias}.${quoteIdent("id")}`);
+  const innerOptions: GelIRCompileOptions = { ...options, relation };
   const checkpoint = params.length;
   const whereSqls = [...built.whereSqls];
   for (const w of rewrittenWheres) {
@@ -465,41 +455,28 @@ export const tryCompileCorrelatedExistsSelect = (
   // common-prefix sharing).
   const detached = (set as { isWithBinding?: boolean }).isWithBinding === true
     || (set.pathId?.namespace ?? []).some((ns) => ns.startsWith("with:"));
-  const outerScopes = [
-    ...(options.outerScopes ?? []).filter((scope) =>
-      scope.typeref.id !== innerType.id || !detached),
-    ...[...outerIds].map((id) => ({
-      alias: sourceAlias,
-      typeref: { kind: "type_ref" as const, id, nameHint: id, isScalar: false } as TypeRef,
-      namespace: [] as string[],
-    })),
-  ];
   // pathctx: build the inner source as a structured Relation whose parent holds
   // the outer scopes. For a DETACHED subquery we thread that relation through
   // `options.relation`, so the inner filter resolves the fresh root through the
-  // relation's OWN scope (`ex0`) — shadowing the stale `sourcePathAliases`
-  // binding the inlined path id still carries to the OUTER alias, which is why
+  // relation's OWN scope (`ex0`) — shadowing any enclosing scope binding, which is why
   // `EXISTS sub` previously read `g0."number"` instead of `ex0."number"`
-  // (select_subqueries_04). Inline subqueries leave `options.relation` unset, so
-  // their resolution (common-prefix sharing) is byte-identical to before.
-  const parentRel = new Relation();
-  for (const scope of outerScopes) {
-    parentRel.registerScope(scopeKeyOf(scope.typeref, scope.namespace ?? []), scope.alias);
-  }
+  // (select_subqueries_04). Inline subqueries use only the parent relation so
+  // their fresh root can retain common-prefix sharing with the enclosing row.
+  const parentRel = new Relation(options.relation);
+  for (const id of outerIds) parentRel.registerScope(scopeKeyOf({ id }, []), sourceAlias);
   const checkpoint = params.length;
   const built = compileSelectSourceRelation(
-    cursor, wheres[0], undefined, { ...options, outerScopes }, params, target, innerAlias, undefined, parentRel,
+    cursor, wheres[0], undefined, { ...options, relation: parentRel }, params, target, innerAlias, undefined, parentRel,
   );
   const innerSource = built
-    ?? compileSelectSource(cursor, wheres[0], undefined, { ...options, outerScopes }, params, target, innerAlias);
+    ?? compileSelectSource(cursor, wheres[0], undefined, { ...options, relation: parentRel }, params, target, innerAlias);
   if (!innerSource) {
     params.length = checkpoint;
     return null;
   }
   const innerOptions: GelIRCompileOptions = {
     ...options,
-    outerScopes,
-    relation: detached ? built?.relation : undefined,
+    relation: detached ? built?.relation : parentRel,
   };
   const whereSqls: string[] = [];
   for (const w of wheres) {
