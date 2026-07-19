@@ -402,7 +402,8 @@ const buildInlineLinkIndexSteps = (typeDecl: ObjectTypeDeclaration, onlyLink?: s
 
 const buildExistingLinkIndexSteps = (typeDecl: ObjectTypeDeclaration): MigrationStep[] =>
   typeDecl.members.flatMap((member) => {
-    if (member.kind !== "link" || !usesLinkTable(member)) return [];
+    if (member.kind !== "link") return [];
+    if (!usesLinkTable(member)) return buildInlineLinkIndexSteps(typeDecl, member.name);
     const table = linkTable(typeDecl, member);
     return [
       {

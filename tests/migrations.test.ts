@@ -77,6 +77,21 @@ describe("planSchemaMigration — diff", () => {
     expect(sql).not.toMatch(/DROP TABLE/i);
   });
 
+  it("adds indexes for existing link storage without rebuilding it", () => {
+    const schema = parse(`module default {
+      type User;
+      type Post {
+        author: User;
+        multi tags: User;
+      }
+    }`);
+    const sql = renderMigrationSQL(planSchemaMigration(schema, schema));
+    expect(sql).toContain('CREATE INDEX IF NOT EXISTS "default__post__idx_author_id" ON "default__post" ("author_id")');
+    expect(sql).toContain('CREATE UNIQUE INDEX IF NOT EXISTS "default__post__tags__source_target" ON "default__post__tags" ("source", "target")');
+    expect(sql).toContain('CREATE INDEX IF NOT EXISTS "default__post__tags__target_source" ON "default__post__tags" ("target", "source")');
+    expect(sql).not.toMatch(/ADD COLUMN|DROP TABLE/i);
+  });
+
   it("emits ADD COLUMN when a property is added", () => {
     const sql = renderMigrationSQL(planSchemaMigration(base, withColor));
     expect(sql).toMatch(/ADD COLUMN/i);
