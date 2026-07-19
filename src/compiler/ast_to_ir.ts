@@ -4894,8 +4894,8 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
 
     case "index_access": {
       // Validate that the index is a non-float numeric. EdgeQL reports the
-      // failure as either "cannot index array by 'std::X'" or "cannot index
-      // string by 'std::X'", so we surface the source category in the message.
+      // failure as either "cannot index array by std::X" or "cannot index
+      // string by std::X", so we surface the source category in the message.
       const indexTypeName = expr.indexExpr
         ? inferAstExprTypeName(expr.indexExpr, ctx)
         : (typeof expr.index === "number"
@@ -4915,7 +4915,7 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
             : sourceCat === "bytes" ? "bytes"
             : sourceCat === "json" ? "JSON"
             : "array";
-          failSemantic(`cannot index ${targetWord} by '${indexTypeName}'`);
+          failSemantic(`cannot index ${targetWord} by ${indexTypeName}`);
         }
       }
       // `1[0]` (int indexed) — index indirection only applies to str/bytes/

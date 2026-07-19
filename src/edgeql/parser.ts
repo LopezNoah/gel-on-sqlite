@@ -3574,14 +3574,16 @@ class Parser {
   ): SelectFreeStatement {
     this.expect("lbrace", "Expected '{' after 'select' in free object query");
     const entries = this.parseDelimited("rbrace", () => {
-      // Optional cardinality qualifier on a free-object field.
+      // Optional cardinality / required qualifiers on a free-object field.
       let cardinality: "one" | "many" | undefined;
+      let required = false;
       if (this.peek().kind === "kw_multi") { this.consume(); cardinality = "many"; }
       else if (this.peek().kind === "kw_single") { this.consume(); cardinality = "one"; }
+      if (this.peek().kind === "kw_required") { this.consume(); required = true; }
       const name = this.expectName("Expected free object field name").lexeme;
       this.expect("assign", "Expected ':=' in free object field");
       const expr = this.parseFreeObjectExpr();
-      return cardinality ? { name, expr, cardinality } : { name, expr };
+      return { name, expr, ...(cardinality ? { cardinality } : {}), ...(required ? { required } : {}) };
     }, "Expected ',' between free object entries");
 
     this.expect("rbrace", "Expected '}' after free object entries");
@@ -4163,25 +4165,27 @@ class Parser {
     if (this.peek().kind === "lbrace") {
       // Free object constructor: `{ name := expr, ... }` or with cardinality
       // qualifiers `{ multi name := expr }` / `{ single name := expr }`.
-      const isCardinalityKeyword = (k: string): boolean => k === "kw_multi" || k === "kw_single";
+      const isFieldModifier = (k: string): boolean => k === "kw_multi" || k === "kw_single" || k === "kw_required";
       const isFreeEntryStart = (offset: number): boolean => {
         const first = this.peekNth(offset);
         const second = this.peekNth(offset + 1);
         const third = this.peekNth(offset + 2);
         if (this.isNameToken(first) && second.kind === "assign") return true;
-        if (isCardinalityKeyword(first.kind) && this.isNameToken(second) && third.kind === "assign") return true;
+        if (isFieldModifier(first.kind) && this.isNameToken(second) && third.kind === "assign") return true;
         return false;
       };
       if (isFreeEntryStart(1)) {
         this.consume();
         const entries = this.parseDelimited("rbrace", () => {
           let cardinality: "one" | "many" | undefined;
+          let required = false;
           if (this.peek().kind === "kw_multi") { this.consume(); cardinality = "many"; }
           else if (this.peek().kind === "kw_single") { this.consume(); cardinality = "one"; }
+          if (this.peek().kind === "kw_required") { this.consume(); required = true; }
           const name = this.expectName("Expected free object field name").lexeme;
           this.expect("assign", "Expected ':=' in free object field");
           const fieldExpr = this.parseFreeObjectExpr();
-          return { name, expr: fieldExpr, ...(cardinality ? { cardinality } : {}) };
+          return { name, expr: fieldExpr, ...(cardinality ? { cardinality } : {}), ...(required ? { required } : {}) };
         }, "Expected ',' between free object entries");
         this.expect("rbrace", "Expected '}' after free object entries");
         return { kind: "free_object_constructor", entries };
@@ -4615,7 +4619,7 @@ class Parser {
         // distinct type so it can reject `[1.0]` with "cannot index by float".
         const isFloatLexeme = (lex: string): boolean => {
           if (lex.endsWith("n")) return false;
-          return lex.includes(".") || /[eE]/.test(lex.replace(/_/g, ""));
+          return lex.includes(".") || lex.includes("e") || lex.includes("E");
         };
         const consumeBound = (sign: 1 | -1): number | FreeObjectExpr | undefined => {
           if (this.peek().kind !== "number") return undefined;
@@ -4663,7 +4667,7 @@ class Parser {
         } else if (startToken.kind === "plus" && this.peekNth(1).kind === "number") {
           this.consume();
         }
-        if (this.peek().kind === "number") {
+        if (this.peek().kind === "number" && ["rbracket", "colon"].includes(this.peekNext().kind)) {
           start = consumeBound(startSign);
         } else if (this.peek().kind !== "colon") {
           start = this.parseFreeObjectExpr();

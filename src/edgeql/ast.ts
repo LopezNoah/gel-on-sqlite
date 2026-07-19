@@ -735,6 +735,8 @@ export interface SelectFreeStatement {
     // Optional `single`/`multi` qualifier (`select { single x := … }`). When
     // `one`, the entry's expression must be provably single-or-empty.
     cardinality?: "one" | "many";
+    // `required` marks the field as non-optional in the output object.
+    required?: boolean;
   }>;
   pos: SourcePos;
 }

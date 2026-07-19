@@ -1214,6 +1214,23 @@ const tokenizeImpl = (input: string): TokenizeResult => {
         break;
     }
 
+    // Raw byte strings accept either prefix order: rb'...' or br'...'.
+    if (
+      (cc === CC_r || cc === CC_R_UP || cc === CC_b || cc === CC_B_UP) &&
+      i + 2 < len
+    ) {
+      const second = input.charCodeAt(i + 1);
+      const quote = input.charCodeAt(i + 2);
+      const hasRawBytePrefixes =
+        (cc === CC_r || cc === CC_R_UP) && (second === CC_b || second === CC_B_UP)
+        || (cc === CC_b || cc === CC_B_UP) && (second === CC_r || second === CC_R_UP);
+      if (hasRawBytePrefixes && (quote === CC_SQUOTE || quote === CC_DQUOTE)) {
+        i += 2;
+        scanString(quote, tokenOffset, "bytes_string", true);
+        continue;
+      }
+    }
+
     // Byte strings: b'...' or b"..."
     if ((cc === CC_b || cc === CC_B_UP) && i + 1 < len) {
       const n = input.charCodeAt(i + 1);
