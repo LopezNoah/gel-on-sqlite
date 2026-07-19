@@ -47,6 +47,32 @@ export interface AsyncRuntimeInstance<TAdapter extends AsyncRuntimeDatabaseAdapt
   close: () => Promise<void>;
 }
 
+// SQLite statements are reusable, but preparing them is comparatively costly
+// for the small repeated queries the runtime issues. Keep this cache owned by
+// one connection so statements never cross connection or lifecycle boundaries.
+export const cacheStatements = <TStatement>(
+  prepare: (sql: string) => TStatement,
+  capacity = 256,
+): ((sql: string) => TStatement) => {
+  const statements = new Map<string, TStatement>();
+  return (sql: string): TStatement => {
+    const cached = statements.get(sql);
+    if (cached !== undefined) {
+      statements.delete(sql);
+      statements.set(sql, cached);
+      return cached;
+    }
+
+    const statement = prepare(sql);
+    statements.set(sql, statement);
+    if (statements.size > capacity) {
+      const oldest = statements.keys().next().value;
+      if (oldest !== undefined) statements.delete(oldest);
+    }
+    return statement;
+  };
+};
+
 export const toAsyncAdapter = (adapter: RuntimeDatabaseAdapter): AsyncRuntimeDatabaseAdapter => ({
   target: adapter.target,
   prepare: (sql) => {

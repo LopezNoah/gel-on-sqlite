@@ -5,7 +5,7 @@ import { AppError } from "../errors.js";
 import { parseFixedOffsetHours, parseFormattedTemporal as parseTemporalFormat, parseLocalTemporal } from "../temporal/parser.js";
 
 import type { AsyncRuntimeInstance, RuntimeDatabaseAdapter, RuntimeInstance } from "./adapter.js";
-import { toAsyncAdapter } from "./adapter.js";
+import { cacheStatements, toAsyncAdapter } from "./adapter.js";
 import type { ScalarValue } from "../types.js";
 
 export interface SQLiteStatement {
@@ -1393,7 +1393,7 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
 
     return {
       db: {
-        prepare: (sql) => {
+        prepare: cacheStatements((sql) => {
           const stmt = db.prepare(sql);
           return {
             all: (...params) => toRowRecords(stmt.all(...params)),
@@ -1402,7 +1402,7 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
               return { changes: result.changes };
             },
           };
-        },
+        }),
         close: () => db.close(),
         target: "sqlite",
         pragma: (value) => db.pragma(value),
@@ -1430,7 +1430,7 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
     rawDb.exec("PRAGMA case_sensitive_like = 1");
 
     const db: SQLiteDatabase = {
-      prepare: (sql) => {
+      prepare: cacheStatements((sql) => {
         const stmt = rawDb.prepare(sql) as {
           all: (...params: unknown[]) => unknown;
           run: (...params: unknown[]) => unknown;
@@ -1443,7 +1443,7 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
             return { changes: Number(result.changes ?? 0) };
           },
         };
-      },
+      }),
       close: () => rawDb.close(),
       target: "sqlite",
       exec: (sql) => rawDb.exec(sql),

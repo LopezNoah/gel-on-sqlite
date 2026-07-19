@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { toAsyncAdapter } from "../src/runtime/adapter.js";
+import { cacheStatements, toAsyncAdapter } from "../src/runtime/adapter.js";
 import { executeManyAsync, executeSelectAsync } from "../src/runtime/async_query.js";
 import { createD1Adapter, type D1DatabaseLike } from "../src/runtime/d1_adapter.js";
 import { materializeSchema, openSQLite, type SQLiteDatabase } from "../src/runtime/database.js";
@@ -203,5 +203,21 @@ describe("D1/DO adapter improvements", () => {
     expect(people.rows).toEqual(
       executeQuery(db, schema, "select default::Person { name } order by .name;").rows,
     );
+  });
+});
+
+describe("cacheStatements", () => {
+  it("reuses recent statements and evicts the least recently used", () => {
+    let prepares = 0;
+    const prepare = cacheStatements((sql: string) => ({ sql, sequence: ++prepares }), 2);
+
+    const first = prepare("SELECT 1");
+    expect(prepare("SELECT 1")).toBe(first);
+    prepare("SELECT 2");
+    expect(prepare("SELECT 1")).toBe(first);
+    prepare("SELECT 3");
+
+    expect(prepare("SELECT 2")).toEqual({ sql: "SELECT 2", sequence: 4 });
+    expect(prepares).toBe(4);
   });
 });
