@@ -7180,6 +7180,12 @@ const collectForExprProjectedColumns = (sourceSet: Set, where?: Set, orderBy?: S
     // don't appear elsewhere in the body expression — walk them so those
     // columns make it into the cross-joined table's projection.
     for (const elem of set.shape ?? []) {
+      // Reuse the ordinary object-source projection rules for the element
+      // itself. The recursive walk below only sees scalar pointer leaves,
+      // while this also carries inline links and computed shape references.
+      for (const column of collectProjectedColumns([elem])) {
+        columns.add(column);
+      }
       visit(elem.expr);
     }
     const expr = set.expr;
@@ -7952,6 +7958,19 @@ const compileShapeObjectWithAliases = (
     if (elemExpr.expr.kind === "pointer" && elemExpr.typeref.isScalar) {
       const ptr = elemExpr.expr as Pointer;
       pairs.push(`${quoteLiteral(ptr.ptrref.shortName)}, ${typeAlias}.${quoteIdent(columnForPointer(ptr))}`);
+      continue;
+    }
+    // Object links need the regular correlated shape projection; lowering them
+    // as a plain value column loses the link-table join (and is invalid for
+    // inline links, whose physical column is `<name>_id`).
+    if (elemExpr.expr.kind === "pointer" && !elemExpr.typeref.isScalar) {
+      const projection = compileShapeProjection(element, typeAlias, params, options, target, 0);
+      const projectionAlias = ` AS ${quoteIdent(shapeAliasForElement(element, elemExpr, 0))}`;
+      if (!projection?.endsWith(projectionAlias)) return null;
+      const key = element.name
+        ? quoteLiteral(element.name)
+        : quoteLiteral((elemExpr.expr as Pointer).ptrref.shortName);
+      pairs.push(`${key}, ${projection.slice(0, -projectionAlias.length)}`);
       continue;
     }
     // Computed scalar (`b := n`): compile via the aliased path so binding
