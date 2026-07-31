@@ -477,6 +477,13 @@ export function validateStatementAst(
   }
   const ctx: AstPreValidationCtx = { schema, module, bindings, allowUserSpecifiedId, deps };
 
+  if (statement.kind === "select_expr") {
+    const expr = (statement as { expr?: { kind?: string; values?: unknown[] } }).expr;
+    if (expr?.kind === "set_literal" && expr.values?.length === 0) {
+      preValidationFail("expression returns value of indeterminate type");
+    }
+  }
+
   // `SELECT T.scalarProp FILTER .x …` — partial paths can't be resolved
   // against a primitive subject. (Checked before the generic walk so the
   // error reports the *declared* scalar type, e.g. a custom scalar.)

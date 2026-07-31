@@ -1,5 +1,6 @@
 import BetterSQLite3 from "better-sqlite3";
 import { createRequire } from "node:module";
+import { isDeepStrictEqual } from "node:util";
 
 import { AppError } from "../errors.js";
 import { parseFixedOffsetHours, parseFormattedTemporal as parseTemporalFormat, parseLocalTemporal } from "../temporal/parser.js";
@@ -96,24 +97,30 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
     // in EdgeQL; SQLite's acos/asin silently return NULL. Wrap them in custom
     // helpers that explicitly throw, so SELECT queries surface the diagnostic.
     // `math::sin/cos/tan/cot` raise on non-finite input (Infinity); same idea.
-    const requireFinite = (value: number | null, fname: string): number => {
-      if (value === null || !Number.isFinite(value)) {
+    const trigValue = (value: unknown, fname: string, unitInterval = false): number | "NaN" | null => {
+      if (value === null || value === undefined) return null;
+      if (value === "NaN" || (typeof value === "number" && Number.isNaN(value))) return "NaN";
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric) || (unitInterval && (numeric < -1 || numeric > 1))) {
         throw new AppError("E_VALIDATION", `input is out of range for ${fname}`);
       }
-      return value;
+      return numeric;
     };
-    const requireUnitInterval = (value: number | null, fname: string): number => {
-      if (value === null || !Number.isFinite(value) || value < -1 || value > 1) {
-        throw new AppError("E_VALIDATION", `input is out of range for ${fname}`);
-      }
-      return value;
+    const unaryTrig = (
+      value: unknown,
+      fname: string,
+      fn: (numeric: number) => number,
+      unitInterval = false,
+    ): number | string | null => {
+      const numeric = trigValue(value, fname, unitInterval);
+      return numeric === null || numeric === "NaN" ? numeric : fn(numeric);
     };
-    db.function("_gel_acos", (x: number | null) => Math.acos(requireUnitInterval(x, "math::acos")));
-    db.function("_gel_asin", (x: number | null) => Math.asin(requireUnitInterval(x, "math::asin")));
-    db.function("_gel_cos", (x: number | null) => Math.cos(requireFinite(x, "math::cos")));
-    db.function("_gel_sin", (x: number | null) => Math.sin(requireFinite(x, "math::sin")));
-    db.function("_gel_tan", (x: number | null) => Math.tan(requireFinite(x, "math::tan")));
-    db.function("_gel_cot", (x: number | null) => 1 / Math.tan(requireFinite(x, "math::cot")));
+    db.function("_gel_acos", (x: unknown) => unaryTrig(x, "math::acos", Math.acos, true));
+    db.function("_gel_asin", (x: unknown) => unaryTrig(x, "math::asin", Math.asin, true));
+    db.function("_gel_cos", (x: unknown) => unaryTrig(x, "math::cos", Math.cos));
+    db.function("_gel_sin", (x: unknown) => unaryTrig(x, "math::sin", Math.sin));
+    db.function("_gel_tan", (x: unknown) => unaryTrig(x, "math::tan", Math.tan));
+    db.function("_gel_cot", (x: unknown) => unaryTrig(x, "math::cot", (numeric) => 1 / Math.tan(numeric)));
     // `math::ln/lg/log(x)` raise on non-positive inputs (log of zero or
     // negative is undefined); SQLite returns NULL silently.
     const requirePositive = (value: number | null, fname: string): number => {
@@ -192,8 +199,24 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
       }
       const m = compileRegex("std::re_match", source, flags).exec(String(value));
       if (!m) return null;
-      const groups = m.length === 1 ? [m[0]] : Array.from(m).slice(1);
+      const groups = (m.length === 1 ? [m[0]] : Array.from(m).slice(1))
+        .map((group) => group ?? "");
       return JSON.stringify(groups);
+    });
+    db.function("_gel_re_match_all", (pattern: string | null, value: string | null) => {
+      if (pattern === null || value === null) return null;
+      const flagsMatch = /^\(\?([a-zA-Z]+)\)(.*)$/s.exec(String(pattern));
+      const flagChars = flagsMatch?.[1] ?? "";
+      const flags = `${flagChars.includes("i") ? "i" : ""}${flagChars.includes("m") ? "m" : ""}${flagChars.includes("s") ? "s" : ""}g`;
+      const regex = compileRegex("std::re_match_all", flagsMatch?.[2] ?? String(pattern), flags);
+      const matches: string[][] = [];
+      let match: RegExpExecArray | null;
+      while ((match = regex.exec(String(value))) !== null) {
+        matches.push((match.length === 1 ? [match[0]] : Array.from(match).slice(1))
+          .map((group) => group ?? ""));
+        if (match.index === regex.lastIndex) regex.lastIndex += 1;
+      }
+      return JSON.stringify(matches);
     });
     // `std::re_replace(pattern, replacement, str, flags?)` — string substitution.
     db.function("_gel_re_replace", { varargs: true }, (...args: unknown[]) => {
@@ -237,7 +260,32 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
       const v = arr[normalized];
       return (typeof v === "object" ? JSON.stringify(v) : v) as number | string | null;
     });
-    db.function("_gel_array_fill", (value: unknown, sizeRaw: number | null) => {
+    db.function("_gel_array_find", (
+      arrayRaw: string | null,
+      valueRaw: unknown,
+      startRaw: number | null,
+      structuredValueRaw: number | null,
+    ) => {
+      const values = arrayRaw ? parseJsonArg("std::find", arrayRaw) : [];
+      const value = structuredValueRaw && typeof valueRaw === "string"
+        ? parseJsonArg("std::find", valueRaw)
+        : valueRaw;
+      const start = Math.max(0, Number(startRaw ?? 0));
+      const offset = values.slice(start).findIndex((candidate) => isDeepStrictEqual(candidate, value));
+      return offset < 0 ? -1 : start + offset;
+    });
+    db.function("_gel_array_contains", (
+      arrayRaw: string | null,
+      valueRaw: unknown,
+      structuredValueRaw: number | null,
+    ) => {
+      const values = arrayRaw ? parseJsonArg("std::contains", arrayRaw) : [];
+      const value = structuredValueRaw && typeof valueRaw === "string"
+        ? parseJsonArg("std::contains", valueRaw)
+        : valueRaw;
+      return values.some((candidate) => isDeepStrictEqual(candidate, value)) ? 1 : 0;
+    });
+    db.function("_gel_array_fill", (value: unknown, sizeRaw: number | null, unwrapTupleArrayRaw: number | null) => {
       const size = Number(sizeRaw);
       if (!Number.isSafeInteger(size) || size < 0 || size > 1_000_000) {
         throw new AppError("E_VALIDATION", "array size exceeds the maximum allowed");
@@ -246,17 +294,28 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
       if (typeof value === "string" && (value.startsWith("[") || value.startsWith("{"))) {
         try { element = JSON.parse(value); } catch { /* scalar string */ }
       }
+      if (unwrapTupleArrayRaw && Array.isArray(element) && element.length === 1) {
+        element = element[0];
+      }
       return JSON.stringify(Array.from({ length: size }, () => element));
     });
     // `std::array_set(arr, idx, val)` — raise on out-of-bounds, otherwise
     // return the mutated array as JSON.
-    db.function("_gel_array_set", (a: string | null, idxRaw: number | null, val: unknown) => {
+    db.function("_gel_array_set", (
+      a: string | null,
+      idxRaw: number | null,
+      valRaw: unknown,
+      structuredRaw: number | null,
+    ) => {
       const idx = Number(idxRaw);
       const arr = a ? parseJsonArg("std::array_set", a) : [];
       const normalized = idx < 0 ? arr.length + idx : idx;
       if (normalized < 0 || normalized >= arr.length) {
         throw new AppError("E_VALIDATION", `array index ${idx} is out of bounds`);
       }
+      const val = structuredRaw && typeof valRaw === "string"
+        ? parseJsonArg("std::array_set", valRaw)
+        : valRaw;
       arr[normalized] = val;
       return JSON.stringify(arr);
     });
@@ -264,13 +323,21 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
     // splice and return as JSON. EdgeQL allows idx in [-len, len] (a
     // length-inclusive append is valid; one-past-end and negative-past-start
     // are not).
-    db.function("_gel_array_insert", (a: string | null, idxRaw: number | null, val: unknown) => {
+    db.function("_gel_array_insert", (
+      a: string | null,
+      idxRaw: number | null,
+      valRaw: unknown,
+      structuredRaw: number | null,
+    ) => {
       const idx = Number(idxRaw);
       const arr = a ? parseJsonArg("std::array_insert", a) : [];
       if (idx > arr.length || idx < -arr.length) {
         throw new AppError("E_VALIDATION", `array index ${idx} is out of bounds`);
       }
       const normalized = idx < 0 ? arr.length + idx : idx;
+      const val = structuredRaw && typeof valRaw === "string"
+        ? parseJsonArg("std::array_insert", valRaw)
+        : valRaw;
       arr.splice(normalized, 0, val);
       return JSON.stringify(arr);
     });
@@ -449,10 +516,16 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
     });
     // `std::array_replace(arr, old, new)` — replace every occurrence.
     db.function("_gel_array_replace", { varargs: true }, (...a: unknown[]) => {
-      const [arrRaw, oldV, newV] = a;
+      const [arrRaw, oldRaw, newRaw, structuredRaw] = a;
       if (arrRaw === null || arrRaw === undefined) return null;
       const arr = typeof arrRaw === "string" ? parseJsonArg("std::array_replace", arrRaw) : arrRaw as unknown[];
-      return JSON.stringify(arr.map((v) => (v === oldV ? newV : v)));
+      const oldValue = structuredRaw && typeof oldRaw === "string"
+        ? parseJsonArg("std::array_replace", oldRaw)
+        : oldRaw;
+      const newValue = structuredRaw && typeof newRaw === "string"
+        ? parseJsonArg("std::array_replace", newRaw)
+        : newRaw;
+      return JSON.stringify(arr.map((value) => isDeepStrictEqual(value, oldValue) ? newValue : value));
     });
     // Numeric parsers (`to_int64('1,234', '9,999')` etc.). The `fmt` argument
     // is OPTIONAL, with three regimes mirroring the server's lib/std defs:
@@ -599,15 +672,18 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
       return c !== 0 ? c : x.eps - y.eps;
     };
     const rangeIsEmpty = (r: RangeObj): boolean => Boolean(r.empty);
-    // A range value is either a single range object or a multirange
-    // `{ranges: [...]}` — normalize both into a sorted, merged list of
+    // A range value is either a single range object or a multirange array.
+    // Accept the old `{ranges: [...]}` envelope while normalizing both into a sorted, merged list of
     // non-empty ranges so the predicates can treat them uniformly.
     const asRangeList = (raw: unknown): RangeObj[] | null => {
       if (raw === null || raw === undefined) return null;
-      const o = typeof raw === "string" ? JSON.parse(raw) as RangeObj | { ranges: unknown[] } : raw as RangeObj | { ranges: unknown[] };
-      const list = Array.isArray((o as { ranges?: unknown[] }).ranges)
-        ? ((o as { ranges: unknown[] }).ranges).map((x) => (typeof x === "string" ? JSON.parse(x) : x) as RangeObj)
-        : [o as RangeObj];
+      const o = typeof raw === "string" ? JSON.parse(raw) as unknown : raw;
+      const values = Array.isArray(o)
+        ? o
+        : Array.isArray((o as { ranges?: unknown[] })?.ranges)
+          ? (o as { ranges: unknown[] }).ranges
+          : [o];
+      const list = values.map((x) => (typeof x === "string" ? JSON.parse(x) : x) as RangeObj);
       const nonEmpty = list.filter((r) => !rangeIsEmpty(r));
       nonEmpty.sort((x, y) => cmpPos(lowerPos(x), lowerPos(y)));
       // Merge overlapping/adjacent ranges (Postgres multirange canonical form).
@@ -636,7 +712,7 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
     // single ranges and multiranges are handled uniformly as range lists
     // (`asRangeList`). The result serializes as a single range when both
     // operands were single ranges (erroring if the result isn't one contiguous
-    // range, as EdgeQL does), or as a multirange `{ranges:[…]}` — byte-identical
+    // range, as EdgeQL does), or as a multirange array — byte-identical
     // to `_gel_multirange` — when either operand was a multirange.
     const serializeRange = (r: RangeObj): string =>
       r.empty
@@ -657,12 +733,12 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
     const rawIsMultirange = (raw: unknown): boolean => {
       if (raw === null || raw === undefined) return false;
       const o = typeof raw === "string" ? JSON.parse(raw) : raw;
-      return Boolean(o) && Array.isArray((o as { ranges?: unknown[] }).ranges);
+      return Array.isArray(o) || (Boolean(o) && Array.isArray((o as { ranges?: unknown[] }).ranges));
     };
     // Re-run the multirange canonicalizer over a raw list so a computed result
     // matches the shape `_gel_multirange` (and thus range/multirange `=`) emits.
     const canonicalize = (list: RangeObj[]): RangeObj[] =>
-      asRangeList(JSON.stringify({ ranges: list })) ?? [];
+      asRangeList(JSON.stringify(list)) ?? [];
     const overlaps = (a: RangeObj, b: RangeObj): boolean =>
       cmpPos(lowerPos(a), upperPos(b)) <= 0 && cmpPos(lowerPos(b), upperPos(a)) <= 0;
     const intersectOne = (a: RangeObj, b: RangeObj): RangeObj => {
@@ -680,9 +756,12 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
     };
     const serializeResult = (list: RangeObj[], anyMulti: boolean, op: string): string => {
       if (anyMulti) {
-        return JSON.stringify({
-          ranges: list.map((r) => ({ lower: r.lower, upper: r.upper, inc_lower: r.inc_lower, inc_upper: r.inc_upper })),
-        });
+        return JSON.stringify(list.map((r) => ({
+          lower: r.lower,
+          upper: r.upper,
+          inc_lower: r.inc_lower,
+          inc_upper: r.inc_upper,
+        })));
       }
       if (list.length === 0) return JSON.stringify({ empty: true });
       if (list.length === 1) return serializeRange(list[0]);
@@ -713,7 +792,7 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
     db.function("_gel_range_contains", (rRaw: string | null, v: unknown) => {
       const rs = asRangeList(rRaw);
       if (!rs || v === null || v === undefined) return null;
-      if (typeof v === "string" && v.trimStart().startsWith("{")) {
+      if (typeof v === "string" && (v.trimStart().startsWith("{") || v.trimStart().startsWith("["))) {
         const inner = asRangeList(v);
         if (!inner) return null;
         // Every inner range must be covered by some outer range.
@@ -773,8 +852,8 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
     db.function("_gel_multirange", (arrRaw: string | null) => {
       if (arrRaw === null) return null;
       const arr = parseJsonArg("std::multirange", arrRaw);
-      const merged = asRangeList(JSON.stringify({ ranges: arr }));
-      return JSON.stringify({ ranges: merged ?? [] });
+      const merged = asRangeList(JSON.stringify(arr));
+      return JSON.stringify(merged ?? []);
     });
     // `multirange_unpack(mr)` — JSON array of constituent ranges (the SQL
     // layer explodes it with json_each).
@@ -893,7 +972,9 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
       const s = String(v).trim().toLowerCase();
       if (s === "inf" || s === "+inf" || s === "infinity" || s === "+infinity") return Infinity;
       if (s === "-inf" || s === "-infinity") return -Infinity;
-      if (s === "nan") return NaN;
+      // SQLite normalizes a numeric NaN returned by a UDF to NULL. Keep an
+      // explicit sentinel so math UDFs can preserve NaN through SQL lowering.
+      if (s === "nan") return "NaN";
       const n = Number(s);
       if (s === "" || Number.isNaN(n)) {
         throw new AppError("E_VALIDATION", `invalid input syntax for type std::float64: '${String(v)}'`);

@@ -64,6 +64,9 @@ export interface StdlibFunctionEntry {
   runtime?: StdlibRuntimeImpl;
 }
 
+const structuredCollectionArg = (type: string | undefined): number =>
+  type?.startsWith("array<") || type?.startsWith("tuple<") || type === "std::tuple" ? 1 : 0;
+
 // ── Runtime helpers (shared by the `runtime` slots) ───────────────────────
 
 const extractScalar = (arg: RuntimeFunctionArg): ScalarValue | null => {
@@ -789,13 +792,15 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
   {
     name: "std::array_fill",
     meta: { minArgs: 2, maxArgs: 2 },
-    sql: (argSql) => argSql[0] && argSql[1] ? `_gel_array_fill(${argSql[0]}, ${argSql[1]})` : null,
+    sql: (argSql, argTypes) => argSql[0] && argSql[1]
+      ? `_gel_array_fill(${argSql[0]}, ${argSql[1]}, ${argTypes?.[0]?.startsWith("array<") && argTypes[0].includes("tuple") ? 1 : 0})`
+      : null,
   },
   {
     name: "std::array_set",
     meta: { minArgs: 3, maxArgs: 3 },
-    sql: (argSql) => argSql[0] && argSql[1] && argSql[2]
-      ? `_gel_array_set(${argSql[0]}, ${argSql[1]}, ${argSql[2]})`
+    sql: (argSql, argTypes) => argSql[0] && argSql[1] && argSql[2]
+      ? `_gel_array_set(${argSql[0]}, ${argSql[1]}, ${argSql[2]}, ${structuredCollectionArg(argTypes?.[2])})`
       : null,
     runtime: (args) => {
       const raw = args[0];
@@ -817,8 +822,8 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
   {
     name: "std::array_insert",
     meta: { minArgs: 3, maxArgs: 3 },
-    sql: (argSql) => argSql[0] && argSql[1] && argSql[2]
-      ? `_gel_array_insert(${argSql[0]}, ${argSql[1]}, ${argSql[2]})`
+    sql: (argSql, argTypes) => argSql[0] && argSql[1] && argSql[2]
+      ? `_gel_array_insert(${argSql[0]}, ${argSql[1]}, ${argSql[2]}, ${structuredCollectionArg(argTypes?.[2])})`
       : null,
     runtime: (args) => {
       const raw = args[0];
@@ -1193,9 +1198,12 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
     // `find(haystack, needle)` returns 0-based position or -1 if not found.
     // SQLite's instr returns 1-based, 0 if not found — translate accordingly.
     name: "std::find",
-    meta: { minArgs: 2, maxArgs: 2 },
-    sql: (argSql) => {
+    meta: { minArgs: 2, maxArgs: 3 },
+    sql: (argSql, argTypes) => {
       if (!argSql[0] || !argSql[1]) return null;
+      if (argTypes?.[0]?.startsWith("array<")) {
+        return `_gel_array_find(${argSql[0]}, ${argSql[1]}, ${argSql[2] ?? "0"}, ${structuredCollectionArg(argTypes?.[1])})`;
+      }
       return `(instr(CAST(${argSql[0]} AS TEXT), CAST(${argSql[1]} AS TEXT)) - 1)`;
     },
   },
@@ -1203,8 +1211,11 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
     // `contains(haystack, needle)` for strings: true if instr > 0.
     name: "std::contains",
     meta: { minArgs: 2, maxArgs: 2 },
-    sql: (argSql) => {
+    sql: (argSql, argTypes) => {
       if (!argSql[0] || !argSql[1]) return null;
+      if (argTypes?.[0]?.startsWith("array<")) {
+        return `_gel_array_contains(${argSql[0]}, ${argSql[1]}, ${structuredCollectionArg(argTypes?.[1])})`;
+      }
       return `(instr(CAST(${argSql[0]} AS TEXT), CAST(${argSql[1]} AS TEXT)) > 0)`;
     },
   },
@@ -1241,7 +1252,8 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
         for (const subject of subjects) {
           const match = new RegExp(source, flags).exec(subject);
           if (!match) continue;
-          out.push(match.length === 1 ? [match[0]] : match.slice(1));
+          out.push((match.length === 1 ? [match[0]] : match.slice(1))
+            .map((group) => group ?? ""));
         }
       }
       return out;
@@ -1258,7 +1270,8 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
       const out: unknown[] = [];
       let m: RegExpExecArray | null;
       while ((m = re.exec(subject)) !== null) {
-        out.push(m.length === 1 ? m[0] : m.slice(1));
+        out.push((m.length === 1 ? [m[0]] : m.slice(1))
+          .map((group) => group ?? ""));
         if (m.index === re.lastIndex) re.lastIndex += 1;
       }
       return out;
@@ -1352,8 +1365,8 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
   },
   {
     name: "std::array_replace",
-    sql: (argSql) => argSql[0] && argSql[1] && argSql[2]
-      ? `_gel_array_replace(${argSql[0]}, ${argSql[1]}, ${argSql[2]})`
+    sql: (argSql, argTypes) => argSql[0] && argSql[1] && argSql[2]
+      ? `_gel_array_replace(${argSql[0]}, ${argSql[1]}, ${argSql[2]}, ${structuredCollectionArg(argTypes?.[1])})`
       : null,
   },
   {

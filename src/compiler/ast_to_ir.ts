@@ -81,6 +81,7 @@ import type { GeneratedSchema, GeneratedSchemaType } from "../codegen/schema.js"
 import { resolveSchemaModelForCompile } from "../codegen/schema_loader.js";
 import { astPathExprToQlast } from "./ast_to_qlast.js";
 import { compilePathQlast, isQlastDeferred, type QlastPathDeps } from "./qlast_setgen.js";
+import { tryResolveStdlibFunction } from "../stdlib/functions.js";
 
 // Reject a GROUP BY clause that uses one name in conflicting roles (a USING
 // alias vs a direct field, or a link property vs an object property). Relocated
@@ -2213,8 +2214,8 @@ const literalToSet = (value: string | number | boolean | null): Set => ({
             : "string_constant",
     value,
   } as BaseConstant,
-  pathId: defaultPathId("std::anyscalar"),
-  typeref: unknownTypeRef("std::anyscalar"),
+  pathId: defaultPathId(typeof value === "boolean" ? "std::bool" : "std::anyscalar"),
+  typeref: unknownTypeRef(typeof value === "boolean" ? "std::bool" : "std::anyscalar"),
   shape: [],
   isBinding: false,
   isMaterializedRef: false,
@@ -2602,14 +2603,41 @@ const inferAstExprTypeName = (expr: FreeObjectExpr, ctx: IRCompileContext): stri
       // comparisons (`(1,2) = [1,2]`) can be rejected. If any element is
       // un-inferable, fall back to a generic `tuple<>` so the type-category
       // bucket still matches.
-      const inner = (expr as { values: FreeObjectExpr[] }).values
-        .map((v) => inferAstExprTypeName(v, ctx) ?? "anytype");
+      const inner = (expr as { values: FreeObjectExpr[] }).values.map((value) => {
+        const inferred = inferAstExprTypeName(value, ctx);
+        return inferred ? normalizeScalarCastName(ctx, inferred) : "anytype";
+      });
+      return `tuple<${inner.join(", ")}>`;
+    }
+    case "free_object_constructor": {
+      const object = expr as { tupleLike?: boolean; entries: Array<{ expr: FreeObjectExpr }> };
+      if (!object.tupleLike) return undefined;
+      const inner = object.entries.map((entry) => {
+        const inferred = inferAstExprTypeName(entry.expr, ctx);
+        return inferred ? normalizeScalarCastName(ctx, inferred) : "anytype";
+      });
       return `tuple<${inner.join(", ")}>`;
     }
     case "array_literal_expr": {
       const values = (expr as { values: FreeObjectExpr[] }).values;
       if (values.length === 0) return "array<anytype>";
-      const elemType = inferAstExprTypeName(values[0], ctx) ?? "anytype";
+      const inferred = values.map((value) => inferAstExprTypeName(value, ctx));
+      let elemType = inferred[0] ? normalizeScalarCastName(ctx, inferred[0]) : "anytype";
+      for (let i = 1; i < inferred.length; i += 1) {
+        const inferredType = inferred[i];
+        if (!inferredType) {
+          elemType = "anytype";
+          break;
+        }
+        const next = normalizeScalarCastName(ctx, inferredType);
+        if (next === elemType) continue;
+        const common = commonScalarType(elemType, next);
+        if (!common) {
+          elemType = "anytype";
+          break;
+        }
+        elemType = common;
+      }
       return `array<${elemType}>`;
     }
     case "set_expr": {
@@ -2803,6 +2831,7 @@ const inferAstExprTypeName = (expr: FreeObjectExpr, ctx: IRCompileContext): stri
       // Marking it as such (like re_match) lets the result codec JSON-decode
       // the array rather than surfacing the raw JSON text.
       if (shortName === "str_split") return "array<std::str>";
+      if (shortName === "contains" || shortName === "re_test") return "std::bool";
       if (shortName === "round") return first ?? "std::float64";
       if (shortName === "ceil" || shortName === "floor") {
         // EdgeQL `math::ceil` / `math::floor` return int64 for the small
@@ -3079,9 +3108,12 @@ const commonScalarType = (a: string, b: string): string | undefined => {
     return a === "std::float32" && b === "std::int16" ? a : "std::float64";
   }
   if (typeCategory(a) === "array" && typeCategory(b) === "array") {
-    if (a.includes("anytype")) return b;
-    if (b.includes("anytype")) return a;
-    return a === b ? a : undefined;
+    const left = a.slice(a.indexOf("<") + 1, -1).trim();
+    const right = b.slice(b.indexOf("<") + 1, -1).trim();
+    if (left.includes("anytype")) return b;
+    if (right.includes("anytype")) return a;
+    const element = commonScalarType(left, right);
+    return element ? `array<${element}>` : undefined;
   }
   if (typeCategory(a) === "tuple" && typeCategory(b) === "tuple") {
     const unpack = (type: string): string[] | undefined => {
@@ -3104,7 +3136,18 @@ const commonScalarType = (a: string, b: string): string | undefined => {
     const left = unpack(a);
     const right = unpack(b);
     if (!left || !right || left.length !== right.length) return undefined;
-    const values = left.map((value, i) => commonScalarType(value, right[i]));
+    const slotType = (value: string): string => {
+      let depth = 0;
+      for (let i = 0; i < value.length; i += 1) {
+        if (value[i] === "<") depth += 1;
+        else if (value[i] === ">") depth -= 1;
+        else if (value[i] === ":" && depth === 0 && value[i - 1] !== ":" && value[i + 1] !== ":") {
+          return value.slice(i + 1).trim();
+        }
+      }
+      return value;
+    };
+    const values = left.map((value, i) => commonScalarType(slotType(value), slotType(right[i])));
     return values.every((value): value is string => value !== undefined)
       ? `tuple<${values.join(", ")}>`
       : undefined;
@@ -3146,6 +3189,7 @@ const arithmeticResultType = (a: string, b: string, op: string): string | undefi
     const temporal = signed.has(a) ? b : signed.has(b) ? a : undefined;
     const duration = signed.has(a) ? a : signed.has(b) ? b : undefined;
     if (!temporal || !duration) return undefined;
+    if (typeCategory(temporal) !== "datetime") return undefined;
     if (temporal === "std::cal::local_date") {
       return duration === "std::cal::date_duration" ? temporal : "std::cal::local_datetime";
     }
@@ -3333,6 +3377,97 @@ const argToParamCastDistance = (
   argType: string,
   paramType: string,
 ): number | undefined => {
+  const paramUnion = paramType.split("|").map((part) => part.trim()).filter(Boolean);
+  const argUnion = argType.split("|").map((part) => part.trim()).filter(Boolean);
+  if (paramUnion.length > 1 || argUnion.length > 1) {
+    let total = 0;
+    for (const argBranch of argUnion) {
+      const distances = paramUnion
+        .map((paramBranch) => argToParamCastDistance(ctx, argBranch, paramBranch))
+        .filter((distance): distance is number => distance !== undefined);
+      if (distances.length === 0) return undefined;
+      total += Math.min(...distances);
+    }
+    return total;
+  }
+  argType = normalizeScalarCastName(ctx, argType);
+  paramType = normalizeScalarCastName(ctx, paramType);
+  const bareName = (typeName: string): string => {
+    const trimmed = typeName.trim();
+    const index = trimmed.lastIndexOf("::");
+    return index >= 0 ? trimmed.slice(index + 2) : trimmed;
+  };
+  const collectionElement = (typeName: string, kind: "array" | "tuple"): string | undefined => {
+    const trimmed = typeName.trim();
+    const open = trimmed.indexOf("<");
+    if (open < 0 || !trimmed.endsWith(">")) return undefined;
+    if (bareName(trimmed.slice(0, open)) !== kind) return undefined;
+    return trimmed.slice(open + 1, -1).trim();
+  };
+  const pseudo = bareName(paramType);
+  const argBare = bareName(argType);
+  const integerTypes = new globalThis.Set(["int16", "int32", "int64", "bigint"]);
+  const realTypes = new globalThis.Set([...integerTypes, "float32", "float64", "decimal"]);
+  if (pseudo === "anytype") return 40;
+  if (pseudo === "anyscalar") {
+    return argType.includes("<") || (!argType.startsWith("std::") && !argType.startsWith("cal::"))
+      ? undefined
+      : 30;
+  }
+  if (pseudo === "anyint") return integerTypes.has(argBare) ? 10 : undefined;
+  if (pseudo === "anyreal") return realTypes.has(argBare) ? 20 : undefined;
+  const argObject = getSchemaType(ctx, argType);
+  const paramObject = getSchemaType(ctx, paramType);
+  if (argObject && paramObject) {
+    return argType === paramType || isSubtypeOf(ctx, argType, paramType) ? 0 : undefined;
+  }
+  const paramArray = collectionElement(paramType, "array");
+  const argArray = collectionElement(argType, "array");
+  if (paramArray !== undefined || argArray !== undefined) {
+    if (paramArray === undefined || argArray === undefined) return undefined;
+    return argToParamCastDistance(ctx, argArray, paramArray);
+  }
+  const paramTuple = collectionElement(paramType, "tuple");
+  const argTuple = collectionElement(argType, "tuple");
+  if (paramTuple !== undefined || argTuple !== undefined) {
+    if (paramTuple === undefined || argTuple === undefined) return undefined;
+    const splitSlots = (inner: string): string[] => {
+      const slots: string[] = [];
+      let depth = 0;
+      let start = 0;
+      for (let i = 0; i < inner.length; i += 1) {
+        if (inner[i] === "<") depth += 1;
+        else if (inner[i] === ">") depth -= 1;
+        else if (inner[i] === "," && depth === 0) {
+          slots.push(inner.slice(start, i).trim());
+          start = i + 1;
+        }
+      }
+      slots.push(inner.slice(start).trim());
+      return slots.filter(Boolean);
+    };
+    const slotType = (slot: string): string => {
+      let depth = 0;
+      for (let i = 0; i < slot.length; i += 1) {
+        if (slot[i] === "<") depth += 1;
+        else if (slot[i] === ">") depth -= 1;
+        else if (slot[i] === ":" && depth === 0 && slot[i - 1] !== ":" && slot[i + 1] !== ":") {
+          return slot.slice(i + 1).trim();
+        }
+      }
+      return slot;
+    };
+    const paramSlots = splitSlots(paramTuple).map(slotType);
+    const argSlots = splitSlots(argTuple).map(slotType);
+    if (paramSlots.length !== argSlots.length) return undefined;
+    let total = 0;
+    for (let i = 0; i < paramSlots.length; i += 1) {
+      const distance = argToParamCastDistance(ctx, argSlots[i], paramSlots[i]);
+      if (distance === undefined) return undefined;
+      total += distance;
+    }
+    return total;
+  }
   // Walk the arg type's extends-chain to collect it plus all its scalar
   // ancestors; an exact hit anywhere along the chain is a distance-0 match.
   const chain: string[] = [];
@@ -3352,7 +3487,7 @@ const argToParamCastDistance = (
   }
   for (const t of chain) {
     const d = implicitCastDistance(t, paramType);
-    if (d !== undefined) return d;
+    if (d !== undefined) return 100 + d;
   }
   return undefined;
 };
@@ -3381,7 +3516,15 @@ const scoreUDFOverloadCandidate = (
     if (param.variadic) {
       // The variadic slot absorbs every remaining positional arg; each one
       // must individually bind to the element type.
+      let polymorphicType: string | undefined;
+      const polymorphic = ["anytype", "anyscalar", "anyint", "anyreal"]
+        .includes(param.type.split("::").pop() ?? param.type);
       while (cursor < positionalTypes.length) {
+        if (polymorphic) {
+          const actual = normalizeScalarCastName(ctx, positionalTypes[cursor]);
+          if (polymorphicType !== undefined && actual !== polymorphicType) return undefined;
+          polymorphicType = actual;
+        }
         const d = argToParamCastDistance(ctx, positionalTypes[cursor], paramType);
         if (d === undefined) return undefined;
         total += d;
@@ -3397,7 +3540,7 @@ const scoreUDFOverloadCandidate = (
       argType = namedTypes.get(param.name);
     }
     if (argType === undefined) {
-      if (param.default === undefined) return undefined;
+      if (param.default === undefined && param.defaultExpr === undefined) return undefined;
       continue;
     }
     const d = argToParamCastDistance(ctx, argType, paramType);
@@ -3428,9 +3571,15 @@ const resolveUDFOverload = (
     const inferAttempt = tryResult(() =>
       inferAstExprTypeName(functionCallArgToFreeObjectExpr(isNamed ? arg.arg : arg), ctx),
     );
-    if (!inferAttempt.ok || inferAttempt.value === undefined) return undefined;
+    if (!inferAttempt.ok || inferAttempt.value === undefined) {
+      return candidates.length === 1 ? candidates[0] : undefined;
+    }
     if (isNamed) namedTypes.set(arg.name, inferAttempt.value);
     else positionalTypes.push(inferAttempt.value);
+  }
+  if (candidates.length === 1
+      && [...positionalTypes, ...namedTypes.values()].some((typeName) => typeName.includes("anytype"))) {
+    return candidates[0];
   }
   let best: FunctionDef[] = [];
   let bestDistance = Infinity;
@@ -3444,7 +3593,13 @@ const resolveUDFOverload = (
       best.push(fn);
     }
   }
-  return best.length === 1 ? best[0] : undefined;
+  if (best.length === 0) {
+    throw new AppError("E_SEMANTIC", "function call does not exist", 1, 1);
+  }
+  if (best.length > 1) {
+    throw new AppError("E_SEMANTIC", `function ${candidates[0]?.name ?? "call"} is not unique`, 1, 1);
+  }
+  return best[0];
 };
 
 // Attempt to build an inlined-body Set for a user-defined function call. The
@@ -3469,7 +3624,7 @@ const tryBuildInlinedUDFBody = (
     fn.module === moduleName && fn.name === shortName,
   );
   if (matches.length === 0) return undefined;
-  const fn = matches.length === 1 ? matches[0] : resolveUDFOverload(matches, args, ctx);
+  const fn = resolveUDFOverload(matches, args, ctx);
   if (!fn) return undefined;
   const fnBody = fn.body;
   if (fnBody.kind !== "query") return undefined;
@@ -6158,7 +6313,15 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
       const innerExpr = expr.expr;
       const innerIsJsonCast = innerExpr.kind === "cast" && innerExpr.castType === "json";
       const enumTarget = lookupEnumScalar(ctx, expr.castType);
+      if (tryResolveStdlibFunction(expr.castType, 1, ctx.module)) {
+        failSemantic(`type '${expr.castType}' does not exist`);
+      }
       const normalizedCastType = normalizeScalarCastName(ctx, expr.castType);
+      if (normalizedCastType.startsWith("array<")
+          && (innerExpr.kind === "tuple"
+            || (innerExpr.kind === "free_object_constructor" && innerExpr.tupleLike))) {
+        failSemantic(`cannot cast tuple to ${normalizedCastType}`);
+      }
       const rangePrefix = normalizedCastType.startsWith("range<") ? "range<"
         : normalizedCastType.startsWith("multirange<") ? "multirange<"
         : undefined;

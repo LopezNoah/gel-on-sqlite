@@ -820,6 +820,9 @@ class Parser {
     this.consume();
     const isTuple = head === "tuple" || head === "std::tuple";
     const parseArg = (): string => {
+      if (this.peek().kind === "string") {
+        throw new AppError("E_SYNTAX", "Unexpected type expression", ...this.posPair(this.peek()));
+      }
       if (isTuple
         && this.isNameToken(this.peek())
         && this.peekNext().kind === "colon"
@@ -3422,6 +3425,30 @@ class Parser {
       return this.parseSelectExprTail(start, ctx, this.parseFreeObjectExpr(), expectEof);
     }
 
+    // A qualified type followed by a set operator is an expression, not a
+    // typed SELECT. Inspect the token after the complete qualified name.
+    if (this.isNameToken(this.peek()) && binaryOpKinds.includes(this.kindAfterQualifiedName())) {
+      return this.parseSelectExprTail(start, ctx, this.parseFreeObjectExpr(), expectEof);
+    }
+
+    // `Type { shape }.field { shape }` continues after the first projection.
+    // Route only that chained form through the expression parser; ordinary
+    // `SELECT Type { shape }` keeps the typed-select path.
+    if (this.isNameToken(this.peek()) && this.peekNext().kind === "lbrace") {
+      let depth = 0;
+      let offset = 1;
+      do {
+        const kind = this.peekNth(offset).kind;
+        if (kind === "lbrace") depth += 1;
+        else if (kind === "rbrace") depth -= 1;
+        offset += 1;
+      } while (depth > 0 && this.peekNth(offset).kind !== "eof");
+      const continuation = this.peekNth(offset).kind;
+      if (["dot", "optional_link", "backward_link", "at", "lbracket", "lbrace"].includes(continuation)) {
+        return this.parseSelectExprTail(start, ctx, this.parseFreeObjectExpr(), expectEof);
+      }
+    }
+
     return undefined;
   }
 
@@ -3556,6 +3583,10 @@ class Parser {
       this.consume();
     }
     if (expectEof) {
+      if (this.peek().kind === "string") {
+        const token = this.peek();
+        throw new AppError("E_SYNTAX", `Unexpected ''${token.lexeme}''`, ...this.posPair(token));
+      }
       this.expect("eof", "Unexpected tokens after statement");
     }
     return {

@@ -798,12 +798,17 @@ export const compileFunctionCallSQL = (
     const isDiscreteTypeHint = (hint: string): boolean =>
       hint.endsWith("::int16") || hint.endsWith("::int32") || hint.endsWith("::int64")
       || hint.endsWith("::local_date");
+    const isContinuousTypeHint = (hint: string): boolean =>
+      hint.endsWith("::float32") || hint.endsWith("::float64") || hint.endsWith("::decimal")
+      || hint.endsWith("::datetime") || hint.endsWith("::local_datetime");
     const exprIsIntLiteral = (s: Set): boolean => {
       let cur = s;
       while (cur.expr.kind === "select_expr") cur = (cur.expr as SelectExpr).result;
       return cur.expr.kind === "integer_constant";
     };
-    const discrete = (["0", "1"] as const).some((key) => {
+    const boundArgs = (["0", "1"] as const).map((key) => call.args[key]).filter(Boolean);
+    const boundHints = boundArgs.map((arg) => scalarArgTypeHint(arg!.expr)).filter((hint): hint is string => hint !== undefined);
+    const discrete = !boundHints.some(isContinuousTypeHint) && (["0", "1"] as const).some((key) => {
       const arg = call.args[key];
       if (!arg) return false;
       const hint = scalarArgTypeHint(arg.expr);
