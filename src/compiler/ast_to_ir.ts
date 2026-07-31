@@ -2573,8 +2573,10 @@ const inferAstExprTypeName = (expr: FreeObjectExpr, ctx: IRCompileContext): stri
     case "binding_ref": {
       const enumType = lookupEnumScalar(ctx, expr.name);
       if (enumType) return enumType.qualifiedName;
-      const binding = resolveBinding(ctx, expr.name);
-      if (binding?.typeref.nameHint) return binding.typeref.nameHint;
+      const bindingType = resolveBinding(ctx, expr.name)?.typeref.nameHint;
+      if (bindingType?.startsWith("range<") || bindingType?.startsWith("multirange<")) {
+        return bindingType;
+      }
       // `INTROSPECT std::float64` parses the type name as a binding_ref;
       // recognise the std/cal/schema qualified names so the introspect_typeof
       // case can emit the type itself.
@@ -5703,7 +5705,9 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
           right,
         } as CoalesceExpr,
         pathId: defaultPathId("std::coalesce"),
-        typeref: resultType ? unknownTypeRef(resultType) : left.typeref,
+        typeref: resultType && typeCategory(resultType) !== "other"
+          ? unknownTypeRef(resultType)
+          : left.typeref,
         shape: [],
         isBinding: false,
         isMaterializedRef: false,
@@ -5735,7 +5739,9 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
           elseExpr,
         } as IfElseExpr,
         pathId: defaultPathId("std::if_else"),
-        typeref: resultType ? unknownTypeRef(resultType) : ifExpr.typeref,
+        typeref: resultType && typeCategory(resultType) !== "other"
+          ? unknownTypeRef(resultType)
+          : ifExpr.typeref,
         shape: [],
         isBinding: false,
         isMaterializedRef: false,
