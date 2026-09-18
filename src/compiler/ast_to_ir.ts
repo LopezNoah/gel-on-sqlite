@@ -53,6 +53,9 @@ import type {
   DeleteStmt,
   ConfigStmt,
   GroupStmt,
+  ObjectSelectBinding,
+  BindingId,
+  VisibleBindingExpr,
   InsertExpr,
   UpdateExpr,
   DeleteExpr,
@@ -141,6 +144,13 @@ export interface IRCompileContext {
   // CORRELATED one (ADR 0061); the AST still carries them. Read only by the
   // tuple-count factoring stamp.
   bindingAst?: Map<string, unknown>;
+  // Object-valued WITH definitions survive as statement-owned binding records;
+  // nested scopes share this array so every visible binding is available to the
+  // lowering and inspection seams without keeping an AST side channel.
+  objectBindings?: ObjectSelectBinding[];
+  // Shared compile-local identity allocator. The object wrapper keeps nested
+  // child contexts from copying the counter by value.
+  bindingIdCounter?: { next: number };
   // Stack of schema aliases currently being inlined. Used to detect cycles
   // (e.g. alias A := SELECT B; alias B := SELECT A) and to skip alias
   // resolution within an alias's own body.
@@ -567,6 +577,26 @@ const parseTupleStructuredTypeRef = (ctx: IRCompileContext, name: string): TypeR
       if (part.length > 0) parts.push(part);
     }
   }
+  const resolveStructuredSubtype = (typeName: string): TypeRef => {
+    const tuple = parseTupleStructuredTypeRef(ctx, typeName);
+    if (tuple) return tuple;
+    const trimmedType = typeName.trim();
+    if (trimmedType.startsWith("array<") && trimmedType.endsWith(">")) {
+      const element = resolveStructuredSubtype(trimmedType.slice("array<".length, -1));
+      return {
+        kind: "type_ref",
+        id: `array<${element.id}>`,
+        nameHint: `array<${element.nameHint}>`,
+        module: "std",
+        isView: false,
+        isScalar: false,
+        isAbstract: false,
+        collection: "array",
+        subtypes: [element],
+      };
+    }
+    return resolveTypeRef(ctx, trimmedType);
+  };
   const subtypes: TypeRef[] = parts.map((part) => {
     // Named tuple element: `name: type`. Only a lone `:` at depth 0 counts —
     // a `::` (qualified name like `std::int64`) is a positional element.
@@ -583,9 +613,9 @@ const parseTupleStructuredTypeRef = (ctx: IRCompileContext, name: string): TypeR
     }
     if (collection === "tuple" && colonIdx > 0) {
       const elementName = part.slice(0, colonIdx).trim();
-      return { ...resolveTypeRef(ctx, part.slice(colonIdx + 1).trim()), elementName };
+      return { ...resolveStructuredSubtype(part.slice(colonIdx + 1).trim()), elementName };
     }
-    return resolveTypeRef(ctx, part);
+    return resolveStructuredSubtype(part);
   });
   // Reconstruct the canonical tuple type name from the *resolved* subtypes so
   // element types are fully qualified (`tuple<std::str, std::str>`). Naively
@@ -611,6 +641,26 @@ const parseTupleStructuredTypeRef = (ctx: IRCompileContext, name: string): TypeR
   };
 };
 
+const parseStructuredCollectionTypeRef = (ctx: IRCompileContext, name: string): TypeRef | undefined => {
+  const tuple = parseTupleStructuredTypeRef(ctx, name);
+  if (tuple) return tuple;
+  const trimmed = name.trim();
+  if (!trimmed.startsWith("array<") || !trimmed.endsWith(">")) return undefined;
+  const elementName = trimmed.slice("array<".length, -1).trim();
+  const element = parseStructuredCollectionTypeRef(ctx, elementName) ?? resolveTypeRef(ctx, elementName);
+  return {
+    kind: "type_ref",
+    id: `array<${element.id}>`,
+    nameHint: `array<${element.nameHint}>`,
+    module: "std",
+    isView: false,
+    isScalar: false,
+    isAbstract: false,
+    collection: "array",
+    subtypes: [element],
+  };
+};
+
 // Coerce an inlined UDF argument Set so its tuple values carry the element
 // NAMES declared by the parameter's type. A call like `foo((1,))` where `foo`
 // declares `x: tuple<a: int64>` passes a POSITIONAL tuple, but inside the body
@@ -625,54 +675,67 @@ const coerceArgToNamedTupleType = (
   ctx: IRCompileContext,
   argIR: Set,
   declaredType: string,
+  deepArrays = false,
 ): Set => {
   const declaredRef = parseTupleStructuredTypeRef(ctx, declaredType);
   if (!declaredRef || declaredRef.collection !== "tuple") return argIR;
-  const declaredSubtypes = declaredRef.subtypes ?? [];
-  const elementNames = declaredSubtypes.map((st) => st.elementName);
-  // Only a tuple with at least one explicitly-named slot needs renaming.
-  if (!elementNames.some((n) => n !== undefined)) return argIR;
-
-  const rewriteTuple = (tuple: Tuple): Tuple => {
-    if (tuple.elements.length !== elementNames.length) return tuple;
-    return {
-      ...tuple,
-      named: true,
-      elements: tuple.elements.map((el, i) => ({
-        ...el,
-        name: elementNames[i] ?? el.name ?? String(i),
-      })),
-    };
-  };
 
   // Recurse through the set-shaped wrappers a tuple-valued argument can sit
   // behind: UNION of tuples (`{(1,), (2,)}`), SELECT/FOR wrappers, etc. The
   // walk only rewrites `tuple` exprs and rebuilds the spine around them.
-  const rewrite = (set: Set): Set => {
+  const rewrite = (set: Set, typeRef: TypeRef): Set => {
     const e = set.expr;
-    if (e.kind === "tuple") {
-      return { ...set, expr: rewriteTuple(e as Tuple) };
+    if (e.kind === "tuple" && typeRef.collection === "tuple") {
+      const tuple = e as Tuple;
+      const subtypes = typeRef.subtypes ?? [];
+      if (tuple.elements.length !== subtypes.length) return set;
+      const named = subtypes.some((subtype) => subtype.elementName !== undefined);
+      return {
+        ...set,
+        typeref: typeRef,
+        expr: {
+          ...tuple,
+          named,
+          elements: tuple.elements.map((element, index) => ({
+            ...element,
+            name: subtypes[index].elementName ?? element.name ?? String(index),
+            val: rewrite(element.val, subtypes[index]),
+          })),
+        },
+      };
+    }
+    const targetHasNamedTuple = (target: TypeRef): boolean =>
+      (target.collection === "tuple" && (target.subtypes ?? []).some((subtype) => subtype.elementName !== undefined))
+      || (target.subtypes ?? []).some(targetHasNamedTuple);
+    if (deepArrays && e.kind === "array" && typeRef.collection === "array" && typeRef.subtypes?.[0]
+        && targetHasNamedTuple(typeRef.subtypes[0])) {
+      const array = e as ArrayExpr;
+      return {
+        ...set,
+        typeref: typeRef,
+        expr: { ...array, elements: array.elements.map((element) => rewrite(element, typeRef.subtypes![0])) },
+      };
     }
     if (e.kind === "operator_call" && (e as OperatorCall).operator === "union") {
       const op = e as OperatorCall;
       const newArgs: Record<string, CallArg> = {};
       for (const [k, arg] of Object.entries(op.args)) {
-        newArgs[k] = { ...arg, expr: rewrite(arg.expr) };
+        newArgs[k] = { ...arg, expr: rewrite(arg.expr, typeRef) };
       }
       return { ...set, expr: { ...op, args: newArgs } };
     }
     if (e.kind === "select_expr") {
       const sel = e as SelectExpr;
-      return { ...set, expr: { ...sel, result: rewrite(sel.result) } };
+      return { ...set, expr: { ...sel, result: rewrite(sel.result, typeRef) } };
     }
     if (e.kind === "for_expr") {
       const fr = e as unknown as { body: Set };
-      return { ...set, expr: { ...(e as object), body: rewrite(fr.body) } as typeof e };
+      return { ...set, expr: { ...(e as object), body: rewrite(fr.body, typeRef) } as typeof e };
     }
     return set;
   };
 
-  return rewrite(argIR);
+  return rewrite(argIR, declaredRef);
 };
 
 const isUniversalObjectRefName = (name: string): boolean => {
@@ -943,7 +1006,13 @@ const rerootSetSubject = (body: Set, newRoot: Set, subjectTypeId: string): Set |
     const ptr = body.expr as Pointer;
     const rerootedSource = rerootSetSubject(ptr.source, newRoot, subjectTypeId);
     if (!rerootedSource) return null;
-    return { ...body, expr: { ...ptr, source: rerootedSource } };
+    return {
+      ...body,
+      pathId: body.pathId
+        ? { ...body.pathId, namespace: [...(newRoot.pathId?.namespace ?? [])] }
+        : body.pathId,
+      expr: { ...ptr, source: rerootedSource },
+    };
   }
   return null;
 };
@@ -1069,7 +1138,7 @@ function gatherBindingShape(set: Set, depth = 0): ShapeElement[] {
   return [];
 }
 
-const resolveCarriedShapeElement = (source: Set, field: string): Set | undefined => {
+const resolveCarriedShapeElement = (source: Set, field: string, ctx?: IRCompileContext): Set | undefined => {
   if (field.startsWith("@")) return undefined;
 
   // A shape attached to `source` may define a new computed pointer (for
@@ -1095,8 +1164,11 @@ const resolveCarriedShapeElement = (source: Set, field: string): Set | undefined
   }
   if (!shapedElement) return undefined;
 
+  const sourceForClauseInspection = source.expr.kind === "visible_binding_expr" && ctx
+    ? ctx.objectBindings?.find((binding) => binding.id === (source.expr as { bindingId: string }).bindingId)?.source ?? source
+    : source;
   const sourceHasClauses = ((): boolean => {
-    let cur: Set = source;
+    let cur: Set = sourceForClauseInspection;
     while (cur.expr.kind === "select_expr") {
       const se = cur.expr as SelectExpr;
       if (se.where || se.limit || se.offset || (se.orderBy && se.orderBy.length > 0)) return true;
@@ -1104,20 +1176,24 @@ const resolveCarriedShapeElement = (source: Set, field: string): Set | undefined
     }
     return false;
   })();
-  const computedIsObjectPath = ((): boolean => {
-    let cur: Set = shapedElement.expr;
-    while (cur.expr.kind === "select_expr") cur = (cur.expr as SelectExpr).result;
-    return (cur.expr.kind === "type_root" || cur.expr.kind === "pointer") && !cur.typeref.isScalar;
-  })();
   const computedIsGroupRowChain = ((): boolean => {
     let cur: Set = shapedElement.expr;
     while (cur.expr.kind === "select_expr") cur = (cur.expr as SelectExpr).result;
     return cur.expr.kind === "group_row_field";
   })();
-  if ((sourceHasClauses || computedIsGroupRowChain) && !computedIsObjectPath) {
+  const markCarriedBindingShape = (set: Set): Set => ({ ...set, isCarriedBindingShape: true });
+  if (source.expr.kind === "visible_binding_expr") {
     const rerooted = rerootSetSubject(shapedElement.expr, source, source.typeref.id);
-    if (rerooted) return rerooted;
-    return {
+    if (rerooted) return markCarriedBindingShape(rerooted);
+  }
+  if (sourceHasClauses || computedIsGroupRowChain) {
+    // Keep the binding's iteration even when the carried member is an object
+    // path. A bare object path used to bypass this wrapper because the SQL
+    // lowerer could not traverse a FOR body; that made `U.cards` escape a
+    // filtered `WITH U := (SELECT User ... FILTER ...)` and scan Card globally.
+    const rerooted = rerootSetSubject(shapedElement.expr, source, source.typeref.id);
+    if (rerooted) return markCarriedBindingShape(rerooted);
+    return markCarriedBindingShape({
       kind: "set",
       expr: {
         kind: "for_expr",
@@ -1132,9 +1208,9 @@ const resolveCarriedShapeElement = (source: Set, field: string): Set | undefined
       isBinding: false,
       isMaterializedRef: false,
       isSchemaAlias: false,
-    };
+    });
   }
-  return shapedElement.expr;
+  return markCarriedBindingShape(shapedElement.expr);
 };
 
 const shapeRequestsLinkProperty = (shape: EdgeQLShapeElement[]): boolean => {
@@ -1334,22 +1410,21 @@ const resolveBacklinkPointerRef = (
   // can't be reasoned about. Surface the same error here so users get the
   // canonical message instead of a partially-correct result that quietly
   // drops computed-link rows.
-  if (!sourceHint) {
-    // Computed-link aliases live on the schema snapshot's `computeds` (the
-    // generated schema model drops them), so consult `ctx.schema` directly.
-    const allTypeDefs = ctx.schema?.listTypes() ?? [];
-    for (const typeDef of allTypeDefs) {
-      const computed = (typeDef.computeds ?? []).find(
-        (candidate) => candidate.kind === "link" && candidate.name === linkName,
+  // Computed-link aliases live on the schema snapshot's `computeds` (the
+  // generated schema model drops them), so consult `ctx.schema` directly.
+  const allTypeDefs = ctx.schema?.listTypes() ?? [];
+  for (const typeDef of allTypeDefs) {
+    if (allowedSourceIds && !allowedSourceIds.has(qualifyTypeNameOf(typeDef))) continue;
+    const computed = (typeDef.computeds ?? []).find(
+      (candidate) => candidate.kind === "link" && candidate.name === linkName,
+    );
+    if (computed) {
+      throw new AppError(
+        "E_SEMANTIC",
+        `cannot follow backlink '${linkName}' because link '${linkName}' of object type '${qualifyTypeNameOf(typeDef)}' is computed`,
+        1,
+        1,
       );
-      if (computed) {
-        throw new AppError(
-          "E_SEMANTIC",
-          `cannot follow backlink '${linkName}' because link '${linkName}' of object type '${qualifyTypeNameOf(typeDef)}' is computed`,
-          1,
-          1,
-        );
-      }
     }
   }
   for (const typeDef of listSchemaTypeDefs(ctx)) {
@@ -1827,6 +1902,21 @@ const resolveConstTupleIndexElement = (source: Set, index: number): Set | undefi
       break;
     }
   }
+  if (cursor.expr.kind === "index_expr") {
+    const indexed = cursor.expr as IndexExpr;
+    if (indexed.expr.expr.kind === "array" && indexed.index.expr.kind === "integer_constant") {
+      const array = indexed.expr.expr as ArrayExpr;
+      const arrayIndex = Number((indexed.index.expr as BaseConstant).value);
+      if (Number.isInteger(arrayIndex) && arrayIndex >= 0 && arrayIndex < array.elements.length) {
+        cursor = array.elements[arrayIndex];
+        while (cursor.expr.kind === "select_expr") {
+          const se = cursor.expr as SelectExpr;
+          if (se.where || se.limit || se.offset || (se.orderBy && se.orderBy.length > 0)) return undefined;
+          cursor = se.result;
+        }
+      }
+    }
+  }
   // `.N` over a UNION of tuples (`{(1,), (2,)}.0`): distribute the projection
   // over each operand so the union carries element N, not whole tuples.
   if (!isCorrelatedTupleUnion(source)
@@ -1883,7 +1973,7 @@ const compilePathSteps = (steps: EdgeQLPathStep[], ctx: IRCompileContext): Set =
         }
         const ptrref = resolvePointerRef(ctx, out.typeref, step.name);
         if (!ptrref) {
-          const carried = resolveCarriedShapeElement(out, step.name);
+          const carried = resolveCarriedShapeElement(out, step.name, ctx);
           if (carried) {
             out = carried;
             continue;
@@ -1979,7 +2069,7 @@ const compilePathSteps = (steps: EdgeQLPathStep[], ctx: IRCompileContext): Set =
         ptrref = resolvePointerRef(ctx, (out.expr as TypeRoot).typeref, step.name);
       }
       if (!ptrref) {
-        const carried = resolveCarriedShapeElement(out, step.name);
+        const carried = resolveCarriedShapeElement(out, step.name, ctx);
         if (carried) {
           out = carried;
           continue;
@@ -2040,6 +2130,40 @@ const childScope = (ctx: IRCompileContext): IRCompileContext => ({
   bindingScopes: [...ctx.bindingScopes, new Map<string, Set>()],
 });
 
+const bindingSourceShape = (source: Set): ShapeElement[] => {
+  if (source.shape.length > 0) return source.shape;
+  let cursor = source;
+  while (cursor.expr.kind === "select_expr") {
+    cursor = (cursor.expr as SelectExpr).result;
+    if (cursor.shape.length > 0) return cursor.shape;
+  }
+  return [];
+};
+
+const visibleBindingSet = (source: Set, bindingId: BindingId): Set => {
+  const typeref = source.typeref;
+  return {
+    kind: "set",
+    expr: {
+      kind: "visible_binding_expr",
+      bindingId,
+      typeref,
+    } as VisibleBindingExpr,
+    pathId: {
+      kind: "path_id",
+      namespace: [`binding:${bindingId}`],
+      isPointerPath: false,
+      steps: [{ type: typeref }],
+    },
+    typeref,
+    shape: bindingSourceShape(source),
+    isBinding: "with",
+    isMaterializedRef: false,
+    isSchemaAlias: false,
+    isVisibleBindingRef: true,
+  };
+};
+
 const bindValue = (ctx: IRCompileContext, name: string, value: Set): void => {
   const current = ctx.bindingScopes[ctx.bindingScopes.length - 1];
   if (!current) {
@@ -2064,6 +2188,8 @@ const withBindings = (ctx: IRCompileContext, bindings: WithBinding[] | undefined
     return ctx;
   }
   const scoped = childScope(ctx);
+  scoped.objectBindings = ctx.objectBindings ?? [];
+  scoped.bindingIdCounter = ctx.bindingIdCounter ?? { next: 0 };
   // Record the binding VALUE ASTs so the tuple-count factoring stamp can see
   // alias/view boundaries that WITH-inlining erases from the Live IR (ADR 0061).
   scoped.bindingAst = new Map(ctx.bindingAst ?? []);
@@ -2071,6 +2197,7 @@ const withBindings = (ctx: IRCompileContext, bindings: WithBinding[] | undefined
     scoped.bindingAst.set(binding.name, binding.value);
   }
   for (const binding of bindings) {
+    const definitionStart = (scoped.objectBindings ??= []).length;
     let set: Set;
     switch (binding.value.kind) {
       case "literal":
@@ -2119,28 +2246,14 @@ const withBindings = (ctx: IRCompileContext, bindings: WithBinding[] | undefined
         set = literalToSet(binding.value.member);
         break;
       case "subquery": {
-        // `setFromTypeRoot` dropped the binding's projection shape, so
-        // `WITH U := User { c := … }` lost the computed `c` and every `U.c`
-        // then errored "no link or property". Re-compile the shaped select to
-        // keep it — but ONLY for a genuine projection shape with no clauses.
-        // A clause-bearing / implicit-`{id}`-only subquery is how an
-        // INSERT-in-WITH (pre-executed, rewritten to `SELECT T FILTER .id IN
-        // {…}`) and bare filtered selects arrive; recompiling those flips their
-        // cardinality (single insert result → multi filtered scan) and breaks
-        // dependent re-projections, so they keep the type-root behaviour.
+        // Keep the complete compiled source, including FILTER/ORDER BY/LIMIT/
+        // OFFSET. The object binding record owns this source; replacing a
+        // clause-bearing subquery with a type root loses its iteration identity.
         const q = binding.value.query;
-        const hasProjection = q.shape.some((el) => {
-          const name = (el as { name?: string }).name;
-          const op = (el as { operation?: string }).operation;
-          return name !== undefined && name !== "id" && (op === "assign" || op === "materialize");
-        });
-        const hasClauses = Object.keys(q.clauses ?? {}).length > 0;
-        set = (hasProjection && !hasClauses)
-          ? compileFreeObjectExpr(
-            { kind: "select", typeName: q.typeName, shape: q.shape, clauses: q.clauses },
-            scoped,
-          )
-          : setFromTypeRoot(resolveTypeRef(scoped, q.typeName));
+        set = compileFreeObjectExpr(
+          { kind: "select", typeName: q.typeName, shape: q.shape, clauses: q.clauses },
+          scoped,
+        );
         break;
       }
       case "subquery_expr":
@@ -2194,7 +2307,21 @@ const withBindings = (ctx: IRCompileContext, bindings: WithBinding[] | undefined
         },
       };
     }
-    bindValue(scoped, binding.name, set);
+    if (!set.typeref.isScalar) {
+      const bindingId = `b${scoped.bindingIdCounter!.next++}`;
+      const nestedDefinitions = scoped.objectBindings!.slice(definitionStart);
+      scoped.objectBindings!.length = definitionStart;
+      scoped.objectBindings!.push({
+        kind: "object_select_binding",
+        id: bindingId,
+        source: set,
+        definitionScopeId: ctx.nextScopeId++,
+      });
+      scoped.objectBindings!.push(...nestedDefinitions);
+      bindValue(scoped, binding.name, visibleBindingSet(set, bindingId));
+    } else {
+      bindValue(scoped, binding.name, set);
+    }
   }
   return scoped;
 };
@@ -2528,8 +2655,14 @@ const inferAstExprTypeName = (expr: FreeObjectExpr, ctx: IRCompileContext): stri
         return Number.isInteger(expr.value) ? "std::int64" : "std::float64";
       }
       return undefined;
-    case "cast":
-      return normalizeScalarCastName(ctx, expr.castType);
+    case "cast": {
+      const castType = normalizeScalarCastName(ctx, expr.castType);
+      if (expr.expr.kind === "array_literal_expr"
+          && !castType.startsWith("array<") && !castType.startsWith("tuple<")) {
+        return `array<${castType}>`;
+      }
+      return castType;
+    }
     case "enum_path":
       return normalizeScalarCastName(ctx, expr.enumType);
     case "path": {
@@ -2596,7 +2729,10 @@ const inferAstExprTypeName = (expr: FreeObjectExpr, ctx: IRCompileContext): stri
       // — the parser turns the type name into a `select` statement with
       // an implicit `{id}` shape. Surface the type name back so the outer
       // introspect_typeof case can carry it as the inferred type.
-      return (expr as { typeName?: string }).typeName;
+      const typeName = (expr as { typeName?: string }).typeName;
+      return typeName && isUniversalObjectRefName(typeName)
+        ? resolveTypeRef(ctx, typeName).nameHint
+        : typeName;
     }
     case "tuple": {
       // Best-effort: name the tuple by its element types so cross-type
@@ -2724,7 +2860,8 @@ const inferAstExprTypeName = (expr: FreeObjectExpr, ctx: IRCompileContext): stri
       // String concat returns str; array concat returns the array type.
       const parts = (expr as { parts: FreeObjectExpr[] }).parts;
       for (const part of parts) {
-        const t = inferAstExprTypeName(part, ctx);
+        const boundType = part.kind === "binding_ref" ? resolveBinding(ctx, part.name)?.typeref.nameHint : undefined;
+        const t = boundType?.startsWith("array<") ? boundType : inferAstExprTypeName(part, ctx);
         if (t?.startsWith("array<")) return t;
       }
       return "std::str";
@@ -2810,6 +2947,7 @@ const inferAstExprTypeName = (expr: FreeObjectExpr, ctx: IRCompileContext): stri
       const isAllInt = argTypes.every((t) => t === "std::int16" || t === "std::int32" || t === "std::int64");
       if (shortName === "sum") {
         if (isAnyDecimal) return "std::decimal";
+        if (argTypes.length > 0 && argTypes.every((t) => t === "std::float32")) return "std::float32";
         if (isAnyNumericFloat) return "std::float64";
         if (isAnyBigint) return "std::bigint";
         if (isAllInt && argTypes.length > 0) return "std::int64";
@@ -2831,8 +2969,10 @@ const inferAstExprTypeName = (expr: FreeObjectExpr, ctx: IRCompileContext): stri
       // Marking it as such (like re_match) lets the result codec JSON-decode
       // the array rather than surfacing the raw JSON text.
       if (shortName === "str_split") return "array<std::str>";
-      if (shortName === "contains" || shortName === "re_test") return "std::bool";
-      if (shortName === "round") return first ?? "std::float64";
+      if (shortName === "contains" || shortName === "re_test" || shortName === "all" || shortName === "any") {
+        return "std::bool";
+      }
+      if (shortName === "round") return first === "std::float32" ? "std::float64" : first ?? "std::float64";
       if (shortName === "ceil" || shortName === "floor") {
         // EdgeQL `math::ceil` / `math::floor` return int64 for the small
         // integer inputs, bigint for bigint, decimal for decimal, and float64
@@ -3794,7 +3934,7 @@ const tryBuildInlinedUDFBody = (
     } as FreeObjectExpr;
   }
   const bodyAttempt = tryResult(() => compileFreeObjectExpr(substituted, inlineCtx));
-  return bodyAttempt.ok ? bodyAttempt.value : undefined;
+  return bodyAttempt.ok ? coerceArgToNamedTupleType(ctx, bodyAttempt.value, fn.returnType, true) : undefined;
 };
 
 // IR Sets known to be non-empty at their binding site — populated when a UDF
@@ -3815,6 +3955,8 @@ const astExprDefinitelyNonEmpty = (expr: FreeObjectExpr, ctx: IRCompileContext):
     case "tuple":
     case "array_literal_expr":
       return true;
+    case "free_object_constructor":
+      return Boolean((expr as { tupleLike?: boolean }).tupleLike);
     case "set_literal":
       return (expr as { values: unknown[] }).values.length > 0
         && (expr as { values: unknown[] }).values.every((v) => v !== null);
@@ -4047,7 +4189,8 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
     const qlPath = astPathExprToQlast(expr as FreeObjectExpr);
     if (qlPath) {
       try {
-        return compilePathQlast(qlPath, ctx, qlastPathDeps);
+        const routed = compilePathQlast(qlPath, ctx, qlastPathDeps);
+        return routed;
       } catch (error) {
         if (!isQlastDeferred(error)) throw error;
         // DEFERRED — fall through to the legacy path compiler.
@@ -4158,6 +4301,12 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
         }
         const computedSet = tryLowerComputedPropertyOnTypePath(ctx, subject, expr.name);
         if (computedSet) return computedSet;
+      }
+      const helperAlias = ctx.schema?.listAliases().find(
+        (alias) => expr.name.startsWith(`__${alias.name}__`),
+      );
+      if (helperAlias) {
+        failSemantic(`cannot refer to alias link helper type '${ctx.module}::${expr.name}'`);
       }
       const typeref = resolveTypeRef(ctx, expr.name);
       return setFromTypeRoot(typeref);
@@ -4435,7 +4584,7 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
       const headSet = resolveHeadSet(expr.head);
       const ptrref = resolvePointerRef(ctx, headSet.typeref, expr.tail);
       if (ptrref) return extendPathSet(headSet, ptrref);
-      const carried = resolveCarriedShapeElement(headSet, expr.tail);
+      const carried = resolveCarriedShapeElement(headSet, expr.tail, ctx);
       return carried ?? {
         ...headSet,
         pathId: defaultPathId(`${expr.head}.${expr.tail}`),
@@ -4469,7 +4618,7 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
       for (const field of tail) {
         const ptrref = resolvePointerRef(ctx, out.typeref, field);
         if (!ptrref) {
-          const carried = resolveCarriedShapeElement(out, field);
+          const carried = resolveCarriedShapeElement(out, field, ctx);
           if (carried) {
             out = carried;
             continue;
@@ -4481,7 +4630,13 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
         }
         out = extendPathSet(out, ptrref);
       }
-      return out;
+      // A carried object shape is needed while resolving subsequent computed
+      // fields (`U.cards.a`), but a bare path value (`U.cards`) is an object
+      // identity, not an implicit shape projection. Keep the shape available
+      // during the walk and drop it at the path boundary.
+      return !out.typeref.isScalar && out.shape.length > 0
+        ? { ...out, shape: [] }
+        : out;
     }
 
     case "path_steps": {
@@ -4531,7 +4686,7 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
             ptrref = resolvePointerRef(ctx, (out.expr as TypeRoot).typeref, step.name);
           }
           if (!ptrref) {
-            const carried = resolveCarriedShapeElement(out, step.name);
+            const carried = resolveCarriedShapeElement(out, step.name, ctx);
             if (carried) {
               out = carried;
               continue;
@@ -4770,8 +4925,14 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
             && entry.expr.shape.length > 0
             && !entry.expr.typeref?.isScalar,
         );
-        if (shapeEntry?.expr.shape && shapeEntry.expr.shape.length > 0 && (!extended.shape || extended.shape.length === 0)) {
-          return { ...extended, shape: shapeEntry.expr.shape };
+        if (shapeEntry?.expr.shape
+            && shapeEntry.expr.shape.length > 0
+            && (!extended.shape || extended.shape.length === 0)) {
+          return {
+            ...extended,
+            shape: shapeEntry.expr.shape,
+            isCarriedBindingShape: true,
+          };
         }
         return extended;
       }
@@ -4782,6 +4943,7 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
       const computedSet = tryLowerComputedPropertyOnTypePath(ctx, source, expr.field)
         ?? tryLowerComputedLinkRefOnTypePath(ctx, source, expr.field);
       if (computedSet) {
+        const markCarriedBindingShape = (set: Set): Set => ({ ...set, isCarriedBindingShape: true });
         // `(SELECT T FILTER …).computedP` — the substituted body alone
         // loses the source's filtered iteration; wrap in a FOR over the
         // source so the body evaluates once per (filtered) row.
@@ -4808,8 +4970,8 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
           // that row — correlated — instead of a for_expr whose body is a fresh
           // extent the SQL layer CROSS JOINs.
           const rerooted = rerootSetSubject(computedSet, source, source.typeref.id);
-          if (rerooted) return rerooted;
-          return {
+          if (rerooted) return markCarriedBindingShape(rerooted);
+          return markCarriedBindingShape({
             kind: "set",
             expr: {
               kind: "for_expr",
@@ -4824,11 +4986,11 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
             isBinding: false,
             isMaterializedRef: false,
             isSchemaAlias: false,
-          };
+          });
         }
-        return computedSet;
+        return markCarriedBindingShape(computedSet);
       }
-      // A shape attached to `source` may define a *new* computed pointer
+        // A shape attached to `source` may define a *new* computed pointer
       // (e.g. `Person {ok := .name = .tag}`) which the type's schema doesn't
       // declare. Surface that shape element so `P.ok` resolves to its body.
       // Skip splat-expanded entries and pure field/link entries (`{name}`):
@@ -4860,27 +5022,21 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
           if (shapedElement) break;
         }
       }
-      if (shapedElement) {
+        if (shapedElement) {
         // `(SELECT T { c := E } FILTER F).c` — the computed body alone loses
         // the subject's iteration scope and FILTER. Wrap it in a FOR over the
         // subject so E evaluates once per (filtered) subject row.
+        const sourceForClauseInspection = source.expr.kind === "visible_binding_expr"
+          ? ctx.objectBindings?.find((binding) => binding.id === (source.expr as { bindingId: string }).bindingId)?.source ?? source
+          : source;
         const sourceHasClauses = ((): boolean => {
-          let cur: Set = source;
+          let cur: Set = sourceForClauseInspection;
           while (cur.expr.kind === "select_expr") {
             const se = cur.expr as SelectExpr;
             if (se.where || se.limit || se.offset || (se.orderBy && se.orderBy.length > 0)) return true;
             cur = se.result;
           }
           return false;
-        })();
-        // Only wrap value-producing computeds — an object-set computed
-        // (type_root / pointer body) may have further path steps applied
-        // (`U.friend.name`), which the pointer-chain compiler can't walk
-        // through a for_expr.
-        const computedIsObjectPath = ((): boolean => {
-          let cur: Set = shapedElement.expr;
-          while (cur.expr.kind === "select_expr") cur = (cur.expr as SelectExpr).result;
-          return (cur.expr.kind === "type_root" || cur.expr.kind === "pointer") && !cur.typeref.isScalar;
         })();
         // A group-row chain computed (`z := g.elements.name`) is independent
         // of the subject rows, so returning the body alone would drop the
@@ -4891,13 +5047,20 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
           while (cur.expr.kind === "select_expr") cur = (cur.expr as SelectExpr).result;
           return cur.expr.kind === "group_row_field";
         })();
-        if ((sourceHasClauses || computedIsGroupRowChain) && !computedIsObjectPath) {
+        const markCarriedBindingShape = (set: Set): Set => ({ ...set, isCarriedBindingShape: true });
+        if (source.expr.kind === "visible_binding_expr") {
+          const rerooted = rerootSetSubject(shapedElement.expr, source, source.typeref.id);
+          if (rerooted) return markCarriedBindingShape(rerooted);
+        }
+        if (sourceHasClauses || computedIsGroupRowChain) {
           // Re-root a subject-rooted pointer-chain computed onto the
           // (filtered/rebound) source so it correlates to that row instead of
-          // a for_expr CROSS JOINing a fresh extent.
+          // a fresh global extent. Object-valued computables also need the
+          // wrapper: a filtered binding with `cards := Card` must produce no
+          // cards when the binding has no rows.
           const rerooted = rerootSetSubject(shapedElement.expr, source, source.typeref.id);
-          if (rerooted) return rerooted;
-          return {
+          if (rerooted) return markCarriedBindingShape(rerooted);
+          return markCarriedBindingShape({
             kind: "set",
             expr: {
               kind: "for_expr",
@@ -4912,9 +5075,9 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
             isBinding: false,
             isMaterializedRef: false,
             isSchemaAlias: false,
-          };
+          });
         }
-        return shapedElement.expr;
+        return markCarriedBindingShape(shapedElement.expr);
       }
       // If the source is a direct `Type.field` reference (no intermediate
       // computed/subquery scope) and the field isn't a built-in pseudo-
@@ -5243,7 +5406,10 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
     }
 
     case "concat": {
-      const partTypes = expr.parts.map((part) => inferAstExprTypeName(part, ctx));
+      const partTypes = expr.parts.map((part) => {
+        const boundType = part.kind === "binding_ref" ? resolveBinding(ctx, part.name)?.typeref.nameHint : undefined;
+        return boundType?.startsWith("array<") ? boundType : inferAstExprTypeName(part, ctx);
+      });
       const isArrayType = (typeName?: string): boolean => !!typeName && typeName.startsWith("array<");
       const definedTypes = partTypes.filter((typeName): typeName is string => typeName !== undefined);
       if (definedTypes.some(isArrayType)) {
@@ -5794,6 +5960,13 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
       // body-less function_call IR when the function isn't a known UDF or
       // the body shape isn't supported — the runtime path picks that up.
       const inlinedBody = tryBuildInlinedUDFBody(expr.call.name, expr.call.args, ctx);
+      if (inlinedBody) {
+        let bodyCore = inlinedBody;
+        while (bodyCore.expr.kind === "select_expr") {
+          bodyCore = (bodyCore.expr as SelectExpr).result;
+        }
+        if (bodyCore.expr.kind === "for_expr") return inlinedBody;
+      }
       if (inlinedBody && !inlinedBody.typeref.isScalar && inlinedBody.typeref.inSchema) {
         return inlinedBody;
       }
@@ -6399,6 +6572,24 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
         }
       }
 
+      if (innerExpr.kind === "array_literal_expr" && innerExpr.values.length === 0
+          && !expr.castType.startsWith("array<") && !expr.castType.startsWith("tuple<")) {
+        const inner = compileFreeObjectExpr(innerExpr, ctx);
+        const elementType = resolveTypeRef(ctx, normalizeScalarCastName(ctx, expr.castType));
+        const arrayType: TypeRef = {
+          kind: "type_ref",
+          id: `array<${elementType.id}>`,
+          nameHint: `array<${elementType.nameHint}>`,
+          module: "std",
+          isView: false,
+          isScalar: false,
+          isAbstract: false,
+          collection: "array",
+          subtypes: [elementType],
+        };
+        return { ...inner, typeref: arrayType, expr: { ...(inner.expr as ArrayExpr), typeref: arrayType } };
+      }
+
       // Duration literals fold to Gel's canonical ISO form ('PT24H',
       // 'P11M20D') — equality, ordering, and result serialization all
       // operate on the canonical text.
@@ -6429,7 +6620,54 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
         const paramDef = ctx.params.get((inner.expr as { name: string }).name);
         if (paramDef) (paramDef as { required: boolean }).required = false;
       }
-      const toType = resolveTypeRef(ctx, expr.castType);
+      const toType = parseStructuredCollectionTypeRef(ctx, expr.castType) ?? resolveTypeRef(ctx, expr.castType);
+      const castElement = (value: Set, targetType: TypeRef): Set => ({
+        kind: "set",
+        expr: {
+          kind: "type_cast",
+          fromType: value.typeref,
+          toType: targetType,
+          expr: value,
+        },
+        pathId: defaultPathId(`cast:${targetType.nameHint}`),
+        typeref: targetType,
+        shape: [],
+        isBinding: false,
+        isMaterializedRef: false,
+        isSchemaAlias: false,
+      });
+      if (toType.collection === "array" && toType.subtypes?.[0] && inner.expr.kind === "array"
+          && (inner.expr as ArrayExpr).elements.length > 0) {
+        const array = inner.expr as ArrayExpr;
+        return {
+          ...inner,
+          typeref: toType,
+          expr: {
+            ...array,
+            typeref: toType,
+            elements: array.elements.map((element) => castElement(element, toType.subtypes![0])),
+          },
+        };
+      }
+      if (toType.collection === "tuple" && toType.subtypes && inner.expr.kind === "tuple") {
+        const tuple = inner.expr as Tuple;
+        if (tuple.elements.length === toType.subtypes.length) {
+          const named = toType.subtypes.every((subtype) => subtype.elementName !== undefined);
+          return {
+            ...inner,
+            typeref: toType,
+            expr: {
+              ...tuple,
+              named,
+              elements: tuple.elements.map((element, index) => ({
+                ...element,
+                name: toType.subtypes![index].elementName ?? String(index),
+                val: castElement(element.val, toType.subtypes![index]),
+              })),
+            },
+          };
+        }
+      }
       return {
         kind: "set",
         expr: {
@@ -6836,6 +7074,7 @@ const statementBase = (ctx: IRCompileContext) => ({
   triggers: [],
   warnings: [],
   unsafeIsolationDangers: [],
+  bindings: ctx.objectBindings ?? [],
 });
 
 // Resolve a written path root (`I2` / `Issue` / `User`) plus dotted segments
@@ -6932,8 +7171,11 @@ const compileFilterTarget = (target: FilterTarget, subject: Set, ctx: IRCompileC
       const bound = first === "__current__" || first === "__subject__"
         ? undefined
         : resolveBinding(ctx, first);
-      if (bound) {
-        let result = bound;
+      const schemaAlias = bound || first === "__current__" || first === "__subject__"
+        ? undefined
+        : tryResolveSchemaAliasSet(ctx, first);
+      if (bound || schemaAlias) {
+        let result = bound ?? schemaAlias!;
         for (let i = 1; i < segments.length; i++) {
           const ptrref = resolvePointerRef(ctx, result.typeref, segments[i]);
           if (!ptrref) {
@@ -8090,7 +8332,9 @@ const inferComputedShapeIsMany = (set: Set): boolean => {
     const expr = cur.expr;
     if (expr.kind === "pointer") {
       const ptr = expr as Pointer;
-      if (ptr.direction === "inbound") return true;
+      if (ptr.direction === "inbound") {
+        return ptr.ptrref.inCardinality === "many" || ptr.ptrref.inCardinality === "at_least_one";
+      }
       if (ptr.ptrref.outCardinality === "many" || ptr.ptrref.outCardinality === "at_least_one") return true;
       cur = ptr.source;
       continue;
@@ -9217,7 +9461,8 @@ const compileShape = (
       // direction (single). Traversed backward, the effective cardinality is
       // the forward link's `inCardinality` (many unless the forward link is
       // exclusive).
-      const linkCardinality = ptrref.computedLinkAliasIsBackward
+      const linkCardinality = (expr.expr.kind === "pointer" && (expr.expr as Pointer).direction === "inbound")
+        || ptrref.computedLinkAliasIsBackward
         ? ptrref.inCardinality
         : ptrref.outCardinality;
       out.push({
@@ -9438,6 +9683,8 @@ export const expandSchemaAliasesInStatement = (
     params: new Map(),
     globals: new Map(),
     bindingScopes: [new Map()],
+    objectBindings: [],
+    bindingIdCounter: { next: 0 },
     aliases: new AliasGenerator(),
   };
   if (statement.kind === "select") {
@@ -11371,6 +11618,8 @@ export const compileASTToGelIR = (statement: EdgeQLStatement, options: IRCompile
     params: new Map(),
     globals: new Map(),
     bindingScopes: [new Map()],
+    objectBindings: [],
+    bindingIdCounter: { next: 0 },
     aliases: new AliasGenerator(),
   };
 
@@ -11594,6 +11843,8 @@ export const validateParsedStatement = (
     params: new Map(),
     globals: new Map(),
     bindingScopes: [new Map()],
+    objectBindings: [],
+    bindingIdCounter: { next: 0 },
     aliases: new AliasGenerator(),
   };
   collectStatementShapesForValidation(statement, ctx);

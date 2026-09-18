@@ -1,4 +1,4 @@
-import type { GroupRowProjection, Pointer, Set, TypeRef } from "../ir/gel_ir.js";
+import type { GroupRowProjection, ObjectSelectBinding, Pointer, Set, TypeRef } from "../ir/gel_ir.js";
 import type { RuntimeTarget } from "../runtime/target.js";
 import type { ScalarValue } from "../types.js";
 import type { Relation } from "./relation.js";
@@ -89,6 +89,10 @@ export interface GelIRCompileOptions {
   // element through it; set-position reads (aggregate args) keep the
   // whole-group semantics via groupRowProjection.
   groupElementAlias?: string;
+  // Statement-owned object SELECT binding definitions. The Live IR keeps
+  // references opaque; SQL lowering resolves these definitions locally when it
+  // needs the physical source rows and their clauses.
+  bindings?: readonly ObjectSelectBinding[];
   // Set only when the enclosing scalar select has NO bound row source (e.g.
   // `(SELECT <json>Issue {…} FILTER …) = to_json(…)` — the comparison's
   // operands contribute no outer iteration). With no enclosing row, a

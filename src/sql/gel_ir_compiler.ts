@@ -67,6 +67,7 @@ import type {
   TypeRef,
   Tuple,
   UpdateStmt,
+  VisibleBindingExpr,
 } from "../ir/gel_ir.js";
 import { isBytesValued, isStrValued, qualifiedTypeRefName } from "../ir/value_facts.js";
 import type { ScalarValue } from "../types.js";
@@ -151,6 +152,7 @@ export const compileGelIRToSQL = (
   const selectWhere = statement.where ?? topSelect.selectExpr?.where;
   const selectOrderBy = statement.orderBy ?? topSelect.selectExpr?.orderBy;
   let sourceSet = topSelect.selectExpr ? topSelect.result : unwrapSelectResultSet(statement.expr);
+  if (sourceSet) sourceSet = materializeVisibleBindingSet(sourceSet, options);
   if (
     sourceSet
     && sourceSet !== statement.expr
@@ -376,6 +378,7 @@ export const compileGelIRToSQL = (
   }
   // Register type-root and pointer sources when their range var is introduced,
   // so nested filtered select_expr sources inherit the Relation directly.
+  const sourceParamsStart = params.length;
   const structuredSource = sourceSet
     ? compileSelectSourceRelation(
         sourceSet,
@@ -473,6 +476,7 @@ export const compileGelIRToSQL = (
 
   const sourceAlias = compiledSource.alias;
   const sourceSql = compiledSource.sql;
+  const sourceParams = params.splice(sourceParamsStart);
   const sourceRelation = sourceSet
     ? bindSourceRelation(sourceSet, sourceAlias, options.relation, structuredSource?.relation)
     : options.relation;
@@ -492,6 +496,7 @@ export const compileGelIRToSQL = (
       projections.push(projection);
     }
   }
+  params.push(...sourceParams);
 
   // Link-traversal sources surface the same target row once per source row
   // (e.g. `SELECT Issue.owner{name}` returns one row per Issue even though
@@ -2124,6 +2129,34 @@ const reachesScalarUnion = (set: Set): boolean => {
   return false;
 };
 
+// A carried object shape can produce a pointer whose source is the FOR that
+// preserves the shape owner's iteration (`U.cards.name`). Rebase that pointer
+// chain onto the FOR body for scalar lowering: the FOR source still supplies
+// the owner's clauses, while the body supplies the projected object rows.
+const rebasePointerChainOverForExpr = (set: Set): Set | null => {
+  const chain: Set[] = [];
+  let cursor = set;
+  while (cursor.expr.kind === "pointer") {
+    chain.push(cursor);
+    cursor = (cursor.expr as Pointer).source;
+  }
+  if (chain.length === 0 || cursor.expr.kind !== "for_expr") return null;
+  const forExpr = cursor.expr as ForExpr;
+  let body = forExpr.body;
+  for (let index = chain.length - 1; index >= 0; index -= 1) {
+    const original = chain[index];
+    const pointer = original.expr as Pointer;
+    body = {
+      ...original,
+      expr: { ...pointer, source: body },
+    };
+  }
+  return {
+    ...set,
+    expr: { ...forExpr, body },
+  };
+};
+
 const compileScalarSelectSQL = (
   sourceSet: Set,
   params: ScalarValue[],
@@ -2139,6 +2172,12 @@ const compileScalarSelectSQL = (
   // sub-compiles (e.g. a coalesce_expr that pushed `-1` before later sub-
   // compiles bailed and we fell through to the caller's NULL fallback).
   const entryCheckpoint = params.length;
+  const rebased = rebasePointerChainOverForExpr(sourceSet);
+  if (rebased) {
+    const result = compileScalarSelectSQL(rebased, params, target, options, outerWheres);
+    if (result !== null) return result;
+    params.length = entryCheckpoint;
+  }
   const result = compileScalarSelectSQLInner(sourceSet, params, target, options, outerWheres);
   if (result === null) {
     params.length = entryCheckpoint;
@@ -3251,10 +3290,10 @@ const compileScalarSelectSQLInner = (
     // already falls through here because idxLit is defined.
     if (idxLit === undefined && !isStrValued(idxExpr.expr) && !isBytesValued(idxExpr.expr)) {
       const cp = params.length;
-      const idxSelect = compileScalarSelectSQL(idxExpr.index, params, target, options);
-      if (idxSelect) {
-        const arrSql = compileValueSetSQL(idxExpr.expr, "g_si", params, target, options);
-        if (arrSql) {
+      const arrSql = compileValueSetSQL(idxExpr.expr, "g_si", params, target, options);
+      if (arrSql) {
+        const idxSelect = compileScalarSelectSQL(idxExpr.index, params, target, options);
+        if (idxSelect) {
           const correlatedArr = pickOuterScopeAliasForExpr(idxExpr.expr, options);
           const finalArr = correlatedArr ? arrSql : arrSql;
           void finalArr;
@@ -3354,6 +3393,7 @@ const compileScalarSelectSQLInner = (
       // A shapeless object set (e.g. a backlink branch of a DISTINCT/count
       // union) surfaces its identity so dedup and counting work by id.
       const valueExpr = sourceSet.shape.length > 0
+        && !(sourceSet as { isCarriedBindingShape?: boolean }).isCarriedBindingShape
         ? compilePublicShapeObjectExpr(compiledSource.alias, sourceSet.shape, params, options, target, 0)
         : `json_object(${quoteLiteral("id")}, ${compiledSource.alias}.${quoteIdent("id")})`;
       let sql = `SELECT ${valueExpr} AS ${quoteIdent("value")} FROM ${compiledSource.sql}`;
@@ -4811,6 +4851,14 @@ const tryCompileScalarPointerPathSelectSQL = (
   const leafSql = `${previousAlias}.${quoteIdent(columnForPointer(path.leaf))}`;
   const valueSql = scalarResultValueSQL(leafSql, path.leaf.ptrref.outTarget);
   params.length = checkpoint;
+  // A scalar leaf reached through a visible object binding keeps the binding's
+  // object cardinality. This matters for factored alias-view computables such
+  // as `U.cards := .deck`: deduplicate shared target objects, but do not
+  // collapse different objects merely because their scalar values match.
+  const preserveBindingMultiplicity = (set.pathId?.namespace ?? []).some((tag) => tag.startsWith("binding:"));
+  if (preserveBindingMultiplicity) {
+    return `SELECT ${quoteIdent("value")} FROM (SELECT DISTINCT ${previousAlias}.${quoteIdent("id")} AS ${quoteIdent("__identity")}, ${valueSql} AS ${quoteIdent("value")} FROM ${fromSql} WHERE ${leafSql} IS NOT NULL)`;
+  }
   return `SELECT DISTINCT ${valueSql} AS ${quoteIdent("value")} FROM ${fromSql} WHERE ${leafSql} IS NOT NULL`;
 };
 
@@ -6133,6 +6181,117 @@ const unwrapObjectPassthrough = (set: Set): Set | null => {
   return null;
 };
 
+// Resolve the semantic binding reference only at the SQL lowering seam. The
+// compiler deliberately keeps `visible_binding_expr` in the Live IR so object
+// identity, clauses, and nested shadowing remain inspectable. SQL consumers,
+// which need concrete rows and columns, use the statement-owned definition
+// source instead of reconstructing it from the AST.
+const materializeVisibleBindingSet = (
+  set: Set,
+  options: GelIRCompileOptions,
+  seen = new globalThis.Set<string>(),
+): Set => {
+  const visible = set.expr.kind === "visible_binding_expr"
+    ? set.expr as VisibleBindingExpr
+    : undefined;
+  if (visible) {
+    const definition = options.bindings?.find((binding) => binding.id === visible.bindingId);
+    if (!definition || seen.has(visible.bindingId)) return set;
+    const nextSeen = new globalThis.Set(seen);
+    nextSeen.add(visible.bindingId);
+    return materializeVisibleBindingSet(definition.source, options, nextSeen);
+  }
+
+  const rewrite = (child: Set): Set => materializeVisibleBindingSet(child, options, seen);
+  const expr = set.expr;
+  if (expr.kind === "pointer") {
+    const pointer = expr as Pointer;
+    const source = rewrite(pointer.source);
+    return source === pointer.source ? set : { ...set, expr: { ...pointer, source } };
+  }
+  if (expr.kind === "select_expr") {
+    const select = expr as SelectExpr;
+    const result = rewrite(select.result);
+    const where = select.where ? rewrite(select.where) : undefined;
+    const orderBy = select.orderBy?.map((order) => ({ ...order, path: rewrite(order.path) }));
+    if (result === select.result && where === select.where && orderBy === select.orderBy) return set;
+    return { ...set, expr: { ...select, result, where, orderBy } };
+  }
+  if (expr.kind === "for_expr") {
+    const forExpr = expr as ForExpr;
+    const iterator = rewrite(forExpr.iterator);
+    const body = rewrite(forExpr.body);
+    const where = forExpr.where ? rewrite(forExpr.where) : undefined;
+    const orderBy = forExpr.orderBy?.map((order) => ({ ...order, path: rewrite(order.path) }));
+    if (iterator === forExpr.iterator && body === forExpr.body && where === forExpr.where && orderBy === forExpr.orderBy) return set;
+    return { ...set, expr: { ...forExpr, iterator, body, where, orderBy } };
+  }
+  if (expr.kind === "operator_call" || expr.kind === "function_call") {
+    const call = expr as OperatorCall | FunctionCall;
+    const args = Object.fromEntries(
+      Object.entries(call.args).map(([key, arg]) => [key, { ...arg, expr: rewrite(arg.expr) }]),
+    );
+    const body = "body" in call && call.body ? rewrite(call.body) : undefined;
+    return {
+      ...set,
+      expr: { ...call, args, ...(body ? { body } : {}) } as typeof expr,
+    };
+  }
+  if (expr.kind === "type_cast") {
+    const cast = expr as TypeCast;
+    const inner = rewrite(cast.expr);
+    return inner === cast.expr ? set : { ...set, expr: { ...cast, expr: inner } };
+  }
+  if (expr.kind === "exists_expr") {
+    const exists = expr as ExistsExpr;
+    const inner = rewrite(exists.expr);
+    return inner === exists.expr ? set : { ...set, expr: { ...exists, expr: inner } };
+  }
+  if (expr.kind === "coalesce_expr") {
+    const coalesce = expr as CoalesceExpr;
+    const left = rewrite(coalesce.left);
+    const right = rewrite(coalesce.right);
+    return left === coalesce.left && right === coalesce.right
+      ? set
+      : { ...set, expr: { ...coalesce, left, right } };
+  }
+  if (expr.kind === "if_else_expr") {
+    const ifElse = expr as IfElseExpr;
+    const condition = rewrite(ifElse.condition);
+    const ifExpr = rewrite(ifElse.ifExpr);
+    const elseExpr = rewrite(ifElse.elseExpr);
+    return condition === ifElse.condition && ifExpr === ifElse.ifExpr && elseExpr === ifElse.elseExpr
+      ? set
+      : { ...set, expr: { ...ifElse, condition, ifExpr, elseExpr } };
+  }
+  if (expr.kind === "tuple") {
+    const tuple = expr as Tuple;
+    const elements = tuple.elements.map((element) => ({ ...element, val: rewrite(element.val) }));
+    return { ...set, expr: { ...tuple, elements } };
+  }
+  if (expr.kind === "array") {
+    const array = expr as ArrayExpr;
+    return { ...set, expr: { ...array, elements: array.elements.map(rewrite) } };
+  }
+  if (expr.kind === "index_expr") {
+    const index = expr as IndexExpr;
+    return { ...set, expr: { ...index, expr: rewrite(index.expr), index: rewrite(index.index) } };
+  }
+  if (expr.kind === "slice_expr") {
+    const slice = expr as SliceExpr;
+    return {
+      ...set,
+      expr: {
+        ...slice,
+        expr: rewrite(slice.expr),
+        start: slice.start ? rewrite(slice.start) : undefined,
+        end: slice.end ? rewrite(slice.end) : undefined,
+      },
+    };
+  }
+  return set;
+};
+
 const compileSelectSource = (
   sourceSet: Set,
   where: Set | undefined,
@@ -6143,6 +6302,9 @@ const compileSelectSource = (
   aliasOverride?: string,
   extraColumns?: string[],
 ): { sql: string; alias: string } | null => {
+  sourceSet = materializeVisibleBindingSet(sourceSet, options);
+  where = where ? materializeVisibleBindingSet(where, options) : undefined;
+  orderBy = orderBy?.map((order) => ({ ...order, path: materializeVisibleBindingSet(order.path, options) }));
   const alias = aliasOverride ?? "g0";
   const projectedColumns = [...new Set([
     ...collectProjectedColumns(sourceSet.shape, where, orderBy),
@@ -6710,6 +6872,7 @@ const compileForExprSource = (
   params: ScalarValue[] = [],
   target: RuntimeTarget = options.target ?? "sqlite",
 ): { fromSql: string; baseAlias: string; bindingAliases: Map<string, string>; scalarBindingAliases: Map<string, string>; tupleIterAliases: Map<string, string>; linkPropertyAliases: Map<string, string>; whereSets: Set[]; orderBy?: SortExpr[]; paramsCheckpoint: number } | null => {
+  sourceSet = materializeVisibleBindingSet(sourceSet, options);
   const paramsCheckpoint = params.length;
   const levels: Array<{
     iteratorPathId: string;
@@ -7448,6 +7611,7 @@ const compileValueSetSQLWithAliases = (
   tupleIterAliases?: Map<string, string>,
 ): string | null => {
   const checkpoint = params.length;
+  set = materializeVisibleBindingSet(set, options);
   const relationAlias = (candidate: Set): string | null => {
     const exact = options.relation?.tryGetPathVar(pathIdKey(candidate), "source");
     if (exact) return exact;
@@ -9292,9 +9456,6 @@ const compileForInShapeField = (
   const itAlias = `fi${dN}`;
   const targetAlias = `fp${dN}`;
   const joinAlias = `fj${dN}`;
-  const iterRows = constants
-    .map((c, i) => { params.push(c); return i === 0 ? `SELECT ? AS ${quoteIdent("value")}` : "SELECT ?"; })
-    .join(" UNION ALL ");
   const iterKey = pathIdKey(forExpr.iterator);
   const linkKey = pathIdKey(bodyCur);
   const scalarBindings = new Map<string, string>([[iterKey, itAlias]]);
@@ -9312,6 +9473,9 @@ const compileForInShapeField = (
     pairs.push(`${quoteLiteral(el.name)}, ${v}`);
   }
   const rowExpr = `json_object(${pairs.join(", ")})`;
+  const iterRows = constants
+    .map((c, i) => { params.push(c); return i === 0 ? `SELECT ? AS ${quoteIdent("value")}` : "SELECT ?"; })
+    .join(" UNION ALL ");
   let filterSql = "";
   for (const w of wheres) {
     // The FILTER must be a SQL boolean predicate, not a JSON-wrapped value
@@ -11015,6 +11179,7 @@ const compileValueSetSQL = (
   linkPropertyAlias?: string,
 ): string | null => {
   const checkpoint = params.length;
+  set = materializeVisibleBindingSet(set, options);
   // `.__type__.name` over a union/polymorphic source resolves to the row's
   // dynamic concrete type — emit the `__source_type` column the polymorphic
   // source already projects, not the static union name.
@@ -12159,7 +12324,7 @@ const compileOperatorValueSQL = (
     if (powArgs.length >= 2) {
       const l = compileValueSetSQL(powArgs[0].expr, sourceAlias, params, target, options, linkPropertyAlias);
       const r = compileValueSetSQL(powArgs[1].expr, sourceAlias, params, target, options, linkPropertyAlias);
-      if (l && r) return `pow(${l}, ${r})`;
+      if (l && r) return `_gel_pow(${l}, ${r})`;
       params.length = checkpoint;
       return null;
     }
@@ -12192,7 +12357,27 @@ const compileOperatorValueSQL = (
       && args.some((arg) => arg.expr.typeref?.collection === "array");
     if (looksLikeArrayConcat) {
       const unions = compiled.map((piece) => `SELECT value FROM json_each(${piece})`).join(" UNION ALL ");
-      return `(SELECT json_group_array(value) FROM (${unions}))`;
+      const structuredElements = args.some((arg) => {
+        const elementType = arg.expr.typeref?.collection === "array"
+          ? arg.expr.typeref.subtypes?.[0]
+          : undefined;
+        return elementType?.collection !== undefined
+          || (elementType !== undefined
+            && (qualifyTypeName(elementType) === "std::json"
+              || qualifyTypeName(elementType) === "std::tuple"));
+      });
+      return `(SELECT json_group_array(${structuredElements ? "json(value)" : "value"}) FROM (${unions}))`;
+    }
+    if (compiled.length === 2 && (call.operator === "+" || call.operator === "-")) {
+      const leftType = qualifyTypeName(args[0].expr.typeref);
+      const rightType = qualifyTypeName(args[1].expr.typeref);
+      const temporalLeft = leftType === "std::datetime" || leftType.endsWith("::local_datetime")
+        || leftType.endsWith("::local_date");
+      const durationRight = rightType === "std::duration" || rightType.endsWith("::relative_duration")
+        || rightType.endsWith("::date_duration");
+      if (temporalLeft && durationRight) {
+        return `_gel_temporal_add_duration(${compiled[0]}, ${compiled[1]}, ${call.operator === "-" ? -1 : 1})`;
+      }
     }
     // `+`/`*`/`-` over range operands are set algebra (union / intersection /
     // difference), not scalar arithmetic — emit the range UDFs, which return

@@ -32,14 +32,14 @@ export const SET_CONSUMING_FUNCTIONS = new Set<string>([
   "count", "sum", "min", "max", "avg", "all", "any", "array_agg", "enumerate",
   "mean", "stddev", "stddev_pop", "var", "var_pop",
   "assert_distinct", "assert_single", "assert_exists", "assert",
-  "array_unpack", "range_unpack", "array_join", "array_get",
+  "array_unpack", "range_unpack", "array_get",
 ]);
 
 // Stdlib functions that return std::bool — their IR typeref is usually the
 // uninferred `std::anytype`, so the value layer consults this list to decide
 // when to JSON-encode the boolean result.
 const BOOL_RETURNING_STDLIB = new Set<string>([
-  "contains", "re_test", "range_is_empty", "range_is_inclusive_upper",
+  "all", "any", "contains", "re_test", "range_is_empty", "range_is_inclusive_upper",
   "range_is_inclusive_lower", "overlaps", "strictly_above", "strictly_below",
   "bounded_above", "bounded_below", "adjacent",
 ]);
@@ -787,10 +787,13 @@ export const compileFunctionCallSQL = (
   // sorted position — otherwise `inc_upper := true` on its own lands in the
   // `inc_lower` slot and the upper bound is wrongly read as exclusive.
   if (shortName === "range" && args.length >= 1 && args.length <= 4) {
-    // `args` is parallel to the key-sorted `orderedCallArgs`, so recover the
-    // key→SQL mapping by zipping the same sort back together.
+    // Bind explicit arguments once. Named parameters are non-optional at the
+    // function boundary, so a missing optional query parameter propagates the
+    // empty set instead of constructing a NULL-valued range.
+    const aliasByKey: Record<string, string> = {};
+    argKeys.forEach((key, index) => { aliasByKey[key] = `range_arg_${index}`; });
     const sqlByKey: Record<string, string> = {};
-    argKeys.forEach((key, i) => { sqlByKey[key] = args[i] ?? "NULL"; });
+    argKeys.forEach((key) => { sqlByKey[key] = quoteIdent(aliasByKey[key]); });
     // Discrete range types canonicalize to inclusive-lower / exclusive-upper
     // (like Postgres `int4range`/`daterange`): the integer families and
     // `cal::local_date` (dates step by whole days). `datetime`/`local_datetime`
@@ -820,9 +823,15 @@ export const compileFunctionCallSQL = (
     const incUpper = sqlByKey["inc_upper"] ?? "NULL";
     const rangeSql = `_gel_range(${lower}, ${upper}, ${incLower}, ${incUpper}, ${discrete ? 1 : 0})`;
     const empty = sqlByKey["empty"];
-    return empty
+    const resultSql = empty
       ? `(CASE WHEN ${empty} = 1 OR ${empty} = json('true') THEN json_object('empty', json('true')) ELSE ${rangeSql} END)`
       : rangeSql;
+    const bindings = argKeys.map((key, index) => `${args[index] ?? "NULL"} AS ${quoteIdent(aliasByKey[key])}`);
+    const requiredNamedArgs = argKeys
+      .filter((key) => !/^\d+$/.test(key))
+      .map((key) => `${quoteIdent(aliasByKey[key])} IS NOT NULL`);
+    return `(SELECT ${resultSql} FROM (SELECT ${bindings.join(", ")})`
+      + `${requiredNamedArgs.length > 0 ? ` WHERE ${requiredNamedArgs.join(" AND ")}` : ""})`;
   }
 
   const lowered = lowerStdlibFunctionSql(

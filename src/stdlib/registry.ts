@@ -296,6 +296,11 @@ const uuidGenerateSql = (): string =>
 // ── The registry ──────────────────────────────────────────────────────────
 
 export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
+  {
+    name: "std::enc::base64_decode",
+    meta: { minArgs: 1, maxArgs: 1 },
+    sql: (argSql) => argSql[0] ? `_gel_base64_decode(${argSql[0]})` : null,
+  },
   // math::
   {
     name: "math::abs",
@@ -437,7 +442,7 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
   {
     name: "math::atan2",
     meta: { minArgs: 2, maxArgs: 2 },
-    sql: (argSql) => argSql[0] && argSql[1] ? `atan2(${argSql[0]}, ${argSql[1]})` : null,
+    sql: (argSql) => argSql[0] && argSql[1] ? `_gel_atan2(${argSql[0]}, ${argSql[1]})` : null,
     runtime: (args) => Math.atan2(toNumber(args[0]), toNumber(args[1])),
   },
   {

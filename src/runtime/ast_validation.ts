@@ -418,6 +418,25 @@ function checkFunctionCallSignatures(ctx: AstPreValidationCtx, call: FunctionCal
   const callNameParts = call.name.split("::");
   const leaf = callNameParts[callNameParts.length - 1];
 
+  const containsMutationResult = (node: unknown, seen = new Set<string>()): boolean => {
+    if (!node || typeof node !== "object") return false;
+    if (Array.isArray(node)) return node.some((value) => containsMutationResult(value, seen));
+    const value = node as Record<string, unknown>;
+    if (value.kind === "mutation_expr") return true;
+    if (value.kind === "subquery_statement") {
+      const statement = value.statement as { kind?: string } | undefined;
+      if (statement?.kind === "insert" || statement?.kind === "update") return true;
+    }
+    if (value.kind === "binding_ref" && typeof value.name === "string" && !seen.has(value.name)) {
+      const binding = ctx.bindings.get(value.name);
+      if (binding) {
+        const nextSeen = new Set(seen);
+        nextSeen.add(value.name);
+        if (containsMutationResult(binding, nextSeen)) return true;
+      }
+    }
+    return Object.values(value).some((child) => containsMutationResult(child, seen));
+  };
   // `sum` only accepts numeric arguments. The SQL pipeline silently coerces
   // strings, so reject the statically-known-string case here.
   if (leaf === "sum" && call.args.length === 1) {
@@ -434,6 +453,9 @@ function checkFunctionCallSignatures(ctx: AstPreValidationCtx, call: FunctionCal
   const fnDef = ctx.schema.findFunction(moduleName, leaf, call.args.length)
     ?? (moduleName === "default" ? undefined : ctx.schema.findFunction("default", leaf, call.args.length));
   if (!fnDef) return;
+  if (call.args.some((arg) => containsMutationResult(arg))) {
+    preValidationFail("newly created or updated objects cannot be passed to functions");
+  }
   // Positional args map only to POSITIONAL parameters, in order; NAMED ONLY
   // params are never matched positionally (`call1('-', 1, 2, suffix := 's')`
   // must not bind `2` to `suffix`). Args beyond the declared positional params
@@ -476,6 +498,29 @@ export function validateStatementAst(
     bindings.set(binding.name, binding.value);
   }
   const ctx: AstPreValidationCtx = { schema, module, bindings, allowUserSpecifiedId, deps };
+
+  if (statement.kind === "for") {
+    const forStatement = statement as unknown as {
+      variable: string;
+      iteratorExpr: { kind?: string; expr?: { kind?: string }; field?: string };
+      body: unknown;
+    };
+    const iterator = forStatement.iteratorExpr;
+    const bodyUsesIteratorLinkProperty = (node: unknown): boolean => {
+      if (!node || typeof node !== "object") return false;
+      if (Array.isArray(node)) return node.some(bodyUsesIteratorLinkProperty);
+      const value = node as Record<string, unknown>;
+      if (value.kind === "field_access" && typeof value.field === "string" && value.field.startsWith("@")) {
+        const source = value.expr as { kind?: string; name?: string } | undefined;
+        if (source?.kind === "binding_ref" && source.name === forStatement.variable) return true;
+      }
+      return Object.values(value).some(bodyUsesIteratorLinkProperty);
+    };
+    if (iterator.kind === "field_access" && iterator.expr?.kind === "select"
+        && bodyUsesIteratorLinkProperty(forStatement.body)) {
+      preValidationFail("unexpected reference to link property outside of a path expression");
+    }
+  }
 
   if (statement.kind === "select_expr") {
     const expr = (statement as { expr?: { kind?: string; values?: unknown[] } }).expr;

@@ -48,9 +48,8 @@ describe("stdlib registry — SQL lowerability is the sql slot", () => {
     }
   });
 
-  // The exact set the old BASE_SQL_NATIVE_STDLIB_LOWERING gate (+ the
-  // UNREGISTERED_BUT_SUPPORTED patch-set) allowed. Pinning it guards against
-  // accidentally dropping or adding a SQL-lowerable function during the merge.
+  // The old BASE_SQL_NATIVE_STDLIB_LOWERING gate plus intentional additions.
+  // Pinning it guards against accidentally changing SQL-lowerable coverage.
   it("matches the historical SQL-lowerable set", () => {
     const expected = [
       "math::abs", "math::ceil", "math::floor", "math::exp", "math::sqrt",
@@ -81,6 +80,7 @@ describe("stdlib registry — SQL lowerability is the sql slot", () => {
       // template names the old gate forgot (the UNREGISTERED_BUT_SUPPORTED patch)
       "cal::time_get", "cal::date_get", "std::duration_truncate",
       "std::duration_to_seconds", "std::re_test", "std::re_match", "std::re_replace",
+      "std::enc::base64_decode",
     ].sort();
     const actual = STDLIB_FUNCTIONS.filter((e) => e.sql).map((e) => e.name).sort();
     expect(actual).toEqual(expected);

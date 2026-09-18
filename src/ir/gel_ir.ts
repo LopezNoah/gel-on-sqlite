@@ -164,12 +164,25 @@ export interface Set extends Base {
   isMaterializedRef: boolean;
   isSchemaAlias: boolean;
   isVisibleBindingRef?: boolean;
+  // A carried shape resolved from a visible object binding. The shape remains
+  // available while resolving a subsequent computed field, but a bare value at
+  // the path boundary is still object identity.
+  isCarriedBindingShape?: boolean;
   ignoreRewrites?: boolean;
   isFactoringProtected?: boolean;
   anchor?: string;
   showAsAnchor?: string;
   pathScopeId?: number;
   materializedSets?: MaterializedSet[];
+}
+
+export type BindingId = string;
+
+export interface ObjectSelectBinding extends Base {
+  kind: "object_select_binding";
+  id: BindingId;
+  source: Set;
+  definitionScopeId: number;
 }
 
 export interface ShapeElement extends Base {
@@ -214,6 +227,7 @@ export interface Statement extends Base {
   triggers: Trigger[][];
   warnings: string[];
   unsafeIsolationDangers: string[];
+  bindings: ObjectSelectBinding[];
 }
 
 export interface SelectStmt extends Statement {
@@ -365,6 +379,7 @@ export interface MaterializedExpr extends Base {
 
 export interface VisibleBindingExpr extends Base {
   kind: "visible_binding_expr";
+  bindingId: BindingId;
   typeref: TypeRef;
 }
 
@@ -845,6 +860,7 @@ export type IRNode =
   | PathId
   | ScopeTreeNode
   | MaterializedSet
+  | ObjectSelectBinding
   | Param
   | Global
   | Set

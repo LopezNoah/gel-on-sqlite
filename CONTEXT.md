@@ -28,6 +28,10 @@ _Avoid_: member header parser, DDL regex.
 The bundle `CompilerService.compile` hands the engine: the Live IR, the SQL artifact, and (for mutations) the DML IR.
 _Avoid_: compile result, output.
 
+**Binding identity**:
+The semantic origin shared by references to one `WITH` binding. It preserves the binding's iteration, source clauses, factoring role, and volatility semantics; it does not imply physical materialization.
+_Avoid_: binding marker, materialized binding.
+
 ## Inference (facts carried on the Live IR Statement)
 
 **Cardinality**:

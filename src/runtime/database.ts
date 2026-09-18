@@ -121,6 +121,11 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
     db.function("_gel_sin", (x: unknown) => unaryTrig(x, "math::sin", Math.sin));
     db.function("_gel_tan", (x: unknown) => unaryTrig(x, "math::tan", Math.tan));
     db.function("_gel_cot", (x: unknown) => unaryTrig(x, "math::cot", (numeric) => 1 / Math.tan(numeric)));
+    db.function("_gel_atan2", (y: unknown, x: unknown) => {
+      if (y === null || y === undefined || x === null || x === undefined) return null;
+      if (y === "NaN" || x === "NaN") return "NaN";
+      return Math.atan2(Number(y), Number(x));
+    });
     // `math::ln/lg/log(x)` raise on non-positive inputs (log of zero or
     // negative is undefined); SQLite returns NULL silently.
     const requirePositive = (value: number | null, fname: string): number => {
@@ -144,6 +149,17 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
         throw new AppError("E_VALIDATION", "value out of range: overflow");
       }
       return r;
+    });
+    db.function("_gel_pow", (base: number | null, exponent: number | null) => {
+      if (base === null || exponent === null) return null;
+      const result = Math.pow(base, exponent);
+      if (Number.isNaN(result)) {
+        throw new AppError("E_VALIDATION", "invalid value for power");
+      }
+      if (Number.isFinite(base) && Number.isFinite(exponent) && !Number.isFinite(result)) {
+        throw new AppError("E_VALIDATION", "value out of range: overflow");
+      }
+      return result;
     });
     // `math::sqrt(-1)` errors — SQLite's sqrt() returns NULL for negatives.
     db.function("_gel_sqrt", (x: number | null) => {
@@ -217,6 +233,17 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
         if (match.index === regex.lastIndex) regex.lastIndex += 1;
       }
       return JSON.stringify(matches);
+    });
+    db.function("_gel_base64_decode", (value: string | null) => {
+      if (value === null) return null;
+      const invalid = /[^A-Za-z0-9+/=]/.exec(value);
+      if (invalid) {
+        throw new AppError("E_VALIDATION", `invalid symbol "${invalid[0]}" found while decoding base64 sequence`);
+      }
+      if (value.length % 4 !== 0 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) {
+        throw new AppError("E_VALIDATION", "invalid base64 end sequence");
+      }
+      return Buffer.from(value, "base64");
     });
     // `std::re_replace(pattern, replacement, str, flags?)` — string substitution.
     db.function("_gel_re_replace", { varargs: true }, (...args: unknown[]) => {
@@ -425,6 +452,28 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
     db.function("_gel_bit_rshift", { safeIntegers: true }, (v: unknown, n: unknown, w: unknown) =>
       bitShift("bit_rshift", v, n, w, false));
     db.function("_gel_bit_count", { safeIntegers: true }, (v: unknown, w: unknown) => {
+      if (typeof v === "string") {
+        let count = 0n;
+        for (let i = 0; i < v.length; i += 1) {
+          let byte = v.charCodeAt(i) & 0xff;
+          while (byte > 0) {
+            count += BigInt(byte & 1);
+            byte >>= 1;
+          }
+        }
+        return count;
+      }
+      if (v instanceof Uint8Array) {
+        let count = 0n;
+        for (const value of v) {
+          let byte = value;
+          while (byte > 0) {
+            count += BigInt(byte & 1);
+            byte >>= 1;
+          }
+        }
+        return count;
+      }
       const x = asBigInt(v);
       if (x === null) return null;
       let u = BigInt.asUintN(Number(asBigInt(w) ?? 64n), x);
@@ -909,26 +958,44 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
           if (Number.isNaN(ms)) throw new AppError("E_VALIDATION", `invalid range bound: '${s}'`);
           return ms;
         };
-        const parseDurMs = (v: unknown): number => {
-          if (v === null || v === undefined) return 24 * 3600 * 1000;
-          if (typeof v === "number") return v * 1000;
+        type TemporalStep = { ms: number } | { months: number; days: number };
+        const parseTemporalStep = (v: unknown): TemporalStep => {
+          if (v === null || v === undefined) return { ms: 24 * 3600 * 1000 };
+          if (typeof v === "number") return { ms: v * 1000 };
           const s = String(v).trim();
           let m = /^(-?\d+):(\d\d)(?::(\d\d(?:\.\d+)?))?$/.exec(s);
-          if (m) return ((Number(m[1]) * 3600) + Number(m[2]) * 60 + Number(m[3] ?? 0)) * 1000;
+          if (m) return { ms: ((Number(m[1]) * 3600) + Number(m[2]) * 60 + Number(m[3] ?? 0)) * 1000 };
+          m = /^P(?:(\d+)M)?(?:(\d+)D)?$/.exec(s);
+          if (m && (m[1] !== undefined || m[2] !== undefined)) {
+            return { months: Number(m[1] ?? 0), days: Number(m[2] ?? 0) };
+          }
           m = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?)?$/.exec(s);
           if (m) {
-            return ((Number(m[1] ?? 0) * 86400) + (Number(m[2] ?? 0) * 3600)
-              + (Number(m[3] ?? 0) * 60) + Number(m[4] ?? 0)) * 1000;
+            return { ms: ((Number(m[1] ?? 0) * 86400) + (Number(m[2] ?? 0) * 3600)
+              + (Number(m[3] ?? 0) * 60) + Number(m[4] ?? 0)) * 1000 };
           }
           m = /^(-?\d+(?:\.\d+)?)\s*(day|hour|minute|second)s?$/i.exec(s);
           if (m) {
             const mult = { day: 86400, hour: 3600, minute: 60, second: 1 }[m[2].toLowerCase() as "day" | "hour" | "minute" | "second"];
-            return Number(m[1]) * mult * 1000;
+            return { ms: Number(m[1]) * mult * 1000 };
           }
           throw new AppError("E_VALIDATION", `invalid step duration: '${s}'`);
         };
-        const stepMs = parseDurMs(a[1]);
-        if (!(stepMs > 0)) throw new AppError("E_VALIDATION", "step has to be greater than zero");
+        const step = parseTemporalStep(a[1]);
+        if (("ms" in step && !(step.ms > 0))
+            || ("months" in step && !(step.months > 0 || step.days > 0))) {
+          throw new AppError("E_VALIDATION", "step has to be greater than zero");
+        }
+        const advance = (ms: number): number => {
+          if ("ms" in step) return ms + step.ms;
+          const date = new Date(ms);
+          const day = date.getUTCDate();
+          date.setUTCDate(1);
+          date.setUTCMonth(date.getUTCMonth() + step.months);
+          const maxDay = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)).getUTCDate();
+          date.setUTCDate(Math.min(day, maxDay) + step.days);
+          return date.getTime();
+        };
         const fmt = (ms: number): string => {
           const d = new Date(ms);
           const p = (n: number, w = 2): string => String(n).padStart(w, "0");
@@ -942,8 +1009,8 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
         const hi = normDt(String(r.upper));
         const outS: string[] = [];
         let v = lo;
-        if (!r.inc_lower) v += stepMs;
-        for (; r.inc_upper ? v <= hi : v < hi; v += stepMs) {
+        if (!r.inc_lower) v = advance(v);
+        for (; r.inc_upper ? v <= hi : v < hi; v = advance(v)) {
           outS.push(fmt(v));
           if (outS.length > 1_000_000) throw new AppError("E_VALIDATION", "range_unpack result is too large");
         }
@@ -1343,6 +1410,30 @@ export const openSQLite = (target: string | Buffer = ":memory:"): SQLiteRuntime 
         invalidUnit("std::date_get", u);
       }
       return dtUnitValue(p, u, "std::date_get", false);
+    });
+    db.function("_gel_temporal_add_duration", (value: string | null, duration: string | null, signRaw: number | null) => {
+      if (value === null || duration === null) return null;
+      const source = parseDt(value);
+      const delta = parseIsoDuration(duration);
+      if (!source || !delta || !source.hasDate) {
+        throw new AppError("E_VALIDATION", "invalid temporal duration arithmetic");
+      }
+      const sign = Number(signRaw) < 0 ? -1 : 1;
+      const date = new Date(Date.UTC(source.year, source.month - 1, 1, source.hour, source.minute, source.second));
+      date.setUTCMonth(date.getUTCMonth() + sign * delta.months);
+      const maxDay = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)).getUTCDate();
+      date.setUTCDate(Math.min(source.day, maxDay) + sign * delta.days);
+      date.setTime(date.getTime() + sign * delta.us / 1000);
+      const local = localDateTimeText(
+        date.getUTCFullYear(),
+        date.getUTCMonth() + 1,
+        date.getUTCDate(),
+        date.getUTCHours(),
+        date.getUTCMinutes(),
+        date.getUTCSeconds() + date.getUTCMilliseconds() / 1000,
+      );
+      if (!source.hasTime) return local.slice(0, 10);
+      return source.hasZone ? `${local}+00:00` : local;
     });
     // `std::duration_get(dur, unit)` — exact durations expose time units;
     // relative durations add year/month/day; date_durations ONLY date units.

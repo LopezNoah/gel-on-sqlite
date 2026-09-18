@@ -778,14 +778,21 @@ class Parser {
     return parts.join("::");
   }
 
-  private parseQualifiedName(message: string): string {
-    const parts = [this.expectName(message).lexeme];
+  private parseQualifiedName(message: string, allowReservedDunder = false): string {
+    const first = this.peek();
+    const parts = [allowReservedDunder && this.isNameToken(first)
+      ? (this.consume(), first.lexeme)
+      : this.expectName(message).lexeme];
     const readSegment = (): string => {
       const tok = this.peek();
       // After `::` upstream's AnyIdentifier production allows most reserved
       // keywords; permit any keyword-like token here as well as the standard
       // name kinds.
       if (this.isNameToken(tok)) {
+        if (allowReservedDunder) {
+          this.consume();
+          return tok.lexeme;
+        }
         return this.expectName("Expected identifier after '::'").lexeme;
       }
       if (this.isKeywordLikeToken(tok)) {
@@ -813,7 +820,10 @@ class Parser {
   // `str`, `std::int64`, `array<str>`, `tuple<int64, str>`, `tuple<tuple<...>, ...>`,
   // and named-field tuples `tuple<name: str, points: int64>`.
   private parseCastTypeName(message: string): string {
-    const head = this.parseQualifiedName(message);
+    const parsedHead = this.parseQualifiedName(message, true);
+    // `Object` is tokenized as a keyword, whose lexeme is normalized to
+    // lowercase. Preserve the standard type's canonical spelling.
+    const head = parsedHead === "object" ? "Object" : parsedHead;
     if (this.peek().kind !== "lt") {
       return head;
     }
@@ -4115,6 +4125,13 @@ class Parser {
       if (this.peek().kind === "kw_typeof") {
         this.consume();
         typeofForm = true;
+      }
+      if (!typeofForm && this.peek().kind === "lparen") {
+        const typeToken = this.peekNext();
+        if (["tuple", "array", "range", "multirange"].includes(typeToken.lexeme.toLowerCase())
+            && this.peekNth(2).kind === "lt") {
+          throw new AppError("E_SEMANTIC", "cannot introspect collection types", ...this.posPair(typeToken));
+        }
       }
       const inner = this.parseFreeObjectPostfixExpr();
       return { kind: "introspect_typeof", expr: inner, typeofForm };

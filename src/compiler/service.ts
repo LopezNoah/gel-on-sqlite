@@ -215,6 +215,7 @@ const compileSqlFromGelIR = (
     target: context.target ?? "sqlite",
     parameterValues: context.params,
     globalValues: context.globals,
+    bindings: gelIr.bindings,
     resolveTypeColumns: makeTypeStorageColumnsResolver(schema),
     resolveLinkStorageType: makeLinkStorageOwnerResolver(schema),
     resolveConcreteSubtypes: (typeName: string) => schema.concreteTypeNamesUnder(typeName),

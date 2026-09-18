@@ -4118,6 +4118,16 @@ const substituteParamRefs = (node: unknown, subs: Map<string, FreeObjectExpr>): 
   }
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(node as object)) out[k] = substituteParamRefs(v, subs);
+  if (out.kind === "select" && typeof out.typeName === "string" && subs.has(out.typeName)) {
+    const clauses = out.clauses as Record<string, unknown> | undefined;
+    if (!clauses || Object.keys(clauses).length === 0) {
+      const replacement = cloneAstNode(subs.get(out.typeName)!);
+      const shape = out.shape as unknown[] | undefined;
+      return shape && shape.length > 0
+        ? { kind: "shape_projection", expr: replacement, shape }
+        : replacement;
+    }
+  }
   return out;
 };
 
@@ -4455,6 +4465,9 @@ const executeQueryWithTraceImpl = (
       result,
     };
   } catch (err) {
+    if (err instanceof RangeError && /call stack/i.test(err.message)) {
+      throw new AppError("E_SEMANTIC", "expression caused the compiler stack to overflow");
+    }
     throw asAppError(decorateErrorWithUnsupportedTag(err, query));
   } finally {
     if (ownsDeferredDeletes) {
