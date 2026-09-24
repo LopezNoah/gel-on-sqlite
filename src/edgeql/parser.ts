@@ -1,4 +1,5 @@
 import { AppError } from "../errors.js";
+import { parseEdgeQLGrammar, parseEdgeQLGrammarScript } from "./grammar_parser.js";
 import { parseAlterTypeBody, parseCreateTypeBody, type AlterTypeOp, type CreateTypeBodyEntry } from "./ddl_body.js";
 import type { ScalarType, ScalarValue } from "../types.js";
 import type {
@@ -9175,6 +9176,7 @@ const parseSetModuleStatementFromTokens = (tokens: Token[]): string | undefined 
 };
 
 export const parseEdgeQL = (input: string, options: ParseEdgeQLOptions = {}): Statement => {
+  if (process.env.VITEST_FORCE_GRAMMAR_PARSER === "1") return parseEdgeQLGrammar(input);
   // The single-statement entry point accepts bare expressions by default —
   // IR tests use it to parse expression-shaped queries directly. The script
   // entry point (`parseEdgeQLScript`) leaves this off to match upstream's
@@ -9199,6 +9201,7 @@ const parseEdgeQLFromTokens = (
 };
 
 export const parseEdgeQLScript = (input: string, options: ParseEdgeQLOptions = {}): Statement[] => {
+  if (process.env.VITEST_FORCE_GRAMMAR_PARSER === "1") return parseEdgeQLGrammarScript(input);
   const statements: Statement[] = [];
   const { tokens, lineStarts } = tokenizeWithStarts(input);
   let activeModule = options.defaultModule;
