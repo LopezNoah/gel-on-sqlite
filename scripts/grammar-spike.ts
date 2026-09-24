@@ -45,6 +45,19 @@ const grammarCases = [
   "WITH x := 2 SELECT x + 1;",
   "WITH x := 2, y := 3 SELECT x + y;",
   "SELECT (1 + 2;",
+  "SELECT User {friends: {name}, nick := .name} ORDER BY .name;",
+  "SELECT {a := 1, b := 2};",
+  "SELECT {1.1, 2.2};",
+  "SELECT [1, 2, 3];",
+  "SELECT DISTINCT User;",
+  "SELECT EXISTS User;",
+  "SELECT <str>$foo;",
+  "SELECT 1 IF true ELSE 2;",
+  "SELECT (SELECT User {name});",
+  "INSERT User {name := 'Alice'} UNLESS CONFLICT ON (.name);",
+  "UPDATE User FILTER .name = 'a' SET {name := 'b'};",
+  "DELETE User FILTER .name = 'a';",
+  "FOR x IN {1, 2} UNION (SELECT x);",
 ];
 
 type Verdict = { accepted: boolean; ast?: unknown; unmapped?: string; error?: string };
