@@ -50,6 +50,7 @@ const BOOL_RETURNING_STDLIB = new Set<string>([
 // extension point — it is an explicit, named cut of one algorithm across files,
 // kept here so the cross-file calls are typed rather than implicit.
 export interface SqlLoweringContext {
+  materializeVisibleBindingSet(set: Set, options: GelIRCompileOptions): Set;
   compileValueSetSQL(
     set: Set,
     sourceAlias: string,

@@ -67,11 +67,12 @@ export const compileGroupRowsSQL = (
   // group elements with silently-missing fields. Compiled once per branch so
   // the positional params repeat with the duplicated SQL text.
   const compileSubject = (): string | null => {
+    const groupSubject = deps.materializeVisibleBindingSet(statement.subject, options);
     // A free-object subject with a multi field (`{a := 1, b := {2, 3, 4}}`)
     // is still ONE element row — aggregate union-valued fields into JSON
     // arrays instead of letting the generic tuple lowering cross-join them.
     {
-      let tupleCursor: Set = statement.subject;
+      let tupleCursor: Set = groupSubject;
       while (tupleCursor.expr.kind === "select_expr") {
         tupleCursor = (tupleCursor.expr as SelectExpr).result;
       }
@@ -81,9 +82,11 @@ export const compileGroupRowsSQL = (
       // an OBJECT (`union ({c, d})`) is NOT aggregated here: it lowers through
       // the generic shaped-subject path, so leave the trigger off for it.
       const isMultiField = (s: Set): boolean => {
-        if (s.expr.kind === "operator_call" && (s.expr as OperatorCall).operator === "union") return true;
-        if (s.expr.kind === "for_expr") {
-          let body = (s.expr as { body: Set }).body;
+        let value = deps.materializeVisibleBindingSet(s, options);
+        while (value.expr.kind === "select_expr") value = (value.expr as SelectExpr).result;
+        if (value.expr.kind === "operator_call" && (value.expr as OperatorCall).operator === "union") return true;
+        if (value.expr.kind === "for_expr") {
+          let body = (value.expr as { body: Set }).body;
           while (body.expr.kind === "select_expr") body = (body.expr as SelectExpr).result;
           return body.expr.kind !== "tuple" && (body.shape?.length ?? 0) === 0;
         }
@@ -115,7 +118,7 @@ export const compileGroupRowsSQL = (
       }
     }
     try {
-      return deps.compileScalarSelectSQL(statement.subject, params, target, { ...options, strictShape: true }, []);
+      return deps.compileScalarSelectSQL(groupSubject, params, target, { ...options, strictShape: true }, []);
     } catch (err) {
       if (!(err instanceof ShapeLoweringMiss)) throw err;
       if (process.env.DBG_GROUP_SQL) console.error("[group-sql] subject miss:", err.message);

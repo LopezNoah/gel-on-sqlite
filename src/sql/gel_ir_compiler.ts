@@ -85,6 +85,7 @@ const sqlLoweringContext: () => SqlLoweringContext = (() => {
   let cached: SqlLoweringContext | undefined;
   return () =>
     (cached ??= Object.freeze({
+      materializeVisibleBindingSet,
       compileScalarSelectSQL,
       compileValueSetSQL,
       compilePredicateSetSQL,
@@ -6212,7 +6213,20 @@ const materializeVisibleBindingSet = (
     if (!definition || seen.has(visible.bindingId)) return set;
     const nextSeen = new globalThis.Set(seen);
     nextSeen.add(visible.bindingId);
-    return materializeVisibleBindingSet(definition.source, options, nextSeen);
+    const materialized = materializeVisibleBindingSet(definition.source, options, nextSeen);
+    // A visible object binding can carry a use-site shape (GROUP adds hidden
+    // BY fields here). Resolve its identity to the definition's source for SQL,
+    // but merge that projection with the source shape so identity columns and
+    // fields selected by the binding remain available to the consumer.
+    if (!set.shape || set.shape.length === 0) return materialized;
+    const shape = [...(materialized.shape ?? [])];
+    for (const rawElement of set.shape) {
+      const element = { ...rawElement, expr: materializeVisibleBindingSet(rawElement.expr, options, seen) };
+      const existing = element.name ? shape.findIndex((candidate) => candidate.name === element.name) : -1;
+      if (existing >= 0) shape[existing] = element;
+      else shape.push(element);
+    }
+    return { ...materialized, shape };
   }
 
   const rewrite = (child: Set): Set => materializeVisibleBindingSet(child, options, seen);

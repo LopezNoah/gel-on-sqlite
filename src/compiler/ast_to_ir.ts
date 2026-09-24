@@ -11007,7 +11007,9 @@ const buildGroupStmtParts = (
     const isTupleElementValue = (val: Set): boolean =>
       isSingleTupleElement(val)
       || (val.expr.kind === "operator_call" && (val.expr as OperatorCall).operator === "union")
-      || (val.expr.kind === "for_expr" && forBodyIsScalarish(val.expr as ForExpr));
+      || (val.expr.kind === "for_expr" && forBodyIsScalarish(val.expr as ForExpr))
+      || (val.expr.kind === "visible_binding_expr"
+        && Boolean(scoped.objectBindings?.some((binding) => binding.id === (val.expr as { bindingId: string }).bindingId)));
     if (cursor.expr.kind === "tuple"
       && (cursor.expr as Tuple).named
       && (cursor.expr as Tuple).elements.every((el) => el.name && isTupleElementValue(el.val))) {
@@ -11040,6 +11042,7 @@ const buildGroupStmtParts = (
       }
     }
     if (cursor.expr.kind !== "for_expr" && cursor.expr.kind !== "type_root"
+      && cursor.expr.kind !== "visible_binding_expr"
       && cursor.expr.kind !== "group_rows" && !subjectTuple) {
       lowerable = false;
     }

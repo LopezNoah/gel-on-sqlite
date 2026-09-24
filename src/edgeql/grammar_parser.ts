@@ -11,6 +11,10 @@ const Name = createToken({ name: "Name", pattern: Lexer.NA });
 const kinds = [
   "kw_select", "kw_with", "kw_filter", "kw_or", "kw_and", "kw_not",
   "kw_true", "kw_false", "kw_null", "kw_unreserved", "identifier", "backtick_name",
+  "kw_current_reserved", "kw_current_reserved_source", "kw_current_reserved_subject",
+  "kw_current_reserved_type", "kw_current_reserved_std", "kw_current_reserved_edgedbsys",
+  "kw_current_reserved_edgedbtpl", "kw_current_reserved_new", "kw_current_reserved_old",
+  "kw_current_reserved_specified", "kw_current_reserved_default",
   "number", "string", "bytes_string", "semi", "lparen", "rparen", "lbrace", "rbrace", "comma", "colon",
   "dot", "coloncolon", "assign", "plus", "minus", "star", "slash", "floor_div",
   "modulo", "pow", "coalesce", "concat", "equals", "not_equals", "lt", "lte",
@@ -19,7 +23,7 @@ const kinds = [
   "lbracket", "rbracket", "kw_distinct", "kw_exists",
   "kw_if", "kw_then", "kw_else", "kw_like", "kw_ilike", "parameter",
   "kw_insert", "kw_unless", "kw_conflict",
-  "kw_on", "kw_module",
+  "kw_on", "kw_module", "kw_optional",
   "kw_update", "kw_delete", "kw_set",
   "kw_for", "kw_in", "kw_union", "kw_except", "kw_intersect",
   "kw_group", "kw_using", "kw_is", "kw_detached", "backward_link", "optional_link", "at",
@@ -29,7 +33,8 @@ const tokens = Object.fromEntries(kinds.map((kind) => [
   kind, createToken({
     name: kind,
     pattern: Lexer.NA,
-    categories: ["identifier", "backtick_name", "kw_unreserved"].includes(kind) ? [Name] : [],
+    categories: ["identifier", "backtick_name", "kw_unreserved"].includes(kind)
+      || kind.startsWith("kw_current_reserved") ? [Name] : [],
   }),
 ])) as Record<GrammarKind, TokenType>;
 
@@ -157,6 +162,7 @@ class GrammarParser extends EmbeddedActionsParser {
   declare updateStatement: () => Statement;
   declare deleteStatement: () => Statement;
   declare forStatement: () => Statement;
+  declare forExpr: () => FreeObjectExpr;
   declare groupStatement: () => GroupStatement;
   declare groupExpr: () => GroupExpr;
   declare groupByElement: () => GroupByElement;
@@ -500,13 +506,13 @@ class GrammarParser extends EmbeddedActionsParser {
           $.CONSUME(tokens.lparen);
           const atoms = $.SUBRULE4($.groupByAtomList);
           $.CONSUME(tokens.rparen);
-          return operation === "cube" ? { kind: "cube", atoms } : { kind: "rollup", atoms };
+          return operation === "cube" ? { kind: "cube" as const, atoms } : { kind: "rollup" as const, atoms };
         } },
         { ALT: () => {
           $.CONSUME2(tokens.lparen);
           const atoms = $.SUBRULE5($.groupByAtomList);
           $.CONSUME2(tokens.rparen);
-          return { kind: "sets", sets: [atoms] };
+          return { kind: "sets" as const, sets: [atoms] };
         } },
         { ALT: () => $.SUBRULE3($.groupByAtom) },
       ]);
@@ -526,13 +532,13 @@ class GrammarParser extends EmbeddedActionsParser {
       { ALT: () => {
         $.CONSUME(tokens.dot);
         const field = $.CONSUME(Name);
-        return { kind: "field_ref", field: field.image };
+        return { kind: "field_ref" as const, field: field.image };
       } },
       { ALT: () => {
         $.CONSUME(tokens.at);
-        return { kind: "link_property_ref", name: $.CONSUME2(Name).image };
+        return { kind: "link_property_ref" as const, name: $.CONSUME2(Name).image };
       } },
-      { ALT: () => ({ kind: "name_ref", name: $.CONSUME3(Name).image }) },
+      { ALT: () => ({ kind: "name_ref" as const, name: $.CONSUME3(Name).image }) },
     ]));
 
     $.RULE("binding", (): WithBinding => {
@@ -788,7 +794,6 @@ class GrammarParser extends EmbeddedActionsParser {
               const binding = $.bindingValues.get(expr.name);
               const shaped: FreeObjectExpr = {
                 kind: "select", typeName: expr.name, shape, clauses: {},
-                detached: binding?.kind === "subquery" ? binding.query.detached : undefined,
               };
               $.explicitShapes.add(shaped);
               return shaped;
@@ -874,10 +879,10 @@ class GrammarParser extends EmbeddedActionsParser {
           nestedShape = $.SUBRULE($.shape);
           $.CONSUME(tokens.rbrace);
         });
-        return $.ACTION(() => ({ kind: "backlink", name,
+        return $.ACTION(() => ({ kind: "backlink" as const, name,
           expr: { link: name, sourceType: sourceType?.kind === "type_name" ? sourceType.name : undefined,
             sourceTypeExpr: sourceType }, ...(nestedShape ? { shape: nestedShape } : {}),
-          operation: "assign", origin: "explicit" }));
+          operation: "assign" as const, origin: "explicit" as const }));
       } },
       { GATE: () => tokenMatcher($.LA(1), tokens.at), ALT: () => {
         $.CONSUME(tokens.at);
@@ -887,8 +892,8 @@ class GrammarParser extends EmbeddedActionsParser {
           $.CONSUME2(tokens.assign);
           expr = computedExpr($.SUBRULE2($.expression));
         });
-        return $.ACTION(() => ({ kind: "computed", name: `@${property}`, expr,
-          operation: "assign", origin: "explicit" }));
+        return $.ACTION(() => ({ kind: "computed" as const, name: `@${property}`, expr,
+          operation: "assign" as const, origin: "explicit" as const }));
       } },
       { ALT: () => {
         const name = $.CONSUME2(Name).image;
@@ -898,7 +903,8 @@ class GrammarParser extends EmbeddedActionsParser {
             $.CONSUME3(tokens.assign);
             const expr = $.SUBRULE3($.expression);
             result = $.ACTION(() => ({
-              kind: "computed", name, expr: computedExpr(expr), operation: "assign", origin: "explicit",
+              kind: "computed" as const, name, expr: computedExpr(expr),
+              operation: "assign" as const, origin: "explicit" as const,
             }));
           } },
           { ALT: () => {
@@ -911,9 +917,39 @@ class GrammarParser extends EmbeddedActionsParser {
             }));
           } },
         ]));
-        return $.ACTION(() => result ?? { kind: "field", name, operation: "assign", origin: "explicit" });
+        return $.ACTION(() => result ?? { kind: "field" as const, name,
+          operation: "assign" as const, origin: "explicit" as const });
       } },
     ]));
+    $.RULE("forExpr", (): FreeObjectExpr => {
+      const binders: Array<{ variable: string; iterator: FreeObjectExpr; optional: boolean }> = [];
+      $.AT_LEAST_ONE(() => {
+        $.CONSUME(tokens.kw_for);
+        let optional = false;
+        $.OPTION(() => { $.CONSUME(tokens.kw_optional); optional = true; });
+        const variable = $.CONSUME(Name).image;
+        $.CONSUME(tokens.kw_in);
+        const iterator = $.SUBRULE($.expression);
+        binders.push({ variable, iterator, optional });
+        $.ACTION(() => { $.bindings.add(variable); });
+      });
+      $.OR([
+        { ALT: () => $.CONSUME(tokens.kw_select) },
+        { ALT: () => $.CONSUME(tokens.kw_union) },
+      ]);
+      const body = $.SUBRULE2($.expression);
+      return $.ACTION(() => {
+        let result = body;
+        for (let i = binders.length - 1; i >= 0; i--) {
+          const binder = binders[i];
+          result = { kind: "for_expr", variable: binder.variable, iterator: binder.iterator,
+            optional: binder.optional, body: result };
+          $.bindings.delete(binder.variable);
+          $.bindingValues.delete(binder.variable);
+        }
+        return result;
+      });
+    });
     $.RULE("atom", (): FreeObjectExpr => $.OR([
       { ALT: () => {
         const literal = $.CONSUME(tokens.number);
@@ -948,6 +984,7 @@ class GrammarParser extends EmbeddedActionsParser {
         const typeName = $.SUBRULE2($.qualifiedName);
         return $.ACTION<FreeObjectExpr>(() => ({ ...typeSource(inModule(typeName, $.defaultModule)), detached: true }));
       } },
+      { GATE: () => tokenMatcher($.LA(1), tokens.kw_for), ALT: () => $.SUBRULE($.forExpr) },
       { ALT: () => {
         $.CONSUME(tokens.dot);
         const field = $.CONSUME(Name).image;
@@ -967,8 +1004,14 @@ class GrammarParser extends EmbeddedActionsParser {
             kind: "function_call", call: { name, args: args.map((arg) => functionArg(arg, $.bindings)) },
           }));
         });
-        return $.ACTION<FreeObjectExpr>(() => result ?? ($.bindings.has(name) || !/[A-Z]/.test(name.split("::").pop()?.[0] ?? "")
-          ? { kind: "binding_ref", name } : typeSource(inModule(name, $.defaultModule))));
+        return $.ACTION<FreeObjectExpr>(() => {
+          if (name.startsWith("__") && name.endsWith("__")) {
+            if (name === "__type__") throw syntaxError("'__type__' is always a path step; reference it as 'X.__type__'");
+            return { kind: "global_ref", name };
+          }
+          return result ?? ($.bindings.has(name) || !/[A-Z]/.test(name.split("::").pop()?.[0] ?? "")
+            ? { kind: "binding_ref", name } : typeSource(inModule(name, $.defaultModule)));
+        });
       } },
       { ALT: () => $.SUBRULE($.parenthesized) },
       { ALT: () => $.SUBRULE($.groupExpr) },
@@ -1032,19 +1075,40 @@ class GrammarParser extends EmbeddedActionsParser {
           $.CONSUME(tokens.rparen);
           return { kind: "tuple" as const, values: [] };
         } },
+        { GATE: () => tokenMatcher($.LA(1), tokens.kw_with), ALT: () => {
+          $.CONSUME(tokens.kw_with);
+          const bindings = [$.SUBRULE($.binding)];
+          $.MANY2(() => {
+            $.CONSUME3(tokens.comma);
+            bindings.push($.SUBRULE2($.binding));
+          });
+          const expr = $.OR2([
+            { GATE: () => tokenMatcher($.LA(1), tokens.kw_select), ALT: () => $.SUBRULE2($.innerSelect) },
+            { GATE: () => tokenMatcher($.LA(1), tokens.kw_group), ALT: () => $.SUBRULE($.groupExpr) },
+            { GATE: () => tokenMatcher($.LA(1), tokens.kw_for), ALT: () => $.SUBRULE2($.forExpr) },
+          ]);
+          $.MANY3(() => $.CONSUME(tokens.semi));
+          $.CONSUME7(tokens.rparen);
+          return { kind: "select_expr_subquery" as const, expr, clauses: { _withBindings: bindings } };
+        } },
         { GATE: () => tokenMatcher($.LA(1), tokens.kw_select), ALT: () => {
           const expr = $.SUBRULE($.innerSelect);
           $.CONSUME2(tokens.rparen);
           return expr;
         } },
+        { GATE: () => tokenMatcher($.LA(1), tokens.kw_for), ALT: () => {
+          const expr = $.SUBRULE($.forExpr);
+          $.CONSUME6(tokens.rparen);
+          return expr;
+        } },
         { GATE: () => [tokens.kw_insert, tokens.kw_update, tokens.kw_delete].some((kind) => tokenMatcher($.LA(1), kind)), ALT: () => {
-          const statement = $.OR2([
+          const statement = $.OR3([
             { ALT: () => $.SUBRULE($.insertStatement) },
             { ALT: () => $.SUBRULE($.updateStatement) },
             { ALT: () => $.SUBRULE($.deleteStatement) },
           ]);
           $.CONSUME4(tokens.rparen);
-          return { kind: "mutation_expr", statement };
+            return { kind: "mutation_expr" as const, statement } as FreeObjectExpr;
         } },
         { GATE: () => tokenMatcher($.LA(1), Name) && tokenMatcher($.LA(2), tokens.assign), ALT: () => {
           const entries = $.SUBRULE($.tupleEntries);
@@ -1065,7 +1129,7 @@ class GrammarParser extends EmbeddedActionsParser {
               });
               $.OPTION3(() => $.CONSUME4(tokens.comma));
             } });
-            result = { kind: "tuple", values };
+            result = { kind: "tuple", values } as FreeObjectExpr;
           });
           $.CONSUME5(tokens.rparen);
           return result;
@@ -1142,7 +1206,7 @@ const ddlKinds: Record<string, DDLStatement["objectKind"]> = {
   operator: "operator",
 };
 
-const isWordToken = (token: Token | undefined): token is Token => !!token
+const isWordToken = (token: Token | undefined): boolean => !!token
   && !["eof", "semi", "lbrace", "rbrace", "lparen", "rparen", "lbracket", "rbracket", "comma", "colon", "coloncolon", "dot", "assign"].includes(token.kind);
 
 function parseFunctionDecl(source: string, tokensIn: readonly Token[], start: number): FunctionDecl | undefined {
@@ -1187,9 +1251,9 @@ function parseFunctionDecl(source: string, tokensIn: readonly Token[], start: nu
         tokensIn[to - 1].offset + tokensIn[to - 1].lexeme.length).trim();
     }
     params.push({ name: nameToken.lexeme.replace(/^`|`$/g, ""), type,
-      ...(prefix.some((token) => token.lower === "variadic") ? { variadic: true } : {}),
-      ...(optional ? { optional: true } : {}), ...(setOf ? { setOf: true } : {}),
-      ...(defaultExpr !== undefined ? { defaultExpr } : {}) });
+      variadic: prefix.some((token) => token.lower === "variadic") || undefined,
+      namedOnly: prefix.some((token) => token.lower === "named") || undefined,
+      optional: optional || undefined, setOf: setOf || undefined, defaultExpr });
   };
   for (let i = start + 1; i <= endParams; i++) {
     const token = tokensIn[i];
@@ -1230,7 +1294,7 @@ function parseFunctionDecl(source: string, tokensIn: readonly Token[], start: nu
     if (language === "sql" && tokensIn[body]?.kind === "kw_function") {
       fromFunction = tokensIn[body + 1]?.lexeme;
     } else if (tokensIn[body]?.kind === "string" || tokensIn[body]?.kind === "bytes_string") {
-      query = tokensIn[body].lexeme;
+      query = tokensIn[body].lexeme.trim();
     } else if (tokensIn[body]?.kind === "lparen") {
       const open = body;
       let parenDepth = 0;
@@ -1244,8 +1308,7 @@ function parseFunctionDecl(source: string, tokensIn: readonly Token[], start: nu
       }
     }
   }
-  return { params, returnType, ...(returnOptional ? { returnOptional } : {}),
-    ...(returnSetOf ? { returnSetOf } : {}), body: { kind: "query", language, query,
+  return { params, returnType, returnOptional, returnSetOf, body: { kind: "query", language, query,
       ...(fromFunction ? { fromFunction } : {}), ...(fromExpression ? { fromExpression } : {}) } };
 }
 
@@ -1407,6 +1470,32 @@ function parseConfigureGrammar(source: string, lexical: readonly Token[], lineSt
   return { kind: "configure", scope, operation, target, ...(value ? { value } : {}), pos };
 }
 
+function parseGlobalSettingGrammar(
+  source: string,
+  lexical: readonly Token[],
+  lineStarts: readonly number[],
+  defaultModule?: string,
+): ConfigureStatement {
+  const stream = lexical.filter((token) => token.kind !== "eof" && token.kind !== "semi");
+  const start = stream[0];
+  const operation = start.lower.toLowerCase();
+  if (operation !== "set" && operation !== "reset") throw syntaxError("Expected SET or RESET GLOBAL");
+  let i = 2;
+  const targetStart = i;
+  while (i < stream.length && stream[i].kind !== "assign") i++;
+  const target = stream.slice(targetStart, i).map((token) => token.lexeme).join("");
+  let value: FreeObjectExpr | undefined;
+  if (operation === "set") {
+    if (stream[i]?.kind !== "assign") throw syntaxError("Expected ':=' in SET GLOBAL statement");
+    const expressionSource = source.slice(stream[i].offset + stream[i].lexeme.length).replace(/;\s*$/, "").trim();
+    const parsed = parseEdgeQLGrammar(`SELECT ${expressionSource}`, defaultModule);
+    if (parsed.kind === "select_expr") value = parsed.expr;
+  }
+  const pos = offsetToLineCol(start.offset, lineStarts);
+  return { kind: "configure", scope: "session", operation, target,
+    ...(value ? { value } : {}), isSessionGlobal: true, pos };
+}
+
 function hasTopLevelDmlAfterWith(lexical: readonly Token[]): boolean {
   let depth = 0;
   for (const token of lexical) {
@@ -1435,15 +1524,31 @@ export function parseEdgeQLGrammar(source: string, defaultModule?: string): Stat
   grammar.defaultModule = defaultModule;
   if (lexical[0]?.kind === "kw_with" && lexical[1]?.kind === "kw_module") {
     let depth = 0;
-    // Account for nested delimiters while locating the statement following the
-    // module qualifier; SELECTs in parenthesized expressions aren't the body.
+    let bindingComma = -1;
     let foundBody = -1;
     for (let i = 2; i < lexical.length; i++) {
       const token = lexical[i];
+      if (depth === 0 && token.kind === "comma") { bindingComma = i; break; }
       if (depth === 0 && ["kw_select", "kw_group", "kw_insert", "kw_update", "kw_delete", "kw_for", "kw_create", "kw_alter", "kw_drop"]
         .includes(token.kind)) { foundBody = i; break; }
       if (["lbrace", "lparen", "lbracket"].includes(token.kind)) depth++;
       else if (["rbrace", "rparen", "rbracket"].includes(token.kind)) depth--;
+    }
+    if (bindingComma >= 0) {
+      const moduleName = source.slice(lexical[2].offset, lexical[bindingComma].offset).trim();
+      depth = 0;
+      for (let i = bindingComma + 1; i < lexical.length; i++) {
+        const token = lexical[i];
+        if (depth === 0 && ["kw_select", "kw_group", "kw_insert", "kw_update", "kw_delete", "kw_for", "kw_create", "kw_alter", "kw_drop"]
+          .includes(token.kind)) { foundBody = i; break; }
+        if (["lbrace", "lparen", "lbracket"].includes(token.kind)) depth++;
+        else if (["rbrace", "rparen", "rbracket"].includes(token.kind)) depth--;
+      }
+      if (foundBody < 0) throw syntaxError("Expected a statement after WITH MODULE bindings");
+      const tail = source.slice(lexical[bindingComma].offset + lexical[bindingComma].lexeme.length);
+      const parsed = parseEdgeQLGrammar(`WITH ${tail}`);
+      parsed.pos = offsetToLineCol(lexical[foundBody].offset, lineStarts);
+      return { ...parsed, withModule: moduleName } as Statement;
     }
     if (foundBody < 0) throw syntaxError("Expected a statement after WITH MODULE");
     const moduleName = source.slice(lexical[2].offset, lexical[foundBody].offset).trim();
@@ -1451,6 +1556,12 @@ export function parseEdgeQLGrammar(source: string, defaultModule?: string): Stat
     const bodyPos = offsetToLineCol(lexical[foundBody].offset, lineStarts);
     parsed.pos = bodyPos;
     return { ...parsed, withModule: moduleName } as Statement;
+  }
+  if (lexical[0]?.kind === "kw_set" && lexical[1]?.kind === "kw_global") {
+    return parseGlobalSettingGrammar(source, lexical, lineStarts, defaultModule);
+  }
+  if (lexical[0]?.lower === "reset" && lexical[1]?.kind === "kw_global") {
+    return parseGlobalSettingGrammar(source, lexical, lineStarts, defaultModule);
   }
   if (lexical[0]?.kind === "kw_configure") return parseConfigureGrammar(source, lexical, lineStarts);
   if (["kw_create", "kw_alter", "kw_drop"].includes(lexical[0]?.kind ?? "")) {
