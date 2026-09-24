@@ -385,6 +385,19 @@ const dedupeByName = <T extends { name: string }>(items: readonly T[]): T[] => {
 
 export type MultLevel = "empty" | "unique" | "duplicate" | "unknown";
 
+// Binary step of set_expr cardinality union. The five known modes agree with
+// Bend-Gel/src/SqliteTsCardinality.bend's union_step and Cardinality.add.
+// `unknown` has no paper interval; an empty operand still leaves it intact.
+export const unionCard = (cards: readonly CardLevel[]): CardLevel =>
+  cards.reduce<CardLevel>((acc, card) => {
+    if (acc === "empty") return card;
+    if (card === "empty") return acc;
+    if (acc === "one" || acc === "at_least_one" || card === "one" || card === "at_least_one") {
+      return "at_least_one";
+    }
+    return "many";
+  }, "empty");
+
 // Shared per-statement inference engine: builds the schema walkers + the
 // cardinality expression engine once, and exposes statement-level cardinality
 // and multiplicity derivations that reuse them. Both `inferStatementCardinality`
@@ -444,12 +457,6 @@ const makeInferenceEngine = (
   };
   const cartesianMany = (cards: CardLevel[]): CardLevel =>
     cards.reduce((acc, c) => cartesianCard(acc, c), "one" as CardLevel);
-  const unionCard = (cards: CardLevel[]): CardLevel => {
-    if (cards.length === 0) return "empty";
-    if (cards.every((c) => c === "empty")) return "empty";
-    if (cards.some((c) => c === "one" || c === "at_least_one")) return "at_least_one";
-    return "many";
-  };
   const cardUnionOfFields = (a: CardLevel, b: CardLevel): CardLevel => {
     if (a === "empty") return b;
     if (b === "empty") return a;

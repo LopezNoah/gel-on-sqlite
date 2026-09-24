@@ -168,6 +168,9 @@ export interface Set extends Base {
   // available while resolving a subsequent computed field, but a bare value at
   // the path boundary is still object identity.
   isCarriedBindingShape?: boolean;
+  // Object set whose row owns an inlined computed property. Kept so consumers
+  // can preserve the computed value's per-object cardinality after inlining.
+  computedSource?: Set;
   ignoreRewrites?: boolean;
   isFactoringProtected?: boolean;
   anchor?: string;

@@ -1138,6 +1138,18 @@ function gatherBindingShape(set: Set, depth = 0): ShapeElement[] {
   return [];
 }
 
+const computedOwnerSource = (source: Set, ctx?: IRCompileContext): Set => {
+  const owner = source.expr.kind === "visible_binding_expr" && ctx
+    ? ctx.objectBindings?.find(
+        (binding) => binding.id === (source.expr as { bindingId: string }).bindingId,
+      )?.source ?? source
+    : source;
+  // The owner source is used only to recover row cardinality. Its computed
+  // shape must not trigger object-shape unwrapping before select clauses are
+  // applied, or a filtered/limited binding becomes a full table scan.
+  return owner.shape.length > 0 ? { ...owner, shape: [] } : owner;
+};
+
 const resolveCarriedShapeElement = (source: Set, field: string, ctx?: IRCompileContext): Set | undefined => {
   if (field.startsWith("@")) return undefined;
 
@@ -1164,9 +1176,7 @@ const resolveCarriedShapeElement = (source: Set, field: string, ctx?: IRCompileC
   }
   if (!shapedElement) return undefined;
 
-  const sourceForClauseInspection = source.expr.kind === "visible_binding_expr" && ctx
-    ? ctx.objectBindings?.find((binding) => binding.id === (source.expr as { bindingId: string }).bindingId)?.source ?? source
-    : source;
+  const sourceForClauseInspection = computedOwnerSource(source, ctx);
   const sourceHasClauses = ((): boolean => {
     let cur: Set = sourceForClauseInspection;
     while (cur.expr.kind === "select_expr") {
@@ -1181,7 +1191,11 @@ const resolveCarriedShapeElement = (source: Set, field: string, ctx?: IRCompileC
     while (cur.expr.kind === "select_expr") cur = (cur.expr as SelectExpr).result;
     return cur.expr.kind === "group_row_field";
   })();
-  const markCarriedBindingShape = (set: Set): Set => ({ ...set, isCarriedBindingShape: true });
+  const markCarriedBindingShape = (set: Set): Set => ({
+    ...set,
+    isCarriedBindingShape: true,
+    computedSource: source,
+  });
   if (source.expr.kind === "visible_binding_expr") {
     const rerooted = rerootSetSubject(shapedElement.expr, source, source.typeref.id);
     if (rerooted) return markCarriedBindingShape(rerooted);
@@ -4943,7 +4957,11 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
       const computedSet = tryLowerComputedPropertyOnTypePath(ctx, source, expr.field)
         ?? tryLowerComputedLinkRefOnTypePath(ctx, source, expr.field);
       if (computedSet) {
-        const markCarriedBindingShape = (set: Set): Set => ({ ...set, isCarriedBindingShape: true });
+        const markCarriedBindingShape = (set: Set): Set => ({
+          ...set,
+          isCarriedBindingShape: true,
+          computedSource: source,
+        });
         // `(SELECT T FILTER …).computedP` — the substituted body alone
         // loses the source's filtered iteration; wrap in a FOR over the
         // source so the body evaluates once per (filtered) row.
@@ -5026,9 +5044,7 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
         // `(SELECT T { c := E } FILTER F).c` — the computed body alone loses
         // the subject's iteration scope and FILTER. Wrap it in a FOR over the
         // subject so E evaluates once per (filtered) subject row.
-        const sourceForClauseInspection = source.expr.kind === "visible_binding_expr"
-          ? ctx.objectBindings?.find((binding) => binding.id === (source.expr as { bindingId: string }).bindingId)?.source ?? source
-          : source;
+        const sourceForClauseInspection = computedOwnerSource(source, ctx);
         const sourceHasClauses = ((): boolean => {
           let cur: Set = sourceForClauseInspection;
           while (cur.expr.kind === "select_expr") {
@@ -5047,7 +5063,11 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
           while (cur.expr.kind === "select_expr") cur = (cur.expr as SelectExpr).result;
           return cur.expr.kind === "group_row_field";
         })();
-        const markCarriedBindingShape = (set: Set): Set => ({ ...set, isCarriedBindingShape: true });
+        const markCarriedBindingShape = (set: Set): Set => ({
+          ...set,
+          isCarriedBindingShape: true,
+          computedSource: source,
+        });
         if (source.expr.kind === "visible_binding_expr") {
           const rerooted = rerootSetSubject(shapedElement.expr, source, source.typeref.id);
           if (rerooted) return markCarriedBindingShape(rerooted);

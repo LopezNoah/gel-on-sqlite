@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { beforeAll, describe, expect, it } from "vitest";
 import { parseEdgeQL } from "../src/edgeql/parser.js";
 import { compileASTToGelIR, expandSchemaAliasesInStatement } from "../src/compiler/ast_to_ir.js";
+import { unionCard } from "../src/compiler/inference.js";
 import { parseDeclarativeSchema } from "../src/schema/sdl_adapter.js";
 import { schemaSnapshotFromDeclarative } from "../src/schema/uiSchema.js";
 import type { SchemaSnapshot } from "../src/schema/schema.js";
@@ -150,6 +151,45 @@ describe("TestEdgeQLCardinalityInference", () => {
 
   it("test_edgeql_ir_card_inference_10", () => {
     expectCardinality(schema, `SELECT 1`, "one");
+  });
+
+  // The five known statement-level modes correspond to Bend-Gel's CEmpty,
+  // COptional, COne, CMany, and CNonEmptyMany respectively. The expected
+  // matrix is Cardinality.add, whose sqlite-ts bridge is checked in
+  // Bend-Gel/LAWS.bend. The Live IR's unknown mode is outside that bridge.
+  const unionOperands = [
+    ["<int64>{}", "empty"],
+    ["(SELECT Card.cost LIMIT 1)", "at_most_one"],
+    ["1", "one"],
+    ["Card.cost", "many"],
+    ["{1, 2}", "at_least_one"],
+  ] as const;
+  const unionExpected: Cardinality[][] = [
+    ["empty", "at_most_one", "one", "many", "at_least_one"],
+    ["at_most_one", "many", "at_least_one", "many", "at_least_one"],
+    ["one", "at_least_one", "at_least_one", "at_least_one", "at_least_one"],
+    ["many", "many", "at_least_one", "many", "at_least_one"],
+    ["at_least_one", "at_least_one", "at_least_one", "at_least_one", "at_least_one"],
+  ];
+
+  it("matches the paper's five-mode addition for UNION operands", () => {
+    for (const [i, [left, leftCard]] of unionOperands.entries()) {
+      for (const [j, [right, rightCard]] of unionOperands.entries()) {
+        expect(unionCard([leftCard, rightCard])).toBe(unionExpected[i][j]);
+        // The public statement boundary widens an exactly empty result to
+        // at_most_one; the set_expr union itself retains the empty mode.
+        const expected = i === 0 && j === 0 ? "at_most_one" : unionExpected[i][j];
+        expectCardinality(schema, `SELECT (${left}) UNION (${right})`, expected);
+      }
+    }
+  });
+
+  it("keeps unknown outside the five-mode bridge while retaining the empty identity", () => {
+    expect(unionCard([])).toBe("empty");
+    expect(unionCard(["unknown", "empty"])).toBe("unknown");
+    expect(unionCard(["empty", "unknown"])).toBe("unknown");
+    expect(unionCard(["one", "unknown"])).toBe("at_least_one");
+    expect(unionCard(["one", "empty", "empty"])).toBe("one");
   });
 
   it("test_edgeql_ir_card_inference_11", () => {

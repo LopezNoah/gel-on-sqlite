@@ -324,7 +324,18 @@ export const compileGelIRToSQL = (
         forSource.bindingAliases.set(root.key, alias);
       }
     }
-    const bodyOptions = setValueIsBool(sourceSet) ? { ...options, nativeBoolResults: true } : options;
+    // FOR aliases are produced by the source planner rather than by a FROM
+    // Relation. Register their path variables so aggregate lowering can tell a
+    // genuinely correlated body from a free top-level aggregate.
+    const bodyRelation = new Relation(options.relation);
+    for (const [pathKey, alias] of forSource?.bindingAliases ?? []) {
+      bodyRelation.registerPath(pathKey, "source", alias);
+      bodyRelation.registerPath(pathKey, "identity", `${alias}.${quoteIdent("id")}`);
+    }
+    const bodyOptionsBase = forSource ? { ...options, relation: bodyRelation } : options;
+    const bodyOptions = setValueIsBool(sourceSet)
+      ? { ...bodyOptionsBase, nativeBoolResults: true }
+      : bodyOptionsBase;
     const bodySql = forSource
       ? compileValueSetSQLWithAliases(bodySet, forSource.bindingAliases, forSource.baseAlias, params, target, bodyOptions, forSource.linkPropertyAliases, forSource.scalarBindingAliases, forSource.tupleIterAliases)
       : null;
@@ -801,7 +812,10 @@ const compileUpdateStmtToSQL = (statement: UpdateStmt, options: GelIRCompileOpti
   // through `parent_id`). We restore EdgeQL semantics by joining the update
   // target against a fresh `(SELECT * FROM <table>)` snapshot under the `g0`
   // alias — all SET/WHERE expressions then resolve against the snapshot.
-  const assigns = compileDmlAssignments(statement.shape, "g0", params, target, options);
+  const rowRelation = new Relation(options.relation);
+  rowRelation.registerScope(scopeKeyOf(statement.subject, []), "g0");
+  const rowOptions = { ...options, relation: rowRelation };
+  const assigns = compileDmlAssignments(statement.shape, "g0", params, target, rowOptions);
   if (!assigns) {
     params.length = paramsCheckpoint;
   }
@@ -812,7 +826,7 @@ const compileUpdateStmtToSQL = (statement: UpdateStmt, options: GelIRCompileOpti
     + ` FROM (SELECT * FROM ${quoteIdent(table)}) AS g0`
     + ` WHERE g0_w.${quoteIdent("id")} = g0.${quoteIdent("id")}`;
   if (statement.where) {
-    const where = compileWhereClause(statement.where, "g0", params, target, options);
+    const where = compileWhereClause(statement.where, "g0", params, target, rowOptions);
     if (!where) {
       sql += " AND 0";
       return {
@@ -2366,10 +2380,15 @@ const compileForExprScalarSource = (
     // way to get the body's Card source as g1 (vs the iterator's g0). Only
     // fall back to body-with-cross-join when the structured path can't
     // handle the body's shape.
+    const bodyRelation = new Relation(options.relation);
     {
       const projectedColumns = collectForExprProjectedColumns(sourceSet);
       const forSource = compileForExprSource(sourceSet, projectedColumns, options, params, target);
       if (forSource) {
+        for (const [pathKey, alias] of forSource.bindingAliases) {
+          bodyRelation.registerPath(pathKey, "source", alias);
+          bodyRelation.registerPath(pathKey, "identity", `${alias}.${quoteIdent("id")}`);
+        }
         const bodySet = innermostForExprBody(sourceSet);
         const freeRoots = collectFreeTypeRoots(bodySet, forSource.bindingAliases);
         let nextIdx = Math.max(countAliases(forSource.bindingAliases), forSource.baseAlias === "g0" ? 0 : 1);
@@ -2383,9 +2402,10 @@ const compileForExprScalarSource = (
         // the scalar-group desugar) puts each element row in the level's
         // value column; per-element field reads in the body resolve through
         // groupElementAlias.
+        const bodyOptionsBase = { ...options, relation: bodyRelation };
         const bodyOptions = groupElementsIteratorAlias(forExpr, forSource) !== undefined
-          ? { ...options, groupElementAlias: groupElementsIteratorAlias(forExpr, forSource) }
-          : options;
+          ? { ...bodyOptionsBase, groupElementAlias: groupElementsIteratorAlias(forExpr, forSource) }
+          : bodyOptionsBase;
         // A re-projection shape on the FOR result (`(for c in T union (c { len
         // := … })) { name, l := .len }`, e.g. a GROUP subject) must project the
         // OUTER shape, not the body's own shape — but ONLY when the body can't
@@ -2432,7 +2452,7 @@ const compileForExprScalarSource = (
           ];
           if (whereSets.length > 0) {
             const whereSql = whereSets
-              .map((where) => compilePredicateWithAliases(where, forSource.bindingAliases, params, target, options, forSource.linkPropertyAliases, forSource.scalarBindingAliases, forSource.tupleIterAliases))
+              .map((where) => compilePredicateWithAliases(where, forSource.bindingAliases, params, target, bodyOptions, forSource.linkPropertyAliases, forSource.scalarBindingAliases, forSource.tupleIterAliases))
               .filter((entry): entry is string => Boolean(entry))
               .join(" AND ");
             if (whereSql) {
@@ -2484,7 +2504,8 @@ const compileForExprScalarSource = (
     // params array so we can stitch them in the right order (iter first
     // in the final SQL → iter params first in the merged array).
     const bodyParams: ScalarValue[] = [];
-    const bodySql = compileScalarSelectSQL(forExpr.body, bodyParams, target, options, propagatedWheres);
+    const bodyOptions = { ...options, relation: bodyRelation };
+    const bodySql = compileScalarSelectSQL(forExpr.body, bodyParams, target, bodyOptions, propagatedWheres);
     if (!bodySql) return null;
     if (bodyUsesIter) {
       params.push(...bodyParams);
@@ -4851,15 +4872,7 @@ const tryCompileScalarPointerPathSelectSQL = (
   const leafSql = `${previousAlias}.${quoteIdent(columnForPointer(path.leaf))}`;
   const valueSql = scalarResultValueSQL(leafSql, path.leaf.ptrref.outTarget);
   params.length = checkpoint;
-  // A scalar leaf reached through a visible object binding keeps the binding's
-  // object cardinality. This matters for factored alias-view computables such
-  // as `U.cards := .deck`: deduplicate shared target objects, but do not
-  // collapse different objects merely because their scalar values match.
-  const preserveBindingMultiplicity = (set.pathId?.namespace ?? []).some((tag) => tag.startsWith("binding:"));
-  if (preserveBindingMultiplicity) {
-    return `SELECT ${quoteIdent("value")} FROM (SELECT DISTINCT ${previousAlias}.${quoteIdent("id")} AS ${quoteIdent("__identity")}, ${valueSql} AS ${quoteIdent("value")} FROM ${fromSql} WHERE ${leafSql} IS NOT NULL)`;
-  }
-  return `SELECT DISTINCT ${valueSql} AS ${quoteIdent("value")} FROM ${fromSql} WHERE ${leafSql} IS NOT NULL`;
+  return `SELECT ${quoteIdent("value")} FROM (SELECT DISTINCT ${previousAlias}.${quoteIdent("id")} AS ${quoteIdent("__identity")}, ${valueSql} AS ${quoteIdent("value")} FROM ${fromSql} WHERE ${leafSql} IS NOT NULL)`;
 };
 
 // Pick the SQL alias for an outer iteration scope that matches the type
@@ -6037,7 +6050,7 @@ const tryCompileCorrelatedScalarPointerPathScalarSelect = (
   // it the raw column value rather than the json_quote'd form scalar SELECT
   // emits at the top level.
   const leafSql = `${built.leafAlias}.${quoteIdent(columnForPointer(built.path.leaf))}`;
-  return `SELECT ${leafSql} AS ${quoteIdent("value")} FROM ${built.fromSql} WHERE ${built.anchorWhere}`;
+  return `SELECT ${quoteIdent("value")} FROM (SELECT DISTINCT ${built.leafAlias}.${quoteIdent("id")} AS ${quoteIdent("__identity")}, ${leafSql} AS ${quoteIdent("value")} FROM ${built.fromSql} WHERE ${built.anchorWhere})`;
 };
 
 // `x IN {.val, .children.val, .children.children.val, …}` inside a FILTER:
@@ -6725,8 +6738,9 @@ const compileSelectSource = (
   const projection = leafLinkColumns.length > 0
     ? `${previousAlias}.*, ${leafLinkColumns.join(", ")}`
     : `${previousAlias}.*`;
+  const distinct = leafLinkColumns.length === 0 ? "DISTINCT " : "";
   return {
-    sql: `(SELECT ${projection} FROM ${fromSql}) ${alias}`,
+    sql: `(SELECT ${distinct}${projection} FROM ${fromSql}) ${alias}`,
     alias,
   };
 };

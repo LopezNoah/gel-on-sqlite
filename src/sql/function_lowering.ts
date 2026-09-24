@@ -16,7 +16,7 @@ import type {
 import type { RuntimeTarget } from "../runtime/target.js";
 import type { ScalarValue } from "../types.js";
 import type { GelIRCompileOptions, ScalarPointerPath } from "./compiler_types.js";
-import { scopeKeyOf, type Relation } from "./relation.js";
+import { pathKeyOf, scopeKeyOf, type Relation } from "./relation.js";
 import { lowerStdlibFunctionSql } from "./stdlib_lowering.js";
 import { bindOperandsOnce } from "./sql_fragment.js";
 import { countArgIsFactored } from "../ir/scope_tree.js";
@@ -437,6 +437,32 @@ export const compileCountOfSetSQL = (
     return null;
   }
 
+  if (expr.kind === "function_call" && set.computedSource) {
+    const name = (expr as FunctionCall).functionName.split("::").pop() ?? "";
+    if (["count", "sum", "array_agg", "all", "any"].includes(name)) {
+      const checkpoint = params.length;
+      const source = deps.compileSelectSourceRelation(
+        set.computedSource,
+        undefined,
+        undefined,
+        options,
+        params,
+        target,
+        "computed_owner",
+      ) ?? deps.compileSelectSource(
+        set.computedSource,
+        undefined,
+        undefined,
+        options,
+        params,
+        target,
+        "computed_owner",
+      );
+      if (source) return `(SELECT count(*) FROM ${source.sql})`;
+      params.length = checkpoint;
+    }
+  }
+
   // count() always returns one scalar row, including for an empty argument.
   // Therefore a count of that result has cardinality one without evaluating
   // the inner aggregate as a row source.
@@ -684,7 +710,18 @@ export const compileFunctionCallSQL = (
         pathSet = se.result;
         orderBy = se.orderBy;
       }
-      const correlated = deps.tryCompileCorrelatedScalarPointerPathScalarSelect(pathSet, sourceAlias, options);
+      const scalarPath = deps.extractScalarPointerPath(pathSet);
+      const rootIsScoped = scalarPath !== null
+        && (
+          options.relation?.correlateScope(scopeKeyOf(
+            scalarPath.root.typeref,
+            scalarPath.root.pathId?.namespace ?? [],
+          )) !== undefined
+          || options.relation?.tryGetPathVar(pathKeyOf(scalarPath.root), "source") != null
+        );
+      const correlated = rootIsScoped
+        ? deps.tryCompileCorrelatedScalarPointerPathScalarSelect(pathSet, sourceAlias, options)
+        : null;
       if (correlated) {
         let inner = correlated;
         if (orderBy && orderBy.length > 0) {

@@ -123,12 +123,10 @@ is already exercised by detached-EXISTS via `existence_proof.ts`).
    (`ctx.bindingAst` carries the binding value ASTs). The count gate
    (`tryCompileSharedPrefixTupleCount`) fires only when that stamp is `true`.
    Result: `count((Card.name,Card.cost))` now zips to `9` (was the product `81`);
-   factored `count((U.cards.name,U.cards.cost))` stays `81`. Full suite: zero
-   regressions, zero test-flips (the fix has no prior test). Cases the gate still
-   can't reach are unchanged and orthogonal: `08` (`deck_cost` lowers as a
-   computed aggregate `sum(...)`, not a scalar pointer leaf, so the structural
-   matcher skips it), `07a`/`07c` (pre-existing failures from computed-link /
-   filtered-binding lowering, not factoring).
+   factored `count((U.cards.name,U.cards.cost))` stays `81`. ADR 0065 completed
+   filtered object-binding preservation for `07c`; ADR 0066 completed target-ID
+   deduplication before scalar projection for `07a` and per-owner cardinality for
+   the computed aggregate in `08`.
 
 ## Collapse is restricted to type-root prefixes (soundness)
 
@@ -137,37 +135,25 @@ tuple count ONLY for a **type-root extent** (e.g. `Card` — no path dedup). A
 pointer-chain prefix is unsafe: EdgeQL deduplicates such paths by object
 identity, so counting raw join rows over-counts. Measured:
 `count((Card.owners.name, Card.owners.id))` zips to **22** where the dedup-aware
-answer is smaller. So the gate requires `shared.expr.kind === "type_root"`;
-pointer-chain prefixes revert to the product path. `count((Card.name,Card.cost))`
-still collapses to `9`. (A dedup-aware collapse for pointer prefixes is future
-work.)
+answer is smaller. So the factoring collapse still requires
+`shared.expr.kind === "type_root"`; pointer-chain prefixes use the product path,
+but each factor now consumes ADR 0066's identity-deduplicated rows.
+`count((Card.name,Card.cost))` still collapses to `9`.
 
-## Known-deeper failures this does NOT fix (diagnosed)
+## Deferred failures completed
 
-These need core path/binding-lowering changes, orthogonal to factoring:
-
-- **`scope_computables_08`** `count((Card.owners.name, Card.owners.deck_cost))`
-  → want 16. `deck_cost` lowers as `sum(...)` (not a scalar pointer leaf), and a
-  collapse over `Card.owners` gives 22 anyway (backlink dedup). Blocked on
-  backlink path-dedup semantics, not the gate.
-- **`scope_computables_07a`** `WITH U := User{cards:=.deck}; count((U.cards.name,
-  U.cards.cost))` → want 81, gets 45. Root cause: `tryCompileScalarPointerPathSelectSQL`
-  (gel_ir_compiler.ts) emits `SELECT DISTINCT <leaf>` — dedups by scalar VALUE
-  (`cost`→5) instead of by the leaf's OWNING OBJECT (`card`→9). The DISTINCT is
-  load-bearing for multi-link scalar paths; the fix (dedup by owning object)
-  touches all of them and needs full-suite validation.
-- **`scope_computables_07c`** filtered `WITH U := (SELECT User{...} FILTER
-  .name="Phil")` → want 0, gets 81. Root cause: `U.cards` lowers to
-  `count(*) FROM (all cards)` with NO reference to `U` — the binding's
-  filter/correlation is erased; the computable `cards := Card` is evaluated
-  globally. A binding-correlation rework.
+- ADR 0065 preserves filtered object-binding sources, so `scope_computables_07c`
+  returns `0` without falling back to the full type extent.
+- ADR 0066 deduplicates object targets before scalar projection, so
+  `scope_computables_07a` retains nine card-owned values per factor and returns
+  `81`.
+- ADR 0066 also preserves the owner source of an inlined computed aggregate, so
+  `scope_computables_08` obtains four owner rows for each tuple factor and
+  returns `16`.
 
 ## Consequences
 
-- Correct-but-untested behaviour change is *deferred*: plain
-  `count((Card.name, Card.cost))` currently returns the product (`81`) where Gel
-  returns the correlated `9`. Phase 3 fixes this, so Phase 3 needs a full-suite
-  regression pass (other tests may lean on today's product semantics).
-- Until Phase 1 lands, the scope-tree authority cannot be wired live — querying a
-  reconstructed tree gives wrong answers for the inlined cases (it would re-enable
-  the 07b regression).
+- Plain `count((Card.name, Card.cost))` is covered at `9`, while the factored
+  alias-view form remains `81`.
+- Pointer traversal, object identity, and scalar equality are tested as separate
+  multiplicity layers; factoring decisions remain owned by the scope tree.
