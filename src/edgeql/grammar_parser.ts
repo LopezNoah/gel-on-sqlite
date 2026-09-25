@@ -1426,6 +1426,22 @@ class GrammarParser extends EmbeddedActionsParser {
         && tokenMatcher($.LA(3), tokens.backward_link), ALT: () => $.SUBRULE($.computedBacklinkShapeEntry) },
       { ALT: () => {
         const name = $.CONSUME2(Name).image;
+        let recursionDepth: number | undefined;
+        $.OPTION7({
+          GATE: () => tokenMatcher($.LA(1), tokens.star) && tokenMatcher($.LA(2), tokens.number),
+          DEF: () => {
+            $.CONSUME2(tokens.star);
+            const depth = $.CONSUME(tokens.number);
+            recursionDepth = $.ACTION(() => {
+              const value = Number(depth.image.replace(/_/g, ""));
+              if (value !== 1) {
+                throw syntaxError("Only recursive shape depth 1 is supported",
+                  depth.startLine ?? 1, depth.startColumn ?? 1);
+              }
+              return value;
+            });
+          },
+        });
         let result: ShapeElement | undefined;
         $.OPTION3(() => $.OR2([
           { ALT: () => {
@@ -1436,7 +1452,7 @@ class GrammarParser extends EmbeddedActionsParser {
               operation: "assign" as const, origin: "explicit" as const,
             }));
           } },
-          { ALT: () => {
+          { GATE: () => tokenMatcher($.LA(2), tokens.lbrace), ALT: () => {
             $.CONSUME(tokens.colon);
             $.CONSUME2(tokens.lbrace);
             const shape = $.SUBRULE2($.shape);
@@ -1460,8 +1476,17 @@ class GrammarParser extends EmbeddedActionsParser {
               operation: "assign", origin: "explicit",
             }));
           } },
+          { ALT: () => {
+            $.CONSUME2(tokens.colon);
+            const expr = $.SUBRULE5($.expression);
+            result = $.ACTION(() => ({
+              kind: "computed" as const, name, expr: computedExpr(expr),
+              operation: "assign" as const, origin: "explicit" as const,
+            }));
+          } },
         ]));
         return $.ACTION(() => result ?? { kind: "field" as const, name,
+          ...(recursionDepth !== undefined ? { recursionDepth } : {}),
           operation: "assign" as const, origin: "explicit" as const });
       } },
     ]));

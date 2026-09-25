@@ -3,8 +3,12 @@ import Database from "better-sqlite3";
 import { describe, expect, it } from "vitest";
 import { CompilerService } from "../src/compiler/service.js";
 import { schemaFromSdl } from "../src/compiler/inspect.js";
+import { tableNameForType } from "../src/codegen/sql.js";
 import { parseEdgeQLGrammar, parseEdgeQLGrammarScript } from "../src/edgeql/grammar_parser.js";
+import { parseGelGrammarStatement } from "../src/edgeql/gel_lr_ast_reducer.js";
+import { parseEdgeQLScript } from "../src/edgeql/parser.js";
 import { acceptsGelGrammarBlock, parseGelGrammarCST, type GelCSTNode } from "../src/edgeql/gel_lr_parser.js";
+import { openSQLite, materializeSchema } from "../src/runtime/database.js";
 
 // This tests the *working AST* seam, not just syntax acceptance: the same
 // compiler should be able to consume the grammar-backed result.
@@ -99,6 +103,8 @@ const queries = [
   "WITH x := {1, 2} SELECT x;",
   "WITH x := <int64>{} SELECT array_agg(x);",
   "SELECT Issue {number, related_to: {time_estimate}} ORDER BY Issue.number;",
+  "SELECT Issue { number, related_to *1 } FILTER Issue.number = '2';",
+  "SELECT Person {name, tag, sub: Person IS DerivedPerson} ORDER BY .name",
   "SELECT Review.<reviews[IS Movie];",
   "SELECT Review.<reviews[IS Movie].title;",
   "SELECT Movie[IS Film];",
@@ -433,6 +439,53 @@ describe("grammar-backed SELECT parser", () => {
     expect(reductions).toContain("reduce_Expr_PLUS_Expr");
   });
 
+  it.each([
+    ["SELECT 1;", 1],
+    ["SELECT 1 + 2 * 3;", 7],
+    ["SELECT (1 + 2) * 3;", 9],
+    ["SELECT 1 < 2;", 1],
+    ["SELECT true AND false;", 0],
+  ] as const)("reduces and executes a Gel-generated scalar AST: %s", (query, expected) => {
+    const statement = parseGelGrammarStatement(query);
+    const artifact = new CompilerService().compile(schemaFromSdl(""), statement);
+    const database = new Database(":memory:");
+    try {
+      expect(database.prepare(artifact.sql.sql).all(...artifact.sql.params)).toEqual([{ value: expected }]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("does not silently reduce unsupported generated blocks or expression forms", () => {
+    expect(() => parseGelGrammarStatement("SELECT 1; SELECT 2;")).toThrow(/simple SELECT statements only/);
+    expect(() => parseGelGrammarStatement("SELECT User {friends: {name}};")).toThrow(/plain field entries only/);
+    expect(() => parseGelGrammarStatement("SELECT 1 ORDER BY 1;")).toThrow(/SELECT clauses/);
+  });
+
+  it("reduces a generated object-shape query and executes its projected field", () => {
+    const schema = schemaFromSdl("type Foo { required name: str; }");
+    const { db } = openSQLite(":memory:");
+    try {
+      materializeSchema(db, schema);
+      const table = tableNameForType("default::Foo");
+      const insert = db.prepare(`INSERT INTO ${table} (id, name) VALUES (?, ?)`);
+      insert.run("foo-1", "Ada");
+      insert.run("foo-2", "Bea");
+
+      const shaped = parseGelGrammarStatement("SELECT Foo {name} FILTER .name = 'Ada';");
+      const shapedArtifact = new CompilerService().compile(schema, shaped);
+      const shapedRows = db.prepare(shapedArtifact.sql.sql).all(...shapedArtifact.sql.params) as Array<{ name: string }>;
+      expect(shapedRows.map((row) => row.name)).toEqual(["Ada"]);
+
+      const path = parseGelGrammarStatement("SELECT Foo.name;");
+      const pathArtifact = new CompilerService().compile(schema, path);
+      const pathRows = db.prepare(pathArtifact.sql.sql).all(...pathArtifact.sql.params) as Array<{ value: string }>;
+      expect(pathRows.map((row) => row.value)).toEqual(["Ada", "Bea"]);
+    } finally {
+      db.close();
+    }
+  });
+
   it.each(gelAstGoldens)("matches Gel AST golden for $query", ({ query, ast }) => {
     expect(parseEdgeQLGrammar(query)).toEqual(ast);
   });
@@ -466,11 +519,40 @@ describe("grammar-backed SELECT parser", () => {
     });
   });
 
+  it("parses legacy recursive links and colon-computed shape expressions", () => {
+    const recursive = parseEdgeQLGrammar("SELECT Issue { number, related_to *1 } FILTER Issue.number = '2';");
+    expect(recursive).toMatchObject({
+      kind: "select",
+      shape: [
+        { kind: "field", name: "number" },
+        { kind: "field", name: "related_to", recursionDepth: 1 },
+      ],
+    });
+
+    const typed = parseEdgeQLGrammar("SELECT Person {name, tag, sub: Person IS DerivedPerson} ORDER BY .name");
+    expect(typed).toMatchObject({
+      kind: "select",
+      shape: [
+        { kind: "field", name: "name" },
+        { kind: "field", name: "tag" },
+        { kind: "computed", name: "sub", expr: { kind: "select_expr", expr: { kind: "is_type" } } },
+      ],
+    });
+  });
+
+  it.each([
+    "SELECT Issue { number, related_to *1 } FILTER Issue.number = '2';",
+    "SELECT Person {name, tag, sub: Person IS DerivedPerson} ORDER BY .name",
+  ])("keeps local compatibility syntax in the production parser: %s", (query) => {
+    expect(() => parseEdgeQLScript(query)).not.toThrow();
+  });
+
   it.each([
     "SELECT 1 +;", "SELECT User {name,,};", "SELECT (1 + 2;", "1 + 2;", "SELECT Movie[IS Film &];",
     "SELECT call1(suffix := 's1', 1);", "SELECT call1(suffix := 's1', suffix := 's2');",
     "INSERT Person {name := 'Alice'} UNLESS CONFLICT ELSE (Person);",
     "SELECT User ORDER BY .name EMPTY MIDDLE;",
+    "SELECT Issue {related_to *5};",
     "SELECT INTROSPECT;", "SELECT INTROSPECT TYPEOF;",
     "SELECT 1e999;", "SELECT 1e-324;", "SELECT 111111111111111111111111;",
     "SELECT 1; SELECT 2;",

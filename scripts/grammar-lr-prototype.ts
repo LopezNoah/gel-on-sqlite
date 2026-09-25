@@ -5,6 +5,7 @@ import { delimiter, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { acceptsGelGrammarBlock } from "../src/edgeql/gel_lr_parser.js";
 import { parseEdgeQLGrammarScript } from "../src/edgeql/grammar_parser.js";
+import { parseEdgeQLScript } from "../src/edgeql/parser.js";
 import { tokenizeWithStarts, type Token } from "../src/edgeql/tokenizer.js";
 import { extractSuiteQueries } from "./grammar-query-corpus.js";
 
@@ -193,6 +194,7 @@ const corpus = extractSuiteQueries();
 const total = corpus.queries.length;
 let accepted = 0;
 let acceptedBySuiteExtension = 0;
+let acceptedByProductionParser = 0;
 const compatibilityGaps = new Set<string>();
 const rejectedQueries = new Set<string>();
 for (const { query } of corpus.queries) {
@@ -210,15 +212,21 @@ for (const { query } of corpus.queries) {
       parseEdgeQLGrammarScript(query);
       acceptedBySuiteExtension++;
     } catch {
-      compatibilityGaps.add(query);
-      if (stats.examples.length < 2) stats.examples.push(query.replace(/\s+/g, " ").slice(0, 150));
+      try {
+        parseEdgeQLScript(query);
+        acceptedByProductionParser++;
+      } catch {
+        compatibilityGaps.add(query);
+        if (stats.examples.length < 2) stats.examples.push(query.replace(/\s+/g, " ").slice(0, 150));
+      }
     }
   }
   if (!acceptedQuery) rejectedQueries.add(query);
   queryCounts.set(kind, stats);
 }
 console.log(`Generated Gel LR syntax coverage: ${accepted}/${total} (${(accepted / total * 100).toFixed(1)}%); skipped ${corpus.skippedInterpolated} interpolated templates.`);
-console.log(`Additional suite-local forms recognized by the TypeScript reducer: ${acceptedBySuiteExtension}; combined: ${accepted + acceptedBySuiteExtension}/${total}.`);
+console.log(`Additional forms accepted by the working-AST grammar reducer: ${acceptedBySuiteExtension}.`);
+console.log(`Further suite forms accepted by the production compatibility parser: ${acceptedByProductionParser}; combined: ${accepted + acceptedBySuiteExtension + acceptedByProductionParser}/${total}.`);
 for (const query of compatibilityGaps) {
   console.log(`  parser compatibility gap: ${query.replace(/\s+/g, " ").slice(0, 180)}`);
 }

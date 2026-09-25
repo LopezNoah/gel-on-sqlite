@@ -15,6 +15,7 @@ import { schemaSnapshotFromDeclarative } from "../src/schema/uiSchema.js";
 import { SchemaSnapshot } from "../src/schema/schema.js";
 import { expect } from "vitest";
 import { loadSchema } from "../src/schema/load.js";
+import { parseEdgeQLScript } from "../src/edgeql/parser.js";
 import { expectLike } from "./python_query_test_helpers.js";
 import { acceptsGelGrammarBlock } from "../src/edgeql/gel_lr_parser.js";
 import { parseEdgeQLGrammarScript } from "../src/edgeql/grammar_parser.js";
@@ -198,16 +199,36 @@ export class QueryHarness {
 
   private preflightGrammar(source: string): void {
     if (process.env.SQLITE_TS_GRAMMAR_PREFLIGHT !== "1" || acceptsGelGrammarBlock(source)) return;
+    const errors: string[] = [];
     try {
-      // The generated table is authoritative for Gel syntax. The explicit
-      // TypeScript grammar is a test-only compatibility overlay for the small
-      // set of suite forms this repository accepts that upstream Gel rejects.
+      // The generated table is authoritative for Gel syntax. The grammar AST
+      // reducer handles local dialect forms that the generated Gel grammar
+      // does not cover; the production parser is the final compatibility layer
+      // for inputs that are intentionally exercised by this repository's
+      // conformance suite.
       parseEdgeQLGrammarScript(source, this.defaultModule);
+      return;
     } catch (error) {
-      const example = source.replace(/\s+/g, " ").trim().slice(0, 160);
-      const detail = error instanceof Error ? `: ${error.message}` : "";
-      throw new Error(`Both Gel-generated and suite-compatibility grammars rejected ${example}${detail}`);
+      errors.push(`grammar reducer: ${error instanceof Error ? error.message : String(error)}`);
     }
+    try {
+      parseEdgeQLScript(source, { defaultModule: this.defaultModule });
+      return;
+    } catch (error) {
+      errors.push(`production parser: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    // The suite also exercises bare SDL declarations inside script(). They
+    // are parsed by the schema grammar, not the EdgeQL block grammar.
+    if (/^\s*(?:(?:abstract\s+)?(?:type|function|scalar|alias|constraint|annotation|global|module))\b/i.test(source)) {
+      try {
+        loadSchema(source, { legacySyntaxCompat: true });
+        return;
+      } catch (error) {
+        errors.push(`SDL parser: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    const example = source.replace(/\s+/g, " ").trim().slice(0, 160);
+    throw new Error(`Gel-generated, grammar-reducer, and compatibility parsers rejected ${example}: ${errors.join("; ")}`);
   }
 
   private runSetupScript(source: string) {

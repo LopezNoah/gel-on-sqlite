@@ -5370,6 +5370,17 @@ class Parser {
       }
     }
 
+    let recursionDepth: number | undefined;
+    if (this.peek().kind === "star" && this.peekNext().kind === "number") {
+      this.consume();
+      const depthToken = this.consume();
+      const depth = Number(depthToken.lexeme.replace(/_/g, ""));
+      if (depth !== 1) {
+        throw new AppError("E_SYNTAX", "Only recursive shape depth 1 is supported", ...this.posPair(depthToken));
+      }
+      recursionDepth = depth;
+    }
+
     if (this.peek().kind === "dot" && (this.peekNext().kind === "star" || this.peekNext().kind === "double_splat")) {
       this.consume();
       const clauseModifiers = this.clauseChainToShapeModifiers(this.parseClauseChain());
@@ -5500,22 +5511,18 @@ class Parser {
     if (hasLinkShapeColon) {
       // `name: (select …)` — colon-computed pointer: upstream EdgeQL allows
       // an expression after the colon, equivalent to `name := (…)`.
-      if (this.peek().kind === "lparen") {
-        const expr = this.parseFreeObjectExpr();
-        const modifiers = this.clauseChainToShapeModifiers(this.parseClauseChain());
-        return {
-          kind: "computed",
-          name,
-          expr: { kind: "select_expr", expr, clauses: {} },
-          operation: "assign",
-          origin: "explicit",
-          required,
-          cardinality,
-          ...modifiers,
-        };
-      }
-      const token = this.peek();
-      throw new AppError("E_SYNTAX", "Expected '{' after ':' in link shape", ...this.posPair(token));
+      const expr = this.parseFreeObjectExpr();
+      const modifiers = this.clauseChainToShapeModifiers(this.parseClauseChain());
+      return {
+        kind: "computed",
+        name,
+        expr: { kind: "select_expr", expr, clauses: {} },
+        operation: "assign",
+        origin: "explicit",
+        required,
+        cardinality,
+        ...modifiers,
+      };
     }
 
     const opToken = this.peek();
@@ -5526,6 +5533,7 @@ class Parser {
       return {
         kind: "field",
         name,
+        ...(recursionDepth !== undefined ? { recursionDepth } : {}),
         required,
         cardinality,
         operation: "assign",

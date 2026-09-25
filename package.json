@@ -20,7 +20,10 @@
     "ui:dev": "npm --prefix ui run dev",
     "ui:build": "npm --prefix ui run build",
     "ui:preview": "npm --prefix ui run preview",
-    "lint": "eslint . --ignore-pattern \"tests/**\" --ignore-pattern \"dist/**\" --ignore-pattern \"debug*\""
+    "lint": "oxlint .",
+    "lint:fix": "oxlint --fix .",
+    "format": "oxfmt .",
+    "format:check": "oxfmt --check ."
   },
   "dependencies": {
     "better-sqlite3": "^11.8.1",
@@ -29,17 +32,16 @@
     "zod": "^3.24.2"
   },
   "devDependencies": {
-    "@eslint/js": "^10.0.1",
     "@types/better-sqlite3": "^7.6.12",
     "@types/express": "^4.17.21",
     "@types/node": "^22.13.10",
     "@types/sql.js": "^1.4.11",
-    "eslint": "^10.3.0",
+    "oxfmt": "^0.70.0",
+    "oxlint": "^1.85.0",
     "sql.js": "^1.14.1",
     "supertest": "^7.0.0",
     "tsx": "^4.19.3",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.59.3",
     "vitest": "^2.1.8"
   }
 }

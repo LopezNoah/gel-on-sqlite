@@ -56,6 +56,8 @@ export interface ShapeElementModifiers {
   limit?: number;
   offsetExpr?: FreeObjectExpr;
   limitExpr?: FreeObjectExpr;
+  /** Maximum recursive expansion depth on legacy `link *N` shape entries. */
+  recursionDepth?: number;
 }
 
 export type FilterTarget =

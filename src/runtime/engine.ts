@@ -48,7 +48,7 @@ import {
 } from "./access_policy.js";
 import { applyPendingInsertDefaults } from "./default_resolution.js";
 import { parseDeclarativeSchema } from "../schema/sdl_adapter.js";
-import { schemaSnapshotFromDeclarative } from "../schema/uiSchema.js";
+import { functionDefsFromDeclarative, schemaSnapshotFromDeclarative } from "../schema/uiSchema.js";
 import { linkTableName, tableNameForType } from "../codegen/sql.js";
 import { populateSchemaIntrospection } from "../schema/schema_introspection.js";
 import type { SQLiteDatabase } from "../runtime/database.js";
@@ -917,6 +917,28 @@ const validateBareSdlDefaults = (script: string): void => {
   }
 };
 
+// Legacy SDL permits top-level `function ... using (...)` declarations in a
+// script. They are schema declarations rather than EdgeQL statements, so
+// register them before the normal statement parser runs.
+const registerBareSdlFunctionScript = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  script: string,
+  strictUserDDL: boolean,
+): boolean => {
+  if (strictUserDDL || !/^\s*function\b/i.test(script)) return false;
+  const parsed = tryResult(
+    () => parseDeclarativeSchema(script, { legacySyntaxCompat: true }),
+    { captureAll: true },
+  );
+  if (!parsed.ok || parsed.value === undefined || !(parsed.value.functions?.length)) return false;
+
+  for (const fn of functionDefsFromDeclarative(parsed.value)) schema.addFunction(fn);
+  populateSchemaIntrospection(db, schema);
+  getCompilerService().clear();
+  return true;
+};
+
 // Map the structured exclusive-constraint specs from `parseCreateTypeBody` to
 // the `ConstraintDef[]` the runtime's exclusivity machinery consumes (or
 // undefined when none), mirroring the old `collectExclusiveConstraintSpecs`.
@@ -1641,6 +1663,9 @@ export const executeScript = (
   // validation in `executeQueryUnitWithTrace` ever sees it.
   validateScriptUserDDL(script, parserOptions, securityContext.strictUserDDL ?? false);
   validateBareSdlDefaults(script);
+  if (registerBareSdlFunctionScript(db, schema, script, securityContext.strictUserDDL ?? false)) {
+    return { kind: "insert", changes: 0 };
+  }
   maybeRegisterDynamicDDLScript(db, schema, script);
   if (maybeHandleAliasDDLScript(schema, script)) {
     // Alias state changed; refresh the schema::* introspection rows so

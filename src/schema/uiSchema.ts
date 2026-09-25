@@ -951,7 +951,8 @@ const parseFunctionBody = (fn: FunctionDeclaration): FunctionDef["body"] => {
     };
   }
 
-  if (isQueryStatement(statement)) {
+  const hasExplicitQuery = /^(?:select|with|for|insert|update|delete)\b/i.test(trimmed);
+  if (hasExplicitQuery && isQueryStatement(statement)) {
     return {
       kind: "query",
       language: fn.body.language,
