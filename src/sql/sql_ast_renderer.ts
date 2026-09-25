@@ -27,7 +27,7 @@ interface BindingInfo {
   columns?: ReadonlySet<string>;
 }
 
-type Scope = Map<symbol, BindingInfo>;
+type Scope = Map<number, BindingInfo>;
 
 const cloneScope = (scope: Scope): Scope => new Map(scope);
 
@@ -107,7 +107,9 @@ const validateSelect = (select: SqlSelect, outerScope: Scope): void => {
       columns: columnsForSource(item.source),
     };
     if (availableToJoin.has(binding.id)) {
-      throw new SqlAstValidationError(`Range-variable binding '${binding.alias}' is declared twice`);
+      throw new SqlAstValidationError(
+        `Range-variable binding '${binding.alias}' is declared twice`,
+      );
     }
     availableToJoin.set(binding.id, bindingInfo);
     localScope.set(binding.id, bindingInfo);
@@ -118,7 +120,9 @@ const validateSelect = (select: SqlSelect, outerScope: Scope): void => {
         throw new SqlAstValidationError("CROSS JOIN cannot have an ON expression");
       }
       if (join && join.kind !== "cross" && !join.on) {
-        throw new SqlAstValidationError(`${join.kind.toUpperCase()} JOIN requires an ON expression`);
+        throw new SqlAstValidationError(
+          `${join.kind.toUpperCase()} JOIN requires an ON expression`,
+        );
       }
       if (join?.on) validateExpr(join.on, availableToJoin);
     }
@@ -129,7 +133,10 @@ const validateSelect = (select: SqlSelect, outerScope: Scope): void => {
   if (select.where) validateExpr(select.where, expressionScope);
   for (const expr of select.groupBy ?? []) validateExpr(expr, expressionScope);
   if (select.having) validateExpr(select.having, expressionScope);
-  for (const order of select.orderBy ?? []) validateExpr(order.expr, expressionScope);
+  for (const order of select.orderBy ?? []) {
+    if ("sql" in order) continue;
+    validateExpr(order.expr, expressionScope);
+  }
   if (select.limit) validateExpr(select.limit, expressionScope);
   if (select.offset) validateExpr(select.offset, expressionScope);
 };
@@ -188,7 +195,9 @@ const validateExpr = (expr: SqlExpr, scope: Scope): void => {
       return;
     default: {
       const exhaustive: never = expr;
-      throw new SqlAstValidationError(`Unsupported SQL expression ${(exhaustive as { kind: string }).kind}`);
+      throw new SqlAstValidationError(
+        `Unsupported SQL expression ${(exhaustive as { kind: string }).kind}`,
+      );
     }
   }
 };
@@ -244,9 +253,14 @@ const renderSelect = (select: SqlSelect, params: ScalarValue[]): string => {
   if (select.having) text += ` HAVING ${renderExpr(select.having, params)}`;
   if (select.orderBy?.length) {
     text += ` ORDER BY ${select.orderBy
-      .map(({ expr, direction, nulls }) =>
-        `${renderExpr(expr, params)} ${direction}${nulls ? ` NULLS ${nulls}` : ""}`,
-      )
+      .map((order) => {
+        if ("sql" in order) {
+          params.push(...order.params);
+          return order.sql;
+        }
+        const { expr, direction, nulls } = order;
+        return `${renderExpr(expr, params)} ${direction}${nulls ? ` NULLS ${nulls}` : ""}`;
+      })
       .join(", ")}`;
   }
   if (select.limit) text += ` LIMIT ${renderExpr(select.limit, params)}`;
@@ -262,19 +276,19 @@ const renderFromItem = (item: SqlFromItem, params: ScalarValue[]): string => {
 const renderSource = (source: SqlSource, params: ScalarValue[]): string => {
   switch (source.kind) {
     case "table":
-      return `${quoteIdent(source.name)} ${quoteIdent(source.binding.alias)}`;
+      return `${quoteIdent(source.name)} ${renderAlias(source.binding)}`;
     case "derived":
-      return `(${renderQuery(source.query, params)}) ${quoteIdent(source.binding.alias)}`;
+      return `(${renderQuery(source.query, params)}) ${renderAlias(source.binding)}`;
     case "legacy_source":
       params.push(...source.params);
-      return `${source.sql} ${quoteIdent(source.binding.alias)}`;
+      return source.aliasIncluded ? source.sql : `${source.sql} ${renderAlias(source.binding)}`;
   }
 };
 
 const renderExpr = (expr: SqlExpr, params: ScalarValue[]): string => {
   switch (expr.kind) {
     case "column":
-      return `${quoteIdent(expr.binding.alias)}.${quoteIdent(expr.name)}`;
+      return `${renderAlias(expr.binding)}.${quoteIdent(expr.name)}`;
     case "parameter":
       params.push(expr.value);
       return "?";
@@ -287,19 +301,29 @@ const renderExpr = (expr: SqlExpr, params: ScalarValue[]): string => {
     case "call":
       return `${expr.name}(${expr.args.map((arg) => renderExpr(arg, params)).join(", ")})`;
     case "case":
-      return (
-        `CASE ${expr.branches
-          .map(({ when, then }) => `WHEN ${renderExpr(when, params)} THEN ${renderExpr(then, params)}`)
-          .join(" ")} ELSE ${renderExpr(expr.otherwise, params)} END`
-      );
+      return `CASE ${expr.branches
+        .map(
+          ({ when, then }) => `WHEN ${renderExpr(when, params)} THEN ${renderExpr(then, params)}`,
+        )
+        .join(" ")} ELSE ${renderExpr(expr.otherwise, params)} END`;
     case "scalar_subquery":
       return `(${renderQuery(expr.query, params)})`;
     case "exists":
       return `${expr.negated ? "NOT " : ""}EXISTS (${renderQuery(expr.query, params)})`;
     case "star":
-      return expr.binding ? `${quoteIdent(expr.binding.alias)}.*` : "*";
+      return expr.binding ? `${renderAlias(expr.binding)}.*` : "*";
     case "legacy_expr":
       params.push(...expr.params);
       return expr.sql;
   }
+};
+
+const renderAlias = (binding: SqlBinding): string => {
+  if (binding.quoteAlias) return quoteIdent(binding.alias);
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(binding.alias)) {
+    throw new SqlAstValidationError(
+      `Unquoted SQL alias '${binding.alias}' is not a safe identifier`,
+    );
+  }
+  return binding.alias;
 };

@@ -122,6 +122,14 @@ _Avoid_: row mapper, schema deserializer.
 The SQL-lowering decision that maps a Live IR path, in its current scope and requested aspect, to the range variable that provides it. Distinct from [[Scope-tree factoring authority]], which decides whether path occurrences correlate or remain independent.
 _Avoid_: path lookup, correlation policy
 
+**Relation** (`src/sql/relation.ts`):
+The path-resolution authority for lowering scopes. It registers which range variable supplies each path/aspect, resolves references through parent scopes, and can inject a required column into a child relation before rendering. `getPathExpr` preserves a typed SQL expression; `getPathVar` is the compatibility projection to SQL text for lowerings not yet migrated. Path resolution does not grant correlation permission (ADR 0064).
+_Avoid_: SQL AST (the query representation), correlation policy.
+
+**SQL AST** (`src/sql/sql_ast.ts`):
+The structured SQLite query/expression representation between migrated Live IR lowering and SQL text. Range-variable bindings have identities independent of printed aliases; derived sources expose projection names; `renderSqlAst` validates typed references and collects positional parameters in emitted order. `GelIRSQLArtifact.sqlAst` is present only for migrated statement families. Direct scalar shape leaves, simple singleton scalar comparisons, and direct scalar sort keys currently lower to typed column/operator/parameter/order nodes. Explicit legacy fragments remain during migration and do not receive structural scope checking (ADR 0069).
+_Avoid_: Live IR, SQL string builder.
+
 **Pointer-step join**:
 `src/sql/pointer_join.ts::pointerStepJoinSql(step)` — the single home for the JOIN fragment that lowers one pointer-chain step (`User.posts.author`). Four shapes: junction-table vs inline-`<name>_id`-FK, each × inbound (backlink) / outbound. Takes the parts that vary with context (direction, previous/next alias, the already-compiled `targetSource`, and either the junction `{linkAlias, linkTable}` or the `{inlineColumn}`) and emits SQL byte-identical to the inline form it replaced. Nine lowering functions in `gel_ir_compiler.ts` re-derived this wiring, differing only in alias names; they now route through it. The first-step FROM seeds, single-link correlated-subquery membership checks, and `anchorWhere` constructions are a different idiom (WHERE-correlation, not per-step JOIN append) and stay with their callers (see `docs/adr/0011`). Depends only on `quoteIdent`, so it is a pure, unit-tested string builder — no `SqlLoweringContext` deps needed.
 

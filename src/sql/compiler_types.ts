@@ -8,6 +8,7 @@ import type {
 import type { RuntimeTarget } from "../runtime/target.js";
 import type { ScalarValue } from "../types.js";
 import type { Relation } from "./relation.js";
+import type { SqlQuery } from "./sql_ast.js";
 
 // A pointer chain ending in a scalar (or, for object-identity existence
 // checks, an object) leaf: the root set, the leaf pointer, the intermediate
@@ -28,6 +29,8 @@ export interface GelIRSQLArtifact {
   sql: string;
   params: ScalarValue[];
   loweringMode: "single_statement" | "fallback_multi_query";
+  /** Present for statement families already represented by the scoped SQL AST. */
+  sqlAst?: SqlQuery;
   // INSERT artifacts only: each assigned column with its compiled SQL value
   // expression and that expression's own parameter slice. Lets the runtime
   // mutation executor splice individual SQL-lowered assignments (function

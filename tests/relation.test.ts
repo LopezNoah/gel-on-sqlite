@@ -6,6 +6,8 @@ import {
   resetInjectionCounter,
   scopeKeyOf,
 } from "../src/sql/relation.js";
+import { sql, sqlBinding } from "../src/sql/sql_ast.js";
+import Database from "better-sqlite3";
 
 // Beachhead tests for the pathctx-style Relation/PathRegistry (src/sql/relation.ts).
 //
@@ -31,7 +33,7 @@ describe("PathRegistry — question (1): column on the current iteration row", (
     const r = new Relation();
     r.addRangeVar({ alias: "g0", sourceSql: '"default__card"' });
     r.addOutput("name", 'g0."name"');
-    expect(r.toSql().sql).toBe('SELECT g0."name" AS "name" FROM "default__card" g0');
+    expect(r.toSql().sql).toBe('SELECT g0."name" AS "name" FROM "default__card" "g0"');
   });
 });
 
@@ -78,12 +80,12 @@ describe("PathRegistry — recursive column injection (#5, the string-emission g
 
     // Parent needs Card.cost, which child can compute but did not expose.
     const ref = parent.getPathVar("Card.cost", "value");
-    expect(ref).toBe('sub."__inj0"');
+    expect(ref).toBe('"sub"."__inj0"');
 
     // The child subquery now projects the injected column.
     expect(child.toSql().sql).toContain('g0."cost" AS "__inj0"');
     // And the parent serializes the child as a subquery range var.
-    expect(parent.toSql().sql).toMatch(/FROM \(SELECT .* FROM "default__card" g0\) sub/);
+    expect(parent.toSql().sql).toMatch(/FROM \(SELECT .* FROM "default__card" "g0"\) "sub"/);
   });
 
   it("injecting the same path twice reuses one column (idempotent)", () => {
@@ -128,10 +130,117 @@ describe("path_rvar_map — which range var provides a path (Gel pgast.path_rvar
     const rvB = parent.addRangeVar({ alias: "s1", sourceSql: "", relation: childB });
     parent.registerPathRvar("Card.cost", "value", rvB);
 
-    expect(parent.getPathVar("Card.cost", "value")).toBe('s1."__inj0"');
+    expect(parent.getPathVar("Card.cost", "value")).toBe('"s1"."__inj0"');
     // The chosen provider exposed the column; the sibling was left untouched.
     expect(childB.toSql().sql).toContain('g1."cost" AS "__inj0"');
     expect(childA.toSql().sql).not.toContain("__inj0");
+  });
+});
+
+describe("Relation SQL AST lowering", () => {
+  it("owns projection, legacy source, and predicate parameters in SQL order", () => {
+    const relation = new Relation();
+    const source = relation.addRangeVar({
+      alias: "s",
+      sourceSql: '(SELECT ? AS "value")',
+      columns: ["value"],
+      params: ["from"],
+    });
+    relation.addOutputExpr("label", sql.parameter("select"));
+    relation.addWhereExpr(
+      sql.binary(">", sql.call("length", sql.column(source.binding, "value")), sql.parameter(0)),
+    );
+
+    const built = relation.toSql();
+    expect(built).toEqual({
+      sql: 'SELECT ? AS "label" FROM (SELECT ? AS "value") "s" WHERE (length("s"."value") > ?)',
+      params: ["select", "from", 0],
+    });
+
+    const db = new Database(":memory:");
+    try {
+      expect(db.prepare(built.sql).all(...built.params)).toEqual([{ label: "select" }]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("renders and executes link-property projections through a junction-table join", () => {
+    const relation = new Relation();
+    const user = relation.addRangeVar({
+      alias: "u",
+      table: { name: "users", columns: ["id", "name"] },
+    });
+    const deckBinding = sqlBinding("d");
+    const deck = relation.addRangeVar({
+      alias: "d",
+      binding: deckBinding,
+      table: { name: "user_deck", columns: ["source", "target", "count"] },
+      join: {
+        kind: "inner",
+        onExpr: sql.binary("=", sql.column(deckBinding, "source"), sql.column(user.binding, "id")),
+      },
+    });
+    const cardBinding = sqlBinding("c");
+    const card = relation.addRangeVar({
+      alias: "c",
+      binding: cardBinding,
+      table: { name: "cards", columns: ["id", "name"] },
+      join: {
+        kind: "inner",
+        onExpr: sql.binary("=", sql.column(cardBinding, "id"), sql.column(deck.binding, "target")),
+      },
+    });
+    relation.addOutputExpr("user", sql.column(user.binding, "name"));
+    relation.addOutputExpr("card", sql.column(card.binding, "name"));
+    relation.addOutputExpr("@count", sql.column(deck.binding, "count"));
+    relation.addWhereExpr(sql.binary(">=", sql.column(deck.binding, "count"), sql.parameter(2)));
+
+    const built = relation.toSql();
+    expect(built.params).toEqual([2]);
+
+    const db = new Database(":memory:");
+    try {
+      db.exec(
+        "CREATE TABLE users (id INTEGER, name TEXT); CREATE TABLE user_deck (source INTEGER, target INTEGER, count INTEGER); CREATE TABLE cards (id INTEGER, name TEXT);",
+      );
+      db.exec(
+        "INSERT INTO users VALUES (1, 'Ada'); INSERT INTO cards VALUES (10, 'Dragon'), (11, 'Imp'); INSERT INTO user_deck VALUES (1, 10, 3), (1, 11, 1);",
+      );
+      expect(db.prepare(built.sql).all(...built.params)).toEqual([
+        { user: "Ada", card: "Dragon", "@count": 3 },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("recursively injects a typed path as a derived-table export", () => {
+    const child = new Relation();
+    const row = child.addRangeVar({
+      alias: "c",
+      table: { name: "cards", columns: ["id", "cost"] },
+    });
+    child.registerPathExpr("Card.cost", "value", sql.column(row.binding, "cost"));
+    child.addOutputExpr("id", sql.column(row.binding, "id"));
+
+    const parent = new Relation();
+    const source = parent.addRangeVar({ alias: "src", sourceSql: "", relation: child });
+    parent.addOutputExpr("cost", parent.getPathExpr("Card.cost", "value"));
+
+    const built = parent.toSql();
+    expect(built.sql).toContain('"src"."__inj0" AS "cost"');
+    expect(built.sql).toContain('"c"."cost" AS "__inj0"');
+
+    const db = new Database(":memory:");
+    try {
+      db.exec(
+        "CREATE TABLE cards (id INTEGER, cost INTEGER); INSERT INTO cards VALUES (1, 5), (2, 9);",
+      );
+      expect(db.prepare(built.sql).all(...built.params)).toEqual([{ cost: 5 }, { cost: 9 }]);
+    } finally {
+      db.close();
+    }
   });
 });
 

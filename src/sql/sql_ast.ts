@@ -2,13 +2,20 @@ import type { ScalarValue } from "../types.js";
 
 /** Identity of one SQL range variable. The printable alias is deliberately not identity. */
 export interface SqlBinding {
-  readonly id: symbol;
+  readonly id: number;
   readonly alias: string;
+  readonly debugName: string;
+  /** Generated, identifier-safe aliases may retain the legacy unquoted form. */
+  readonly quoteAlias: boolean;
 }
 
-export const sqlBinding = (alias: string, debugName = alias): SqlBinding => ({
-  id: Symbol(debugName),
+let nextBindingId = 0;
+
+export const sqlBinding = (alias: string, debugName = alias, quoteAlias = true): SqlBinding => ({
+  id: nextBindingId++,
   alias,
+  debugName,
+  quoteAlias,
 });
 
 export type SqlBinaryOperator =
@@ -38,10 +45,19 @@ export type SqlExpr =
   | { readonly kind: "column"; readonly binding: SqlBinding; readonly name: string }
   | { readonly kind: "parameter"; readonly value: ScalarValue }
   | { readonly kind: "literal"; readonly value: ScalarValue }
-  | { readonly kind: "binary"; readonly operator: SqlBinaryOperator; readonly left: SqlExpr; readonly right: SqlExpr }
+  | {
+      readonly kind: "binary";
+      readonly operator: SqlBinaryOperator;
+      readonly left: SqlExpr;
+      readonly right: SqlExpr;
+    }
   | { readonly kind: "unary"; readonly operator: SqlUnaryOperator; readonly operand: SqlExpr }
   | { readonly kind: "call"; readonly name: string; readonly args: readonly SqlExpr[] }
-  | { readonly kind: "case"; readonly branches: readonly SqlCaseBranch[]; readonly otherwise: SqlExpr }
+  | {
+      readonly kind: "case";
+      readonly branches: readonly SqlCaseBranch[];
+      readonly otherwise: SqlExpr;
+    }
   | { readonly kind: "scalar_subquery"; readonly query: SqlQuery }
   | { readonly kind: "exists"; readonly query: SqlQuery; readonly negated?: boolean }
   | { readonly kind: "star"; readonly binding?: SqlBinding }
@@ -73,7 +89,7 @@ export interface SqlSelect {
   readonly where?: SqlExpr;
   readonly groupBy?: readonly SqlExpr[];
   readonly having?: SqlExpr;
-  readonly orderBy?: readonly SqlOrder[];
+  readonly orderBy?: readonly SqlOrderBy[];
   readonly limit?: SqlExpr;
   readonly offset?: SqlExpr;
 }
@@ -94,6 +110,16 @@ export interface SqlOrder {
   readonly direction: "ASC" | "DESC";
   readonly nulls?: "FIRST" | "LAST";
 }
+
+/** Explicit migration adapter for a complete legacy ORDER BY item/list. */
+export interface SqlLegacyOrder {
+  readonly kind: "legacy_order";
+  readonly sql: string;
+  readonly params: readonly ScalarValue[];
+  readonly reason: string;
+}
+
+export type SqlOrderBy = SqlOrder | SqlLegacyOrder;
 
 export interface SqlFromItem {
   readonly source: SqlSource;
@@ -133,6 +159,7 @@ export interface SqlLegacySource {
   readonly reason: string;
   readonly binding: SqlBinding;
   readonly columns?: readonly string[];
+  readonly aliasIncluded?: boolean;
 }
 
 export const sql = {
@@ -164,11 +191,12 @@ export const sql = {
     reason: string,
     params: readonly ScalarValue[] = [],
   ): SqlLegacyExpr => ({ kind: "legacy_expr", sql: sqlText, params, reason }),
-  table: (
-    name: string,
-    binding: SqlBinding,
-    columns?: readonly string[],
-  ): SqlTableSource => ({ kind: "table", name, binding, columns }),
+  table: (name: string, binding: SqlBinding, columns?: readonly string[]): SqlTableSource => ({
+    kind: "table",
+    name,
+    binding,
+    columns,
+  }),
   derived: (query: SqlQuery, binding: SqlBinding): SqlDerivedSource => ({
     kind: "derived",
     query,
@@ -180,7 +208,21 @@ export const sql = {
     reason: string,
     params: readonly ScalarValue[] = [],
     columns?: readonly string[],
-  ): SqlLegacySource => ({ kind: "legacy_source", sql: sqlText, params, reason, binding, columns }),
+    aliasIncluded = false,
+  ): SqlLegacySource => ({
+    kind: "legacy_source",
+    sql: sqlText,
+    params,
+    reason,
+    binding,
+    columns,
+    aliasIncluded,
+  }),
+  legacyOrder: (
+    sqlText: string,
+    reason: string,
+    params: readonly ScalarValue[] = [],
+  ): SqlLegacyOrder => ({ kind: "legacy_order", sql: sqlText, params, reason }),
   select: (args: Omit<SqlSelect, "kind">): SqlSelect => ({ kind: "select", ...args }),
   unionAll: (...branches: SqlQuery[]): SqlCompoundSelect => ({
     kind: "compound_select",

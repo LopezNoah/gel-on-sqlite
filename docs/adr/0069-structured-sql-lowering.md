@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed.
+Accepted; implementation in progress.
 
 ## Context
 
@@ -10,13 +10,13 @@ The Live IR is lowered directly into SQL strings by `src/sql/gel_ir_compiler.ts`
 
 ## Decision
 
-Lower migrated Live IR families to a **SQLite SQL AST** and render that AST, rather than assembling their SQL with interpolated strings. The intended pipeline is `Live IR → scoped SQL AST → SQLite renderer → GelIRSQLArtifact { sql, params, loweringMode, … }`. This is a backend representation, not a second EdgeQL semantic IR: the Live IR and its scope-tree/factoring facts still decide set semantics, correlation permission, object identity, cardinality, and which physical link storage to read. `Relation` remains the authority for *which* path/aspect is supplied by *which* range variable; the SQL AST represents and checks the resulting relational and expression structure. Path resolution must not be used as permission to correlate (ADR 0064).
+Lower migrated Live IR families to a **SQLite SQL AST** and render that AST, rather than assembling their SQL with interpolated strings. The intended pipeline is `Live IR → scoped SQL AST → SQLite renderer → GelIRSQLArtifact { sql, params, loweringMode, … }`. This is a backend representation, not a second EdgeQL semantic IR: the Live IR and its scope-tree/factoring facts still decide set semantics, correlation permission, object identity, cardinality, and which physical link storage to read. `Relation` remains the authority for _which_ path/aspect is supplied by _which_ range variable; the SQL AST represents and checks the resulting relational and expression structure. Path resolution must not be used as permission to correlate (ADR 0064).
 
 The AST must represent, as typed nodes, the constructs used by each migrated lowering: table and derived-table sources, joins and their predicates, SELECT projections and clauses, UNION ALL and WITH as needed, correlated subqueries, column references, operators, calls, CASE, literals, and bound values. A column reference carries the identity of the range variable that supplies it (and its column), not just a printable alias. A child relation's exported columns have explicit identities; a parent may only refer to those exports. The renderer assigns/prints SQL aliases, quotes identifiers, parenthesizes expressions, and emits `?` placeholders while collecting bound values in **render order**. A parameterized subtree can be rendered in exactly one place; repeated use of an expression must be represented explicitly (for example, by binding it once in a derived table), rather than duplicating its SQL or its bound values.
 
 Rendering validates the structural contract: references resolve to an in-scope range variable or an explicitly permitted enclosing scope, derived-table references resolve to projected columns, and unsupported nodes fail explicitly. It does **not** attempt to infer EdgeQL factoring, prove that every physical table has a column, or make an incorrect logical plan correct merely by rendering it. Schema-backed pointer/link-table selection and scope-tree decisions stay in their existing authorities. `sqlite` and `d1` continue to use SQLite-compatible output; introduce no new dialect abstraction without a concrete need.
 
-This revises the *expressions stay strings* choice in `src/sql/relation.ts` for migrated families, without replacing its path registry. Avoid maintaining a parallel string-based path-resolution mechanism or a generic `raw SQL` node as the normal representation: either would preserve the alias/scope hazards behind an AST-shaped wrapper. A narrow, identified legacy-fragment adapter is permitted at the migration edge, owns its parameters, and cannot claim AST scope validation for its contents.
+This revises the _expressions stay strings_ choice in `src/sql/relation.ts` for migrated families, without replacing its path registry. Avoid maintaining a parallel string-based path-resolution mechanism or a generic `raw SQL` node as the normal representation: either would preserve the alias/scope hazards behind an AST-shaped wrapper. A narrow, identified legacy-fragment adapter is permitted at the migration edge, owns its parameters, and cannot claim AST scope validation for its contents.
 
 ## Migration and acceptance
 
@@ -26,6 +26,10 @@ This revises the *expressions stay strings* choice in `src/sql/relation.ts` for 
 4. Migrate further lowering families incrementally. A migrated family emits through one structured path; remove its old string assembly once equivalent. Legacy families may continue to return owned fragments at an explicit outer adaptation seam (ADR 0067). No all-at-once rewrite of the SQL compiler or of runtime DML SQL is required by this decision.
 
 Each migrated slice is accepted when renderer validation rejects a missing or out-of-scope alias/export, nested parameters retain their values and order after composition or branch rejection, compile inspection preserves the intended SQL gate/strategy, and representative SQLite execution tests preserve EdgeQL results (including correlation and link-property multiplicity). Canonical SQL goldens can flag structural changes, but byte-identical SQL is not a requirement: rendering is allowed to change aliases and formatting. Unsupported constructs must keep an explicit legacy route or report unsupported; do not silently route a partly built AST into a second semantic lowering.
+
+## Implementation progress
+
+The initial slice is in place: `sql_ast.ts` defines typed query/expression nodes and clone-safe binding identities; `sql_ast_renderer.ts` validates typed scope/export references and renders owned parameters in SQL emission order; `Relation.toSqlAst()` retains nested relations as structured subqueries; and `compileGelIRToSQL` attaches a SQL AST to bare scalar literals and the ordinary source-backed SELECT path. The latter now uses typed row-identity and direct scalar shape projections, simple singleton scalar `FILTER` comparisons, and direct scalar sort keys; known source exports are checked. An executed shaped link-property SELECT pins this compiler seam, while its nested link-table projection remains an explicit legacy expression. A separate executed SQL-AST test covers a UNION ALL of link-storage tables, the `@count` projection, and a correlated `EXISTS` predicate. Complex shapes, filters, ordering, and polymorphic source SQL still use named legacy adapters, whose contents are not scope-validated. Wiring actual EdgeQL link-table lowering into those typed nodes remains in progress.
 
 ## Consequences and alternatives
 

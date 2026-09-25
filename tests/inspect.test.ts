@@ -284,7 +284,7 @@ describe("Gel-shaped compile facts projection", () => {
       ]),
     );
     expect(gelFacts.sqlite_sql).toContain("json_group_array");
-    expect(gelFacts.sqlite_sql).toContain('WHERE (EXISTS (SELECT 1 FROM (SELECT ? AS "value")');
+    expect(gelFacts.sqlite_sql).toContain('WHERE (a0."name" = ?)');
   });
 
   it("covers a real nested link-property shape golden", () => {

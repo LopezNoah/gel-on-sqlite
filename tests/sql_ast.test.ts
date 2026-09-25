@@ -1,9 +1,40 @@
 import Database from "better-sqlite3";
 import { describe, expect, it } from "vitest";
+import { CompilerService } from "../src/compiler/service.js";
+import { parseEdgeQL } from "../src/edgeql/parser.js";
+import type { Statement } from "../src/edgeql/ast.js";
+import { schemaFromSdl } from "../src/compiler/inspect.js";
 import { sql, sqlBinding } from "../src/sql/sql_ast.js";
-import { renderSqlAst, SqlAstValidationError, validateSqlAst } from "../src/sql/sql_ast_renderer.js";
+import {
+  renderSqlAst,
+  SqlAstValidationError,
+  validateSqlAst,
+} from "../src/sql/sql_ast_renderer.js";
 
 describe("scoped SQL AST", () => {
+  it("lowers a bare scalar literal through the compiler's SQL AST path", () => {
+    const parsed = parseEdgeQL("SELECT 42;") as unknown;
+    const statement = (Array.isArray(parsed) ? parsed[0] : parsed) as Statement;
+    const compiler = new CompilerService();
+    const schema = schemaFromSdl("type User { property name: str; }");
+    const first = compiler.compile(schema, statement);
+    const cached = compiler.compile(schema, statement);
+    const artifact = cached.sql;
+
+    expect(first.sql.sql).toBe(artifact.sql);
+    expect(cached.cache.status).toBe("hit");
+    expect(artifact.sqlAst?.kind).toBe("select");
+    expect(artifact.sql).toBe('SELECT ? AS "value"');
+    expect(artifact.params).toEqual([42]);
+
+    const db = new Database(":memory:");
+    try {
+      expect(db.prepare(artifact.sql).all(...artifact.params)).toEqual([{ value: 42 }]);
+    } finally {
+      db.close();
+    }
+  });
+
   it("renders and executes a structured SELECT with render-order parameters", () => {
     const users = sqlBinding("u");
     const scores = sqlBinding("s");
@@ -34,8 +65,12 @@ describe("scoped SQL AST", () => {
 
     const db = new Database(":memory:");
     try {
-      db.exec("CREATE TABLE users (id INTEGER, name TEXT); CREATE TABLE scores (user_id INTEGER, score INTEGER);");
-      db.exec("INSERT INTO users VALUES (1, 'Ada'), (2, 'Grace'); INSERT INTO scores VALUES (1, 11), (2, 9);");
+      db.exec(
+        "CREATE TABLE users (id INTEGER, name TEXT); CREATE TABLE scores (user_id INTEGER, score INTEGER);",
+      );
+      db.exec(
+        "INSERT INTO users VALUES (1, 'Ada'), (2, 'Grace'); INSERT INTO scores VALUES (1, 11), (2, 9);",
+      );
       expect(db.prepare(rendered.sql).all(...rendered.params)).toEqual([
         { marker: "projected", name: "Ada" },
       ]);
@@ -111,7 +146,10 @@ describe("scoped SQL AST", () => {
         { source: sql.derived(inner, source) },
         {
           source: sql.table("other", joined, ["id"]),
-          join: { kind: "inner", on: sql.binary("=", sql.column(joined, "id"), sql.parameter("on")) },
+          join: {
+            kind: "inner",
+            on: sql.binary("=", sql.column(joined, "id"), sql.parameter("on")),
+          },
         },
       ],
       where: sql.binary("=", sql.column(source, "value"), sql.parameter("where")),
@@ -119,6 +157,84 @@ describe("scoped SQL AST", () => {
     });
 
     expect(renderSqlAst(query).params).toEqual(["select", "from", "on", "where", 1]);
+  });
+
+  it("executes a union-backed link-property read with a correlated predicate", () => {
+    const user = sqlBinding("u");
+    const link = sqlBinding("lp");
+    const userDeck = sqlBinding("ud");
+    const botDeck = sqlBinding("bd");
+    const linkRows = sql.unionAll(
+      sql.select({
+        projections: [
+          { expr: sql.column(userDeck, "source"), alias: "source" },
+          { expr: sql.column(userDeck, "target"), alias: "target" },
+          { expr: sql.column(userDeck, "count"), alias: "count" },
+        ],
+        from: [{ source: sql.table("user_deck", userDeck, ["source", "target", "count"]) }],
+      }),
+      sql.select({
+        projections: [
+          { expr: sql.column(botDeck, "source"), alias: "source" },
+          { expr: sql.column(botDeck, "target"), alias: "target" },
+          { expr: sql.column(botDeck, "count"), alias: "count" },
+        ],
+        from: [{ source: sql.table("bot_deck", botDeck, ["source", "target", "count"]) }],
+      }),
+    );
+    const card = sqlBinding("c");
+    const activeCard = sql.select({
+      projections: [{ expr: sql.literal(1), alias: "one" }],
+      from: [{ source: sql.table("cards", card, ["id", "active"]) }],
+      where: sql.binary(
+        "AND",
+        sql.binary("=", sql.column(card, "id"), sql.column(link, "target")),
+        sql.binary("=", sql.column(card, "active"), sql.literal(1)),
+      ),
+    });
+    const query = sql.select({
+      projections: [
+        { expr: sql.column(user, "name"), alias: "user" },
+        { expr: sql.column(link, "count"), alias: "@count" },
+      ],
+      from: [
+        { source: sql.table("users", user, ["id", "name"]) },
+        {
+          source: sql.derived(linkRows, link),
+          join: {
+            kind: "inner",
+            on: sql.binary("=", sql.column(link, "source"), sql.column(user, "id")),
+          },
+        },
+      ],
+      where: sql.binary(
+        "AND",
+        sql.binary(">=", sql.column(link, "count"), sql.parameter(2)),
+        sql.exists(activeCard),
+      ),
+      orderBy: [{ expr: sql.column(user, "name"), direction: "ASC" }],
+    });
+    const rendered = renderSqlAst(query);
+    expect(rendered.sql).toContain("UNION ALL");
+    expect(rendered.sql).toContain('"lp"."source" = "u"."id"');
+    expect(rendered.sql).toContain('"c"."id" = "lp"."target"');
+    expect(rendered.params).toEqual([2]);
+
+    const db = new Database(":memory:");
+    try {
+      db.exec(
+        "CREATE TABLE users (id INTEGER, name TEXT); CREATE TABLE user_deck (source INTEGER, target INTEGER, count INTEGER); CREATE TABLE bot_deck (source INTEGER, target INTEGER, count INTEGER); CREATE TABLE cards (id INTEGER, active INTEGER);",
+      );
+      db.exec(
+        "INSERT INTO users VALUES (1, 'Ada'), (2, 'Bea'); INSERT INTO user_deck VALUES (1, 10, 3), (1, 11, 1); INSERT INTO bot_deck VALUES (2, 12, 4); INSERT INTO cards VALUES (10, 1), (11, 1), (12, 1);",
+      );
+      expect(db.prepare(rendered.sql).all(...rendered.params)).toEqual([
+        { user: "Ada", "@count": 3 },
+        { user: "Bea", "@count": 4 },
+      ]);
+    } finally {
+      db.close();
+    }
   });
 
   it("reports invalid join structure and SQL function names", () => {

@@ -24,14 +24,16 @@
 // shared-prefix correlation and outer-scope correlation fall out of one lookup
 // instead of N special cases.
 //
-// Design choice: expressions stay strings. We do NOT model a SQL *expression*
-// AST -- Gel only has pgast because Postgres forced it, and the expression AST is
-// the low-value / high-cost part. The leverage is the mutable *relation* + the
-// path registry; relations are objects, expressions remain SQL text, and a
-// relation serializes to {sql, params} exactly once at its boundary.
+// The path registry remains the authority for which range variable supplies a
+// path/aspect (ADR 0064). SQL lowering now stores typed expressions and serializes
+// the relation tree through the SQL AST. Existing compiler call sites still use
+// the explicit string adapters while their expression families migrate (ADR
+// 0069); those fragments do not receive structural scope validation.
 
 import type { PathId, Set as IRSet, TypeRef } from "../ir/gel_ir.js";
 import type { ScalarValue } from "../types.js";
+import { sql, sqlBinding, type SqlBinding, type SqlExpr, type SqlSelect } from "./sql_ast.js";
+import { renderSqlAst, renderSqlExpr } from "./sql_ast_renderer.js";
 
 // Matches the one-liner replicated in engine.ts / schema_materialize.ts / etc.
 const quoteIdent = (ident: string): string => `"${ident.replaceAll('"', '""')}"`;
@@ -78,22 +80,34 @@ export class PathNotResolvable extends Error {
 export type JoinKind = "base" | "cross" | "inner" | "left";
 
 /**
- * A FROM entry. `sourceSql` is either a base table name (`"default__card"`) or a
- * parenthesizable subquery; when the source is itself a built Relation, pass it
- * as `relation` so the parent can inject columns into it (recursive column
- * injection). `params` are the source's own bound values, spliced in FROM order.
+ * A FROM entry. Prefer `table` or a child `relation`; `sourceSql` is the explicit
+ * legacy-source adapter for SQL still assembled by another lowering. A child
+ * Relation stays structured so the parent can recursively inject exports before
+ * the SQL AST is rendered.
  */
-export interface RangeVar {
+export interface RangeVarInput {
   alias: string;
-  sourceSql: string;
+  binding?: SqlBinding;
+  sourceSql?: string;
+  table?: { name: string; columns?: readonly string[] };
+  /** Exported columns for a legacy source, when its projection is known. */
+  columns?: readonly string[];
   relation?: Relation;
-  join?: { kind: Exclude<JoinKind, "base">; on: string };
+  join?: {
+    kind: Exclude<JoinKind, "base">;
+    on?: string;
+    onExpr?: SqlExpr;
+  };
   params?: ScalarValue[];
+}
+
+export interface RangeVar extends RangeVarInput {
+  binding: SqlBinding;
 }
 
 interface OutputColumn {
   alias: string;
-  expr: string;
+  expr: SqlExpr;
 }
 
 let injectionCounter = 0;
@@ -112,13 +126,13 @@ export const resetInjectionCounter = (): void => {
  */
 export class Relation {
   readonly fromSources: RangeVar[] = [];
-  readonly whereConjuncts: { sql: string; params: ScalarValue[] }[] = [];
+  readonly whereConjuncts: SqlExpr[] = [];
   private readonly outputColumns: OutputColumn[] = [];
 
   // The registry: pathKey -> aspect -> SQL expression visible IN this relation.
   // Mirrors Gel's `path_namespace` (edb/pgsql/ast.py): "what SQL expression
   // represents this path here?".
-  private readonly outputs = new Map<string, Map<Aspect, string>>();
+  private readonly outputs = new Map<string, Map<Aspect, SqlExpr>>();
   // Gel's `path_rvar_map` (edb/pgsql/ast.py): which FROM range var PROVIDES a
   // given (path, aspect) — distinct from `outputs` (the expression visible here)
   // and from a child relation's own outputs (the column it exposes outside
@@ -138,23 +152,41 @@ export class Relation {
 
   // ---- building -----------------------------------------------------------
 
-  addRangeVar(rv: RangeVar): RangeVar {
+  addRangeVar(input: RangeVarInput): RangeVar {
+    if (!input.relation && !input.table && input.sourceSql === undefined) {
+      throw new Error(
+        `Range variable '${input.alias}' requires a table, relation, or legacy source`,
+      );
+    }
+    const rv: RangeVar = { ...input, binding: input.binding ?? sqlBinding(input.alias) };
     this.fromSources.push(rv);
     return rv;
   }
 
-  addWhere(sql: string, params: ScalarValue[] = []): void {
-    this.whereConjuncts.push({ sql, params });
+  addWhere(sqlText: string, params: ScalarValue[] = []): void {
+    this.addWhereExpr(sql.legacyExpr(sqlText, "Relation.addWhere legacy predicate", params));
+  }
+
+  addWhereExpr(expr: SqlExpr): void {
+    this.whereConjuncts.push(expr);
   }
 
   /** Register the SQL expression for a path/aspect visible in this relation. */
   registerPath(pathKey: string, aspect: Aspect, sqlExpr: string): void {
+    this.registerPathExpr(
+      pathKey,
+      aspect,
+      sql.legacyExpr(sqlExpr, "Relation.registerPath legacy expression"),
+    );
+  }
+
+  registerPathExpr(pathKey: string, aspect: Aspect, expr: SqlExpr): void {
     let m = this.outputs.get(pathKey);
     if (!m) {
       m = new Map();
       this.outputs.set(pathKey, m);
     }
-    m.set(aspect, sqlExpr);
+    m.set(aspect, expr);
   }
 
   /** Register a type-root range var so fresh references correlate (question 2). */
@@ -189,6 +221,10 @@ export class Relation {
 
   /** Add an explicit output column (e.g. the SELECT projection). */
   addOutput(alias: string, expr: string): void {
+    this.addOutputExpr(alias, sql.legacyExpr(expr, "Relation.addOutput legacy projection"));
+  }
+
+  addOutputExpr(alias: string, expr: SqlExpr): void {
     if (!this.outputColumns.some((c) => c.alias === alias)) {
       this.outputColumns.push({ alias, expr });
     }
@@ -218,13 +254,24 @@ export class Relation {
     if (this.fromSources.some((rv) => rv.alias === alias)) return true;
     if ([...this.scopes.values()].includes(alias)) return true;
     for (const aspects of this.outputs.values()) {
-      if (aspects.get("source") === alias) return true;
+      const source = aspects.get("source");
+      if (source && renderSqlExpr(source).sql === alias) return true;
     }
     return this.parent?.hasAlias(alias) ?? false;
   }
 
   /** Like getPathVar but returns null instead of throwing. */
   tryGetPathVar(pathKey: string, aspect: Aspect): string | null {
+    const expr = this.tryGetPathExpr(pathKey, aspect);
+    if (expr === null) return null;
+    const rendered = renderSqlExpr(expr);
+    if (rendered.params.length > 0) {
+      throw new Error("A parameterized path expression must be consumed as a SqlExpr");
+    }
+    return rendered.sql;
+  }
+
+  tryGetPathExpr(pathKey: string, aspect: Aspect): SqlExpr | null {
     // (1) already visible here.
     const local = this.outputs.get(pathKey)?.get(aspect);
     if (local !== undefined) return local;
@@ -241,17 +288,17 @@ export class Relation {
     for (const rv of candidates) {
       const child = rv.relation;
       if (!child) continue;
-      const inner = child.tryGetPathVar(pathKey, aspect);
+      const inner = child.tryGetPathExpr(pathKey, aspect);
       if (inner !== null) {
         const exposed = child.expose(pathKey, aspect, inner);
-        const ref = `${rv.alias}.${quoteIdent(exposed)}`;
-        this.registerPath(pathKey, aspect, ref); // memoize: don't re-inject
+        const ref = sql.column(rv.binding, exposed);
+        this.registerPathExpr(pathKey, aspect, ref); // memoize: don't re-inject
         return ref;
       }
     }
 
     // (3 across nesting) correlate to an enclosing relation.
-    if (this.parent) return this.parent.tryGetPathVar(pathKey, aspect);
+    if (this.parent) return this.parent.tryGetPathExpr(pathKey, aspect);
     return null;
   }
 
@@ -266,70 +313,93 @@ export class Relation {
     return r;
   }
 
+  getPathExpr(pathKey: string, aspect: Aspect): SqlExpr {
+    const expr = this.tryGetPathExpr(pathKey, aspect);
+    if (expr === null) throw new PathNotResolvable(pathKey, aspect);
+    return expr;
+  }
+
   /**
    * Ensure this relation projects `pathKey`/`aspect` as an output column and
    * return that column's output alias. Idempotent: a path injected twice reuses
    * the same column. This is the "inject a column the subquery didn't originally
    * expose" half of recursive column injection.
    */
-  private expose(pathKey: string, aspect: Aspect, expr: string): string {
+  private expose(pathKey: string, aspect: Aspect, expr: SqlExpr): string {
     const existing = this.outputs.get(pathKey)?.get(aspect);
-    const already = this.outputColumns.find(
-      (c) => c.expr === expr || quoteIdent(c.alias) === existing,
-    );
+    const existingRendered = existing ? renderSqlExpr(existing) : undefined;
+    const exprRendered = renderSqlExpr(expr);
+    const sameRenderedExpr = (candidate: SqlExpr): boolean => {
+      const rendered = renderSqlExpr(candidate);
+      return (
+        rendered.sql === exprRendered.sql &&
+        rendered.params.length === exprRendered.params.length &&
+        rendered.params.every((value, index) => Object.is(value, exprRendered.params[index]))
+      );
+    };
+    const already = this.outputColumns.find((c) => sameRenderedExpr(c.expr));
     if (already) return already.alias;
+    const registered = existingRendered
+      ? this.outputColumns.find(
+          (c) =>
+            quoteIdent(c.alias) === existingRendered.sql && existingRendered.params.length === 0,
+        )
+      : undefined;
+    if (registered) return registered.alias;
     const name = `__inj${injectionCounter}`;
     injectionCounter += 1;
     this.outputColumns.push({ alias: name, expr });
     // Within this relation the path is now readable as its own output alias.
-    this.registerPath(pathKey, aspect, quoteIdent(name));
+    this.registerPathExpr(
+      pathKey,
+      aspect,
+      sql.legacyExpr(quoteIdent(name), "Relation injected output alias"),
+    );
     return name;
   }
 
   // ---- serialization (once, at the boundary) ------------------------------
 
-  /** Serialize to a single SQL string + params (FROM order, then WHERE order). */
-  toSql(): { sql: string; params: ScalarValue[] } {
-    const params: ScalarValue[] = [];
-
-    const fromParts: string[] = [];
-    this.fromSources.forEach((rv, i) => {
-      const src = rv.relation ? `(${this.serializeChild(rv.relation, params)})` : rv.sourceSql;
-      if (!rv.relation && rv.params) params.push(...rv.params);
-      const entry = `${src} ${rv.alias}`;
-      if (i === 0) {
-        fromParts.push(entry);
-      } else if (!rv.join || rv.join.kind === "cross") {
-        fromParts.push(`CROSS JOIN ${entry}`);
-      } else {
-        const kw = rv.join.kind === "left" ? "LEFT JOIN" : "JOIN";
-        fromParts.push(`${kw} ${entry} ON ${rv.join.on}`);
-      }
+  /** Build the structured SELECT representation, retaining legacy leaves explicitly. */
+  toSqlAst(): SqlSelect {
+    const from = this.fromSources.map((rv, index) => {
+      const source = rv.relation
+        ? sql.derived(rv.relation.toSqlAst(), rv.binding)
+        : rv.table
+          ? sql.table(rv.table.name, rv.binding, rv.table.columns)
+          : sql.legacySource(
+              rv.sourceSql ?? "",
+              rv.binding,
+              "Relation range source is still emitted by legacy SQL lowering",
+              rv.params,
+              rv.columns,
+            );
+      if (index === 0) return { source };
+      const join = rv.join;
+      if (!join || join.kind === "cross") return { source, join: { kind: "cross" as const } };
+      return {
+        source,
+        join: {
+          kind: join.kind,
+          on:
+            join.onExpr ??
+            sql.legacyExpr(join.on ?? "", "Relation join predicate is still emitted as SQL text"),
+        },
+      };
     });
-
-    const cols =
+    const projections =
       this.outputColumns.length > 0
-        ? this.outputColumns.map((c) => `${c.expr} AS ${quoteIdent(c.alias)}`).join(", ")
-        : "*";
-
-    let sql = `SELECT ${cols}`;
-    if (fromParts.length > 0) sql += ` FROM ${fromParts.join(" ")}`;
-
-    if (this.whereConjuncts.length > 0) {
-      const where = this.whereConjuncts
-        .map((c) => {
-          params.push(...c.params);
-          return c.sql;
-        })
-        .join(" AND ");
-      sql += ` WHERE ${where}`;
-    }
-    return { sql, params };
+        ? this.outputColumns.map(({ alias, expr }) => ({ expr, alias }))
+        : [{ expr: sql.star() }];
+    const where = this.whereConjuncts.reduce<SqlExpr | undefined>(
+      (acc, expr) => (acc ? sql.binary("AND", acc, expr) : expr),
+      undefined,
+    );
+    return sql.select({ projections, from, where });
   }
 
-  private serializeChild(child: Relation, params: ScalarValue[]): string {
-    const { sql, params: childParams } = child.toSql();
-    params.push(...childParams);
-    return sql;
+  /** Serialize the structured relation to SQL and parameters in render order. */
+  toSql(): { sql: string; params: ScalarValue[] } {
+    return renderSqlAst(this.toSqlAst());
   }
 }

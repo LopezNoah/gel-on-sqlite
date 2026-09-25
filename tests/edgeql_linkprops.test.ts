@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { QueryHarness } from "./utils.js";
 import { assertQueryResult, unorderedBag, unorderedSet } from "./python_query_test_helpers.js";
+import { getCompilerService } from "../src/compiler/service.js";
+import { parseEdgeQLScript } from "../src/edgeql/parser.js";
 
 describe("TestEdgeQLLinkproperties", () => {
   let h: QueryHarness;
@@ -10,6 +12,40 @@ describe("TestEdgeQLLinkproperties", () => {
       schema: "cards",
       setup: "cards_setup",
     });
+  });
+
+  it("routes a shaped link-property SELECT through the SQL AST and executes it", () => {
+    const query = `SELECT User { name, deck: { @count } } FILTER .name = 'Alice' ORDER BY .name;`;
+    const statement = parseEdgeQLScript(query)[0];
+    const artifact = getCompilerService().compile(h.schema, statement).sql;
+
+    expect(artifact.sqlAst?.kind).toBe("select");
+    if (artifact.sqlAst?.kind !== "select") throw new Error("expected the SELECT SQL AST");
+    expect(
+      artifact.sqlAst.projections.some(
+        ({ expr }) => expr.kind === "column" && expr.name === "name",
+      ),
+    ).toBe(true);
+    expect(artifact.sqlAst.projections.some(({ expr }) => expr.kind === "legacy_expr")).toBe(true);
+    expect(artifact.sqlAst.where?.kind).toBe("binary");
+    if (artifact.sqlAst.where?.kind !== "binary") throw new Error("expected a typed filter");
+    expect(artifact.sqlAst.where.left).toMatchObject({ kind: "column", name: "name" });
+    expect(artifact.sqlAst.where.right).toEqual({ kind: "parameter", value: "Alice" });
+    expect(artifact.sqlAst.orderBy?.[0]).toMatchObject({
+      direction: "ASC",
+      expr: { kind: "column", name: "name" },
+    });
+    const rows = h.db.prepare(artifact.sql).all(...artifact.params) as Array<{
+      name: string;
+      deck: string;
+    }>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0].name).toBe("Alice");
+    expect(
+      JSON.parse(rows[0].deck)
+        .map((entry: { "@count": number }) => entry["@count"])
+        .sort(),
+    ).toEqual([2, 2, 3, 3]);
   });
 
   it("test_edgeql_props_basic_01", () => {
